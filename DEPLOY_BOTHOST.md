@@ -26,7 +26,7 @@ SECRET_KEY=любой-секретный-ключ
 
 ## 3. Запуск
 - Node.js версия: 18+
-- Команда запуска: `npm start` или `node src/index.js`
+- Команда запуска: `npm start` или `node index.js`
 - Порт: 3000
 
 ## 4. Описание проекта
@@ -37,7 +37,7 @@ SECRET_KEY=любой-секретный-ключ
 ## 5. Структура файлов для Bothost
 ```
 /public/        - фронтенд (Telegram Mini App)
-/src/           - бэкенд (Node.js)
+/               - бэкенд (Node.js, index.js)
 /package.json   - зависимости
 .env            - переменные окружения (не грузить на git!)
 ```
