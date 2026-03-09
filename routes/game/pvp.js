@@ -17,6 +17,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError } = require('../../utils/logger');
+const { withPlayerLock } = require('../../utils/transactions');
 
 // ============================================================================
 // Утилиты
@@ -102,26 +103,6 @@ const ok = (res, data = {}) => res.json({ success: true, ...data });
  */
 const fail = (res, message, code = 400, statusCode = 400) => 
     res.status(statusCode).json({ success: false, error: message, code });
-
-/**
- * Транзакция с блокировкой игрока
- */
-const txWithLock = async (playerId, fn) => {
-    await query('BEGIN');
-    try {
-        const lockedPlayer = await queryOne(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
-        );
-        
-        const result = await fn(lockedPlayer);
-        await query('COMMIT');
-        return result;
-    } catch (error) {
-        await query('ROLLBACK');
-        throw error;
-    }
-};
 
 /**
  * Логирование действия в player_logs
@@ -230,7 +211,7 @@ router.post('/pvp/attack', async (req, res) => {
         }
 
         // Выполняем атаку в транзакции
-        const result = await txWithLock(playerId, async (lockedPlayer) => {
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
             if (!lockedPlayer) {
                 throw new Error('Игрок не найден');
             }
@@ -261,7 +242,7 @@ router.post('/pvp/attack', async (req, res) => {
             await playerHelper.updateEnergy(playerId);
             
             // Получаем актуальные данные атакующего
-            const attacker = await playerHelper.getPlayerById(playerId);
+            const attacker = await playerHelper.getById(playerId);
 
             if (attacker.energy < 1) {
                 throw new Error('Нужна энергия для атаки');
@@ -320,7 +301,7 @@ router.post('/pvp/attack-hit', async (req, res) => {
         }
 
         // Выполняем удар в транзакции
-        const result = await txWithLock(playerId, async (lockedPlayer) => {
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
             if (!lockedPlayer) {
                 throw new Error('Игрок не найден');
             }
@@ -343,8 +324,8 @@ router.post('/pvp/attack-hit', async (req, res) => {
             const attackerId = isAttacker ? battle.attacker_id : battle.target_id;
             const defenderId = isAttacker ? battle.target_id : battle.attacker_id;
 
-            const attacker = await playerHelper.getPlayerById(attackerId);
-            const defender = await playerHelper.getPlayerById(defenderId);
+            const attacker = await playerHelper.getById(attackerId);
+            const defender = await playerHelper.getById(defenderId);
 
             if (!attacker || !defender) {
                 throw new Error('Игрок не найден');
@@ -482,7 +463,7 @@ const GamePVP = {
         safeStringify,
         safeParse,
         handleError,
-        txWithLock,
+        withPlayerLock,
         logPlayerAction
     }
 };

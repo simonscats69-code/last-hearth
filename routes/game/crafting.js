@@ -108,29 +108,6 @@ const fail = (res, message, code = 400, statusCode = 400) =>
     res.status(statusCode).json({ success: false, error: message, code });
 
 /**
- * Транзакция с блокировкой игрока
- * @param {number} playerId - ID игрока
- * @param {Function} fn - Функция транзакции
- */
-const txWithLock = async (playerId, fn) => {
-    await query('BEGIN');
-    try {
-        // Блокируем строку игрока для предотвращения race conditions
-        const lockedPlayer = await queryOne(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
-        );
-        
-        const result = await fn(lockedPlayer);
-        await query('COMMIT');
-        return result;
-    } catch (error) {
-        await query('ROLLBACK');
-        throw error;
-    }
-};
-
-/**
  * Логирование действия в player_logs
  * @param {number} playerId - ID игрока
  * @param {string} action - Действие
@@ -268,7 +245,7 @@ router.post('/craft', async (req, res) => {
         }
 
         // Выполняем крафт в транзакции с блокировкой игрока
-        const result = await txWithLock(playerId, async (lockedPlayer) => {
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
             if (!lockedPlayer) {
                 throw new Error('Игрок не найден');
             }
@@ -491,7 +468,7 @@ const GameCrafting = {
         safeStringify,
         safeParse,
         handleError,
-        txWithLock,
+        withPlayerLock,
         logPlayerAction
     }
 };

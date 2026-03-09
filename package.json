@@ -2,9 +2,9 @@
   "name": "last-hearth",
   "version": "1.0.0",
   "description": "Постапокалиптический survival RPG Telegram Mini App",
-  "main": "src/index.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node index.js",
     "dev": "node --watch src/index.js",
     "migrate": "node src/db/migrate.js"
   },
@@ -18,9 +18,13 @@
     "node-telegram-bot-api": "^0.64.0",
     "dotenv": "^16.3.1",
     "uuid": "^9.0.1",
-    "telegraf": "^4.15.3"
+    "telegraf": "^4.15.3",
+    "ws": "^8.16.0"
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }

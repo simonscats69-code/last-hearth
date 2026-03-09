@@ -341,6 +341,39 @@ async function seedData(pool) {
     }
     console.log('✅ Боссы созданы');
     
+    // Таблица достижений игроков
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS player_achievements (
+            id SERIAL PRIMARY KEY,
+            player_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
+            achievement_key VARCHAR(50) NOT NULL,
+            rewarded_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(player_id, achievement_key)
+        )
+    `);
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_achievements_player ON player_achievements(player_id)
+    `);
+    console.log('✅ Таблица достижений создана');
+    
+    // Таблица логов игроков
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS player_logs (
+            id SERIAL PRIMARY KEY,
+            player_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
+            action VARCHAR(100) NOT NULL,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `);
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_player_logs_player ON player_logs(player_id)
+    `);
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_player_logs_action ON player_logs(action)
+    `);
+    console.log('✅ Таблица логов создана');
+    
     console.log('🎉 Миграция завершена!');
 }
 

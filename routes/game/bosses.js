@@ -18,6 +18,7 @@ const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
+const { notifyBossAttack, getConnectedCount } = require('../../utils/realtime');
 
 /**
  * Универсальный обработчик ошибок
@@ -239,16 +240,15 @@ router.post('/attack-boss', async (req, res) => {
                 }
             }
             
-            // Обновляем энергию
-            await playerHelper.updateEnergy(playerId);
-            
+            // Обновляем энергию - сначала получаем с блокировкой
+            // Оптимизированный порядок: FOR UPDATE -> проверка -> UPDATE
             const playerResult = await client.query(`
                 SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
             
             const updatedPlayer = playerResult.rows[0];
             
-            // Проверяем энергию
+            // Проверяем энергию до списания
             if (updatedPlayer.energy < 1) {
                 await client.query('ROLLBACK');
                 return res.json({
@@ -258,6 +258,12 @@ router.post('/attack-boss', async (req, res) => {
                     energy: updatedPlayer.energy
                 });
             }
+            
+            // Списываем энергию
+            await client.query(`
+                UPDATE players SET energy = energy - 1, last_energy_update = NOW()
+                WHERE id = $1
+            `, [playerId]);
             
             // Вычисляем урон
             const equipment = safeJsonParse(updatedPlayer.equipment, {});
@@ -291,6 +297,19 @@ router.post('/attack-boss', async (req, res) => {
             }
             
             await client.query('COMMIT');
+            
+            // WebSocket уведомление об атаке босса
+            if (getConnectedCount() > 0) {
+                notifyBossAttack(playerId, {
+                    bossId: boss.id,
+                    bossName: boss.name,
+                    newHp: result.newHp,
+                    maxHp: boss.max_hp,
+                    damage: damage,
+                    isRaid: is_raid,
+                    killed: result.killed
+                });
+            }
             
             // Логируем действие
             logger.info(`[bosses] Атака босса`, {
@@ -331,6 +350,47 @@ router.post('/attack-boss', async (req, res) => {
 });
 
 /**
+ * Выдача наград за убийство босса
+ * Унифицированная функция для одиночной и рейд-атаки
+ */
+async function grantRewards(client, playerId, boss) {
+    const rewards = {
+        coins: boss.reward_coins,
+        exp: boss.reward_exp,
+        items: safeJsonParse(boss.reward_items, [])
+    };
+    
+    try {
+        // Выдаём монеты
+        if (boss.reward_coins) {
+            await client.query(`
+                UPDATE players SET coins = coins + $1 WHERE id = $2
+            `, [boss.reward_coins, playerId]);
+        }
+        
+        // Выдаём опыт
+        if (boss.reward_exp) {
+            await playerHelper.addExperience(playerId, boss.reward_exp);
+        }
+        
+        // Обновляем счётчик убитых боссов
+        await client.query(`
+            UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1
+        `, [playerId]);
+        
+    } catch (error) {
+        logger.error('[bosses] Ошибка выдачи наград', {
+            playerId,
+            bossId: boss.id,
+            error: error.message
+        });
+        throw error;
+    }
+    
+    return rewards;
+}
+
+/**
  * Обработка рейд-атаки
  */
 async function handleRaidAttack(client, playerId, boss, damage, isRaid) {
@@ -360,24 +420,13 @@ async function handleRaidAttack(client, playerId, boss, damage, isRaid) {
         UPDATE boss_sessions SET hp = $1 WHERE id = $2
     `, [newHp, raidSession.id]);
     
-    // Записываем прогресс игрока
-    const existingDamage = await client.query(`
-        SELECT damage FROM raid_progress 
-        WHERE session_id = $1 AND player_id = $2
-    `, [raidSession.id, playerId]);
-    
-    if (existingDamage.rows.length > 0) {
-        await client.query(`
-            UPDATE raid_progress 
-            SET damage = damage + $1 
-            WHERE session_id = $2 AND player_id = $3
-        `, [damage, raidSession.id, playerId]);
-    } else {
-        await client.query(`
-            INSERT INTO raid_progress (session_id, player_id, damage)
-            VALUES ($1, $2, $3)
-        `, [raidSession.id, playerId, damage]);
-    }
+    // UPSERT прогресса игрока - оптимизация запросов
+    await client.query(`
+        INSERT INTO raid_progress (session_id, player_id, damage)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (session_id, player_id) 
+        DO UPDATE SET damage = raid_progress.damage + EXCLUDED.damage
+    `, [raidSession.id, playerId, damage]);
     
     // Проверяем, убит ли босс
     let killed = false;
@@ -392,49 +441,16 @@ async function handleRaidAttack(client, playerId, boss, damage, isRaid) {
             WHERE id = $1
         `, [raidSession.id]);
         
-        // Награды
-        rewards = {
-            coins: boss.reward_coins,
-            exp: boss.reward_exp,
-            items: safeJsonParse(boss.reward_items, [])
-        };
+        // Выдаём награды через унифицированную функцию
+        rewards = await grantRewards(client, playerId, boss);
         
-        // Выдаём награды
-        if (boss.reward_coins) {
-            await client.query(`
-                UPDATE players SET coins = coins + $1 WHERE id = $2
-            `, [boss.reward_coins, playerId]);
-        }
-        
-        if (boss.reward_exp) {
-            await playerHelper.addExperience(playerId, boss.reward_exp);
-        }
-        
-        // Следующий босс
+        // UPSERT ключа для следующего босса
         const nextBossId = boss.id + 1;
-        const nextBossExists = await client.query(`SELECT id FROM bosses WHERE id = $1`, [nextBossId]);
-        
-        if (nextBossExists.rows.length > 0) {
-            // Даём ключ для следующего босса
-            const existingKey = await client.query(`
-                SELECT quantity FROM boss_keys WHERE player_id = $1 AND boss_id = $2
-            `, [playerId, nextBossId]);
-            
-            if (existingKey.rows.length > 0) {
-                await client.query(`
-                    UPDATE boss_keys SET quantity = quantity + 1 WHERE player_id = $1 AND boss_id = $2
-                `, [playerId, nextBossId]);
-            } else {
-                await client.query(`
-                    INSERT INTO boss_keys (player_id, boss_id, quantity) VALUES ($1, $2, 1)
-                `, [playerId, nextBossId]);
-            }
-        }
-        
-        // Обновляем счётчик убитых боссов
         await client.query(`
-            UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1
-        `, [playerId]);
+            INSERT INTO boss_keys (player_id, boss_id, quantity) VALUES ($1, $2, 1)
+            ON CONFLICT (player_id, boss_id) 
+            DO UPDATE SET quantity = boss_keys.quantity + 1
+        `, [playerId, nextBossId]);
     }
     
     return { newHp, killed, rewards };
@@ -446,12 +462,6 @@ async function handleRaidAttack(client, playerId, boss, damage, isRaid) {
 async function handleSoloAttack(client, playerId, boss, damage, isRaid) {
     const newHp = Math.max(0, boss.hp - damage);
     
-    // Тратим энергию
-    await client.query(`
-        UPDATE players SET energy = energy - 1, last_energy_update = NOW()
-        WHERE id = $1
-    `, [playerId]);
-    
     // Проверяем победу
     let killed = false;
     let rewards = null;
@@ -459,47 +469,16 @@ async function handleSoloAttack(client, playerId, boss, damage, isRaid) {
     if (newHp <= 0) {
         killed = true;
         
-        rewards = {
-            coins: boss.reward_coins,
-            exp: boss.reward_exp,
-            items: safeJsonParse(boss.reward_items, [])
-        };
+        // Выдаём награды через унифицированную функцию
+        rewards = await grantRewards(client, playerId, boss);
         
-        // Выдаём награды
-        if (boss.reward_coins) {
-            await client.query(`
-                UPDATE players SET coins = coins + $1 WHERE id = $2
-            `, [boss.reward_coins, playerId]);
-        }
-        
-        if (boss.reward_exp) {
-            await playerHelper.addExperience(playerId, boss.reward_exp);
-        }
-        
-        // Следующий босс
+        // UPSERT ключа для следующего босса
         const nextBossId = boss.id + 1;
-        const nextBossExists = await client.query(`SELECT id FROM bosses WHERE id = $1`, [nextBossId]);
-        
-        if (nextBossExists.rows.length > 0) {
-            const existingKey = await client.query(`
-                SELECT quantity FROM boss_keys WHERE player_id = $1 AND boss_id = $2
-            `, [playerId, nextBossId]);
-            
-            if (existingKey.rows.length > 0) {
-                await client.query(`
-                    UPDATE boss_keys SET quantity = quantity + 1 WHERE player_id = $1 AND boss_id = $2
-                `, [playerId, nextBossId]);
-            } else {
-                await client.query(`
-                    INSERT INTO boss_keys (player_id, boss_id, quantity) VALUES ($1, $2, 1)
-                `, [playerId, nextBossId]);
-            }
-        }
-        
-        // Обновляем счётчик
         await client.query(`
-            UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1
-        `, [playerId]);
+            INSERT INTO boss_keys (player_id, boss_id, quantity) VALUES ($1, $2, 1)
+            ON CONFLICT (player_id, boss_id) 
+            DO UPDATE SET quantity = boss_keys.quantity + 1
+        `, [playerId, nextBossId]);
     }
     
     return { newHp, killed, rewards };

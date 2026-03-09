@@ -14,6 +14,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne } = require('../../db/database');
 const { logger, logPlayerError } = require('../../utils/logger');
+const { withPlayerLock } = require('../../utils/transactions');
 
 // ============================================================================
 // Константы и утилиты
@@ -116,22 +117,8 @@ const fail = (res, message, code = 400, statusCode = 400) =>
 /**
  * Транзакция с блокировкой игрока
  */
-const txWithLock = async (playerId, fn) => {
-    await query('BEGIN');
-    try {
-        const lockedPlayer = await queryOne(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
-        );
-        
-        const result = await fn(lockedPlayer);
-        await query('COMMIT');
-        return result;
-    } catch (error) {
-        await query('ROLLBACK');
-        throw error;
-    }
-};
+// Импортировать из transactionHelpers: withPlayerLock
+// Удалено - используйте utils/transactionHelpers.js
 
 /**
  * Логирование действия в player_logs
@@ -228,7 +215,7 @@ router.post('/base/build', async (req, res) => {
         }
 
         // Выполняем постройку в транзакции с блокировкой
-        const result = await txWithLock(playerId, async (lockedPlayer) => {
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
             if (!lockedPlayer) {
                 throw new Error('Игрок не найден');
             }
@@ -316,7 +303,7 @@ router.post('/base/upgrade', async (req, res) => {
             return fail(res, 'Здание не найдено: ' + building_id, 'BUILDING_NOT_FOUND');
         }
 
-        const result = await txWithLock(playerId, async (lockedPlayer) => {
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
             if (!lockedPlayer) {
                 throw new Error('Игрок не найден');
             }
@@ -382,7 +369,7 @@ const GameBase = {
         safeStringify,
         safeParse,
         handleError,
-        txWithLock,
+        withPlayerLock,
         logPlayerAction
     }
 };

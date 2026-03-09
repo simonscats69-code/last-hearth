@@ -7,19 +7,29 @@ const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
 const { logger, requestMiddleware } = require('./utils/logger');
+const { getMetrics, updateWebSocketMetrics } = require('./utils/realtime');
+const { startScheduler } = require('./utils/scheduler');
+const { initAchievementsTable } = require('./utils/achievements');
+const { initWebSocket, getMetrics: getWebSocketMetrics } = require('./utils/realtime');
+const { telegramAuthMiddleware } = require('./utils/telegramAuth');
 const { initDatabase, query } = require('./db/database');
 const { setupWebhook } = require('./bot/webhook');
 const gameRouter = require('./routes/game');
 const apiRouter = require('./routes/api');
+const adminRouter = require('./routes/admin');
+const leaderboardRouter = require('./routes/leaderboard');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Разрешённые источники для CORS
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bot';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
     'https://*.telegram.org',
     'https://t.me',
-    'https://*.t.me'
+    'https://*.t.me',
+    FRONTEND_URL  // Добавляем FRONTEND_URL в список разрешённых
 ];
 
 const ORIGIN_SET = new Set(ALLOWED_ORIGINS);
@@ -71,14 +81,19 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
     const origin = req.headers.origin;
+    // Разрешаем только конкретный frontend для Mini App
     if (!origin) {
-        res.header('Access-Control-Allow-Origin', '*');
+        // Нет origin (прямой запрос) - разрешаем
         return next();
     }
-    const isAllowed = ORIGIN_SET.has(origin) || ALLOWED_ORIGINS.some(o => o.includes('*') && origin.endsWith(o.replace('*.', '')));
-    res.header('Access-Control-Allow-Origin', isAllowed ? origin : '*');
+    const isAllowed = ORIGIN_SET.has(origin) || origin === FRONTEND_URL;
+    if (!isAllowed) {
+        logger.warn({ type: 'cors_rejected', origin, ip: req.ip });
+        return res.status(403).json({ error: 'Origin не разрешён' });
+    }
+    res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-ID');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-ID, X-Init-Data');
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
     }
@@ -119,6 +134,8 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 app.use('/api/game', gameRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/leaderboard', leaderboardRouter);
 app.use('/api', apiRouter);
 
 const healthLimiter = rateLimit({
@@ -143,6 +160,28 @@ app.get('/ready', async (req, res) => {
     } catch (err) {
         res.status(500).json({ status: 'not_ready', db: 'error' });
     }
+});
+
+// Метрики сервера (только для админов)
+// Требуется заголовок x-telegram-id с ID пользователя Telegram
+app.get('/metrics', (req, res) => {
+    const adminIds = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+    const telegramId = req.headers['x-telegram-id'];
+    
+    // Разрешаем только админам по их Telegram ID
+    if (!telegramId || !adminIds.includes(String(telegramId))) {
+        logger.warn({ type: 'metrics_access_denied', telegramId, ip: req.ip });
+        return res.status(403).json({ error: 'Доступ запрещён' });
+    }
+    
+    // Получаем метрики
+    const metrics = getMetrics();
+    
+    // Добавляем WebSocket метрики
+    const wsMetrics = getWebSocketMetrics();
+    metrics.websocket = wsMetrics;
+    
+    res.json(metrics);
 });
 
 app.get('/', (req, res) => {
@@ -200,11 +239,22 @@ async function startServer() {
         await initDatabase();
         logger.info('База данных инициализирована');
         
+        // Инициализация таблицы достижений
+        await initAchievementsTable();
+        logger.info('Таблица достижений инициализирована');
+        
         await setupWebhook(app);
         logger.info('Webhook настроен');
         
+        // Запуск планировщика задач
+        startScheduler();
+        logger.info('Планировщик задач запущен');
+        
         server = app.listen(PORT, '0.0.0.0', () => {
             logger.info(`Сервер запущен на порту ${PORT}`);
+            
+            // Инициализация WebSocket
+            initWebSocket(server);
         });
     } catch (err) {
         logger.error({ type: 'startup_error', message: err.message, stack: err.stack });

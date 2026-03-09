@@ -14,140 +14,12 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
-const { logger, logPlayerError } = require('../../utils/logger');
-
-// ============================================================================
-// Утилиты
-// ============================================================================
-
-/**
- * Валидация ID (Number.isInteger и > 0)
- */
-const isValidId = (id) => Number.isInteger(id) && id > 0;
-
-/**
- * Валидация и очистка имени клана
- */
-const sanitizeName = (name) => {
-    if (typeof name !== 'string') return '';
-    return name.trim().replace(/[^\wа-я -]/gi, '').slice(0, 30);
-};
-
-/**
- * Безопасная сериализация JSON с fallback
- */
-const safeStringify = (value) => {
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return JSON.stringify({});
-    }
-};
-
-/**
- * Централизованный обработчик ошибок
- */
-const handleError = (res, error, action, playerId) => {
-    if (playerId) {
-        logPlayerError(playerId, error, { action });
-    } else {
-        logger.error(`[CLANS] ${action}: ${error.message}`, {
-            stack: error.stack
-        });
-    }
-
-    let code = 'INTERNAL_ERROR';
-    let statusCode = 500;
-
-    if (error.message.includes('достаточно') || error.message.includes('монет')) {
-        code = 'INSUFFICIENT_COINS';
-        statusCode = 400;
-    } else if (error.message.includes('не найден')) {
-        code = 'NOT_FOUND';
-        statusCode = 404;
-    } else if (error.message.includes('уже состоите') || error.message.includes('не состоите')) {
-        code = 'CLAN_MEMBERSHIP_ERROR';
-        statusCode = 400;
-    } else if (error.message.includes('закрытый') || error.message.includes('полный')) {
-        code = 'CLAN_ACCESS_ERROR';
-        statusCode = 400;
-    } else if (error.message.includes('лидер') || error.message.includes('Leader')) {
-        code = 'LEADER_ERROR';
-        statusCode = 403;
-    } else if (error.message.includes('валидация') || error.message.includes('ID')) {
-        code = 'VALIDATION_ERROR';
-        statusCode = 400;
-    }
-
-    return res.status(statusCode).json({
-        success: false,
-        error: error.message,
-        code
-    });
-};
-
-/**
- * Унифицированный формат успешного ответа
- */
-const ok = (res, data = {}) => res.json({ success: true, ...data });
-
-/**
- * Унифицированный формат ошибки
- */
-const fail = (res, msg, code = 400, statusCode = 400) => 
-    res.status(statusCode).json({ success: false, error: msg, code });
-
-/**
- * Guard проверка
- */
-const guard = (cond, res, msg, code = 400, statusCode = 400) => {
-    if (cond) { fail(res, msg, code, statusCode); return true; }
-    return false;
-};
-
-/**
- * Async wrapper
- */
-const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
-/**
- * Транзакция с блокировкой игрока
- */
-const txWithLock = async (playerId, fn) => {
-    await query('BEGIN');
-    try {
-        const lockedPlayer = await queryOne(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
-        );
-        
-        const result = await fn(lockedPlayer);
-        await query('COMMIT');
-        return result;
-    } catch (error) {
-        await query('ROLLBACK');
-        throw error;
-    }
-};
-
-/**
- * Логирование действия в player_logs
- */
-const logPlayerAction = async (playerId, action, metadata = {}) => {
-    try {
-        await query(
-            `INSERT INTO player_logs (player_id, action, metadata, created_at) 
-             VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, safeStringify(metadata)]
-        );
-    } catch (error) {
-        logger.warn('Не удалось залогировать действие игрока', {
-            playerId,
-            action,
-            error: error.message
-        });
-    }
-};
+const { withPlayerLock, withClanLock, withPlayerAndClanLock } = require('../../utils/transactions');
+const { validateId, validateString, sanitizeName, validatePositiveInt, validateRange } = require('../../utils/apiHelpers');
+const { ok, fail, error, notFound, badRequest, guard, wrap } = require('../../utils/apiHelpers');
+const { logPlayerAction, parseJSONField, serializeJSONField } = require('../../utils/transactions');
+const { pool } = require('../../db/database');
+const { logger } = require('../../utils/logger');
 
 // ============================================================================
 // Маршруты
@@ -161,7 +33,9 @@ router.get('/clan', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
-    if (guard(!player.clan_id, res, 'Вы не состоите в клане', 'NOT_IN_CLAN')) return;
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
     
     const data = await queryOne(`
         SELECT 
@@ -189,10 +63,12 @@ router.get('/clan', wrap(async (req, res) => {
         WHERE c.id = $1
     `, [player.clan_id]);
     
-    if (guard(!data, res, 'Клан не найден', 'CLAN_NOT_FOUND', 404)) return;
+    if (!data) {
+        return notFound(res, 'Клан не найден', 'CLAN_NOT_FOUND');
+    }
     
     // Логируем действие
-    await logPlayerAction(playerId, 'view_clan', {
+    await logPlayerAction(pool, playerId, 'view_clan', {
         clan_id: player.clan_id
     });
     
@@ -221,13 +97,21 @@ router.post('/clan/create', wrap(async (req, res) => {
     const playerId = player?.id;
     const { name, description = '' } = req.body;
     
-    // Валидация
-    const cleanName = sanitizeName(name);
-    if (guard(cleanName.length < 3 || cleanName.length > 30, res, 'Название клана: 3-30 символов', 'INVALID_NAME')) return;
-    if (guard(player.clan_id, res, 'Вы уже состоите в клане', 'ALREADY_IN_CLAN')) return;
-    if (guard(player.coins < 1000, res, 'Нужно 1000 монет', 'NOT_ENOUGH_COINS')) return;
+    // Валидация имени клана
+    const nameValidation = sanitizeName(name, 30);
+    if (!nameValidation.valid) {
+        return fail(res, nameValidation.error, nameValidation.code);
+    }
     
-    const result = await txWithLock(playerId, async (lockedPlayer) => {
+    if (player.clan_id) {
+        return fail(res, 'Вы уже состоите в клане', 'ALREADY_IN_CLAN');
+    }
+    
+    if (player.coins < 1000) {
+        return fail(res, 'Нужно 1000 монет', 'NOT_ENOUGH_COINS');
+    }
+    
+    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -240,7 +124,7 @@ router.post('/clan/create', wrap(async (req, res) => {
         const insertResult = await query(
             `INSERT INTO clans (name, description, leader_id, created_at) 
              VALUES ($1, $2, $3, NOW()) RETURNING id`,
-            [cleanName, String(description).slice(0, 200), lockedPlayer.telegram_id]
+            [nameValidation.value, String(description).slice(0, 200), lockedPlayer.telegram_id]
         );
         const clanId = insertResult.rows[0].id;
         
@@ -251,13 +135,13 @@ router.post('/clan/create', wrap(async (req, res) => {
         );
 
         // Логируем создание клана
-        await logPlayerAction(playerId, 'clan_create', {
+        await logPlayerAction(pool, playerId, 'clan_create', {
             clan_id: clanId,
-            clan_name: cleanName,
+            clan_name: nameValidation.value,
             cost: 1000
         });
 
-        return { message: `Клан "${cleanName}" создан!`, clan: { id: clanId, name: cleanName } };
+        return { message: `Клан "${nameValidation.value}" создан!`, clan: { id: clanId, name: nameValidation.value } };
     });
     
     ok(res, result);
@@ -272,9 +156,15 @@ router.post('/clan/join', wrap(async (req, res) => {
     const playerId = player?.id;
     const { clan_id } = req.body;
     
-    // Валидация ID
-    if (guard(!isValidId(clan_id), res, 'Укажите корректный ID клана', 'INVALID_CLAN_ID')) return;
-    if (guard(player.clan_id, res, 'Вы уже состоите в клане', 'ALREADY_IN_CLAN')) return;
+    // Валидация ID клана
+    const idValidation = validateId(clan_id, 'ID клана');
+    if (!idValidation.valid) {
+        return fail(res, idValidation.error, idValidation.code);
+    }
+    
+    if (player.clan_id) {
+        return fail(res, 'Вы уже состоите в клане', 'ALREADY_IN_CLAN');
+    }
     
     const clan = await queryOne(
         `SELECT c.*, (SELECT COUNT(*) FROM players WHERE clan_id = c.id) AS members_count 
@@ -282,11 +172,19 @@ router.post('/clan/join', wrap(async (req, res) => {
         [clan_id]
     );
     
-    if (guard(!clan, res, 'Клан не найден', 'CLAN_NOT_FOUND', 404)) return;
-    if (guard(!clan.is_open, res, 'Клан закрытый', 'CLAN_CLOSED')) return;
-    if (guard(Number(clan.members_count) >= 30, res, 'Клан полный (макс. 30 участников)', 'CLAN_FULL')) return;
+    if (!clan) {
+        return notFound(res, 'Клан не найден', 'CLAN_NOT_FOUND');
+    }
     
-    const result = await txWithLock(playerId, async (lockedPlayer) => {
+    if (!clan.is_open) {
+        return fail(res, 'Клан закрытый', 'CLAN_CLOSED');
+    }
+    
+    if (Number(clan.members_count) >= 30) {
+        return fail(res, 'Клан полный (макс. 30 участников)', 'CLAN_FULL');
+    }
+    
+    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -319,7 +217,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         }
 
         // Логируем вступление
-        await logPlayerAction(playerId, 'clan_join', {
+        await logPlayerAction(pool, playerId, 'clan_join', {
             clan_id,
             clan_name: clan.name
         });
@@ -338,10 +236,15 @@ router.post('/clan/leave', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
-    if (guard(!player.clan_id, res, 'Вы не состоите в клане', 'NOT_IN_CLAN')) return;
-    if (guard(player.clan_role === 'leader', res, 'Лидер не может покинуть клан. Передайте лидерство.', 'LEADER_CANT_LEAVE', 403)) return;
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
     
-    await txWithLock(playerId, async (lockedPlayer) => {
+    if (player.clan_role === 'leader') {
+        return fail(res, 'Лидер не может покинуть клан. Передайте лидерство.', 'LEADER_CANT_LEAVE', 403);
+    }
+    
+    await withPlayerLock(playerId, async (lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -352,7 +255,7 @@ router.post('/clan/leave', wrap(async (req, res) => {
         );
 
         // Логируем выход из клана
-        await logPlayerAction(playerId, 'clan_leave', {
+        await logPlayerAction(pool, playerId, 'clan_leave', {
             clan_id: player.clan_id
         });
     });
@@ -387,7 +290,7 @@ router.get('/clans', wrap(async (req, res) => {
     `, [limit, offset]);
 
     // Логируем
-    await logPlayerAction(playerId, 'view_clans', {
+    await logPlayerAction(pool, playerId, 'view_clans', {
         limit,
         offset,
         total
@@ -418,7 +321,9 @@ router.get('/clan-boss', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
-    if (guard(!player.clan_id, res, 'Вы не состоите в клане', 'NOT_IN_CLAN')) return;
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
     
     const boss = await queryOne(
         `SELECT * FROM clan_bosses WHERE clan_id = $1 AND status = 'active' 
@@ -439,11 +344,19 @@ router.post('/clan-boss/spawn', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
-    if (guard(!player.clan_id, res, 'Вы не состоите в клане', 'NOT_IN_CLAN')) return;
-    if (guard(player.clan_role !== 'leader', res, 'Только лидер может вызвать босса', 'NOT_LEADER', 403)) return;
-    if (guard(player.coins < 500, res, 'Нужно 500 монет', 'NOT_ENOUGH_COINS')) return;
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
     
-    const result = await txWithLock(playerId, async (lockedPlayer) => {
+    if (player.clan_role !== 'leader') {
+        return fail(res, 'Только лидер может вызвать босса', 'NOT_LEADER', 403);
+    }
+    
+    if (player.coins < 500) {
+        return fail(res, 'Нужно 500 монет', 'NOT_ENOUGH_COINS');
+    }
+    
+    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -465,7 +378,7 @@ router.post('/clan-boss/spawn', wrap(async (req, res) => {
         await query(`UPDATE players SET coins = coins - 500 WHERE id = $1`, [playerId]);
 
         // Логируем
-        await logPlayerAction(playerId, 'clan_boss_spawn', {
+        await logPlayerAction(pool, playerId, 'clan_boss_spawn', {
             clan_id: player.clan_id,
             cost: 500
         });
@@ -485,14 +398,18 @@ router.post('/clan-boss/attack', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
-    if (guard(!player.clan_id, res, 'Вы не состоите в клане', 'NOT_IN_CLAN')) return;
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
     
     const now = Date.now();
-    if (guard(now - new Date(player.last_attack || 0) < 1000, res, 'Слишком быстро, подожди 1 секунду', 'ATTACK_TOO_FAST', 429)) return;
+    if (now - new Date(player.last_attack || 0) < 1000) {
+        return fail(res, 'Слишком быстро, подожди 1 секунду', 'ATTACK_TOO_FAST', 429);
+    }
     
     const damage = Math.max(1, Math.floor(player.strength * 2 + player.agility * 0.5));
     
-    const result = await txWithLock(playerId, async (lockedPlayer) => {
+    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -520,7 +437,7 @@ router.post('/clan-boss/attack', wrap(async (req, res) => {
         if (!playerResult.rows.length) throw { message: 'Недостаточно энергии', code: 'NOT_ENOUGH_ENERGY' };
 
         // Логируем атаку
-        await logPlayerAction(playerId, 'clan_boss_attack', {
+        await logPlayerAction(pool, playerId, 'clan_boss_attack', {
             clan_id: player.clan_id,
             damage,
             boss_hp: bossResult.rows[0].hp
@@ -545,11 +462,10 @@ router.post('/clan-boss/attack', wrap(async (req, res) => {
 const GameClans = {
     router,
     utils: {
-        isValidId,
+        validateId,
         sanitizeName,
-        safeStringify,
-        handleError,
-        txWithLock,
+        serializeJSONField,
+        withPlayerLock,
         logPlayerAction
     }
 };
