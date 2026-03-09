@@ -7,6 +7,8 @@ RUN npm ci --only=production || npm install --only=production
 
 COPY . .
 
+RUN chmod +x src/index.js
+
 EXPOSE 3000
 
-CMD ["node", "src/index.js"]
+ENTRYPOINT ["node", "src/index.js"]
