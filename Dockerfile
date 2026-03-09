@@ -7,8 +7,9 @@ RUN npm ci --only=production || npm install --only=production
 
 COPY . .
 
-RUN chmod +x entrypoint.sh
+COPY ./entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3000
 
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]
