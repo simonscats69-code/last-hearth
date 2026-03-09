@@ -1,5 +1,23 @@
-require('dotenv').config();
+/**
+ * Last Hearth - Постапокалиптический survival RPG Telegram Mini App
+ * 
+ * Точка входа сервера
+ */
+
 const express = require('express');
+const path = require('path');
+const compression = require('compression');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { randomUUID } = require('crypto');
+
+// Пробуем загрузить dotenv, но не критично если его нет (на продакшене может не быть)
+try {
+    require('dotenv').config();
+} catch (e) {
+    // dotenv не доступен - используем переменные окружения напрямую
+    console.log('ℹ️ dotenv не загружен, используем переменные окружения системы');
+}
 const path = require('path');
 const compression = require('compression');
 const helmet = require('helmet');

@@ -3,36 +3,52 @@
  * Создаёт БД и таблицы
  * 
  * Запуск: npm run migrate
+ * 
+ * Примечание: Не требует dotenv - использует переменные окружения BotHost напрямую
  */
 
-require('dotenv').config();
 const { Pool } = require('pg');
 
-// Для Supabase сразу подключаемся к БД postgres
-const pool = new Pool({
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
-    database: 'postgres', // Supabase использует БД postgres
-    ssl: { rejectUnauthorized: false } // Для Supabase нужен SSL
-});
+// Подключение к PostgreSQL
+// Используем DATABASE_URL если доступна (BotHost), иначе отдельные переменные
+let poolConfig;
 
-async function createDatabase() {
-    // Supabase уже имеет БД "postgres" - пропускаем создание
-    console.log('ℹ️ Используем существующую базу данных Supabase');
-}
-
-async function createTables() {
-    // Подключаемся к нашей БД
-    const gamePool = new Pool({
+if (process.env.DATABASE_URL) {
+    // DATABASE_URL уже содержит все параметры подключения
+    poolConfig = {
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false } // Для Supabase нужен SSL
+    };
+    console.log('ℹ️ Используем DATABASE_URL для подключения');
+} else {
+    // Используем отдельные переменные окружения
+    poolConfig = {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         user: process.env.DB_USER || 'postgres',
         password: process.env.DB_PASSWORD || 'postgres',
-        database: 'postgres', // Supabase использует БД postgres
+        database: process.env.DB_NAME || 'postgres',
         ssl: { rejectUnauthorized: false }
-    });
+    };
+    console.log('ℹ️ Используем отдельные переменные DB_* для подключения');
+}
+
+// Для Supabase сразу подключаемся к БД postgres
+const pool = new Pool(poolConfig);
+
+async function createDatabase() {
+    // Supabase уже имеет БД "postgres" - пропускаем создание
+    // Также поддерживаем DATABASE_URL напрямую
+    if (process.env.DATABASE_URL) {
+        console.log('ℹ️ Подключаемся к базе данных через DATABASE_URL');
+    } else {
+        console.log('ℹ️ Подключаемся к базе данных через DB_* переменные');
+    }
+}
+
+async function createTables() {
+    // Используем тот же пул для createTables
+    const gamePool = new Pool(poolConfig);
 
     const tables = [
         // Основная таблица игроков
