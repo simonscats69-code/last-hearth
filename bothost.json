@@ -3,6 +3,6 @@
     "dockerfile": "Dockerfile"
   },
   "run": {
-    "cmd": ["node", "src/index.js"]
+    "cmd": ["node", "index.js"]
   }
 }
