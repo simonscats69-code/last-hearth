@@ -4,6 +4,7 @@
   "description": "Постапокалиптический survival RPG Telegram Mini App",
   "main": "index.js",
   "scripts": {
+    "build": "npm install",
     "start": "node index.js",
     "dev": "node --watch index.js",
     "migrate": "node db/migrate.js"
