@@ -7,8 +7,6 @@ RUN npm ci --only=production
 
 COPY . .
 
-RUN chmod +x entrypoint.sh
-
 EXPOSE 3000
 
-ENTRYPOINT ["./entrypoint.sh"]
+CMD ["node", "index.js"]
