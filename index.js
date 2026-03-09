@@ -115,8 +115,7 @@ app.use(requestMiddleware);
 app.use(express.static(path.join(__dirname, 'public'), {
     maxAge: '1h',
     etag: true,
-    cacheControl: true,
-    immutable: true
+    cacheControl: true
 }));
 
 app.use('/api/game', gameRouter);
@@ -136,12 +135,6 @@ app.get('/health', healthLimiter, (req, res) => {
     });
 });
 
-app.get('/debug/memory', (req, res) => {
-    if (process.env.NODE_ENV === 'production') {
-        return res.status(403).end();
-    }
-    res.json(process.memoryUsage());
-});
 
 app.get('/ready', async (req, res) => {
     try {
@@ -190,3 +183,33 @@ function shutdown(signal) {
 }
 
 process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+process.on('uncaughtException', (err) => {
+    logger.error({ type: 'uncaughtException', message: err.message, stack: err.stack });
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    logger.error({ type: 'unhandledRejection', reason: String(reason) });
+    process.exit(1);
+});
+
+async function startServer() {
+    try {
+        await initDatabase();
+        logger.info('База данных инициализирована');
+        
+        await setupWebhook(app);
+        logger.info('Webhook настроен');
+        
+        server = app.listen(PORT, '0.0.0.0', () => {
+            logger.info(`Сервер запущен на порту ${PORT}`);
+        });
+    } catch (err) {
+        logger.error({ type: 'startup_error', message: err.message, stack: err.stack });
+        process.exit(1);
+    }
+}
+
+startServer();
