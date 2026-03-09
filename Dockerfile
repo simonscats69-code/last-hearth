@@ -1,12 +1,9 @@
 # Last Hearth - Telegram Mini App
 FROM node:18-alpine
 
-# Устанавливаем bash (по умолчанию в alpine есть только sh)
-RUN apk add --no-cache bash
-
 WORKDIR /app
 
-# Копируем package.json и устанавливаем зависимости
+# Устанавливаем зависимости
 COPY package*.json ./
 RUN npm install
 
@@ -19,6 +16,5 @@ RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3000
 
-# Запускаем через entrypoint.sh с bash
-ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "index.js"]
