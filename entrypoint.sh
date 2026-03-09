@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-echo "🚀 Запуск Last Hearth..."
-
-# Создаём папку для данных если её нет
+# Инициализация папки данных
 mkdir -p /app/data
+chmod 777 /app/data
+chown -R $(id -u):$(id -g) /app/data 2>/dev/null || true
 
-# Запускаем команду
+# Запуск основного приложения
 exec "$@"

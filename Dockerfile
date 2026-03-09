@@ -3,17 +3,18 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Копируем package.json и package-lock.json
+# Копируем package.json и устанавливаем зависимости
 COPY package*.json ./
-
-# Устанавливаем все зависимости
 RUN npm install
 
 # Копируем весь проект
 COPY . .
 
-# Порт
+# Копируем entrypoint и делаем исполняемым внутри контейнера
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 3000
 
-# Запускаем напрямую (без entrypoint.sh)
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "index.js"]
