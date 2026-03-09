@@ -3,8 +3,16 @@
  * Telegram Mini App
  */
 
-// Инициализация Telegram WebApp
-const tg = window.Telegram.WebApp;
+// Инициализация Telegram WebApp (с проверкой для разработки вне Telegram)
+const tg = window.Telegram?.WebApp || {
+    expand: () => {},
+    ready: () => {},
+    themeParams: {},
+    initDataUnsafe: { user: {} },
+    HapticFeedback: null,
+    sendData: () => {},
+    close: () => {}
+};
 tg.expand();
 tg.ready();
 
@@ -65,7 +73,7 @@ if ('serviceWorker' in navigator) {
 
 // Конфигурация
 const API_URL = ''; // Пустая строка = текущий хост
-const ADSGRAM_APP_ID = 'your_adsgram_app_id'; // Заменить на реальный ID
+const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || ''; // Загружается из env или пустая строка
 
 // Состояние игры
 let gameState = {
@@ -78,10 +86,14 @@ let gameState = {
 
 // AdsGram инициализация
 let Adsgram = null;
-if (typeof AdsgramInit === 'function') {
-    Adsgram = AdsgramInit({
-        appId: ADSGRAM_APP_ID
-    });
+if (typeof AdsgramInit === 'function' && ADSGRAM_APP_ID) {
+    try {
+        Adsgram = AdsgramInit({
+            appId: ADSGRAM_APP_ID
+        });
+    } catch (e) {
+        console.warn('AdsGram инициализация не удалась:', e);
+    }
 }
 
 /**
@@ -112,24 +124,34 @@ async function apiRequest(endpoint, options = {}) {
 
     try {
         const response = await fetch(`${API_URL}${endpoint}`, mergedOptions);
-        const data = await response.json();
         
-        // КРИТИЧЕСКИЙ БАГ #1: Обработка 401/403
+        // Проверяем статус ответа ДО парсинга JSON
         if (!response.ok) {
+            // Пытаемся получить текст ошибки
+            let errorMessage = 'Ошибка запроса';
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.error || errorMessage;
+            } catch (e) {
+                // Если не JSON, используем статус
+                errorMessage = `Ошибка ${response.status}`;
+            }
+            
             if (response.status === 401 || response.status === 403) {
                 showModal('⚠️ Сессия истекла', 'Пожалуйста, перезапустите приложение');
                 setTimeout(() => {
-                    if (window.telegram?.WebApp) {
-                        window.telegram.WebApp.close();
+                    if (tg) {
+                        tg.close();
                     } else {
                         window.location.reload();
                     }
                 }, 2000);
                 return { success: false, error: 'Сессия истекла' };
             }
-            throw new Error(data.error || 'Ошибка запроса');
+            throw new Error(errorMessage);
         }
         
+        const data = await response.json();
         return data;
     } catch (error) {
         console.error('API Error:', error);

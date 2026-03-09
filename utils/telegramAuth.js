@@ -42,6 +42,15 @@ function validateTelegramInitData(initData, botToken) {
             .update(botToken)
             .digest();
         
+        // Парсим данные пользователя для логирования
+        let userId = null;
+        try {
+            const userData = JSON.parse(data.user);
+            userId = userData.id;
+        } catch (e) {
+            // ignore parse errors
+        }
+        
         // Сортируем данные (кроме hash) и создаём строку
         const dataCheckString = Object.keys(data)
             .filter(key => key !== 'hash')
@@ -54,7 +63,23 @@ function validateTelegramInitData(initData, botToken) {
             .update(dataCheckString)
             .digest('hex');
 
-        if (hash !== data.hash) {
+        // Безопасное сравнение хешей с использованием timingSafeEqual
+        let isValid = false;
+        try {
+            const hashBuf = Buffer.from(hash);
+            const dataHashBuf = Buffer.from(data.hash);
+            
+            if (hashBuf.length === dataHashBuf.length) {
+                isValid = crypto.timingSafeEqual(hashBuf, dataHashBuf);
+            }
+        } catch (e) {
+            // Ошибка при сравнении - считаем невалидным
+            logger.warn({ type: 'ws_auth_failed', reason: 'hash_compare_error', userId, error: e.message });
+            return null;
+        }
+        
+        if (!isValid) {
+            logger.warn({ type: 'ws_auth_failed', reason: 'hash_mismatch', userId });
             return null;
         }
 

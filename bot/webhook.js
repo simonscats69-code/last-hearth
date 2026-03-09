@@ -52,10 +52,10 @@ async function setupWebhook(app) {
                 // Создаём начальный инвентарь
                 await query(`
                     UPDATE players SET inventory = $1 WHERE telegram_id = $2
-                `, [[
+                `, [JSON.stringify([
                     { id: '1', name: 'Консервы', type: 'food', hunger: 10 },
                     { id: '2', name: 'Вода', type: 'water', thirst: 15 }
-                ], telegramId]);
+                ]), telegramId]);
             } else {
                 // Обновляем username при повторном входе
                 if (username && player.username !== username) {

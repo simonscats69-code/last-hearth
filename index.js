@@ -7,10 +7,9 @@ const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
 const { logger, requestMiddleware } = require('./utils/logger');
-const { getMetrics, updateWebSocketMetrics } = require('./utils/realtime');
 const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/achievements');
-const { initWebSocket, getMetrics: getWebSocketMetrics } = require('./utils/realtime');
+const { initWebSocket, getMetrics, updateWebSocketMetrics } = require('./utils/realtime');
 const { telegramAuthMiddleware } = require('./utils/telegramAuth');
 const { initDatabase, query } = require('./db/database');
 const { setupWebhook } = require('./bot/webhook');
@@ -177,10 +176,6 @@ app.get('/metrics', (req, res) => {
     // Получаем метрики
     const metrics = getMetrics();
     
-    // Добавляем WebSocket метрики
-    const wsMetrics = getWebSocketMetrics();
-    metrics.websocket = wsMetrics;
-    
     res.json(metrics);
 });
 
@@ -204,12 +199,28 @@ app.use((err, req, res, next) => {
 });
 
 let server;
+let isShuttingDown = false;
 
 function shutdown(signal) {
     logger.info(`Получен сигнал ${signal}. Завершаем сервер...`);
+    
+    if (isShuttingDown) {
+        logger.warn('Процесс завершения уже запущен');
+        return;
+    }
+    isShuttingDown = true;
+    
     if (server) {
-        server.close(() => {
+        server.close(async () => {
             logger.info('HTTP сервер остановлен');
+            // Закрываем подключение к БД
+            try {
+                const { closePool } = require('./db/database');
+                await closePool();
+                logger.info('Подключение к БД закрыто');
+            } catch (err) {
+                logger.error('Ошибка закрытия БД:', err);
+            }
             process.exit(0);
         });
         setTimeout(() => {
@@ -217,7 +228,19 @@ function shutdown(signal) {
             process.exit(1);
         }, 10000);
     } else {
-        process.exit(0);
+        // Сервер ещё не запущен, ждём завершения инициализации
+        const checkServerInterval = setInterval(() => {
+            if (server) {
+                clearInterval(checkServerInterval);
+                shutdown(signal);
+            }
+        }, 100);
+        // Таймаут если сервер так и не запустится
+        setTimeout(() => {
+            clearInterval(checkServerInterval);
+            logger.error('Сервер не был инициализирован, принудительный exit');
+            process.exit(1);
+        }, 30000);
     }
 }
 

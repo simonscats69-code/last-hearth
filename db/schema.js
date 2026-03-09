@@ -93,6 +93,18 @@ async function createTables() {
         )
     `);
 
+    // Наборы предметов
+    await query(`
+        CREATE TABLE IF NOT EXISTS item_sets (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            description TEXT,
+            bonus_2 JSONB DEFAULT '{}',
+            bonus_3 JSONB DEFAULT '{}',
+            bonus_4 JSONB DEFAULT '{}'
+        )
+    `);
+
     // Предметы
     await query(`
         CREATE TABLE IF NOT EXISTS items (
@@ -103,19 +115,7 @@ async function createTables() {
             damage INTEGER DEFAULT 0,
             defense INTEGER DEFAULT 0,
             description TEXT,
-            set_id INTEGER
-        )
-    `);
-
-    // Наборы предметов
-    await query(`
-        CREATE TABLE IF NOT EXISTS item_sets (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            description TEXT,
-            bonus_2 JSONB DEFAULT '{}',
-            bonus_3 JSONB DEFAULT '{}',
-            bonus_4 JSONB DEFAULT '{}'
+            set_id INTEGER REFERENCES item_sets(id)
         )
     `);
 

@@ -78,7 +78,7 @@ function validateString(str, name, maxLength = 50) {
 async function logPlayerAction(playerId, action, meta = {}) {
     try {
         await query(
-            'INSERT INTO player_logs (player_id, action, meta, created_at) VALUES ($1, $2, $3, NOW())',
+            'INSERT INTO player_logs (player_id, action, metadata, created_at) VALUES ($1, $2, $3, NOW())',
             [playerId, action, serializeJSONField(meta)]
         );
     } catch (err) {

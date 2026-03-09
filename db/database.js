@@ -25,7 +25,7 @@ if (process.env.DATABASE_URL) {
 
 const pool = new Pool({
     ...poolConfig,
-    max: 20,
+    max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
 });
@@ -75,7 +75,7 @@ function safeJsonParse(value, fallback = {}) {
  * @param {array} params - Параметры запроса
  * @returns {Promise<object>} Результат запроса
  */
-async function query(text, params) {
+async function query(text, params = []) {
     const start = Date.now();
     try {
         const res = await pool.query(text, params);
@@ -290,6 +290,22 @@ async function initDatabase() {
             color VARCHAR(20)
         );
 
+        -- Таблица сетов предметов
+        CREATE TABLE IF NOT EXISTS item_sets (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            icon VARCHAR(50),
+            
+            -- Бонусы сета
+            -- 2 предмета = малый бонус
+            bonus_2 JSONB DEFAULT '{"health": 10, "damage": 2}',
+            -- 3 предмета = средний бонус
+            bonus_3 JSONB DEFAULT '{"health": 25, "damage": 5, "crit_chance": 2}',
+            -- 4 предмета = большой бонус
+            bonus_4 JSONB DEFAULT '{"health": 50, "damage": 10, "crit_chance": 5, "crit_damage": 10}'
+        );
+
         -- Таблица предметов
         CREATE TABLE IF NOT EXISTS items (
             id SERIAL PRIMARY KEY,
@@ -333,22 +349,6 @@ async function initDatabase() {
             
             icon VARCHAR(50),
             image_url VARCHAR(500)
-        );
-
-        -- Таблица сетов предметов
-        CREATE TABLE IF NOT EXISTS item_sets (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            description TEXT,
-            icon VARCHAR(50),
-            
-            -- Бонусы сета
-            -- 2 предмета = малый бонус
-            bonus_2 JSONB DEFAULT '{"health": 10, "damage": 2}',
-            -- 3 предмета = средний бонус
-            bonus_3 JSONB DEFAULT '{"health": 25, "damage": 5, "crit_chance": 2}',
-            -- 4 предмета = большой бонус
-            bonus_4 JSONB DEFAULT '{"health": 50, "damage": 10, "crit_chance": 5, "crit_damage": 10}'
         );
 
         -- Связь предметов с сетами
@@ -922,33 +922,33 @@ async function seedDatabase() {
             name: 'Военный сет', 
             description: 'Армейская экипировка выжившего', 
             icon: '🎖️',
-            bonus_2: '{"damage": 3, "defense": 2}',
-            bonus_3: '{"damage": 7, "defense": 5, "health": 20}',
-            bonus_4: '{"damage": 15, "defense": 10, "health": 50, "crit_chance": 3}'
+            bonus_2: { damage: 3, defense: 2 },
+            bonus_3: { damage: 7, defense: 5, health: 20 },
+            bonus_4: { damage: 15, defense: 10, health: 50, crit_chance: 3 }
         },
         { 
             name: 'Медицинский сет', 
             description: 'Оборудование для выживания', 
             icon: '🏥',
-            bonus_2: '{"health": 15, "medicine_effect": 5}',
-            bonus_3: '{"health": 35, "medicine_effect": 10, "radiation_resist": 5}',
-            bonus_4: '{"health": 75, "medicine_effect": 20, "radiation_resist": 15, "infection_resist": 10}'
+            bonus_2: { health: 15, medicine_effect: 5 },
+            bonus_3: { health: 35, medicine_effect: 10, radiation_resist: 5 },
+            bonus_4: { health: 75, medicine_effect: 20, radiation_resist: 15, infection_resist: 10 }
         },
         { 
             name: 'Сталкерский сет', 
             description: 'Экипировка для исследования зоны', 
             icon: '🎒',
-            bonus_2: '{"luck": 3, "agility": 2}',
-            bonus_3: '{"luck": 7, "agility": 5, "energy": 10}',
-            bonus_4: '{"luck": 15, "agility": 10, "energy": 25, "radiation_resist": 10}'
+            bonus_2: { luck: 3, agility: 2 },
+            bonus_3: { luck: 7, agility: 5, energy: 10 },
+            bonus_4: { luck: 15, agility: 10, energy: 25, radiation_resist: 10 }
         },
         { 
             name: 'Бандитский сет', 
             description: 'Оружие и защита мародёра', 
             icon: '💣',
-            bonus_2: '{"damage": 4, "crit_chance": 2}',
-            bonus_3: '{"damage": 9, "crit_chance": 5, "crit_damage": 10}',
-            bonus_4: '{"damage": 18, "crit_chance": 10, "crit_damage": 25, "pvp_damage": 5}'
+            bonus_2: { damage: 4, crit_chance: 2 },
+            bonus_3: { damage: 9, crit_chance: 5, crit_damage: 10 },
+            bonus_4: { damage: 18, crit_chance: 10, crit_damage: 25, pvp_damage: 5 }
         }
     ];
 
@@ -1003,18 +1003,18 @@ async function seedDatabase() {
         { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊' },
         
         // Оружие
-        { name: 'Нож', description: 'Простой нож выживания', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: '{"damage": 5}', durability: 50, max_durability: 50, price: 30, icon: '🔪' },
-        { name: 'Бита', description: 'Бейсбольная бита', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: '{"damage": 8}', durability: 30, max_durability: 30, price: 25, icon: '🏏' },
-        { name: 'Пистолет', description: 'Травматический пистолет', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', stats: '{"damage": 20, "ammo": 8}', durability: 100, max_durability: 100, price: 200, icon: '🔫' },
-        { name: 'Автомат', description: 'Автоматическое оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: '{"damage": 40, "ammo": 30}', durability: 200, max_durability: 200, price: 500, icon: '⚔️' },
-        { name: 'Дробовик', description: 'Охотничий дробовик', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: '{"damage": 60, "ammo": 5}', durability: 150, max_durability: 150, price: 750, icon: '🔫' },
-        { name: 'Снайперка', description: 'Снайперская винтовка', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: '{"damage": 100, "ammo": 5}', durability: 300, max_durability: 300, price: 1500, icon: '🔭' },
+        { name: 'Нож', description: 'Простой нож выживания', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 5 }, durability: 50, max_durability: 50, price: 30, icon: '🔪' },
+        { name: 'Бита', description: 'Бейсбольная бита', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 8 }, durability: 30, max_durability: 30, price: 25, icon: '🏏' },
+        { name: 'Пистолет', description: 'Травматический пистолет', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', stats: { damage: 20, ammo: 8 }, durability: 100, max_durability: 100, price: 200, icon: '🔫' },
+        { name: 'Автомат', description: 'Автоматическое оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 40, ammo: 30 }, durability: 200, max_durability: 200, price: 500, icon: '⚔️' },
+        { name: 'Дробовик', description: 'Охотничий дробовик', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 60, ammo: 5 }, durability: 150, max_durability: 150, price: 750, icon: '🔫' },
+        { name: 'Снайперка', description: 'Снайперская винтовка', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 100, ammo: 5 }, durability: 300, max_durability: 300, price: 1500, icon: '🔭' },
         
         // Броня
-        { name: 'Кожаная куртка', description: 'Простая защита', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: '{"defense": 5}', durability: 50, max_durability: 50, price: 40, icon: '🧥' },
-        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', stats: '{"defense": 25}', durability: 150, max_durability: 150, price: 300, icon: '🦺' },
-        { name: 'Противогаз', description: 'Защита от радиации', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: '{"radiation_resist": 15}', durability: 100, max_durability: 100, price: 100, icon: '😷' },
-        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: '{"defense": 10}', durability: 80, max_durability: 80, price: 80, icon: '⛑️' },
+        { name: 'Кожаная куртка', description: 'Простая защита', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5 }, durability: 50, max_durability: 50, price: 40, icon: '🧥' },
+        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', stats: { defense: 25 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
+        { name: 'Противогаз', description: 'Защита от радиации', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { radiation_resist: 15 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
+        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { defense: 10 }, durability: 80, max_durability: 80, price: 80, icon: '⛑️' },
         
         // Ресурсы
         { name: 'Металлолом', description: 'Металлолом для крафта', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 5, icon: '🔩' },
@@ -1034,16 +1034,16 @@ async function seedDatabase() {
         { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, icon: '💥' },
         { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 800, icon: '🏥' },
         { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, icon: '🛡️' },
-        { name: 'Плазменный пистолет', description: 'Экспериментальное оружие', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: '{"damage": 80, "ammo": 12}', durability: 250, max_durability: 250, price: 2500, icon: '🔮' },
-        { name: 'Экзо-костюм', description: 'Тяжёлая броня', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: '{"defense": 50, "radiation_resist": 30}', durability: 300, max_durability: 300, price: 3000, icon: '🤖' },
+        { name: 'Плазменный пистолет', description: 'Экспериментальное оружие', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 80, ammo: 12 }, durability: 250, max_durability: 250, price: 2500, icon: '🔮' },
+        { name: 'Экзо-костюм', description: 'Тяжёлая броня', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, icon: '🤖' },
         { name: 'Титан', description: 'Редкий металл для крафта', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 100, icon: '🔶' },
         { name: 'Уран', description: 'Радиоактивный материал', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 150, icon: '☢️' },
         
         // LEGENDARY предметы (для локаций 6-7)
         { name: 'Сыворотка мутанта', description: 'Даёт сверхспособности', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬' },
         { name: 'Эликсир бессмертия', description: 'Полное воскрешение', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, icon: '⭐' },
-        { name: 'Лазерная винтовка', description: 'Оружие из будущего', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', stats: '{"damage": 150, "ammo": 20}', durability: 500, max_durability: 500, price: 10000, icon: '⚡' },
-        { name: 'Броня стражей', description: 'Легендарная броня', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: '{"defense": 80, "radiation_resist": 50}', durability: 500, max_durability: 500, price: 15000, icon: '👑' },
+        { name: 'Лазерная винтовка', description: 'Оружие из будущего', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', stats: { damage: 150, ammo: 20 }, durability: 500, max_durability: 500, price: 10000, icon: '⚡' },
+        { name: 'Броня стражей', description: 'Легендарная броня', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, icon: '👑' },
         { name: 'Кристалл силы', description: 'Осколок метеорита', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 500, icon: '💎' },
         { name: 'Ядерный элемент', description: 'Сильнейшая энергия', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 1000, icon: '🔥' }
     ];
@@ -1107,52 +1107,61 @@ function getMarketListingLimit(level) {
  * @returns {object} - Результат создания
  */
 async function createMarketListing(sellerId, itemData, quantity, price, starsPrice, durationHours) {
-    const player = await queryOne('SELECT id, level FROM players WHERE telegram_id = $1', [sellerId]);
-    if (!player) return { success: false, error: 'Игрок не найден' };
-    
-    // Проверяем лимит объявлений
-    const limit = getMarketListingLimit(player.level);
-    const currentCount = await getActiveListingsCount(player.id);
-    
-    if (currentCount >= limit) {
-        return { success: false, error: `Достигнут лимит объявлений (${limit}). Отмените или дождитесь окончания существующих.` };
-    }
-    
-    // Проверяем, что у игрока есть предмет в инвентаре
-    const playerData = await queryOne('SELECT inventory FROM players WHERE id = $1', [player.id]);
-    const inventory = playerData.inventory || {};
-    const itemKey = itemData.id.toString();
-    
-    if (!inventory[itemKey] || inventory[itemKey] < quantity) {
-        return { success: false, error: 'Недостаточно предметов в инвентаре' };
-    }
-    
-    // Удаляем предметы из инвентаря
-    inventory[itemKey] -= quantity;
-    if (inventory[itemKey] <= 0) {
-        delete inventory[itemKey];
-    }
-    
-    await query('UPDATE players SET inventory = $1 WHERE id = $2', [inventory, player.id]);
-    
-    // Вычисляем время окончания
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + durationHours);
-    
-    // Создаём объявление
-    const result = await query(
-        `INSERT INTO market_listings 
-         (seller_id, item_id, item_data, quantity, price, stars_price, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id`,
-        [sellerId, itemData.id, JSON.stringify(itemData), quantity, price, starsPrice, expiresAt]
-    );
-    
-    return {
-        success: true,
-        listingId: result.rows[0].id,
-        message: `Объявление создано на ${durationHours} часов`
-    };
+    // Используем транзакцию для атомарности операции
+    return await transaction(async (client) => {
+        const playerResult = await client.query('SELECT id, level FROM players WHERE telegram_id = $1', [sellerId]);
+        const player = playerResult.rows[0];
+        if (!player) return { success: false, error: 'Игрок не найден' };
+        
+        // Проверяем лимит объявлений
+        const limit = getMarketListingLimit(player.level);
+        const countResult = await client.query(
+            'SELECT COUNT(*) as cnt FROM market_listings WHERE seller_id = $1 AND status = \'active\' AND expires_at > NOW()',
+            [player.id]
+        );
+        const currentCount = parseInt(countResult.rows[0].cnt);
+        
+        if (currentCount >= limit) {
+            return { success: false, error: `Достигнут лимит объявлений (${limit}). Отмените или дождитесь окончания существующих.` };
+        }
+        
+        // Проверяем, что у игрока есть предмет в инвентаре
+        const playerDataResult = await client.query('SELECT inventory FROM players WHERE id = $1', [player.id]);
+        const playerData = playerDataResult.rows[0];
+        const inventory = playerData.inventory || {};
+        const itemKey = itemData.id.toString();
+        
+        if (!inventory[itemKey] || inventory[itemKey] < quantity) {
+            return { success: false, error: 'Недостаточно предметов в инвентаре' };
+        }
+        
+        // Удаляем предметы из инвентаря
+        inventory[itemKey] -= quantity;
+        if (inventory[itemKey] <= 0) {
+            delete inventory[itemKey];
+        }
+        
+        await client.query('UPDATE players SET inventory = $1 WHERE id = $2', [inventory, player.id]);
+        
+        // Вычисляем время окончания
+        const expiresAt = new Date();
+        expiresAt.setHours(expiresAt.getHours() + durationHours);
+        
+        // Создаём объявление
+        const result = await client.query(
+            `INSERT INTO market_listings 
+             (seller_id, item_id, item_data, quantity, price, stars_price, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING id`,
+            [sellerId, itemData.id, JSON.stringify(itemData), quantity, price, starsPrice, expiresAt]
+        );
+        
+        return {
+            success: true,
+            listingId: result.rows[0].id,
+            message: `Объявление создано на ${durationHours} часов`
+        };
+    });
 }
 
 /**
@@ -1162,110 +1171,113 @@ async function createMarketListing(sellerId, itemData, quantity, price, starsPri
  * @returns {object} - Результат покупки
  */
 async function buyFromMarket(buyerId, listingId) {
-    // Получаем объявление
-    const listing = await queryOne(
-        `SELECT ml.*, p.username, p.first_name 
-         FROM market_listings ml 
-         LEFT JOIN players p ON ml.seller_id = p.telegram_id
-         WHERE ml.id = $1`,
-        [listingId]
-    );
-    
-    if (!listing) {
-        return { success: false, error: 'Объявление не найдено' };
-    }
-    
-    if (listing.status !== 'active') {
-        return { success: false, error: 'Объявление уже неактивно' };
-    }
-    
-    if (new Date(listing.expires_at) < new Date()) {
-        return { success: false, error: 'Срок объявления истёк' };
-    }
-    
-    if (listing.seller_id === buyerId) {
-        return { success: false, error: 'Нельзя купить свой товар' };
-    }
-    
-    // Получаем данные покупателя
-    const buyer = await queryOne('SELECT * FROM players WHERE telegram_id = $1', [buyerId]);
-    if (!buyer) return { success: false, error: 'Игрок не найден' };
-    
-    // Проверяем достаточно ли денег
-    const totalPrice = listing.price * listing.quantity;
-    const totalStarsPrice = listing.stars_price * listing.quantity;
-    
-    if (buyer.coins < totalPrice) {
-        return { success: false, error: 'Недостаточно монет' };
-    }
-    
-    if (buyer.stars < totalStarsPrice) {
-        return { success: false, error: 'Недостаточно звёзд' };
-    }
-    
-    // Вычисляем комиссию (5%)
-    const commission = Math.floor(totalPrice * 0.05);
-    const sellerGets = totalPrice - commission;
-    
-    // Переводим монеты
-    
-    // Обновляем баланс покупателя
-    await query(
-        'UPDATE players SET coins = coins - $1, stars = stars - $2 WHERE id = $3',
-        [totalPrice, totalStarsPrice, buyer.id]
-    );
-    
-    // Начисляем продавцу
-    await query(
-        'UPDATE players SET coins = coins + $1 WHERE telegram_id = $2',
-        [sellerGets, listing.seller_id]
-    );
-    
-    // Добавляем предмет покупателю
-    const itemData = listing.item_data;
-    const inventory = buyer.inventory || {};
-    const itemKey = itemData.id.toString();
-    
-    if (inventory[itemKey]) {
-        inventory[itemKey] += listing.quantity;
-    } else {
-        inventory[itemKey] = listing.quantity;
-    }
-    
-    await query('UPDATE players SET inventory = $1 WHERE id = $2', [inventory, buyer.id]);
-    
-    // Обновляем объявление
-    await query(
-        `UPDATE market_listings 
-         SET status = 'sold', sold_at = NOW() 
-         WHERE id = $1`,
-        [listingId]
-    );
-    
-    // Записываем в историю (для обеих сторон)
-    await query(
-        `INSERT INTO market_history 
-         (listing_id, seller_id, buyer_id, item_id, item_data, quantity, price, stars_price, commission, transaction_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'sale')`,
-        [listingId, listing.seller_id, buyerId, listing.item_id, listing.item_data, listing.quantity, listing.price, listing.stars_price, commission]
-    );
-    
-    await query(
-        `INSERT INTO market_history 
-         (listing_id, seller_id, buyer_id, item_id, item_data, quantity, price, stars_price, commission, transaction_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'purchase')`,
-        [listingId, listing.seller_id, buyerId, listing.item_id, listing.item_data, listing.quantity, listing.price, listing.stars_price, 0]
-    );
-    
-    return {
-        success: true,
-        message: `Куплено ${listing.quantity}x ${itemData.name} за ${totalPrice} монет`,
-        item: itemData,
-        quantity: listing.quantity,
-        totalPrice: totalPrice,
-        commission: commission,
-        sellerGets: sellerGets
-    };
+    // Используем транзакцию для атомарности операции
+    return await transaction(async (client) => {
+        // Получаем объявление
+        const listingResult = await client.query(
+            `SELECT ml.*, p.username, p.first_name 
+             FROM market_listings ml 
+             LEFT JOIN players p ON ml.seller_id = p.telegram_id
+             WHERE ml.id = $1`,
+            [listingId]
+        );
+        const listing = listingResult.rows[0];
+        
+        if (!listing) {
+            return { success: false, error: 'Объявление не найдено' };
+        }
+        
+        if (listing.status !== 'active') {
+            return { success: false, error: 'Объявление уже неактивно' };
+        }
+        
+        if (new Date(listing.expires_at) < new Date()) {
+            return { success: false, error: 'Срок объявления истёк' };
+        }
+        
+        if (listing.seller_id === buyerId) {
+            return { success: false, error: 'Нельзя купить свой товар' };
+        }
+        
+        // Получаем данные покупателя
+        const buyerResult = await client.query('SELECT * FROM players WHERE telegram_id = $1', [buyerId]);
+        const buyer = buyerResult.rows[0];
+        if (!buyer) return { success: false, error: 'Игрок не найден' };
+        
+        // Проверяем достаточно ли денег
+        const totalPrice = listing.price * listing.quantity;
+        const totalStarsPrice = listing.stars_price * listing.quantity;
+        
+        if (buyer.coins < totalPrice) {
+            return { success: false, error: 'Недостаточно монет' };
+        }
+        
+        if (buyer.stars < totalStarsPrice) {
+            return { success: false, error: 'Недостаточно звёзд' };
+        }
+        
+        // Вычисляем комиссию (5%)
+        const commission = Math.floor(totalPrice * 0.05);
+        const sellerGets = totalPrice - commission;
+        
+        // Обновляем баланс покупателя
+        await client.query(
+            'UPDATE players SET coins = coins - $1, stars = stars - $2 WHERE id = $3',
+            [totalPrice, totalStarsPrice, buyer.id]
+        );
+        
+        // Начисляем продавцу
+        await client.query(
+            'UPDATE players SET coins = coins + $1 WHERE telegram_id = $2',
+            [sellerGets, listing.seller_id]
+        );
+        
+        // Добавляем предмет покупателю
+        const itemData = listing.item_data;
+        const inventory = buyer.inventory || {};
+        const itemKey = itemData.id.toString();
+        
+        if (inventory[itemKey]) {
+            inventory[itemKey] += listing.quantity;
+        } else {
+            inventory[itemKey] = listing.quantity;
+        }
+        
+        await client.query('UPDATE players SET inventory = $1 WHERE id = $2', [inventory, buyer.id]);
+        
+        // Обновляем объявление
+        await client.query(
+            `UPDATE market_listings 
+             SET status = 'sold', sold_at = NOW() 
+             WHERE id = $1`,
+            [listingId]
+        );
+        
+        // Записываем в историю (для обеих сторон)
+        await client.query(
+            `INSERT INTO market_history 
+             (listing_id, seller_id, buyer_id, item_id, item_data, quantity, price, stars_price, commission, transaction_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'sale')`,
+            [listingId, listing.seller_id, buyerId, listing.item_id, listing.item_data, listing.quantity, listing.price, listing.stars_price, commission]
+        );
+        
+        await client.query(
+            `INSERT INTO market_history 
+             (listing_id, seller_id, buyer_id, item_id, item_data, quantity, price, stars_price, commission, transaction_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'purchase')`,
+            [listingId, listing.seller_id, buyerId, listing.item_id, listing.item_data, listing.quantity, listing.price, listing.stars_price, 0]
+        );
+        
+        return {
+            success: true,
+            message: `Куплено ${listing.quantity}x ${itemData.name} за ${totalPrice} монет`,
+            item: itemData,
+            quantity: listing.quantity,
+            totalPrice: totalPrice,
+            commission: commission,
+            sellerGets: sellerGets
+        };
+    });
 }
 
 /**
@@ -1411,7 +1423,9 @@ async function getMarketListings(filters = {}) {
     
     // Сортировка
     const sortBy = filters.sortBy || 'created_at';
-    const sortOrder = filters.sortOrder || 'DESC';
+    const sortOrder = ['ASC', 'DESC'].includes(filters.sortOrder?.toUpperCase()) 
+        ? filters.sortOrder.toUpperCase() 
+        : 'DESC';
     
     const sortMap = {
         'price_asc': 'ml.price ASC',
@@ -1501,37 +1515,6 @@ async function cleanupExpiredListings() {
     return result.rowCount;
 }
 
-module.exports = {
-    pool,
-    query,
-    queryOne,
-    queryAll,
-    initDatabase,
-    // Функции для работы с переломами
-    addBrokenBone,
-    healBrokenBone,
-    getBrokenBones,
-    // Функции для работы с инфекциями
-    addInfection,
-    healInfection,
-    getInfections,
-    processInfections,
-    // Проверка состояния игрока
-    checkPlayerStatus,
-    // Функции рынка
-    getActiveListingsCount,
-    getMarketListingLimit,
-    createMarketListing,
-    buyFromMarket,
-    cancelMarketListing,
-    renewMarketListing,
-    getMarketListings,
-    getMyMarketListings,
-    incrementListingViews,
-    getMarketHistory,
-    cleanupExpiredListings
-};
-
 /**
  * Добавить перелом игроку
  * @param {number} playerId - ID игрока
@@ -1593,7 +1576,7 @@ async function healBrokenBone(playerId, boneType = 'all') {
             'UPDATE players SET broken_leg = false, broken_arm = false, broken_bones = 0 WHERE id = $1',
             [playerId]
         );
-        return { success: true, message: '� all Все переломы излечены!', broken_bones: 0 };
+        return { success: true, message: '🦴 Все переломы излечены!', broken_bones: 0 };
     }
     
     if (boneType === 'leg' && !player.broken_leg) {
@@ -2065,7 +2048,7 @@ async function changeReferralCode(playerId, newCode) {
     if (!player) {
         return { success: false, error: 'Игрок не найден' };
     }
-    if (player.referral_code_changed) {
+    if (player.referral_code_changed === true) {
         return { success: false, error: 'Вы уже меняли реферальный код' };
     }
     
@@ -3086,6 +3069,16 @@ async function getClanBossHistory(clanId, limit = 10) {
     );
 }
 
+/**
+ * Закрыть пул подключений к БД (для graceful shutdown)
+ * @returns {Promise<void>}
+ */
+async function closePool() {
+    if (pool) {
+        await pool.end();
+    }
+}
+
 // Экспорт функций
 module.exports = {
     pool,
@@ -3098,6 +3091,29 @@ module.exports = {
     initDatabase,
     getRankByLevel,
     updateAchievementProgress,
+    // Функции для работы с переломами
+    addBrokenBone,
+    healBrokenBone,
+    getBrokenBones,
+    // Функции для работы с инфекциями
+    addInfection,
+    healInfection,
+    getInfections,
+    processInfections,
+    // Проверка состояния игрока
+    checkPlayerStatus,
+    // Функции рынка
+    getActiveListingsCount,
+    getMarketListingLimit,
+    createMarketListing,
+    buyFromMarket,
+    cancelMarketListing,
+    renewMarketListing,
+    getMarketListings,
+    getMyMarketListings,
+    incrementListingViews,
+    getMarketHistory,
+    cleanupExpiredListings,
     // Функции для рефералов
     generateReferralCode,
     createReferralCode,
@@ -3135,5 +3151,7 @@ module.exports = {
     spawnClanBoss,
     getClanBoss,
     damageClanBoss,
-    getClanBossHistory
+    getClanBossHistory,
+    // Функция для graceful shutdown
+    closePool
 };

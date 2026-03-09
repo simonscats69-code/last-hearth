@@ -17,6 +17,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { calculateCraftSuccess } = require('../../utils/gameConstants');
 const { logger, logGameAction, logPlayerError } = require('../../utils/logger');
+const { withPlayerLock } = require('../../utils/transactions');
 
 // ============================================================================
 // Утилиты

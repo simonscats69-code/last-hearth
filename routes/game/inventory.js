@@ -267,8 +267,8 @@ router.post('/use-item', async (req, res) => {
                         await client.query(`
                             UPDATE players 
                             SET broken_leg = false, broken_arm = false,
-                                inventory = $2
-                            WHERE id = $3
+                                inventory = $1
+                            WHERE id = $2
                         `, [JSON.stringify(newInventory), playerId]);
                         
                         message = `Перевязали ${item.name}. Переломы излечены`;

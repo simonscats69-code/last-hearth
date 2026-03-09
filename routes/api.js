@@ -4,11 +4,14 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, queryAll } = require('../db/database');
+const { query, queryOne, queryAll, safeJsonParse } = require('../db/database');
 
 /**
- * Получение списка всех предметов (для магазина)
+ * Безопасный парсинг JSON условия достижения
  */
+function parseAchievementCondition(condition) {
+    return safeJsonParse(condition, {});
+}
 router.get('/shop/items', async (req, res) => {
     try {
         const items = await queryAll(`
@@ -226,7 +229,7 @@ router.get('/achievements/progress', async (req, res) => {
 
         // Вычисляем прогресс для каждого достижения
         const progress = allAchievements.map(ach => {
-            const condition = typeof ach.condition === 'string' ? JSON.parse(ach.condition) : ach.condition;
+            const condition = parseAchievementCondition(ach.condition);
             let currentValue = 0;
             let isCompleted = progressMap[ach.id]?.completed || false;
 
