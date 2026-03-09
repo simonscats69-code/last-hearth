@@ -12,13 +12,8 @@ RUN npm install
 # Копируем весь проект
 COPY . .
 
-# Копируем и делаем исполняемым entrypoint
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
 # Порт
 EXPOSE 3000
 
-# Запуск через entrypoint
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Запускаем напрямую (без entrypoint.sh)
 CMD ["node", "index.js"]
