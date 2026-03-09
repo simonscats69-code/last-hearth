@@ -1,2 +1,2 @@
-﻿"#!/bin/sh"  
-"exec node index.js" 
+﻿#!/bin/sh
+exec node index.js
