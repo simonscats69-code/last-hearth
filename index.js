@@ -6,11 +6,11 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
-const { logger, requestMiddleware } = require('./src/utils/logger');
-const { initDatabase, query } = require('./src/db/database');
-const { setupWebhook } = require('./src/bot/webhook');
-const gameRouter = require('./src/routes/game');
-const apiRouter = require('./src/routes/api');
+const { logger, requestMiddleware } = require('./utils/logger');
+const { initDatabase, query } = require('./db/database');
+const { setupWebhook } = require('./bot/webhook');
+const gameRouter = require('./routes/game');
+const apiRouter = require('./routes/api');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -190,31 +190,3 @@ function shutdown(signal) {
 }
 
 process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-process.on('unhandledRejection', (err) => {
-    logger.error('Unhandled Rejection', { error: String(err), stack: err?.stack });
-});
-process.on('uncaughtException', (err) => {
-    logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
-    shutdown('uncaughtException');
-});
-
-async function startServer() {
-    try {
-        await initDatabase();
-        logger.info('✓ База данных инициализирована');
-        await setupWebhook(app);
-        logger.info('✓ Telegram webhook настроен');
-        server = app.listen(PORT, '0.0.0.0', () => {
-            logger.info(`✓ Сервер запущен на порту ${PORT}`);
-            logger.info(`  Mini App: http://localhost:${PORT}`);
-            logger.info(`  Health:   http://localhost:${PORT}/health`);
-            logger.info(`  Ready:    http://localhost:${PORT}/ready`);
-        });
-    } catch (error) {
-        logger.error('✗ Ошибка запуска сервера:', { error: error.message, stack: error.stack });
-        process.exit(1);
-    }
-}
-
-startServer();
