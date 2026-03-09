@@ -10,7 +10,12 @@ RUN npm install
 # Копируем весь проект
 COPY . .
 
+# Копируем entrypoint и делаем исполняемым
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 3000
 
-# Запускаем напрямую без entrypoint.sh
+# Запускаем через entrypoint.sh
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "index.js"]
