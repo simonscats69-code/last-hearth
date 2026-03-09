@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    
+    <!-- Telegram Mini App мета-теги -->
+    <meta name="telegram-web-app-version" content="1.0.0">
+    <meta name="telegram-web-app-enabled" content="true">
+    <meta name="telegram-web-app-platform" content="ios/android">
+    
+    <!-- SEO -->
+    <meta name="description" content="Последний Очаг - постапокалиптическая RPG игра">
+    <meta name="theme-color" content="#1a1814">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <title>Последний Очаг</title>
+    
+    <!-- Предподключение для внешних ресурсов -->
+    <link rel="preconnect" href="https://telegram.org">
+    <link rel="preconnect" href="https://adsgram.app">
+    
+    <!-- Основные стили -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Экран загрузки -->
+        <div id="loading-screen" class="screen active">
+            <div class="loader">
+                <div class="loader-icon">🏚️</div>
+                <h1>Последний Очаг</h1>
+                <p>Загрузка...</p>
+            </div>
+        </div>
+
+        <!-- Главное меню -->
+        <div id="main-screen" class="screen">
+            <!-- Хедер с статами -->
+            <header class="game-header">
+                <div class="player-info">
+                    <span class="player-level">Уровень <span id="player-level">1</span></span>
+                    <span class="player-rank" id="player-rank"></span>
+                    <span class="player-name" id="player-name">Выживший</span>
+                </div>
+                <div class="player-stats">
+                    <div class="stat-bar">
+                        <div class="bar health-bar" id="health-bar" style="width: 100%"></div>
+                        <span class="bar-text">❤️ <span id="health-text">100/100</span></span>
+                    </div>
+                    <div class="stat-bar">
+                        <div class="bar energy-bar" id="energy-bar" style="width: 100%"></div>
+                        <span class="bar-text">⚡ <span id="energy-text">100/100</span></span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Текущая локация -->
+            <section class="location-section">
+                <div class="location-card" id="current-location">
+                    <div class="location-icon" id="location-icon">🏠</div>
+                    <div class="location-info">
+                        <h3 id="location-name">Спальный район</h3>
+                        <p id="location-desc">Тихий жилой комплекс</p>
+                        <div class="location-stats">
+                            <span class="radiation">☢️ <span id="location-radiation">0</span></span>
+                            <span class="danger">⚠️ Опасность: <span id="location-danger">1</span>/7</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Основные кнопки действий -->
+            <section class="actions-section">
+                <button class="action-btn search-btn" id="search-btn">
+                    <span class="btn-icon">🔍</span>
+                    <span class="btn-text">Искать</span>
+                    <span class="btn-cost">-1 ⚡</span>
+                </button>
+                
+                <button class="action-btn map-btn" id="map-btn">
+                    <span class="btn-icon">🗺️</span>
+                    <span class="btn-text">Карта</span>
+                </button>
+
+                <button class="action-btn inventory-btn" id="inventory-btn">
+                    <span class="btn-icon">🎒</span>
+                    <span class="btn-text">Инвентарь</span>
+                </button>
+            </section>
+
+            <!-- Статусы персонажа -->
+            <section class="status-section">
+                <div class="status-grid">
+                    <div class="status-item">
+                        <span class="status-icon">🍞</span>
+                        <span class="status-value" id="hunger-value">100%</span>
+                        <span class="status-label">Голод</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-icon">💧</span>
+                        <span class="status-value" id="thirst-value">100%</span>
+                        <span class="status-label">Жажда</span>
+                    </div>
+                    <div class="status-item danger">
+                        <span class="status-icon">☢️</span>
+                        <span class="status-value" id="radiation-value">0</span>
+                        <span class="status-label">Радиация</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-icon">💰</span>
+                        <span class="status-value" id="coins-value">0</span>
+                        <span class="status-label">Монеты</span>
+                    </div>
+                </div>
+                
+                <!-- Состояния: переломы и инфекции -->
+                <div class="conditions-grid" id="conditions-grid" style="display: none;">
+                    <div class="condition-item broken-bones" id="broken-bones-display" style="display: none;">
+                        <span class="condition-icon">🦴</span>
+                        <span class="condition-text" id="broken-bones-text">Переломы: 0</span>
+                        <span class="condition-effect">-50% ⚡</span>
+                    </div>
+                    <div class="condition-item infections" id="infections-display" style="display: none;">
+                        <span class="condition-icon">🤒</span>
+                        <span class="condition-text" id="infections-text">Инфекции: 0</span>
+                        <span class="condition-effect" id="infection-effect">-10% XP</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Дополнительные кнопки -->
+            <section class="extra-actions">
+                <button class="extra-btn" id="bosses-btn">
+                    <span>👹</span> Боссы
+                </button>
+                <button class="extra-btn" id="shop-btn">
+                    <span>🛒</span> Магазин
+                </button>
+                <button class="extra-btn" id="rating-btn">
+                    <span>🏆</span> Рейтинг
+                </button>
+                <button class="extra-btn" id="pvp-btn">
+                    <span>⚔️</span> PvP
+                </button>
+            </section>
+
+            <!-- Кнопки лечения (показываются при наличии переломов/инфекций) -->
+            <section class="heal-actions" id="heal-actions" style="display: none;">
+                <button class="heal-btn" id="heal-bones-btn">
+                    <span>🦴</span> Лечить переломы
+                </button>
+                <button class="heal-btn" id="heal-infections-btn">
+                    <span>💊</span> Лечить инфекции
+                </button>
+            </section>
+
+            <!-- Нижняя навигация -->
+            <nav class="bottom-nav">
+                <button class="nav-btn active" data-screen="main">
+                    <span>🏠</span>
+                    <label>Главная</label>
+                </button>
+                <button class="nav-btn" data-screen="inventory">
+                    <span>🎒</span>
+                    <label>Инвентарь</label>
+                </button>
+                <button class="nav-btn" data-screen="craft">
+                    <span>🔨</span>
+                    <label>Крафт</label>
+                </button>
+                <button class="nav-btn" data-screen="base">
+                    <span>🏚️</span>
+                    <label>База</label>
+                </button>
+                <button class="nav-btn" data-screen="clan">
+                    <span>👥</span>
+                    <label>Клан</label>
+                </button>
+                <button class="nav-btn" data-screen="market">
+                    <span>🏪</span>
+                    <label>Барахолка</label>
+                </button>
+                <button class="nav-btn" data-screen="achievements">
+                    <span>🏆</span>
+                    <label>Достижения</label>
+                </button>
+                <button class="nav-btn" data-screen="seasons">
+                    <span>🎖️</span>
+                    <label>Сезон</label>
+                </button>
+                <button class="nav-btn" data-screen="referral">
+                    <span>🎁</span>
+                    <label>Рефералы</label>
+                </button>
+                <button class="nav-btn" data-screen="menu">
+                    <span>☰</span>
+                    <label>Меню</label>
+                </button>
+            </nav>
+        </div>
+
+        <!-- Экран карты -->
+        <div id="map-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🗺️ Карта города</h2>
+            </header>
+            <div class="map-container">
+                <canvas id="city-map" width="400" height="500"></canvas>
+                <div class="map-info" id="map-info">
+                    <span class="map-location-name">Выберите локацию</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран инвентаря -->
+        <div id="inventory-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🎒 Инвентарь</h2>
+            </header>
+            <!-- Панель управления инвентарём -->
+            <div class="inventory-controls">
+                <div class="inv-filters">
+                    <button class="filter-btn active" data-filter="all">Все</button>
+                    <button class="filter-btn" data-filter="weapon">⚔️ Оружие</button>
+                    <button class="filter-btn" data-filter="armor">🛡️ Броня</button>
+                    <button class="filter-btn" data-filter="resource">💎 Ресурсы</button>
+                    <button class="filter-btn" data-filter="food">🍖 Еда</button>
+                    <button class="filter-btn" data-filter="medicine">💊 Лекарства</button>
+                </div>
+                <div class="inv-sort">
+                    <select id="sort-select">
+                        <option value="id">По ID</option>
+                        <option value="name">По имени</option>
+                        <option value="rarity">По редкости</option>
+                        <option value="count">По количеству</option>
+                    </select>
+                </div>
+            </div>
+            <div class="inventory-content">
+                <div class="inventory-stats">
+                    <div class="inv-stat">
+                        <span>💰 Монеты:</span>
+                        <span id="inv-coins">0</span>
+                    </div>
+                    <div class="inv-stat">
+                        <span>⭐ Звёзды:</span>
+                        <span id="inv-stars">0</span>
+                    </div>
+                </div>
+                <div class="inventory-grid" id="inventory-grid">
+                    <!-- Предметы будут добавлены через JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран крафта -->
+        <div id="craft-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🔨 Крафт</h2>
+            </header>
+            <div class="craft-content">
+                <div class="craft-info">
+                    <span>⚡ Энергия: <span id="craft-energy">0</span></span>
+                </div>
+                <div class="recipes-list" id="recipes-list">
+                    <!-- Рецепты будут добавлены через JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран боссов -->
+        <div id="bosses-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>👹 Боссы</h2>
+            </header>
+            <div class="bosses-list" id="bosses-list">
+                <!-- Боссы будут добавлены через JS -->
+            </div>
+        </div>
+
+        <!-- Экран боя с боссом -->
+        <div id="boss-fight-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="bosses">← К боссам</button>
+            </header>
+            <div class="boss-fight-content">
+                <div class="boss-display" id="boss-display">
+                    <div class="boss-icon" id="boss-icon">👹</div>
+                    <h3 id="boss-name">Босс</h3>
+                    <div class="boss-health-bar">
+                        <div class="bar" id="boss-health-bar" style="width: 100%"></div>
+                        <span id="boss-health-text">1000/1000</span>
+                    </div>
+                </div>
+                
+                <div class="fight-log" id="fight-log">
+                    <p>Нажми "Атаковать" чтобы начать бой!</p>
+                </div>
+
+                <button class="action-btn attack-btn" id="attack-boss-btn">
+                    <span class="btn-icon">⚔️</span>
+                    <span class="btn-text">Атаковать</span>
+                    <span class="btn-cost">-1 ⚡</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Экран магазина -->
+        <div id="shop-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🛒 Магазин</h2>
+            </header>
+            <div class="shop-content">
+                <div class="shop-tabs">
+                    <button class="shop-tab active" data-tab="buffs">⚡ Баффы</button>
+                    <button class="shop-tab" data-tab="minigames">🎰 Мини-игры</button>
+                    <button class="shop-tab" data-tab="cosmetics">💎 Косметика</button>
+                </div>
+                <div class="shop-items" id="shop-items">
+                    <!-- Товары будут добавлены через JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран мини-игры: Слоты -->
+        <div id="slots-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="shop">← В магазин</button>
+                <h2>🎰 Слоты</h2>
+            </header>
+            <div class="minigame-content">
+                <div class="slots-machine">
+                    <div class="slot-row">
+                        <div class="slot" id="slot1">🍒</div>
+                        <div class="slot" id="slot2">🍒</div>
+                        <div class="slot" id="slot3">🍒</div>
+                    </div>
+                </div>
+                <div class="minigame-info">
+                    <p>Поставь монеты и крути!</p>
+                    <p>Выигрыш: x2, x5, x10, x50</p>
+                </div>
+                <div class="minigame-controls">
+                    <input type="number" id="bet-amount" value="10" min="1" max="1000">
+                    <button class="game-btn" id="spin-btn">🎰 Крутить (10 монет)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран мини-игры: Колесо удачи -->
+        <div id="wheel-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="shop">← В магазин</button>
+                <h2>🎡 Колесо удачи</h2>
+            </header>
+            <div class="minigame-content">
+                <div class="wheel-container">
+                    <div class="wheel" id="wheel">
+                        <div class="wheel-segment" style="--i:0"><span>10</span></div>
+                        <div class="wheel-segment" style="--i:1"><span>25</span></div>
+                        <div class="wheel-segment" style="--i:2"><span>50</span></div>
+                        <div class="wheel-segment" style="--i:3"><span>100</span></div>
+                        <div class="wheel-segment" style="--i:4"><span>x2</span></div>
+                        <div class="wheel-segment" style="--i:5"><span>Энергия</span></div>
+                    </div>
+                    <div class="wheel-pointer">▼</div>
+                </div>
+                <div class="minigame-info">
+                    <p>Крути колесо бесплатно 1 раз в день!</p>
+                    <p>За Stars - сколько угодно</p>
+                </div>
+                <div class="minigame-controls">
+                    <button class="game-btn" id="wheel-free-btn">🎡 Бесплатно</button>
+                    <button class="game-btn" id="wheel-paid-btn">⭐ За 1 Star</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран рейтинга -->
+        <div id="rating-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🏆 Рейтинг</h2>
+            </header>
+            <div class="rating-content">
+                <div class="rating-tabs">
+                    <button class="rating-tab active" data-tab="players">Игроки</button>
+                    <button class="rating-tab" data-tab="clans">Кланы</button>
+                </div>
+                <div class="rating-list" id="rating-list">
+                    <!-- Рейтинг будет добавлен через JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран базы -->
+        <div id="base-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🏚️ База</h2>
+            </header>
+            <div class="base-content">
+                <!-- Бонусы базы -->
+                <div class="base-bonuses" id="base-bonuses">
+                    <h3>Бонусы базы</h3>
+                    <div class="bonuses-grid" id="bonuses-grid">
+                        <!-- Бонусы будут добавлены через JS -->
+                    </div>
+                </div>
+
+                <!-- Постройки игрока -->
+                <div class="player-buildings" id="player-buildings">
+                    <h3>Мои постройки</h3>
+                    <div class="buildings-list" id="buildings-list">
+                        <!-- Постройки будут добавлены через JS -->
+                    </div>
+                </div>
+
+                <!-- Доступные постройки -->
+                <div class="available-buildings">
+                    <h3>Строительство</h3>
+                    <div class="build-tabs">
+                        <button class="build-tab active" data-tab="all">Все</button>
+                        <button class="build-tab" data-tab="structure">Структуры</button>
+                        <button class="build-tab" data-tab="production">Производство</button>
+                        <button class="build-tab" data-tab="living">Жильё</button>
+                    </div>
+                    <div class="available-list" id="available-list">
+                        <!-- Доступные постройки будут добавлены через JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран клана (основной) -->
+        <div id="clan-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>👥 Клан</h2>
+            </header>
+            <div class="clan-content" id="clan-content">
+                <!-- Контент будет загружен через JS -->
+            </div>
+        </div>
+
+        <!-- Экран создания клана -->
+        <div id="clan-create-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="clan">← Назад</button>
+                <h2>🏰 Создать клан</h2>
+            </header>
+            <div class="clan-create-content">
+                <div class="form-group">
+                    <label>Название клана</label>
+                    <input type="text" id="clan-name-input" placeholder="3-30 символов" maxlength="30">
+                </div>
+                <div class="form-group">
+                    <label>Описание (необязательно)</label>
+                    <textarea id="clan-desc-input" placeholder="Описание вашего клана" maxlength="200"></textarea>
+                </div>
+                <div class="form-group checkbox-group">
+                    <label>
+                        <input type="checkbox" id="clan-public-input" checked>
+                        <span>Открытый клан (любой может вступить)</span>
+                    </label>
+                </div>
+                <button class="action-btn" id="create-clan-btn">
+                    <span class="btn-icon">🏰</span>
+                    <span class="btn-text">Создать клан</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Экран списка кланов -->
+        <div id="clans-list-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="clan">← Назад</button>
+                <h2>🏰 Список кланов</h2>
+            </header>
+            <div class="clans-list-search">
+                <input type="text" id="clans-search-input" placeholder="Поиск клана...">
+                <button id="clans-search-btn">🔍</button>
+            </div>
+            <div class="clans-list" id="clans-list">
+                <!-- Кланы будут загружены через JS -->
+            </div>
+        </div>
+
+        <!-- Экран чата клана -->
+        <div id="clan-chat-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="clan">← Назад</button>
+                <h2>💬 Чат клана</h2>
+            </header>
+            <div class="clan-chat-messages" id="clan-chat-messages">
+                <!-- Сообщения будут загружены через JS -->
+            </div>
+            <div class="clan-chat-input">
+                <input type="text" id="clan-message-input" placeholder="Введи сообщение...">
+                <button id="clan-send-btn">📤</button>
+            </div>
+        </div>
+
+        <!-- Экран PvP игроков (красная зона) -->
+        <div id="pvp-players-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>⚔️ PvP Зона</h2>
+            </header>
+            <div class="pvp-zone-indicator" id="pvp-zone-indicator">
+                <!-- Индикатор зоны будет загружен через JS -->
+            </div>
+            <div class="pvp-players-list" id="pvp-players-list">
+                <!-- Список игроков будет загружен через JS -->
+            </div>
+            <div class="pvp-actions">
+                <button id="pvp-refresh-btn" class="action-btn">🔄 Обновить</button>
+                <button id="pvp-stats-btn" class="action-btn">📊 Статистика</button>
+            </div>
+        </div>
+
+        <!-- Экран PvP боя -->
+        <div id="pvp-fight-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="pvp-players">⚔️ PvP</button>
+                <h2>⚔️ PvP Бой</h2>
+            </header>
+            <div class="pvp-fight-container">
+                <div class="pvp-combatants">
+                    <div class="pvp-combatant" id="pvp-attacker-info">
+                        <div class="combatant-avatar">👤</div>
+                        <div class="combatant-name" id="pvp-attacker-name">Вы</div>
+                        <div class="combatant-level" id="pvp-attacker-level">Уровень: 1</div>
+                        <div class="health-bar">
+                            <div class="health-fill" id="pvp-attacker-health" style="width: 100%"></div>
+                            <span class="health-text" id="pvp-attacker-health-text">100/100</span>
+                        </div>
+                    </div>
+                    <div class="pvp-vs">VS</div>
+                    <div class="pvp-combatant" id="pvp-defender-info">
+                        <div class="combatant-avatar">👤</div>
+                        <div class="combatant-name" id="pvp-defender-name">Противник</div>
+                        <div class="combatant-level" id="pvp-defender-level">Уровень: 1</div>
+                        <div class="health-bar">
+                            <div class="health-fill" id="pvp-defender-health" style="width: 100%"></div>
+                            <span class="health-text" id="pvp-defender-health-text">100/100</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="pvp-battle-log" id="pvp-battle-log">
+                    <p>⚔️ Бой начался! Нажмите "Атаковать"</p>
+                </div>
+                <div class="pvp-fight-actions">
+                    <button id="pvp-attack-btn" class="pvp-attack-btn">👊 АТАКОВАТЬ</button>
+                </div>
+                <div class="pvp-rewards" id="pvp-rewards" style="display: none;">
+                    <h3>🏆 Результаты боя</h3>
+                    <div id="pvp-rewards-content"></div>
+                    <button id="pvp-claim-rewards-btn" class="action-btn">Забрать награды</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран PvP статистики -->
+        <div id="pvp-stats-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="pvp-players">← Назад</button>
+                <h2>📊 PvP Статистика</h2>
+            </header>
+            <div class="pvp-stats-container">
+                <div class="pvp-rating-card">
+                    <div class="rating-value" id="pvp-rating-value">1000</div>
+                    <div class="rating-label">Рейтинг</div>
+                </div>
+                <div class="pvp-stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="pvp-wins">0</div>
+                        <div class="stat-label">Победы</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="pvp-losses">0</div>
+                        <div class="stat-label">Поражения</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="pvp-streak">0</div>
+                        <div class="stat-label">Серия</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="pvp-max-streak">0</div>
+                        <div class="stat-label">Макс. серия</div>
+                    </div>
+                </div>
+                <div class="pvp-damage-stats">
+                    <h3>Урон</h3>
+                    <div class="damage-dealt">
+                        <span>Нанесено:</span>
+                        <span id="pvp-damage-dealt">0</span>
+                    </div>
+                    <div class="damage-taken">
+                        <span>Получено:</span>
+                        <span id="pvp-damage-taken">0</span>
+                    </div>
+                </div>
+                <div class="pvp-losses-stats">
+                    <h3>Потери</h3>
+                    <div class="coins-lost">
+                        <span>Потеряно монет:</span>
+                        <span id="pvp-coins-lost">0</span>
+                    </div>
+                    <div class="items-lost">
+                        <span>Потеряно предметов:</span>
+                        <span id="pvp-items-lost">0</span>
+                    </div>
+                </div>
+                <div class="pvp-cooldown" id="pvp-cooldown" style="display: none;">
+                    <div class="cooldown-icon">⏳</div>
+                    <div class="cooldown-text">Защита кулдауна</div>
+                    <div class="cooldown-timer" id="pvp-cooldown-timer"></div>
+                </div>
+                <div class="pvp-recent-matches">
+                    <h3>Последние бои</h3>
+                    <div id="pvp-recent-matches-list">
+                        <!-- Бои будут загружены через JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран реферальной программы -->
+        <div id="referral-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🎁 Рефералы</h2>
+            </header>
+            
+            <!-- Пригласи друга -->
+            <div class="referral-invite-section">
+                <h3>🎯 Пригласи друга</h3>
+                <p class="referral-desc">Поделишься кодом с другом — получишь бонусы!</p>
+                
+                <div class="referral-code-box">
+                    <span class="referral-code-label">Твой код:</span>
+                    <div class="referral-code-display">
+                        <span id="referral-code">Загрузка...</span>
+                        <button class="copy-btn" id="copy-referral-code">📋</button>
+                    </div>
+                </div>
+                
+                <div class="referral-change-section" id="referral-change-section" style="display: none;">
+                    <input type="text" id="new-referral-code" placeholder="Новый код (LH-XXXXXXXX)" class="input-field">
+                    <button class="action-btn" id="change-referral-code-btn">Изменить код</button>
+                    <p class="hint">Код можно изменить только 1 раз!</p>
+                </div>
+            </div>
+            
+            <!-- Бонусы -->
+            <div class="referral-bonuses-section">
+                <h3>🎁 Бонусы</h3>
+                <div class="bonuses-grid">
+                    <div class="bonus-card">
+                        <div class="bonus-icon">👤</div>
+                        <div class="bonus-title">При регистрации</div>
+                        <div class="bonus-reward">+50 монет, +1 Energy</div>
+                    </div>
+                    <div class="bonus-card">
+                        <div class="bonus-icon">⭐</div>
+                        <div class="bonus-title">Уровень 5</div>
+                        <div class="bonus-reward">+100 монет</div>
+                    </div>
+                    <div class="bonus-card">
+                        <div class="bonus-icon">⭐⭐</div>
+                        <div class="bonus-title">Уровень 10</div>
+                        <div class="bonus-reward">+200 монет, +5 Stars</div>
+                    </div>
+                    <div class="bonus-card">
+                        <div class="bonus-icon">⭐⭐⭐</div>
+                        <div class="bonus-title">Уровень 20</div>
+                        <div class="bonus-reward">+500 монет, +10 Stars</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Статистика -->
+            <div class="referral-stats-section" id="referral-stats-section">
+                <h3>📊 Статистика</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-value" id="total-referrals">0</span>
+                        <span class="stat-label">Рефералов</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">50</span>
+                        <span class="stat-label">Максимум</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="total-coins-earned">0</span>
+                        <span class="stat-label">Монет заработано</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="total-stars-earned">0</span>
+                        <span class="stat-label">Stars заработано</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Ввести код -->
+            <div class="referral-use-section">
+                <h3>🔑 Ввести код приглашения</h3>
+                <p class="referral-desc">Если у тебя есть код друга — введи его и получи бонус!</p>
+                <div class="use-code-form">
+                    <input type="text" id="use-referral-code" placeholder="Код друга (LH-XXXXXXXX)" class="input-field">
+                    <button class="action-btn primary" id="use-referral-code-btn">Использовать код</button>
+                </div>
+            </div>
+            
+            <!-- Список рефералов -->
+            <div class="referral-list-section">
+                <h3>👥 Твои рефералы</h3>
+                <div class="referrals-list" id="referrals-list">
+                    <!-- Список рефералов будет загружен -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран достижений -->
+        <div id="achievements-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🏆 Достижения</h2>
+            </header>
+            <div class="achievements-stats" id="achievements-stats">
+                <!-- Статистика достижений -->
+            </div>
+            <div class="achievements-categories" id="achievements-categories">
+                <!-- Категории -->
+            </div>
+            <div class="achievements-list" id="achievements-list">
+                <!-- Список достижений -->
+            </div>
+        </div>
+
+        <!-- Экран сезонов -->
+        <div id="seasons-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🎖️ Сезон</h2>
+            </header>
+            
+            <!-- Текущий сезон -->
+            <div class="season-current" id="season-current">
+                <!-- Информация о сезоне -->
+            </div>
+            
+            <!-- Активные события -->
+            <div class="season-events" id="season-events">
+                <h3>⚡ Активные события</h3>
+                <div class="events-list" id="events-list">
+                    <!-- События будут загружены -->
+                </div>
+            </div>
+            
+            <!-- Модификаторы -->
+            <div class="season-modifiers" id="season-modifiers">
+                <h3>📊 Бонусы</h3>
+                <div class="modifiers-list" id="modifiers-list">
+                    <!-- Модификаторы -->
+                </div>
+            </div>
+            
+            <!-- Рейтинг -->
+            <div class="season-rating-section">
+                <h3>🏆 Рейтинг</h3>
+                <div class="season-rating-tabs">
+                    <button class="season-rating-tab active" data-tab="top">Топ</button>
+                    <button class="season-rating-tab" data-tab="my">Мой ранг</button>
+                </div>
+                <div class="season-rating-content" id="season-rating-content">
+                    <div class="season-top-rating" id="season-top-rating">
+                        <!-- Топ игроки -->
+                    </div>
+                    <div class="season-my-rating" id="season-my-rating" style="display: none;">
+                        <!-- Моя позиция -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Ежедневные задания -->
+            <div class="season-daily-tasks">
+                <h3>📋 Ежедневные задания</h3>
+                <div class="daily-tasks-progress" id="daily-tasks-progress">
+                    <!-- Прогресс -->
+                </div>
+                <div class="daily-tasks-list" id="daily-tasks-list">
+                    <!-- Задания -->
+                </div>
+            </div>
+            
+            <!-- Кнопка присоединения -->
+            <div class="season-join-section" id="season-join-section">
+                <button class="action-btn" id="season-join-btn">Присоединиться к сезону</button>
+            </div>
+        </div>
+
+        <!-- Экран барахолки (основной) -->
+        <div id="market-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🏪 Барахолка</h2>
+                <button class="action-btn small" id="market-create-btn">+ Создать</button>
+            </header>
+            <div class="market-filters">
+                <input type="text" id="market-search" placeholder="Поиск..." class="search-input">
+                <select id="market-type-filter" class="filter-select">
+                    <option value="">Все типы</option>
+                    <option value="weapon">Оружие</option>
+                    <option value="armor">Броня</option>
+                    <option value="food">Еда</option>
+                    <option value="medicine">Медикаменты</option>
+                    <option value="resource">Ресурсы</option>
+                </select>
+                <select id="market-sort-filter" class="filter-select">
+                    <option value="date">По дате</option>
+                    <option value="price_asc">Дешевле</option>
+                    <option value="price_desc">Дороже</option>
+                    <option value="popularity">Популярные</option>
+                </select>
+            </div>
+            <div class="market-info-bar">
+                <span id="market-commission">Комиссия: 5%</span>
+                <button class="tab-btn active" data-tab="market-listings">Все объявления</button>
+                <button class="tab-btn" data-tab="market-my">Мои</button>
+                <button class="tab-btn" data-tab="market-history">История</button>
+            </div>
+            <div id="market-listings-tab" class="market-tab active">
+                <div class="market-list" id="market-listings-list">
+                    <!-- Объявления будут загружены через JS -->
+                </div>
+            </div>
+            <div id="market-my-tab" class="market-tab">
+                <div class="market-my-info" id="market-my-info">
+                    <!-- Информация о лимитах -->
+                </div>
+                <div class="market-list" id="market-my-list">
+                    <!-- Мои объявления -->
+                </div>
+            </div>
+            <div id="market-history-tab" class="market-tab">
+                <div class="market-history-stats" id="market-history-stats">
+                    <!-- Статистика -->
+                </div>
+                <div class="market-list" id="market-history-list">
+                    <!-- История -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран создания объявления -->
+        <div id="market-create-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="market">← Назад</button>
+                <h2>🏪 Новое объявление</h2>
+            </header>
+            <div class="market-create-form">
+                <div class="form-group">
+                    <label>Выберите предмет из инвентаря:</label>
+                    <div class="market-inventory-grid" id="market-inventory-grid">
+                        <!-- Инвентарь -->
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Выбрано:</label>
+                    <div id="market-selected-item" class="selected-item-display">
+                        <span class="placeholder">Выберите предмет</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Количество:</label>
+                    <input type="number" id="market-quantity" min="1" value="1" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label>Цена за единицу (монеты):</label>
+                    <input type="number" id="market-price" min="1" value="" class="form-input" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label>Цена за единицу (звёзды):</label>
+                    <input type="number" id="market-stars-price" min="0" value="0" class="form-input" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label>Срок размещения:</label>
+                    <select id="market-duration" class="form-select">
+                        <option value="24h">24 часа</option>
+                        <option value="72h">3 дня</option>
+                        <option value="7d">7 дней</option>
+                    </select>
+                </div>
+                <div class="market-create-summary" id="market-create-summary">
+                    <span>Итого: 0 монет</span>
+                </div>
+                <button id="market-submit-btn" class="action-btn">Создать объявление</button>
+            </div>
+        </div>
+
+        <!-- Модальное окно для покупки -->
+        <div id="market-buy-modal" class="modal">
+            <div class="modal-content market-buy-modal">
+                <h3>Подтверждение покупки</h3>
+                <div id="market-buy-item-info"></div>
+                <div id="market-buy-summary"></div>
+                <div class="modal-buttons">
+                    <button id="market-buy-confirm" class="action-btn">Купить</button>
+                    <button id="market-buy-cancel" class="cancel-btn">Отмена</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Модальное окно -->
+        <div id="modal" class="modal">
+            <div class="modal-content">
+                <h3 id="modal-title">Уведомление</h3>
+                <p id="modal-message">Сообщение</p>
+                <button id="modal-close">ОК</button>
+            </div>
+        </div>
+
+        <!-- AdsGram контейнер -->
+        <div id="adsgram-container"></div>
+    </div>
+
+    <!-- Telegram Web App SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js" async></script>
+    <!-- AdsGram SDK -->
+    <script src="https://adsgram.app/js/adsgram.js" async></script>
+    <!-- Модули игры (в правильном порядке) -->
+    <script src="game-utils.js" defer></script>
+    <script src="game-state.js" defer></script>
+    <script src="game-api.js" defer></script>
+    <script src="game-screens.js" defer></script>
+    <script src="game-store.js" defer></script>
+    <script src="game-particles.js" defer></script>
+    <script src="game-map.js" defer></script>
+    <script src="game-animations.js" defer></script>
+    <!-- Основной скрипт игры -->
+    <script src="game.js" defer></script>
+</body>
+</html>
