@@ -166,25 +166,6 @@ const gameLogger = {
     error: logPlayerError
 };
 
-// Crash logging - перехват необработанных ошибок
-process.on('uncaughtException', err => {
-    logger.error({
-        type: 'uncaught_exception',
-        message: err.message,
-        stack: err.stack
-    });
-    process.exit(1);
-});
-
-process.on('unhandledRejection', err => {
-    logger.error({
-        type: 'unhandled_rejection',
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined
-    });
-    process.exit(1);
-});
-
 module.exports = {
     logger,
     requestMiddleware,
