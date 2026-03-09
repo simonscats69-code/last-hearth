@@ -6,16 +6,28 @@
 const { Pool } = require('pg');
 const { logger } = require('../utils/logger');
 
+// Поддержка DATABASE_URL (Supabase) или отдельных параметров
+const poolConfig = {};
+
+if (process.env.DATABASE_URL) {
+    // Используем DATABASE_URL (PostgreSQL connection string)
+    poolConfig.connectionString = process.env.DATABASE_URL;
+    poolConfig.ssl = { rejectUnauthorized: false };
+} else {
+    // Используем отдельные параметры
+    poolConfig.host = process.env.DB_HOST || 'localhost';
+    poolConfig.port = process.env.DB_PORT || 5432;
+    poolConfig.database = process.env.DB_NAME || 'postgres';
+    poolConfig.user = process.env.DB_USER || 'postgres';
+    poolConfig.password = process.env.DB_PASSWORD || 'postgres';
+    poolConfig.ssl = process.env.DB_HOST?.includes('supabase') ? { rejectUnauthorized: false } : false;
+}
+
 const pool = new Pool({
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    database: 'postgres', // Supabase использует БД postgres
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
+    ...poolConfig,
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
-    ssl: process.env.DB_HOST?.includes('supabase') ? { rejectUnauthorized: false } : false
 });
 
 // Логирование ошибок пула

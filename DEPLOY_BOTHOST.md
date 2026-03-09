@@ -7,13 +7,18 @@
 В панели Bothost нужно настроить:
 
 ```
+# Подключение к БД (любой формат)
+DATABASE_URL=postgresql://postgres:Leonardo43552635@db.eddqhtpbpqzdixejmked.supabase.co:5432/postgres
+
+# Или отдельно:
 DB_HOST=db.eddqhtpbpqzdixejmked.supabase.co
 DB_PORT=5432
 DB_NAME=postgres
 DB_USER=postgres
 DB_PASSWORD=Leonardo43552635
 
-TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
+# Telegram
+TELEGRAM_BOT_TOKEN=8298468022:AAEcwAfgPt3vOMeHyqlOKKmmVEsbG2zjXkc
 MINI_APP_URL=https://твой-домен.bothost.ru
 WEBHOOK_URL=https://твой-домен.bothost.ru/webhook
 SECRET_KEY=любой-секретный-ключ
