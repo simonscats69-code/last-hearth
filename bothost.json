@@ -1,8 +1,0 @@
-{
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
-  "run": {
-    "cmd": ["node", "index.js"]
-  }
-}
