@@ -70,7 +70,9 @@ function safeJsonParse(value, fallback = {}) {
  * @returns {boolean} результат валидации
  */
 function validateTelegramId(telegramId) {
-    return Number.isInteger(telegramId) && telegramId > 0;
+    // Поддерживаем integer, BigInt и строки чисел
+    const num = Number(telegramId);
+    return !isNaN(num) && num > 0 && Number.isFinite(num);
 }
 
 /**
