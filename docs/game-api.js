@@ -6,7 +6,7 @@
  */
 
 // Базовый URL API
-const API_BASE = 'https://bot_1773095214_8193_greatcatsby.bothost.ru/api';
+const API_BASE = 'http://bot_1773095214_8193_greatcatsby.bothost.ru/api';
 
 /**
  * Выполнение запроса к API
@@ -43,6 +43,8 @@ async function apiRequest(endpoint, options = {}) {
         return data;
     } catch (error) {
         console.error('API Request failed:', error);
+        console.error('URL:', url);
+        console.error('Config:', config);
         
         // Показываем ошибку пользователю
         if (options.showError !== false) {

@@ -35,7 +35,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Разрешённые источники для CORS
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bot';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://simonscats69-code.github.io/last-hearth';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
     'https://t.me',
