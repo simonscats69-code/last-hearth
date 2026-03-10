@@ -38,13 +38,26 @@ const PORT = process.env.PORT || 3000;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bot';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
-    'https://*.telegram.org',
     'https://t.me',
-    'https://*.t.me',
-    FRONTEND_URL  // Добавляем FRONTEND_URL в список разрешённых
+    FRONTEND_URL
 ];
 
-const ORIGIN_SET = new Set(ALLOWED_ORIGINS);
+// Проверка CORS с поддержкой telegram поддоменов
+function isOriginAllowed(origin) {
+    if (!origin) return true;
+    
+    // Точное совпадение
+    if (ALLOWED_ORIGINS.includes(origin)) return true;
+    
+    // Проверяем FRONTEND_URL
+    if (origin === FRONTEND_URL) return true;
+    
+    // Telegram поддомены (web.telegram.org, web.telegram.me и т.д.)
+    if (/^https:\/\/[\w-]+\.telegram\.org$/.test(origin)) return true;
+    if (/^https:\/\/[\w-]+\.t\.me$/.test(origin)) return true;
+    
+    return false;
+}
 const jsonParser = express.json({ limit: '1mb' });
 
 app.disable('x-powered-by');
@@ -98,7 +111,7 @@ app.use((req, res, next) => {
         // Нет origin (прямой запрос) - разрешаем
         return next();
     }
-    const isAllowed = ORIGIN_SET.has(origin) || origin === FRONTEND_URL;
+    const isAllowed = isOriginAllowed(origin);
     if (!isAllowed) {
         logger.warn({ type: 'cors_rejected', origin, ip: req.ip });
         return res.status(403).json({ error: 'Origin не разрешён' });
@@ -150,6 +163,11 @@ app.use('/api/admin', adminRouter);
 app.use('/api/leaderboard', leaderboardRouter);
 app.use('/api', apiRouter);
 
+// 404 обработчик
+app.use((req, res) => {
+    res.status(404).json({ error: 'Not found' });
+});
+
 const healthLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 30,
@@ -165,7 +183,7 @@ app.get('/health', healthLimiter, (req, res) => {
 });
 
 
-app.get('/ready', async (req, res) => {
+app.get('/ready', healthLimiter, async (req, res) => {
     try {
         await query('SELECT 1');
         res.json({ status: 'ready', db: 'connected' });
