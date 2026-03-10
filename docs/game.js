@@ -75,14 +75,8 @@ if ('serviceWorker' in navigator) {
 const API_URL = ''; // Пустая строка = текущий хост
 const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || ''; // Загружается из env или пустая строка
 
-// Состояние игры
-let gameState = {
-    player: null,
-    locations: [],
-    bosses: [],
-    currentBoss: null,
-    inventory: {}
-};
+// Состояние игры (уже определено в game-state.js)
+// gameState доступен глобально
 
 // AdsGram инициализация
 let Adsgram = null;
