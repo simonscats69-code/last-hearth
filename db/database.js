@@ -81,8 +81,8 @@ async function query(text, params = []) {
         const res = await pool.query(text, params);
         const duration = Date.now() - start;
         
-        // Логируем только медленные запросы (> 100ms)
-        if (duration > 100) {
+        // Логируем только медленные запросы (> 2000ms)
+        if (duration > 2000) {
             logger.warn('Медленный SQL запрос', { 
                 query: text.substring(0, 100), 
                 duration, 
