@@ -187,59 +187,6 @@ function updateStatsUI() {
 }
 
 /**
- * Сохранение состояния в localStorage
- */
-function saveGameState() {
-    try {
-        const stateToSave = {
-            player: gameState.player,
-            coins: gameState.coins,
-            stars: gameState.stars,
-            loginStreak: gameState.loginStreak,
-            lastLogin: gameState.lastLogin,
-            // Кэшируем часто используемые данные
-            cachedLocations: gameState.locations,
-            cachedRecipes: gameState.recipes,
-            cacheTimestamp: Date.now()
-        };
-        localStorage.setItem('lastHearthState', JSON.stringify(stateToSave));
-    } catch (e) {
-        console.warn('Could not save game state:', e);
-    }
-}
-
-/**
- * Загрузка состояния из localStorage
- * @returns {boolean} - успешна ли загрузка
- */
-function loadGameState() {
-    try {
-        const saved = localStorage.getItem('lastHearthState');
-        if (saved) {
-            const state = JSON.parse(saved);
-            gameState.coins = state.coins || 0;
-            gameState.stars = state.stars || 0;
-            gameState.loginStreak = state.loginStreak || 0;
-            gameState.lastLogin = state.lastLogin;
-            
-            // Восстанавливаем закэшированные данные (не старше 1 часа)
-            const cacheAge = Date.now() - (state.cacheTimestamp || 0);
-            const CACHE_TTL = 60 * 60 * 1000; // 1 час
-            
-            if (cacheAge < CACHE_TTL) {
-                gameState.locations = state.cachedLocations || [];
-                gameState.recipes = state.cachedRecipes || [];
-            }
-            
-            return true;
-        }
-    } catch (e) {
-        console.warn('Could not load game state:', e);
-    }
-    return false;
-}
-
-/**
  * Проверка и обновление стрика входа
  */
 function checkLoginStreak() {

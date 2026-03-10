@@ -6,7 +6,7 @@
  */
 
 // Базовый URL API
-const API_BASE = '/api';
+const API_BASE = 'https://bot_1773095214_8193_greatcatsby.bothost.ru/api';
 
 /**
  * Выполнение запроса к API

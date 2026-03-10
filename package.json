@@ -1,6 +1,6 @@
 {
   "name": "last-hearth",
-  "version": "1.0.6",
+  "version": "1.0.4",
   "description": "Постапокалиптический survival RPG Telegram Mini App",
   "main": "index.js",
   "scripts": {

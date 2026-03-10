@@ -17,7 +17,7 @@ const tg = window.Telegram?.WebApp || {
 
 // Определение цветовой схемы Telegram
 const isDarkTheme = tg.themeParams && tg.themeParams.bg_color 
-    ? isColorDark(tg.themeParams.bg_color) 
+    ? false
     : false;
 
 // Применяем тему Telegram
@@ -25,42 +25,10 @@ if (isDarkTheme) {
     document.documentElement.setAttribute('data-theme', 'dark');
 }
 
-// Утилита для определения тёмной темы
-function isColorDark(hexColor) {
-    if (!hexColor) return false;
-    const hex = hexColor.replace('#', '');
-    const r = parseInt(hex.substr(0, 2), 16);
-    const g = parseInt(hex.substr(2, 2), 16);
-    const b = parseInt(hex.substr(4, 2), 16);
-    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-    return brightness < 128;
-}
-
-/**
- * Вибрация (Haptic Feedback) для Telegram
- */
-function hapticImpact(style = 'medium') {
-    if (tg.HapticFeedback) {
-        tg.HapticFeedback.impactOccurred(style);
-    }
-}
-
-function hapticNotification(type = 'success') {
-    if (tg.HapticFeedback) {
-        tg.HapticFeedback.notificationOccurred(type);
-    }
-}
-
-function hapticSelection() {
-    if (tg.HapticFeedback) {
-        tg.HapticFeedback.selectionChanged();
-    }
-}
-
 // Регистрация Service Worker
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
+        navigator.serviceWorker.register('./sw.js')
             .then((registration) => {
                 console.log('SW зарегистрирован:', registration.scope);
             })
@@ -71,7 +39,7 @@ if ('serviceWorker' in navigator) {
 }
 
 // Конфигурация
-const API_URL = ''; // Пустая строка = текущий хост
+const API_URL = 'https://bot_1773095214_8193_greatcatsby.bothost.ru';
 const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || ''; // Загружается из env или пустая строка
 
 // Состояние игры (уже определено в game-state.js)
@@ -493,26 +461,6 @@ function initInventoryControls() {
             renderInventoryWithFilters(gameState.inventory);
         });
     }
-}
-
-/**
- * Определение категории предмета по ID
- */
-function getItemCategory(itemId) {
-    const id = parseInt(itemId);
-    
-    // Оружие (1-50)
-    if (id >= 1 && id <= 50) return 'weapon';
-    // Броня (51-100)
-    if (id >= 51 && id <= 100) return 'armor';
-    // Ресурсы (101-200)
-    if (id >= 101 && id <= 200) return 'resource';
-    // Еда (201-300)
-    if (id >= 201 && id <= 300) return 'food';
-    // Лекарства (301-400)
-    if (id >= 301 && id <= 400) return 'medicine';
-    
-    return 'other';
 }
 
 /**
@@ -1317,15 +1265,6 @@ async function sendClanMessage() {
 }
 
 /**
- * Экранирование HTML
- */
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-/**
  * Восстановление энергии за Stars
  */
 async function restoreEnergy() {
@@ -1717,74 +1656,6 @@ async function upgradeBuilding(buildingCode) {
 }
 
 /**
- * Переключение экранов
- */
-function showScreen(screenName) {
-    // Скрываем все экраны
-    document.querySelectorAll('.screen').forEach(screen => {
-        screen.classList.remove('active');
-    });
-    
-    // Показываем нужный экран
-    const screen = document.getElementById(`${screenName}-screen`);
-    if (screen) {
-        screen.classList.add('active');
-        
-        // Загружаем данные для экрана
-        switch (screenName) {
-            case 'map':
-                renderLocations();
-                break;
-            case 'inventory':
-                loadInventory();
-                break;
-            case 'craft':
-                loadRecipes();
-                break;
-            case 'bosses':
-                loadBosses();
-                break;
-            case 'rating':
-                loadRating();
-                break;
-            case 'base':
-                loadBase();
-                break;
-            case 'pvp':
-            case 'pvp-players':
-                loadPVPGamePlayers();
-                break;
-            case 'pvp-stats':
-                loadPVPStats();
-                break;
-            case 'market':
-                loadMarketListings();
-                break;
-            case 'market-create':
-                loadMarketCreateForm();
-                break;
-            case 'achievements':
-                loadAchievements();
-                break;
-            case 'seasons':
-                loadSeasonsScreen();
-                break;
-            case 'referral':
-                loadReferralScreen();
-                break;
-        }
-    }
-    
-    // Обновляем навигацию
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.dataset.screen === screenName) {
-            btn.classList.add('active');
-        }
-    });
-}
-
-/**
  * Обновление отображения энергии
  */
 function updateEnergyDisplay() {
@@ -1890,40 +1761,6 @@ async function healInfections() {
     } catch (error) {
         console.error('Ошибка лечения:', error);
     }
-}
-
-/**
- * Показ модального окна
- */
-function showModal(title, message) {
-    const modal = document.getElementById('modal');
-    const modalContent = modal.querySelector('.modal-content');
-    
-    document.getElementById('modal-title').textContent = title;
-    document.getElementById('modal-message').textContent = message;
-    
-    // Анимация появления
-    modalContent.style.animation = 'none';
-    modalContent.offsetHeight; // Trigger reflow
-    modalContent.style.animation = 'slideUp 0.3s ease-out';
-    
-    modal.classList.add('active');
-    
-    // Звук
-    playSound('modal');
-}
-
-/**
- * Закрытие модального окна с анимацией
- */
-function closeModal() {
-    const modal = document.getElementById('modal');
-    const modalContent = modal.querySelector('.modal-content');
-    
-    modalContent.style.animation = 'fadeIn 0.2s reverse';
-    setTimeout(() => {
-        modal.classList.remove('active');
-    }, 150);
 }
 
 /**

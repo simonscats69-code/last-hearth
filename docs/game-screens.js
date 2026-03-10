@@ -14,13 +14,23 @@ const SCREENS = [
     'bosses',         // Боссы
     'boss-fight',     // Бой с боссом
     'clan',           // Клан
+    'clans-list',     // Список кланов
+    'clan-create',    // Создание клана
+    'clan-chat',      // Чат клана
     'shop',           // Магазин
     'slots',          // Слоты
     'wheel',          // Колесо удачи
     'rating',         // Рейтинг
     'base',           // База
     'pvp',            // PvP
+    'pvp-players',    // PvP игроки
+    'pvp-fight',      // PvP бой
+    'pvp-stats',      // PvP статистика
+    'market',         // Рынок
+    'market-create',  // Создание объявления
     'achievements',   // Достижения
+    'seasons',        // Сезоны
+    'referral',       // Рефералы
     'quests',         // Задания
     'profile'         // Профиль
 ];
