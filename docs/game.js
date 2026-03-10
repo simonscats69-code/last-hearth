@@ -39,7 +39,7 @@ if ('serviceWorker' in navigator) {
 }
 
 // Конфигурация
-const API_URL = 'https://bot_1773095214_8193_greatcatsby.bothost.ru';
+const API_URL = 'https://last-hearth.bothost.ru';
 const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || ''; // Загружается из env или пустая строка
 
 // Состояние игры (уже определено в game-state.js)
@@ -109,7 +109,14 @@ async function apiRequest(endpoint, options = {}) {
         return data;
     } catch (error) {
         console.error('API Error:', error);
-        showModal('Ошибка', error.message);
+        
+        // Более подробная обработка ошибок
+        let errorMsg = error.message;
+        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+            errorMsg = 'Не удаётся подключиться к серверу. Проверьте интернет-соединение и попробуйте позже.';
+        }
+        
+        showModal('Ошибка', errorMsg);
         throw error;
     }
 }

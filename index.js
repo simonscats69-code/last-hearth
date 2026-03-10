@@ -35,12 +35,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Разрешённые источники для CORS
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://simonscats69-code.github.io/last-hearth';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
     'https://t.me',
     FRONTEND_URL,
-    'https://simonscats69-code.github.io',
+    'https://last-hearth.bothost.ru',
     'null'
 ];
 
@@ -56,6 +56,9 @@ function isOriginAllowed(origin) {
     
     // GitHub Pages поддомены
     if (origin.startsWith('https://simonscats69-code.github.io')) return true;
+    
+    // BotHost поддомены
+    if (origin.startsWith('https://last-hearth.bothost.ru')) return true;
     
     // Telegram поддомены (web.telegram.org, web.telegram.me и т.д.)
     if (/^https:\/\/[\w-]+\.telegram\.org$/.test(origin)) return true;

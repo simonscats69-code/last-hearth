@@ -5,8 +5,8 @@
  * Управление запросами к серверу
  */
 
-// Базовый URL API
-const API_BASE = 'http://bot_1773095214_8193_greatcatsby.bothost.ru/api';
+// Базовый URL API (используем HTTPS для работы с BotHost)
+const API_BASE = 'https://last-hearth.bothost.ru/api';
 
 /**
  * Выполнение запроса к API
@@ -48,7 +48,16 @@ async function apiRequest(endpoint, options = {}) {
         
         // Показываем ошибку пользователю
         if (options.showError !== false) {
-            showNotification('Ошибка соединения: ' + error.message, 'error');
+            // Более подробное сообщение об ошибке
+            let errorMessage = 'Ошибка соединения';
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                errorMessage = 'Не удаётся连接到 серверу. Проверьте интернет и попробуйте позже.';
+            } else if (error.message.includes('HTTP error')) {
+                errorMessage = 'Сервер вернул ошибку: ' + error.message;
+            } else {
+                errorMessage = 'Ошибка: ' + error.message;
+            }
+            showNotification(errorMessage, 'error');
         }
         
         throw error;
