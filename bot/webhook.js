@@ -59,7 +59,7 @@ async function setupWebhook(app) {
             }
 
             // URL Mini App - без telegram_id (безопасность)
-            const miniAppUrl = process.env.MINI_APP_URL || 'http://localhost:3000';
+            const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
             
             // Приветственное сообщение
             await ctx.reply(
