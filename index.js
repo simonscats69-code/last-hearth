@@ -321,6 +321,16 @@ async function startServer() {
             
             // Инициализация WebSocket
             initWebSocket(server);
+        }).on('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                logger.warn(`Порт ${PORT} уже используется, пробуем порт ${PORT + 1}`);
+                server = app.listen(PORT + 1, '0.0.0.0', () => {
+                    logger.info(`Сервер запущен на порту ${PORT + 1}`);
+                    initWebSocket(server);
+                });
+            } else {
+                logger.error({ type: 'server_error', message: err.message });
+            }
         });
     } catch (err) {
         logger.error({ type: 'startup_error', message: err.message, stack: err.stack });
