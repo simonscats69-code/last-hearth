@@ -152,7 +152,7 @@ app.use((req, res, next) => {
 
 app.use(requestMiddleware);
 
-app.use(express.static(path.join(__dirname, 'public'), {
+app.use(express.static(path.join(__dirname, 'docs'), {
     maxAge: '1h',
     etag: true,
     cacheControl: true
@@ -211,7 +211,7 @@ app.get('/metrics', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public/index.html'));
+    res.sendFile(path.join(__dirname, 'docs/index.html'));
 });
 
 app.use((err, req, res, next) => {
