@@ -88,7 +88,7 @@ async function setupWebhook(app) {
 
     // Команда /profile - открывает Mini App
     bot.command('profile', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'http://localhost:3000';
+        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
         
         await ctx.reply(
             '👤 Открой Mini App для просмотра профиля:',
@@ -105,7 +105,7 @@ async function setupWebhook(app) {
 
     // Команда /locations - открывает Mini App
     bot.command('locations', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'http://localhost:3000';
+        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
         
         await ctx.reply(
             '🗺️ Открой Mini App для просмотра карты:',
@@ -122,7 +122,7 @@ async function setupWebhook(app) {
 
     // Команда /shop - магазин
     bot.command('shop', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'http://localhost:3000';
+        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
         
         await ctx.reply(
             '🏪 Открой Mini App для доступа к магазину:',
@@ -139,7 +139,7 @@ async function setupWebhook(app) {
 
     // Команда /help - помощь
     bot.command('help', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'http://localhost:3000';
+        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
         
         await ctx.reply(
             '❓ <b>Помощь</b>\n\n' +
@@ -163,7 +163,7 @@ async function setupWebhook(app) {
 
     // Команда /play - быстрый запуск игры
     bot.command('play', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'http://localhost:3000';
+        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
         
         await ctx.reply(
             '🎮 <b>Последний Очаг</b>\n\nВся игра в Mini App!',
@@ -180,7 +180,7 @@ async function setupWebhook(app) {
 
     // Команда /daily - ежедневный бонус
     bot.command('daily', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'http://localhost:3000';
+        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
         
         await ctx.reply(
             '🎁 Открой Mini App для получения ежедневного бонуса:',
