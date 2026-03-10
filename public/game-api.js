@@ -17,9 +17,13 @@ const API_BASE = 'https://last-hearth.bothost.ru/api';
 async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
     
+    // Получаем telegram_id из Telegram WebApp
+    const telegramId = getTelegramId();
+    
     const defaultOptions = {
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'x-telegram-id': telegramId || ''
         }
     };
     
