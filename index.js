@@ -164,22 +164,25 @@ app.use((req, res, next) => {
 
 app.use(requestMiddleware);
 
+// Роутеры
+app.use('/api/game', gameRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/leaderboard', leaderboardRouter);
+app.use('/api', apiRouter);
+
+// Статика
 app.use(express.static(path.join(__dirname, 'docs'), {
     maxAge: '1h',
     etag: true,
     cacheControl: true
 }));
 
-app.use('/api/game', gameRouter);
-app.use('/api/admin', adminRouter);
-app.use('/api/leaderboard', leaderboardRouter);
-app.use('/api', apiRouter);
-
-// 404 обработчик
-app.use((req, res) => {
-    res.status(404).json({ error: 'Not found' });
+// Главная страница
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'docs/index.html'));
 });
 
+// Health checks
 const healthLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 30,
@@ -193,7 +196,6 @@ app.get('/health', healthLimiter, (req, res) => {
         timestamp: Date.now()
     });
 });
-
 
 app.get('/ready', healthLimiter, async (req, res) => {
     try {
@@ -222,8 +224,9 @@ app.get('/metrics', (req, res) => {
     res.json(metrics);
 });
 
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'docs/index.html'));
+// 404 обработчик - В САМОМ КОНЦЕ
+app.use((req, res) => {
+    res.status(404).json({ error: 'Not found' });
 });
 
 app.use((err, req, res, next) => {
