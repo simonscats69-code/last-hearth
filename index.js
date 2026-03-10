@@ -18,10 +18,6 @@ try {
     // dotenv не доступен - используем переменные окружения напрямую
     console.log('ℹ️ dotenv не загружен, используем переменные окружения системы');
 }
-const compression = require('compression');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const { randomUUID } = require('crypto');
 
 const { logger, requestMiddleware } = require('./utils/logger');
 const { startScheduler } = require('./utils/scheduler');
