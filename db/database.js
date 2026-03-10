@@ -143,45 +143,21 @@ async function transaction(fn) {
 }
 
 /**
- * Транзакция с использованием той же query функции (упрощённый вариант)
- * @param {Function} fn - Функция-обработчик
- * @returns {Promise<any>} Результат
- */
-// Счётчик для вложенных транзакций
-let _transactionLevel = 0;
-
-/**
- * Транзакция с поддержкой вложенных вызовов через SAVEPOINT
+ * Простая транзакция без поддержки вложенных вызовов
+ * (Session pooler не поддерживает SAVEPOINT)
  * @param {Function} fn - Функция-обработчик
  * @returns {Promise<any>} Результат
  */
 async function tx(fn) {
-    _transactionLevel++;
-    const savepointName = `sp_${_transactionLevel}`;
-    
-    if (_transactionLevel === 1) {
-        await query('BEGIN');
-    } else {
-        await query(`SAVEPOINT ${savepointName}`);
-    }
+    await query('BEGIN');
     
     try {
         const result = await fn();
-        
-        if (_transactionLevel === 1) {
-            await query('COMMIT');
-        }
-        
+        await query('COMMIT');
         return result;
     } catch (e) {
-        if (_transactionLevel === 1) {
-            await query('ROLLBACK');
-        } else {
-            await query(`ROLLBACK TO SAVEPOINT ${savepointName}`);
-        }
+        await query('ROLLBACK');
         throw e;
-    } finally {
-        _transactionLevel--;
     }
 }
 
