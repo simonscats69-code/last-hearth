@@ -5,7 +5,9 @@
 const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('../db/database');
 
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
+    telegram: { agent: null, webhookReply: true }
+});
 
 /**
  * Настройка webhook и обработчиков команд
@@ -18,7 +20,7 @@ async function setupWebhook(app) {
     const webhookUrl = process.env.WEBHOOK_URL;
     if (webhookUrl) {
         try {
-            await bot.telegram.setWebhook(webhookUrl);
+            await bot.telegram.setWebhook(webhookUrl, { drop_pending_updates: true });
             console.log(`Webhook установлен: ${webhookUrl}`);
         } catch (error) {
             console.log('Не удалось установить webhook (возможно локальная разработка):', error.message);
