@@ -12,6 +12,8 @@ const { logger } = require('../../utils/logger');
 async function authenticatePlayer(req, res, next) {
     const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
     
+    console.log('Auth attempt - x-telegram-id:', req.headers['x-telegram-id'], 'query:', req.query.telegram_id);
+    
     if (!telegramId) {
         return res.status(401).json({ error: 'Требуется авторизация' });
     }
