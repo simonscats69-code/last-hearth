@@ -113,8 +113,12 @@ app.use((req, res, next) => {
     }
     const isAllowed = isOriginAllowed(origin);
     if (!isAllowed) {
-        logger.warn({ type: 'cors_rejected', origin, ip: req.ip });
-        return res.status(403).json({ error: 'Origin не разрешён' });
+        logger.warn({ type: 'cors_rejected', origin, ip: req.ip, method: req.method });
+        // Добавляем заголовки CORS даже для запрещённых origin чтобы браузер получил ответ
+        res.header('Access-Control-Allow-Origin', origin);
+        res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-ID, X-Init-Data');
+        return res.status(403).json({ error: 'Origin не разрешён', origin });
     }
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');

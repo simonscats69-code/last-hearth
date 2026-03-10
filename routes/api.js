@@ -522,6 +522,13 @@ router.get('/game-info', async (req, res) => {
 /**
  * Проверка валидности Telegram данных (для Mini App)
  */
+// Обрабатываем OPTIONS для CORS
+router.options('/verify-telegram', (req, res) => {
+    res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-ID');
+    res.sendStatus(200);
+});
+
 router.post('/verify-telegram', async (req, res) => {
     try {
         const { telegram_id, hash } = req.body;
