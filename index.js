@@ -18,7 +18,6 @@ try {
     // dotenv не доступен - используем переменные окружения напрямую
     console.log('ℹ️ dotenv не загружен, используем переменные окружения системы');
 }
-const path = require('path');
 const compression = require('compression');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
