@@ -4,6 +4,7 @@
  */
 
 // Инициализация Telegram WebApp (с проверкой для разработки вне Telegram)
+// Примечание: expand() и ready() вызываем в initGame() после загрузки всех скриптов
 const tg = window.Telegram?.WebApp || {
     expand: () => {},
     ready: () => {},
@@ -13,8 +14,6 @@ const tg = window.Telegram?.WebApp || {
     sendData: () => {},
     close: () => {}
 };
-tg.expand();
-tg.ready();
 
 // Определение цветовой схемы Telegram
 const isDarkTheme = tg.themeParams && tg.themeParams.bg_color 
@@ -91,13 +90,6 @@ if (typeof AdsgramInit === 'function' && ADSGRAM_APP_ID) {
 }
 
 /**
- * Получение Telegram ID
- */
-function getTelegramId() {
-    return tg.initDataUnsafe?.user?.id || localStorage.getItem('telegram_id');
-}
-
-/**
  * API запросы
  */
 async function apiRequest(endpoint, options = {}) {
@@ -169,6 +161,12 @@ const actionLocks = {
  */
 async function initGame() {
     try {
+        // Инициализируем Telegram WebApp
+        if (window.Telegram?.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+        }
+        
         const telegramId = getTelegramId();
         if (!telegramId) {
             showModal('Ошибка', 'Не удалось определить пользователя Telegram');
