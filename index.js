@@ -39,18 +39,23 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bot';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
     'https://t.me',
-    FRONTEND_URL
+    FRONTEND_URL,
+    'https://simonscats69-code.github.io',
+    'null'
 ];
 
 // Проверка CORS с поддержкой telegram поддоменов
 function isOriginAllowed(origin) {
-    if (!origin) return true;
+    if (!origin || origin === 'null') return true;
     
     // Точное совпадение
     if (ALLOWED_ORIGINS.includes(origin)) return true;
     
     // Проверяем FRONTEND_URL
     if (origin === FRONTEND_URL) return true;
+    
+    // GitHub Pages поддомены
+    if (origin.startsWith('https://simonscats69-code.github.io')) return true;
     
     // Telegram поддомены (web.telegram.org, web.telegram.me и т.д.)
     if (/^https:\/\/[\w-]+\.telegram\.org$/.test(origin)) return true;
