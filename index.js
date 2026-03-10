@@ -171,7 +171,7 @@ app.use('/api/leaderboard', leaderboardRouter);
 app.use('/api', apiRouter);
 
 // Статика
-app.use(express.static(path.join(__dirname, 'docs'), {
+app.use(express.static(path.join(__dirname, 'public'), {
     maxAge: '1h',
     etag: true,
     cacheControl: true
@@ -179,7 +179,7 @@ app.use(express.static(path.join(__dirname, 'docs'), {
 
 // Главная страница
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'docs/index.html'));
+    res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
 // Health checks
