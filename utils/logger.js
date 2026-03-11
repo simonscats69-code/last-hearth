@@ -70,8 +70,16 @@ if (process.env.NODE_ENV !== 'production') {
             format: winston.format.combine(
                 winston.format.colorize(),
                 winston.format.timestamp({ format: 'HH:mm:ss' }),
-                winston.format.printf(({ level, message, timestamp }) => {
-                    return `${timestamp} ${level}: ${message}`;
+                winston.format.printf(({ level, message, timestamp, stack }) => {
+                    let msg = message;
+                    // Если message объект - выводим как JSON
+                    if (typeof message === 'object' && message !== null) {
+                        msg = JSON.stringify(message, null, 2);
+                    }
+                    if (stack) {
+                        return `${timestamp} ${level}: ${msg}\n${stack}`;
+                    }
+                    return `${timestamp} ${level}: ${msg}`;
                 })
             )
         })

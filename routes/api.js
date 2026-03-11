@@ -583,7 +583,8 @@ router.post('/verify-telegram', async (req, res) => {
             telegram_id: telegram_id
         });
     } catch (error) {
-        console.error('Ошибка /verify-telegram:', error);
+        console.error('Ошибка /verify-telegram:', error.message);
+        console.error('Стек:', error.stack);
         res.status(500).json({ error: 'Ошибка верификации' });
     }
 });
