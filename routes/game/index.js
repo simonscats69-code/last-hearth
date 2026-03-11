@@ -38,41 +38,70 @@ async function authenticatePlayer(req, res, next) {
 
 router.use(authenticatePlayer);
 
-// Подключаем все модули
-const locationsRouter = require('./locations');
-const inventoryRouter = require('./inventory');
-const bossesRouter = require('./bosses');
-const craftingRouter = require('./crafting');
-const baseRouter = require('./base');
-const clansRouter = require('./clans');
-const pvpRouter = require('./pvp');
-const statusRouter = require('./status');
-const marketRouter = require('./market');
-const energyRouter = require('./energy');
-const referralRouter = require('./referral');
-const seasonsRouter = require('./seasons');
-const purchaseRouter = require('./purchase');
-const itemsRouter = require('./items');
-const profileRouter = require('./profile');
-const debuffsRouter = require('./debuffs');
+// Функция для безопасной загрузки модулей с логированием
+function safeRequire(path) {
+    try {
+        const mod = require(path);
+        console.log(`[OK] Загружен роутер: ${path}`);
+        return mod;
+    } catch(e) {
+        console.error(`[FATAL] Не удалось загрузить роутер: ${path}`, e.message);
+        return null;
+    }
+}
 
-// Используем модули
-router.use(locationsRouter);
-router.use(inventoryRouter);
-router.use(bossesRouter);
-router.use(craftingRouter);
-router.use(baseRouter);
-router.use(clansRouter);
-router.use(pvpRouter);
-router.use(statusRouter);
-router.use(marketRouter);
-router.use(energyRouter);
-router.use(referralRouter);
-router.use(seasonsRouter);
-router.use(purchaseRouter);
-router.use(itemsRouter);
-router.use(profileRouter);
-router.use(debuffsRouter);
+// Подключаем все модули
+const locationsRouter = safeRequire('./locations');
+const inventoryRouter = safeRequire('./inventory');
+const bossesRouter = safeRequire('./bosses');
+const craftingRouter = safeRequire('./crafting');
+const baseRouter = safeRequire('./base');
+const clansRouter = safeRequire('./clans');
+const pvpRouter = safeRequire('./pvp');
+const statusRouter = safeRequire('./status');
+const marketRouter = safeRequire('./market');
+const energyRouter = safeRequire('./energy');
+const referralRouter = safeRequire('./referral');
+const seasonsRouter = safeRequire('./seasons');
+const purchaseRouter = safeRequire('./purchase');
+const itemsRouter = safeRequire('./items');
+const profileRouter = safeRequire('./profile');
+const debuffsModule = safeRequire('./debuffs');
+const debuffsRouter = debuffsModule ? debuffsModule.router : null;
+
+// Используем модули с проверкой
+if (locationsRouter) router.use(locationsRouter);
+else console.error('[FATAL] locationsRouter = null');
+if (inventoryRouter) router.use(inventoryRouter);
+else console.error('[FATAL] inventoryRouter = null');
+if (bossesRouter) router.use(bossesRouter);
+else console.error('[FATAL] bossesRouter = null');
+if (craftingRouter) router.use(craftingRouter);
+else console.error('[FATAL] craftingRouter = null');
+if (baseRouter) router.use(baseRouter);
+else console.error('[FATAL] baseRouter = null');
+if (clansRouter) router.use(clansRouter);
+else console.error('[FATAL] clansRouter = null');
+if (pvpRouter) router.use(pvpRouter);
+else console.error('[FATAL] pvpRouter = null');
+if (statusRouter) router.use(statusRouter);
+else console.error('[FATAL] statusRouter = null');
+if (marketRouter) router.use(marketRouter);
+else console.error('[FATAL] marketRouter = null');
+if (energyRouter) router.use(energyRouter);
+else console.error('[FATAL] energyRouter = null');
+if (referralRouter) router.use(referralRouter);
+else console.error('[FATAL] referralRouter = null');
+if (seasonsRouter) router.use(seasonsRouter);
+else console.error('[FATAL] seasonsRouter = null');
+if (purchaseRouter) router.use(purchaseRouter);
+else console.error('[FATAL] purchaseRouter = null');
+if (itemsRouter) router.use(itemsRouter);
+else console.error('[FATAL] itemsRouter = null');
+if (profileRouter) router.use(profileRouter);
+else console.error('[FATAL] profileRouter = null');
+if (debuffsRouter) router.use(debuffsRouter);
+else console.error('[FATAL] debuffsRouter = null');
 
 // Экспортируем для использования в других модулях
 module.exports = router;
