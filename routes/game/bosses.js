@@ -58,6 +58,7 @@ function safeJsonParse(value, fallback = {}) {
         try {
             return JSON.parse(value);
         } catch (e) {
+            console.error('JSON.parse failed:', typeof value, value.substring(0, 100));
             logger.warn('[bosses] Ошибка парсинга JSON', { value: value.substring(0, 100) });
             return fallback;
         }

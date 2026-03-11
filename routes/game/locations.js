@@ -59,6 +59,7 @@ function safeJsonParse(value, fallback = {}) {
         try {
             return JSON.parse(value);
         } catch (e) {
+            console.error('JSON.parse failed:', typeof value, value.substring(0, 100));
             logger.warn('[locations] Ошибка парсинга JSON', { value: value.substring(0, 100) });
             return fallback;
         }
@@ -223,10 +224,9 @@ router.post('/search', async (req, res) => {
             await client.query(`
                 UPDATE players 
                 SET energy = energy - $1,
-                    radiation = $2,
                     last_energy_update = NOW()
-                WHERE id = $3
-            `, [energyCost, newRadiation, playerId]);
+                WHERE id = $2
+            `, [energyCost, playerId]);
             
             // Проверяем последствия радиации
             let radiationEffect = null;
@@ -418,9 +418,9 @@ router.get('/locations', async (req, res) => {
         
         // Получаем локации с пагинацией
         const locations = await queryAll(`
-            SELECT id, name, radiation, required_luck, description, is_red_zone
+            SELECT DISTINCT ON (name) id, name, radiation, required_luck, description, is_red_zone
             FROM locations
-            ORDER BY required_luck ASC
+            ORDER BY name, id ASC
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
         

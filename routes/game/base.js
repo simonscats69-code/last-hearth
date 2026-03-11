@@ -59,10 +59,12 @@ const safeStringify = (value) => {
  * Парсинг JSON с fallback
  */
 const safeParse = (value, fallback = {}) => {
-    if (!value) return fallback;
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'object') return value;
     try {
         return typeof value === 'string' ? JSON.parse(value) : value;
     } catch {
+        console.error('JSON.parse failed:', typeof value, String(value).substring(0, 100));
         return fallback;
     }
 };
