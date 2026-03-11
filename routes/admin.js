@@ -130,7 +130,7 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
             if (!ALLOWED_FIELDS.includes('energy')) {
                 return res.status(400).json({ error: 'Недопустимое поле: energy' });
             }
-            updates.push(`energy = ${paramIndex++}`);
+            updates.push(`energy = $${paramIndex++}`);
             values.push(energy);
         }
         
@@ -138,7 +138,7 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
             if (!ALLOWED_FIELDS.includes('health')) {
                 return res.status(400).json({ error: 'Недопустимое поле: health' });
             }
-            updates.push(`health = ${paramIndex++}`);
+            updates.push(`health = $${paramIndex++}`);
             values.push(health);
         }
         
@@ -146,7 +146,7 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
             if (!ALLOWED_FIELDS.includes('experience')) {
                 return res.status(400).json({ error: 'Недопустимое поле: experience' });
             }
-            updates.push(`experience = ${paramIndex++}`);
+            updates.push(`experience = $${paramIndex++}`);
             values.push(experience);
         }
         
@@ -291,35 +291,35 @@ router.put('/bosses/:id', requireAdmin, async (req, res) => {
             if (typeof name !== 'string' || name.length > 100) {
                 return res.status(400).json({ error: 'name должен быть строкой до 100 символов' });
             }
-            updates.push(`name = ${paramIndex++}`);
+            updates.push(`name = $${paramIndex++}`);
             values.push(name);
         }
         if (health !== undefined) {
             if (!Number.isInteger(health) || health < 1 || health > 1000000) {
                 return res.status(400).json({ error: 'health должен быть целым числом от 1 до 1000000' });
             }
-            updates.push(`health = ${paramIndex++}`);
+            updates.push(`health = $${paramIndex++}`);
             values.push(health);
         }
         if (damage !== undefined) {
             if (!Number.isInteger(damage) || damage < 0 || damage > 100000) {
                 return res.status(400).json({ error: 'damage должен быть целым числом от 0 до 100000' });
             }
-            updates.push(`damage = ${paramIndex++}`);
+            updates.push(`damage = $${paramIndex++}`);
             values.push(damage);
         }
         if (reward_exp !== undefined) {
             if (!Number.isInteger(reward_exp) || reward_exp < 0 || reward_exp > 1000000) {
                 return res.status(400).json({ error: 'reward_exp должен быть целым числом от 0 до 1000000' });
             }
-            updates.push(`reward_exp = ${paramIndex++}`);
+            updates.push(`reward_exp = $${paramIndex++}`);
             values.push(reward_exp);
         }
         if (reward_items !== undefined) {
             if (!Array.isArray(reward_items)) {
                 return res.status(400).json({ error: 'reward_items должен быть массивом' });
             }
-            updates.push(`reward_items = ${paramIndex++}`);
+            updates.push(`reward_items = $${paramIndex++}`);
             values.push(JSON.stringify(reward_items));
         }
         

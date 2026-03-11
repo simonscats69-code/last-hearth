@@ -814,6 +814,43 @@ html, body {
     color: var(--accent-green);
 }
 
+/* Выпадающее меню "Ещё" */
+.dropdown-menu {
+    position: fixed;
+    bottom: 70px;
+    right: 10px;
+    background: var(--bg-card);
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 8px;
+    z-index: 200;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    min-width: 180px;
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 12px 16px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 8px;
+    text-align: left;
+}
+
+.dropdown-item:hover {
+    background: var(--bg-hover);
+}
+
+.dropdown-item span {
+    font-size: 18px;
+}
+
 /* Экраны (общие стили) */
 .screen-header {
     background: var(--bg-header);
@@ -1380,31 +1417,6 @@ html, body {
     gap: 20px;
 }
 
-.slots-machine {
-    background: linear-gradient(180deg, #1a1a2e 0%, #0f0f23 100%);
-    border-radius: 16px;
-    padding: 20px;
-    border: 3px solid #444;
-}
-
-.slot-row {
-    display: flex;
-    gap: 10px;
-}
-
-.slot {
-    width: 80px;
-    height: 100px;
-    background: linear-gradient(180deg, #fff 0%, #ddd 100%);
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 48px;
-    border: 2px solid #333;
-    box-shadow: inset 0 0 20px rgba(0,0,0,0.3);
-}
-
 .minigame-info {
     text-align: center;
     color: #888;
@@ -1416,17 +1428,6 @@ html, body {
     flex-direction: column;
     align-items: center;
     gap: 10px;
-}
-
-#bet-amount {
-    padding: 10px 20px;
-    font-size: 18px;
-    border-radius: 8px;
-    border: 2px solid #444;
-    background: #1a1a2e;
-    color: white;
-    text-align: center;
-    width: 120px;
 }
 
 .game-btn {
@@ -3974,394 +3975,3 @@ html, body {
     font-size: 20px;
 }
 
-/* ======================== */
-/* Стили для Сезонов       */
-/* ======================== */
-
-.season-current {
-    padding: 16px;
-}
-
-.season-inactive {
-    text-align: center;
-    padding: 32px 16px;
-}
-
-.season-inactive .season-icon {
-    font-size: 64px;
-    margin-bottom: 16px;
-}
-
-.season-info {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 16px;
-    border: 2px solid var(--accent-gold);
-}
-
-.season-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-}
-
-.season-header h3 {
-    margin: 0;
-    color: var(--accent-gold);
-}
-
-.season-days {
-    background: var(--accent-gold);
-    color: #000;
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.season-description {
-    color: var(--text-secondary);
-    margin: 8px 0;
-}
-
-.season-rank-info {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid #333;
-}
-
-.season-rank-info .rank-label {
-    color: var(--text-secondary);
-}
-
-.season-rank-info .rank-value {
-    font-size: 24px;
-    font-weight: bold;
-    color: var(--accent-gold);
-}
-
-.season-rank-info .rank-points {
-    color: var(--accent-green);
-    margin-left: auto;
-}
-
-.season-events {
-    padding: 16px;
-}
-
-.season-events h3 {
-    margin: 0 0 12px 0;
-}
-
-.events-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.event-card {
-    display: flex;
-    gap: 12px;
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 12px;
-    border-left: 3px solid var(--accent-gold);
-}
-
-.event-icon {
-    font-size: 32px;
-}
-
-.event-info h4 {
-    margin: 0 0 4px 0;
-}
-
-.event-info p {
-    margin: 0 0 8px 0;
-    color: var(--text-secondary);
-    font-size: 14px;
-}
-
-.event-modifiers {
-    font-size: 12px;
-    color: var(--accent-green);
-}
-
-.season-modifiers {
-    padding: 16px;
-}
-
-.season-modifiers h3 {
-    margin: 0 0 12px 0;
-}
-
-.modifiers-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.modifier-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: var(--bg-card);
-    border-radius: 8px;
-}
-
-.modifier-name {
-    color: var(--text-secondary);
-    text-transform: capitalize;
-}
-
-.modifier-value {
-    color: var(--accent-green);
-    font-weight: 600;
-}
-
-.season-rating-section {
-    padding: 16px;
-}
-
-.season-rating-section h3 {
-    margin: 0 0 12px 0;
-}
-
-.season-rating-tabs {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 16px;
-}
-
-.season-rating-tab {
-    flex: 1;
-    padding: 12px;
-    background: var(--bg-card);
-    border: 2px solid #333;
-    border-radius: 8px;
-    color: #fff;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.season-rating-tab.active {
-    border-color: var(--accent-gold);
-    color: var(--accent-gold);
-}
-
-.season-rating-content {
-    min-height: 200px;
-}
-
-.season-top-rating,
-.season-my-rating {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.rating-player {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px;
-    background: var(--bg-card);
-    border-radius: 8px;
-}
-
-.rating-rank {
-    font-size: 18px;
-    width: 32px;
-    text-align: center;
-}
-
-.rating-name {
-    flex: 1;
-    font-weight: 600;
-}
-
-.rating-level {
-    color: var(--text-secondary);
-    font-size: 14px;
-}
-
-.rating-points {
-    color: var(--accent-gold);
-}
-
-.my-rank-card {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 16px;
-    background: linear-gradient(135deg, #2d2d1a, #3d3d2a);
-    border: 2px solid var(--accent-gold);
-    border-radius: 12px;
-}
-
-.my-rank-position {
-    font-size: 36px;
-    font-weight: bold;
-    color: var(--accent-gold);
-}
-
-.my-rank-details {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.my-rank-details span {
-    color: var(--text-secondary);
-}
-
-.my-points {
-    color: var(--accent-green);
-    font-weight: 600;
-}
-
-.season-daily-tasks {
-    padding: 16px;
-}
-
-.season-daily-tasks h3 {
-    margin: 0 0 12px 0;
-}
-
-.daily-tasks-progress {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-}
-
-.daily-tasks-progress .progress-bar {
-    flex: 1;
-    height: 8px;
-    background: #333;
-    border-radius: 4px;
-    overflow: hidden;
-}
-
-.daily-tasks-progress .progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent-green), #4caf50);
-    transition: width 0.3s;
-}
-
-.daily-tasks-progress .progress-text {
-    color: var(--text-secondary);
-    font-size: 14px;
-    white-space: nowrap;
-}
-
-.daily-tasks-progress .event-badge {
-    background: var(--accent-gold);
-    color: #000;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.daily-tasks-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.daily-task-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px;
-    background: var(--bg-card);
-    border-radius: 12px;
-}
-
-.daily-task-card.completed {
-    border-left: 3px solid var(--accent-green);
-}
-
-.daily-task-card .task-icon {
-    font-size: 28px;
-}
-
-.daily-task-card .task-info {
-    flex: 1;
-}
-
-.daily-task-card .task-info h4 {
-    margin: 0 0 8px 0;
-    font-size: 14px;
-}
-
-.daily-task-card .task-progress {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.daily-task-card .task-progress-bar {
-    flex: 1;
-    height: 6px;
-    background: #333;
-    border-radius: 3px;
-    overflow: hidden;
-}
-
-.daily-task-card .task-progress-fill {
-    height: 100%;
-    background: var(--accent-green);
-    transition: width 0.3s;
-}
-
-.daily-task-card .task-progress span {
-    color: var(--text-secondary);
-    font-size: 12px;
-}
-
-.daily-task-card .task-reward {
-    display: flex;
-    gap: 8px;
-    margin-top: 4px;
-    font-size: 12px;
-}
-
-.daily-task-card .task-reward span {
-    color: var(--accent-gold);
-}
-
-.daily-task-card .claim-btn {
-    padding: 8px 16px;
-    background: var(--accent-green);
-    border: none;
-    border-radius: 8px;
-    color: #fff;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.daily-task-card .claim-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
-}
-
-.season-join-section {
-    padding: 16px;
-    text-align: center;
-}
-
-.season-join-section .action-btn {
-    width: 100%;
-    padding: 16px;
-    font-size: 16px;
-    background: linear-gradient(135deg, var(--accent-gold), #f0c000);
-    color: #000;
-}

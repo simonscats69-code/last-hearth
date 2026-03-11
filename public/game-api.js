@@ -3,7 +3,7 @@
  * API ЗАПРОСЫ (API Requests)
  * ============================================
  * Управление запросами к серверу
- * Оптимизировано с использованием Proxy и словаря эндпоинтов
+ * Оптимизировано со словарём эндпоинтов
  */
 
 // Базовый URL API (используем HTTPS для работы с BotHost)
@@ -67,126 +67,22 @@ const endpoints = {
     clanBossAttack: { endpoint: '/game/clan-boss/attack', method: 'POST' }
 };
 
-/**
- * Выполнение запроса к API с таймаутом и повторами
- * @param {string} endpoint - endpoint API
- * @param {Object} options - дополнительные опции
- * @param {number} retries - количество повторов (по умолчанию 2)
- * @returns {Promise<Object>} ответ сервера
- */
-async function apiRequest(endpoint, options = {}, retries = 2) {
-    const normalizedEndpoint = API_BASE.endsWith('/api') && endpoint.startsWith('/api/')
-        ? endpoint.slice(4)
-        : endpoint;
-    const url = `${API_BASE}${normalizedEndpoint}`;
-    
-    // Получаем telegram_id из Telegram WebApp
-    const telegramId = getTelegramId();
-    
-    const defaultOptions = {
-        headers: {
-            'Content-Type': 'application/json',
-            'x-telegram-id': telegramId || ''
-        }
-    };
-    
-    const config = { ...defaultOptions, ...options };
-
-    if (config.body && typeof config.body === 'object') {
-        config.body = JSON.stringify(config.body);
-    }
-    
-    // Показываем индикатор загрузки если долго
-    const loadingTimeout = setTimeout(() => {
-        if (options.showLoading !== false) {
-            showNotification('Соединение...', 'info');
-        }
-    }, 2000);
-    
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
-            
-            const response = await fetch(url, {
-                ...config,
-                signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-            clearTimeout(loadingTimeout);
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            
-            // Обработка ошибок от сервера
-            if (data.error) {
-                console.error('API Error:', data.error);
-                throw new Error(data.message || 'Unknown error');
-            }
-            
-            return data;
-        } catch (error) {
-            const isLastAttempt = attempt === retries;
-            
-            clearTimeout(loadingTimeout);
-            
-            if (error.name === 'AbortError') {
-                // Timeout - пробуем ещё раз
-                if (isLastAttempt) {
-                    showNotification('Сервер не отвечает. Попробуй позже.', 'error');
-                    throw error;
-                }
-                // Ждём перед повтором (1с, 2с)
-                await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
-                continue;
-            }
-            
-            if (isLastAttempt) {
-                console.error('API Request failed:', error);
-                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-                    showNotification('Пропал интернет. Проверь соединение.', 'error');
-                } else {
-                    showNotification('Ошибка: ' + error.message, 'error');
-                }
-                throw error;
-            }
-            
-            // Ждём перед повтором
-            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
-        }
-    }
-}
-
-/**
- * GET запрос
- * @param {string} endpoint - endpoint
- * @returns {Promise<Object>} данные
- */
-async function apiGet(endpoint) {
-    return apiRequest(endpoint, { method: 'GET' });
-}
-
-/**
- * POST запрос с JSON телом
- * @param {string} endpoint - endpoint
- * @param {Object} body - данные
- * @returns {Promise<Object>} данные
- */
-async function apiPost(endpoint, body = {}) {
-    return apiRequest(endpoint, {
-        method: 'POST',
-        body: body
-    });
-}
-
 // ============================================
-// КЭШ ДАННЫХ (опционально, для часто используемых данных)
+// КЭШ ДАННЫХ
 // ============================================
 const apiCache = new Map();
-const CACHE_TTL = 30000; // 30 секунд кэширование
+const CACHE_TTL = 30000; // 30 секунд
+
+// Связи между endpoint-ами для умной инвалидации
+const cacheInvalidationMap = {
+    'purchase': ['profile', 'inventory'],
+    'useItem': ['inventory', 'profile'],
+    'craft': ['inventory', 'profile'],
+    'clanJoin': ['clan', 'profile'],
+    'clanLeave': ['clan', 'profile'],
+    'marketBuy': ['inventory', 'profile', 'marketList'],
+    'marketCreate': ['marketList']
+};
 
 function getCached(key) {
     const cached = apiCache.get(key);
@@ -203,17 +99,117 @@ function setCached(key, data) {
 
 function invalidateCache(key) {
     apiCache.delete(key);
+    const relatedKeys = cacheInvalidationMap[key] || [];
+    relatedKeys.forEach(relatedKey => apiCache.delete(relatedKey));
 }
 
 // ============================================
-// ПРОКСИ ДЛЯ ДИНАМИЧЕСКОЙ ГЕНЕРАЦИИ МЕТОДОВ
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================
 
+/** Задержка перед повторной попыткой */
+function delay(attempt) {
+    return new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+}
+
+/** Создание таймаута для индикатора загрузки */
+function createLoadingTimeout(showLoading) {
+    if (showLoading !== false) {
+        return setTimeout(() => showNotification('Соединение...', 'info'), 2000);
+    }
+    return null;
+}
+
 /**
- * Создаёт API метод на основе словаря эндпоинтов
- * @param {string} name - имя эндпоинта
- * @returns {Function} функция API
+ * Выполнение запроса к API с таймаутом и повторами
+ * @param {string} endpoint - endpoint API
+ * @param {Object} options - дополнительные опции
+ * @param {number} retries - количество повторов после первой попытки (по умолчанию 2)
+ * @returns {Promise<Object>} ответ сервера
  */
+async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
+    const normalizedEndpoint = endpoint.startsWith('/api') 
+        ? endpoint.replace(/^\/api/, '') || '/' 
+        : endpoint;
+    
+    const queryString = Object.keys(params).length > 0 
+        ? '?' + new URLSearchParams(params).toString() 
+        : '';
+    const url = `${API_BASE}${normalizedEndpoint.startsWith('/') ? '' : '/'}${normalizedEndpoint}${queryString}`;
+    
+    const telegramId = getTelegramId();
+    
+    const config = {
+        headers: {
+            'Content-Type': 'application/json',
+            'x-telegram-id': telegramId || ''
+        },
+        ...options
+    };
+
+    if (config.body && typeof config.body === 'object') {
+        config.body = JSON.stringify(config.body);
+    }
+    
+    let loadingTimeout = createLoadingTimeout(options.showLoading);
+    
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            if (loadingTimeout) clearTimeout(loadingTimeout);
+            loadingTimeout = createLoadingTimeout(options.showLoading);
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            
+            const response = await fetch(url, { ...config, signal: controller.signal });
+            clearTimeout(timeoutId);
+            clearTimeout(loadingTimeout);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.error === true) {
+                console.error('API Error:', data.message);
+                throw new Error(data.message || 'Unknown error');
+            }
+            
+            return data;
+        } catch (error) {
+            const isLastAttempt = attempt === retries;
+            clearTimeout(loadingTimeout);
+            
+            if (error.name === 'AbortError') {
+                if (isLastAttempt) {
+                    showNotification('Сервер не отвечает. Попробуй позже.', 'error');
+                    throw error;
+                }
+                await delay(attempt);
+                continue;
+            }
+            
+            if (isLastAttempt) {
+                console.error('API Request failed:', error);
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    showNotification('Пропал интернет. Проверь соединение.', 'error');
+                } else {
+                    showNotification('Ошибка: ' + error.message, 'error');
+                }
+                throw error;
+            }
+            
+            await delay(attempt);
+        }
+    }
+}
+
+// ============================================
+// ГЕНЕРАЦИЯ API МЕТОДОВ
+// ============================================
+
+/** Создаёт API метод на основе словаря эндпоинтов */
 function createApiMethod(name) {
     const config = endpoints[name];
     if (!config) {
@@ -221,43 +217,34 @@ function createApiMethod(name) {
     }
     
     if (config.method === 'GET') {
-        return async function(body = {}, options = {}) {
-            // Проверяем кэш для GET запросов без параметров
-            const cacheKey = name;
+        return async function(body = {}) {
             if (Object.keys(body).length === 0) {
-                const cached = getCached(cacheKey);
+                const cached = getCached(name);
                 if (cached) return cached;
-                const data = await apiGet(config.endpoint);
-                setCached(cacheKey, data);
+                const data = await apiRequest(config.endpoint, { method: 'GET' });
+                setCached(name, data);
                 return data;
             }
-            return apiGet(config.endpoint);
+            return apiRequest(config.endpoint, { method: 'GET' }, 2, body);
         };
     } else {
-        return async function(body = {}, options = {}) {
-            // Инвалидируем кэш после POST запросов
+        return async function(body = {}) {
             invalidateCache(name);
-            return apiPost(config.endpoint, body);
+            return apiRequest(config.endpoint, { method: 'POST', body });
         };
     }
 }
 
-/**
- * Динамический API через Proxy
- * Позволяет вызывать методы как gameApi.profile() или gameApi.purchase({...})
- */
-const gameApi = new Proxy({}, {
-    get(target, name) {
-        // Проверяем статические методы
-        if (name === 'get') return apiGet;
-        if (name === 'post') return apiPost;
-        if (name === 'endpoints') return endpoints;
-        if (name === 'cache') return { get: getCached, set: setCached, invalidate: invalidateCache };
-        
-        // Создаём метод на лету
-        return createApiMethod(name);
-    }
-});
+/** Генерируем gameApi один раз через Object.fromEntries */
+const gameApi = Object.fromEntries(
+    Object.keys(endpoints).map(name => [name, createApiMethod(name)])
+);
+
+// Добавляем статические методы
+gameApi.get = (endpoint, params = {}) => apiRequest(endpoint, { method: 'GET' }, 2, params);
+gameApi.post = (endpoint, body = {}) => apiRequest(endpoint, { method: 'POST', body });
+gameApi.endpoints = endpoints;
+gameApi.cache = { get: getCached, set: setCached, invalidate: invalidateCache };
 
 // ============================================================================
 // API ЗАПРОСЫ - используются через game-systems.js и game-ui.js

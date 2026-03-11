@@ -4,6 +4,7 @@
  */
 
 const crypto = require('crypto');
+const logger = require('./logger');
 
 /**
  * Проверяет подпись initData от Telegram

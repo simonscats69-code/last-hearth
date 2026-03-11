@@ -33,7 +33,13 @@ class ParticleSystem {
         this.ctx = this.canvas.getContext('2d');
         this.resize();
         
-        window.addEventListener('resize', () => this.resize());
+        // Удаляем старый обработчик если есть
+        if (this._resizeHandler) {
+            window.removeEventListener('resize', this._resizeHandler);
+        }
+        // Сохраняем ссылку на обработчик
+        this._resizeHandler = () => this.resize();
+        window.addEventListener('resize', this._resizeHandler);
     }
 
     /**

@@ -45,15 +45,14 @@ const leaderboardRouter = require('./routes/leaderboard');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware для логирования всех запросов
+// Middleware для логирования ошибок
 app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
         const duration = Date.now() - start;
+        // Логируем только ошибки
         if (res.statusCode >= 400) {
             console.error(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
-        } else {
-            console.log(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
         }
     });
     next();
@@ -141,15 +140,12 @@ app.use(compression({ threshold: 1024 }));
 
 app.use((req, res, next) => {
     if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-        // Логируем входящие данные
-        console.log('[JSON PARSER] Before parse:', req.method, req.originalUrl, typeof req.body);
+        // Парсим JSON
         return jsonParser(req, res, (err) => {
             if (err) {
                 console.error('[JSON PARSER ERROR]', err.message);
-                console.error('[JSON PARSER STACK]', err.stack);
                 return res.status(400).json({ error: 'Неверный JSON' });
             }
-            console.log('[JSON PARSER] After parse:', req.method, req.originalUrl, typeof req.body);
             next();
         });
     }

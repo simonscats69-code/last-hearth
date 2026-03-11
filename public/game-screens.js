@@ -18,7 +18,6 @@ const SCREENS = [
     'clan-create',    // Создание клана
     'clan-chat',      // Чат клана
     'shop',           // Магазин
-    'slots',          // Слоты
     'wheel',          // Колесо удачи
     'rating',         // Рейтинг
     'base',           // База
@@ -29,7 +28,6 @@ const SCREENS = [
     'market',         // Рынок
     'market-create',  // Создание объявления
     'achievements',   // Достижения
-    'seasons',        // Сезоны
     'referral',       // Рефералы
     'quests',         // Задания
     'profile'         // Профиль

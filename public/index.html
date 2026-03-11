@@ -155,11 +155,8 @@
                 </button>
             </section>
 
-            <!-- Кнопки лечения (показываются при наличии переломов/инфекций) -->
+            <!-- Лечение инфекций -->
             <section class="heal-actions" id="heal-actions" style="display: none;">
-                <button class="heal-btn" id="heal-bones-btn">
-                    <span>🦴</span> Лечить переломы
-                </button>
                 <button class="heal-btn" id="heal-infections-btn">
                     <span>💊</span> Лечить инфекции
                 </button>
@@ -187,27 +184,28 @@
                     <span>👥</span>
                     <label>Клан</label>
                 </button>
-                <button class="nav-btn" data-screen="market">
-                    <span>🏪</span>
-                    <label>Барахолка</label>
-                </button>
-                <button class="nav-btn" data-screen="achievements">
-                    <span>🏆</span>
-                    <label>Достижения</label>
-                </button>
-                <button class="nav-btn" data-screen="seasons">
-                    <span>🎖️</span>
-                    <label>Сезон</label>
-                </button>
-                <button class="nav-btn" data-screen="referral">
-                    <span>🎁</span>
-                    <label>Рефералы</label>
-                </button>
-                <button class="nav-btn" data-screen="menu">
+                <button class="nav-btn" id="more-menu-btn">
                     <span>☰</span>
-                    <label>Меню</label>
+                    <label>Ещё</label>
                 </button>
             </nav>
+
+            <!-- Выпадающее меню "Ещё" -->
+            <div id="more-menu" class="dropdown-menu" style="display: none;">
+                <button class="dropdown-item" data-screen="market">
+                    <span>🏪</span> Барахолка
+                </button>
+                <button class="dropdown-item" data-screen="achievements">
+                    <span>🏆</span> Достижения
+                </button>
+
+                <button class="dropdown-item" data-screen="referral">
+                    <span>🎁</span> Рефералы
+                </button>
+                <button class="dropdown-item" data-screen="rating">
+                    <span>🏆</span> Рейтинг
+                </button>
+            </div>
         </div>
 
         <!-- Экран карты -->
@@ -229,6 +227,7 @@
             <header class="screen-header">
                 <button class="back-btn" data-screen="main">← Назад</button>
                 <h2>🎒 Инвентарь</h2>
+                <button class="action-btn small" data-screen="craft">🔨</button>
             </header>
             <!-- Панель управления инвентарём -->
             <div class="inventory-controls">
@@ -325,6 +324,7 @@
             <header class="screen-header">
                 <button class="back-btn" data-screen="main">← Назад</button>
                 <h2>🛒 Магазин</h2>
+                <button class="action-btn small" data-screen="market">🏪</button>
             </header>
             <div class="shop-content">
                 <div class="shop-tabs">
@@ -334,31 +334,6 @@
                 </div>
                 <div class="shop-items" id="shop-items">
                     <!-- Товары будут добавлены через JS -->
-                </div>
-            </div>
-        </div>
-
-        <!-- Экран мини-игры: Слоты -->
-        <div id="slots-screen" class="screen">
-            <header class="screen-header">
-                <button class="back-btn" data-screen="shop">← В магазин</button>
-                <h2>🎰 Слоты</h2>
-            </header>
-            <div class="minigame-content">
-                <div class="slots-machine">
-                    <div class="slot-row">
-                        <div class="slot" id="slot1">🍒</div>
-                        <div class="slot" id="slot2">🍒</div>
-                        <div class="slot" id="slot3">🍒</div>
-                    </div>
-                </div>
-                <div class="minigame-info">
-                    <p>Поставь монеты и крути!</p>
-                    <p>Выигрыш: x2, x5, x10, x50</p>
-                </div>
-                <div class="minigame-controls">
-                    <input type="number" id="bet-amount" value="10" min="1" max="1000">
-                    <button class="game-btn" id="spin-btn">🎰 Крутить (10 монет)</button>
                 </div>
             </div>
         </div>
@@ -755,67 +730,6 @@
             </div>
         </div>
 
-        <!-- Экран сезонов -->
-        <div id="seasons-screen" class="screen">
-            <header class="screen-header">
-                <button class="back-btn" data-screen="main">← Назад</button>
-                <h2>🎖️ Сезон</h2>
-            </header>
-            
-            <!-- Текущий сезон -->
-            <div class="season-current" id="season-current">
-                <!-- Информация о сезоне -->
-            </div>
-            
-            <!-- Активные события -->
-            <div class="season-events" id="season-events">
-                <h3>⚡ Активные события</h3>
-                <div class="events-list" id="events-list">
-                    <!-- События будут загружены -->
-                </div>
-            </div>
-            
-            <!-- Модификаторы -->
-            <div class="season-modifiers" id="season-modifiers">
-                <h3>📊 Бонусы</h3>
-                <div class="modifiers-list" id="modifiers-list">
-                    <!-- Модификаторы -->
-                </div>
-            </div>
-            
-            <!-- Рейтинг -->
-            <div class="season-rating-section">
-                <h3>🏆 Рейтинг</h3>
-                <div class="season-rating-tabs">
-                    <button class="season-rating-tab active" data-tab="top">Топ</button>
-                    <button class="season-rating-tab" data-tab="my">Мой ранг</button>
-                </div>
-                <div class="season-rating-content" id="season-rating-content">
-                    <div class="season-top-rating" id="season-top-rating">
-                        <!-- Топ игроки -->
-                    </div>
-                    <div class="season-my-rating" id="season-my-rating" style="display: none;">
-                        <!-- Моя позиция -->
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Ежедневные задания -->
-            <div class="season-daily-tasks">
-                <h3>📋 Ежедневные задания</h3>
-                <div class="daily-tasks-progress" id="daily-tasks-progress">
-                    <!-- Прогресс -->
-                </div>
-                <div class="daily-tasks-list" id="daily-tasks-list">
-                    <!-- Задания -->
-                </div>
-            </div>
-            
-            <!-- Кнопка присоединения -->
-            <div class="season-join-section" id="season-join-section">
-                <button class="action-btn" id="season-join-btn">Присоединиться к сезону</button>
-            </div>
-        </div>
 
         <!-- Экран барахолки (основной) -->
         <div id="market-screen" class="screen">

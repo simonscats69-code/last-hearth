@@ -5,20 +5,6 @@
  * Управление CSS анимациями и визуальными эффектами
  */
 
-// Список доступных анимаций
-const ANIMATIONS = {
-    FADE_IN: 'fadeIn',
-    SLIDE_UP: 'slideUp',
-    SLIDE_DOWN: 'slideDown',
-    PULSE: 'pulse',
-    BOUNCE: 'bounce',
-    GLOW: 'glow',
-    SHAKE: 'shake',
-    DAMAGE_FLASH: 'damageFlash',
-    HEAL_FLASH: 'healFlash',
-    SPIN: 'spin'
-};
-
 /**
  * Применение анимации к элементу
  * @param {HTMLElement} element - DOM элемент
@@ -32,7 +18,7 @@ function animateElement(element, animationName, duration = 1000, onComplete = nu
     element.style.animation = `${animationName} ${duration}ms ease-out`;
     
     if (onComplete) {
-        setTimeout(onComplete, duration);
+        element.addEventListener('animationend', onComplete, { once: true });
     }
 }
 
@@ -63,26 +49,23 @@ function showLootAnimation(item) {
 }
 
 /**
- * Визуальный эффект при получении урона
+ * Визуальный эффект вспышки (урон/лечение)
+ * @param {string} type - тип эффекта ('damage' или 'heal')
  */
-function showDamageEffect() {
+function showFlashEffect(type = 'damage') {
     const app = document.getElementById('app');
-    app.style.animation = 'damageFlash 0.3s';
+    if (!app) return;
+    
+    const animation = type === 'heal' ? 'healFlash' : 'damageFlash';
+    app.style.animation = `${animation} 0.3s`;
     setTimeout(() => {
         app.style.animation = '';
     }, 300);
 }
 
-/**
- * Визуальный эффект при получении лечения
- */
-function showHealEffect() {
-    const app = document.getElementById('app');
-    app.style.animation = 'healFlash 0.3s';
-    setTimeout(() => {
-        app.style.animation = '';
-    }, 300);
-}
+// Алиасы для обратной совместимости
+function showDamageEffect() { showFlashEffect('damage'); }
+function showHealEffect() { showFlashEffect('heal'); }
 
 /**
  * Показать модальное окно
@@ -96,7 +79,7 @@ function showModal(title, message, type = 'info') {
     const modalMessage = document.getElementById('modal-message');
     const modalClose = document.getElementById('modal-close');
     
-    if (!modal) return;
+    if (!modal || !modalTitle || !modalMessage || !modalClose) return;
     
     modalTitle.textContent = title;
     modalMessage.textContent = message;
@@ -111,10 +94,12 @@ function showModal(title, message, type = 'info') {
     modal.style.display = 'flex';
     modal.style.animation = 'fadeIn 0.3s ease-out';
     
-    // Обработчик закрытия
+    // Обработчик закрытия (сначала удаляем старый)
+    modalClose.onclick = null;
     modalClose.onclick = () => hideModal();
     
-    // Закрытие по клику вне окна
+    // Закрытие по клику вне окна (сначала удаляем старый)
+    modal.onclick = null;
     modal.onclick = (e) => {
         if (e.target === modal) hideModal();
     };
@@ -125,7 +110,12 @@ function showModal(title, message, type = 'info') {
  */
 function hideModal() {
     const modal = document.getElementById('modal');
+    const modalClose = document.getElementById('modal-close');
+    
+    // Очищаем обработчики при закрытии
+    if (modalClose) modalClose.onclick = null;
     if (modal) {
+        modal.onclick = null;
         modal.style.animation = 'fadeOut 0.2s ease-out';
         setTimeout(() => {
             modal.style.display = 'none';
@@ -140,13 +130,12 @@ function hideModal() {
  * @param {number} duration - длительность в мс
  */
 function showNotification(message, type = 'info', duration = 3000) {
-    const container = document.getElementById('notification-container');
+    let container = document.getElementById('notification-container');
     if (!container) {
-        // Создаём контейнер если нет
-        const newContainer = document.createElement('div');
-        newContainer.id = 'notification-container';
-        newContainer.style.cssText = 'position:fixed;top:20px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:10px;';
-        document.body.appendChild(newContainer);
+        container = document.createElement('div');
+        container.id = 'notification-container';
+        container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:10px;';
+        document.body.appendChild(container);
     }
     
     const notification = document.createElement('div');
@@ -161,7 +150,7 @@ function showNotification(message, type = 'info', duration = 3000) {
         box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     `;
     
-    document.getElementById('notification-container').appendChild(notification);
+    container.appendChild(notification);
     
     // Удаляем после duration
     setTimeout(() => {
@@ -186,13 +175,12 @@ function animateButtonClick(button) {
 /**
  * Добавить эффект загрузки на кнопку
  * @param {HTMLElement} button - кнопка
- * @param {string} originalText - оригинальный текст
  */
-function setButtonLoading(button, originalText) {
+function setButtonLoading(button) {
     if (!button) return;
     
     button.classList.add('loading');
-    button.dataset.originalText = originalText || button.textContent;
+    button.dataset.originalText = button.textContent;
     button.textContent = '⏳ Загрузка...';
     button.disabled = true;
 }

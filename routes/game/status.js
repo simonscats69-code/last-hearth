@@ -141,7 +141,6 @@ router.get('/status', async (req, res) => {
             fatigue: player.fatigue,
             energy: player.energy,
             max_energy: player.max_energy,
-            // broken_bones, broken_leg, broken_arm удалены
             infections: infectionLevel,
             infections_list: infections
         });
@@ -389,7 +388,6 @@ const StatusAPI = {
             fatigue: player.fatigue,
             energy: player.energy,
             max_energy: player.max_energy,
-            // broken_bones, broken_leg, broken_arm удалены
             infections: infectionLevel,
             infections_list: infections
         };

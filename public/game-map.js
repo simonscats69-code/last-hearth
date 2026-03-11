@@ -51,6 +51,8 @@ function renderLocations() {
         // Проверяем клик по локациям
         for (const loc of locations) {
             const pos = gameState.locationPositions[loc.id];
+            if (!pos || pos.radius === undefined) continue;
+            
             const dist = Math.sqrt((x - pos.x) ** 2 + (y - pos.y) ** 2);
             
             if (dist < pos.radius) {
@@ -75,6 +77,8 @@ function renderLocations() {
         let hoveredLoc = null;
         for (const loc of locations) {
             const pos = gameState.locationPositions[loc.id];
+            if (!pos || pos.radius === undefined) continue;
+            
             const dist = Math.sqrt((x - pos.x) ** 2 + (y - pos.y) ** 2);
             if (dist < pos.radius) {
                 hoveredLoc = loc;

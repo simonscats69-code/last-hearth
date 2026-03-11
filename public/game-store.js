@@ -4,7 +4,7 @@
  * ============================================
  * Магазин с 3 категориями:
  * - Баффы (временные усиления)
- * - Мини-игры (слоты, колесо удачи)
+ * - Мини-игры (колесо удачи)
  * - Косметика (эффекты, скины)
  */
 
@@ -53,7 +53,6 @@ const SHOP_ITEMS = {
     
     // Мини-игры
     minigames: [
-        { id: 'minislots', name: 'Слоты', desc: 'Играй в слоты и выигрывай монеты!', icon: '🎰', price: 0, currency: 'free', type: 'game', game: 'slots' },
         { id: 'miniwheel', name: 'Колесо удачи', desc: 'Крути колесо бесплатно или за Stars', icon: '🎡', price: 0, currency: 'free', type: 'game', game: 'wheel' },
     ],
     
@@ -135,9 +134,7 @@ async function buyShopItem(itemId, category) {
     
     // Если это мини-игра
     if (item.type === 'game') {
-        if (item.game === 'slots') {
-            openSlots();
-        } else if (item.game === 'wheel') {
+        if (item.game === 'wheel') {
             openWheel();
         }
         return;
@@ -236,108 +233,6 @@ function checkActiveBuffs() {
  */
 function hasBuff(effect) {
     return gameState.buffs?.[effect] !== undefined;
-}
-
-// ============================================
-// СЛОТЫ
-// ============================================
-
-const SLOT_SYMBOLS = ['🍒', '🍋', '🍇', '💎', '7️⃣', '⭐'];
-const SLOT_PAYOUTS = {
-    '🍒': 2, '🍋': 3, '🍇': 5, '💎': 10, '7️⃣': 50, '⭐': 100
-};
-
-/**
- * Открытие слотов
- */
-function openSlots() {
-    showScreen('slots');
-    resetSlots();
-}
-
-/**
- * Сброс слотов
- */
-function resetSlots() {
-    document.getElementById('slot1').textContent = '🍒';
-    document.getElementById('slot2').textContent = '🍒';
-    document.getElementById('slot3').textContent = '🍒';
-}
-
-/**
- * Запуск слотов
- */
-async function spinSlots() {
-    const betInput = document.getElementById('bet-amount');
-    const bet = parseInt(betInput?.value) || 10;
-    const player = gameState.player;
-    
-    if (!player || player.coins < bet) {
-        showModal('❌ Недостаточно монет', 'Нужно больше монет!');
-        return;
-    }
-    
-    // Спин
-    const btn = document.getElementById('spin-btn');
-    btn.disabled = true;
-    btn.textContent = '🎰 Крутим...';
-    
-    // Анимация
-    for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 100));
-        document.getElementById('slot1').textContent = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
-        document.getElementById('slot2').textContent = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
-        document.getElementById('slot3').textContent = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
-    }
-    
-    // Финальный результат
-    const result = [
-        SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
-        SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
-        SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)]
-    ];
-    
-    document.getElementById('slot1').textContent = result[0];
-    document.getElementById('slot2').textContent = result[1];
-    document.getElementById('slot3').textContent = result[2];
-    
-    // Проверка выигрыша
-    let payout = 0;
-    
-    // Джекпот (все 7)
-    if (result[0] === '7️⃣' && result[1] === '7️⃣' && result[2] === '7️⃣') {
-        payout = bet * SLOT_PAYOUTS['7️⃣'];
-    }
-    // Три одинаковых
-    else if (result[0] === result[1] && result[1] === result[2]) {
-        payout = bet * SLOT_PAYOUTS[result[0]];
-    }
-    // Два 7
-    else if (result.filter(s => s === '7️⃣').length >= 2) {
-        payout = bet * 5;
-    }
-    
-    // Обновляем монеты локально
-    player.coins = (player.coins || 0) - bet + payout;
-    document.getElementById('player-coins').textContent = player.coins;
-    
-    // Синхронизация с сервером
-    const totalWin = payout;
-    if (totalWin > 0) {
-        try {
-            await apiPost('/game/slots/win', { amount: totalWin });
-        } catch (e) {
-            console.error('Ошибка синхронизации слотов:', e);
-        }
-    }
-    
-    btn.disabled = false;
-    btn.textContent = `🎰 Крутить (${bet} монет)`;
-    
-    if (payout > 0) {
-        showModal('🎉 Выигрыш!', `Выпало: ${result.join(' ')}\nВыигрыш: ${payout} монет!`);
-        showConfetti(50);
-    }
 }
 
 // ============================================
@@ -448,12 +343,6 @@ function initShopHandlers() {
             renderShopCategory(btn.dataset.tab);
         });
     });
-    
-    // Кнопка слотов
-    const spinBtn = document.getElementById('spin-btn');
-    if (spinBtn) {
-        spinBtn.addEventListener('click', spinSlots);
-    }
     
     // Кнопки колеса
     const wheelFreeBtn = document.getElementById('wheel-free-btn');

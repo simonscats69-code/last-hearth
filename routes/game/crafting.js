@@ -11,7 +11,7 @@
  * - Централизованный обработчик ошибок
  */
 
-const express = require('express');
+const { randomInt } = require('crypto');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
@@ -288,32 +288,35 @@ router.post('/craft', async (req, res) => {
                 throw new Error(`Нужен навык крафта ${recipe.difficulty}, у вас ${currentCrafting}`);
             }
 
-            // Удаляем материалы
-            let newInventory = [...inventory];
-            for (const reqItem of requirements) {
-                let removed = 0;
-                newInventory = newInventory.filter(item => {
-                    if (removed < reqItem.quantity && item.id === reqItem.item_id) {
-                        removed++;
-                        return false;
-                    }
-                    return true;
-                });
-            }
-
-            // Проверяем энергию
+            // Проверяем энергию (списывается ВСЕГДА)
             const energyCost = recipe.difficulty * 2;
             if (lockedPlayer.energy < energyCost) {
                 throw new Error('Недостаточно энергии. Нужно: ' + energyCost);
             }
             
-            // Бросаем успех (используем rarity из рецепта)
+            // Бросаем успех (используем криптографический RNG)
             const rarity = recipe.result_item_rarity || 'common';
             const successChance = calculateCraftSuccess(currentCrafting, rarity);
-            const rolled = Math.random() * 100;
+            const rolled = randomInt(0, 10000) / 100;
+            const isSuccess = rolled <= successChance;
 
-            if (rolled <= successChance) {
-                // Успех - добавляем предмет
+            // Оптимизированное удаление материалов (O(n))
+            let newInventory = [...inventory];
+            if (isSuccess) {
+                for (const reqItem of requirements) {
+                    let removeCount = reqItem.quantity;
+                    newInventory = newInventory.filter(item => {
+                        if (removeCount > 0 && item.id === reqItem.item_id) {
+                            removeCount--;
+                            return false;
+                        }
+                        return true;
+                    });
+                }
+            }
+
+            // Создаём и добавляем предмет (только при успехе)
+            if (isSuccess) {
                 const newItem = {
                     id: recipe.result_item_id,
                     name: recipe.result_item_name,
@@ -325,19 +328,20 @@ router.post('/craft', async (req, res) => {
                     upgrade_level: 0,
                     modifications: {}
                 };
-
+                
+                // Добавляем предмет в инвентарь
                 newInventory.push(newItem);
 
                 // Повышаем навык крафта (+1 к текущему, макс 100)
                 const expGained = recipe.difficulty * 10;
-                const newCrafting = Math.min(100, currentCrafting + 1);
+                const newCraftingLevel = Math.min(100, currentCrafting + 1);
 
-                // Обновляем игрока в той же транзакции (вычитаем энергию)
+                // Обновляем игрока (энергия списывается ВСЕГДА)
                 await query(`
                     UPDATE players 
                     SET inventory = $1, crafting = $2, energy = energy - $3
                     WHERE id = $4
-                `, [safeStringify(newInventory), newCrafting, energyCost, playerId]);
+                `, [safeStringify(newInventory), newCraftingLevel, energyCost, playerId]);
 
                 // Логируем успешный крафт
                 await logPlayerAction(playerId, 'craft_success', {
@@ -346,7 +350,7 @@ router.post('/craft', async (req, res) => {
                     result_item_id: newItem.id,
                     result_item_name: newItem.name,
                     exp_gained: expGained,
-                    new_crafting_level: newCrafting,
+                    new_crafting_level: newCraftingLevel,
                     rolled: rolled.toFixed(2),
                     success_chance: successChance
                 });
@@ -356,16 +360,17 @@ router.post('/craft', async (req, res) => {
                     message: 'Создан предмет: ' + recipe.result_item_name,
                     item: newItem,
                     exp_gained: expGained,
-                    new_crafting_level: newCrafting,
+                    new_crafting_level: newCraftingLevel,
                     rolled: rolled.toFixed(2),
                     success_chance: successChance
                 };
-
             } else {
-                // Неудача - материалы потеряны
+                // Неудача - энергия списывается, материалы сохраняются
                 await query(`
-                    UPDATE players SET inventory = $1 WHERE id = $2
-                `, [safeStringify(newInventory), playerId]);
+                    UPDATE players 
+                    SET energy = energy - $1
+                    WHERE id = $2
+                `, [energyCost, playerId]);
 
                 // Логируем неудачный крафт
                 await logPlayerAction(playerId, 'craft_failed', {
@@ -373,14 +378,16 @@ router.post('/craft', async (req, res) => {
                     recipe_name: recipe.name,
                     rolled: rolled.toFixed(2),
                     success_chance: successChance,
-                    materials_lost: requirements.map(r => ({ item_id: r.item_id, quantity: r.quantity }))
+                    energy_spent: energyCost,
+                    materials_lost: 0
                 });
 
                 return {
                     success: false,
-                    message: 'Крафт не удался! Материалы потеряны.',
+                    message: 'Крафт не удался! Энергия потрачена, материалы сохранены.',
                     rolled: rolled.toFixed(2),
-                    success_chance: successChance
+                    success_chance: successChance,
+                    energy_spent: energyCost
                 };
             }
         });

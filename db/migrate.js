@@ -208,27 +208,7 @@ async function createTables() {
             UNIQUE(player_id, achievement_id)
         )`,
         
-        // Сезоны
-        `CREATE TABLE IF NOT EXISTS seasons (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            description TEXT,
-            start_date TIMESTAMP NOT NULL,
-            end_date TIMESTAMP NOT NULL,
-            rewards JSONB DEFAULT '{}',
-            active BOOLEAN DEFAULT false
-        )`,
-        
-        // Статистика сезона
-        `CREATE TABLE IF NOT EXISTS season_rating (
-            id SERIAL PRIMARY KEY,
-            season_id INTEGER NOT NULL,
-            player_id VARCHAR(50) NOT NULL,
-            points INTEGER DEFAULT 0,
-            last_updated TIMESTAMP DEFAULT NOW(),
-            UNIQUE(season_id, player_id)
-        )`,
-        
+
         // Ежедневные задания
         `CREATE TABLE IF NOT EXISTS daily_tasks (
             id SERIAL PRIMARY KEY,

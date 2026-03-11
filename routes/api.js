@@ -454,6 +454,11 @@ router.post('/achievements/claim', async (req, res) => {
             WHERE player_id = $1 AND achievement_id = $2
         `, [player.id, achievement_id]);
 
+        // Получаем актуальный баланс после обновления
+        const updatedPlayer = await queryOne(`
+            SELECT coins, stars FROM players WHERE id = $1
+        `, [player.id]);
+
         res.json({
             success: true,
             message: `Вы получили награду: ${reward.coins || 0} монет, ${reward.stars || 0} звёзд`,
@@ -462,8 +467,8 @@ router.post('/achievements/claim', async (req, res) => {
                 stars: reward.stars || 0
             },
             new_balance: {
-                coins: player.coins + (reward.coins || 0),
-                stars: player.stars + (reward.stars || 0)
+                coins: (updatedPlayer.coins || 0),
+                stars: (updatedPlayer.stars || 0)
             }
         });
     } catch (error) {

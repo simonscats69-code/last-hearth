@@ -84,12 +84,7 @@ async function loadProfile() {
     try {
         const statusData = await apiRequest('/api/game/status');
         // Добавляем расширенный статус к данным игрока
-        data.status.broken_bones = statusData.broken_bones?.count || 0;
-        data.status.broken_leg = statusData.broken_bones?.broken_leg || false;
-        data.status.broken_arm = statusData.broken_bones?.broken_arm || false;
         data.status.infections = statusData.infections?.count || 0;
-        data.status.can_walk = statusData.broken_bones?.can_walk ?? true;
-        data.status.can_attack = statusData.broken_bones?.can_attack ?? true;
     } catch (e) {
         console.log('Статус недоступен:', e);
     }
@@ -178,42 +173,21 @@ async function updateProfileUI(player) {
  */
 function updateConditionsUI(status) {
     const conditionsGrid = document.getElementById('conditions-grid');
-    const brokenBonesDisplay = document.getElementById('broken-bones-display');
     const infectionsDisplay = document.getElementById('infections-display');
     const healActions = document.getElementById('heal-actions');
-    const healBonesBtn = document.getElementById('heal-bones-btn');
     const healInfectionsBtn = document.getElementById('heal-infections-btn');
     
     if (!conditionsGrid) return;
     
-    const brokenBones = status.broken_bones || 0;
     const infections = status.infections || 0;
     
     // Показываем/скрываем секцию состояний
-    if (brokenBones > 0 || infections > 0) {
+    if (infections > 0) {
         conditionsGrid.style.display = 'grid';
         if (healActions) healActions.style.display = 'flex';
     } else {
         conditionsGrid.style.display = 'none';
         if (healActions) healActions.style.display = 'none';
-    }
-    
-    // Переломы
-    if (brokenBonesDisplay) {
-        if (brokenBones > 0) {
-            brokenBonesDisplay.style.display = 'flex';
-            const brokenText = [];
-            if (status.broken_leg) brokenText.push('нога');
-            if (status.broken_arm) brokenText.push('рука');
-            const brokenTextEl = document.getElementById('broken-bones-text');
-            if (brokenTextEl) {
-                brokenTextEl.textContent = `🦴 Перелом: ${brokenText.join(', ')}`;
-            }
-            if (healBonesBtn) healBonesBtn.style.display = 'flex';
-        } else {
-            brokenBonesDisplay.style.display = 'none';
-            if (healBonesBtn) healBonesBtn.style.display = 'none';
-        }
     }
     
     // Инфекции
@@ -697,13 +671,6 @@ async function attackBoss() {
         return;
     }
     
-    // Проверяем, может ли игрок атаковать (перелом руки)
-    if (status.broken_arm) {
-        showModal('⚠️ Невозможно атаковать', 'У вас сломана рука! Сначала вылечите перелом.');
-        actionLocks.attackBoss = false;
-        return;
-    }
-    
     const btn = document.getElementById('attack-boss-btn');
     if (btn) btn.disabled = true;
     
@@ -740,11 +707,6 @@ async function attackBoss() {
             }
             if (energyBar && gameState.player?.status) {
                 energyBar.style.width = `${(result.player_energy / gameState.player.status.max_energy) * 100}%`;
-            }
-            
-            // Проверка на перелом
-            if (result.broken_bone) {
-                showModal('🦴 Перелом!', result.broken_bone.message);
             }
             
             // Проверка на победу
@@ -1569,35 +1531,6 @@ async function watchAd() {
 // ============================================================================
 
 /**
- * Лечение переломов
- */
-async function healBrokenBones() {
-    const status = gameState.player?.status;
-    if (!status || status.broken_bones === 0) {
-        showModal('ℹ️ Инфо', 'У вас нет переломов');
-        return;
-    }
-    
-    try {
-        const result = await apiRequest('/api/game/status/heal', {
-            method: 'POST',
-            body: { type: 'bone', use_stars: false }
-        });
-        
-        if (result.success) {
-            showModal('✅ Успех', result.message);
-            await loadProfile();
-        } else if (result.has_bandages === false && result.stars_price) {
-            showModal('⚠️ Нет бинтов', result.message + '\n\nХотите лечить за Stars?');
-        } else {
-            showModal('⚠️ Внимание', result.message);
-        }
-    } catch (error) {
-        console.error('Ошибка лечения:', error);
-    }
-}
-
-/**
  * Лечение инфекций
  */
 async function healInfections() {
@@ -1794,7 +1727,6 @@ window.loadRating = loadRating;
 window.renderRating = renderRating;
 window.loadRatings = loadRatings;
 window.watchAd = watchAd;
-window.healBrokenBones = healBrokenBones;
 window.healInfections = healInfections;
 window.showLootAnimation = showLootAnimation;
 window.showDamageEffect = showDamageEffect;

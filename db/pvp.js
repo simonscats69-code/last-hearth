@@ -3,7 +3,7 @@
  * Управление PvP боями, кулдаунами и статистикой
  */
 
-const { query, queryOne, queryAll, updateAchievementProgress } = require('./database');
+const { query, queryOne, queryAll, updateAchievementProgress, pool } = require('./database');
 
 /**
  * Проверка, является ли локация красной зоной (PvP разрешено)
@@ -32,11 +32,11 @@ async function isProtectedFromPVP(playerId) {
 }
 
 /**
- * Проверка кулдауна PvP для игрока
+ * Получение PvP кулдауна игрока
  * @param {number} playerId - ID игрока
  * @returns {Promise<object|null>} Информация о кулдауне или null
  */
-async function getPVP_cooldown(playerId) {
+async function getPVPCooldown(playerId) {
     return await queryOne(
         `SELECT * FROM pvp_cooldowns 
          WHERE player_id = $1 AND expires_at > NOW()
@@ -46,13 +46,13 @@ async function getPVP_cooldown(playerId) {
 }
 
 /**
- * Установка кулдауна PvP для игрока
+ * Установка PvP кулдауна игроку
  * @param {number} playerId - ID игрока
  * @param {number} minutes - Длительность в минутах
  * @param {string} type - Тип кулдауна
  * @param {string} reason - Причина
  */
-async function setPVP_cooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя') {
+async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя') {
     // Валидация minutes для предотвращения SQL-инъекции
     const validatedMinutes = parseInt(minutes);
     if (!Number.isInteger(validatedMinutes) || validatedMinutes <= 0 || validatedMinutes > 10080) {
@@ -162,8 +162,8 @@ async function createPVPMatch(attackerId, defenderId, locationId) {
     );
     
     // Устанавливаем кулдаун обоим игрокам
-    await setPVP_cooldown(attackerId, 5, 'pvp_battle', 'Участие в PvP бое');
-    await setPVP_cooldown(defenderId, 5, 'pvp_battle', 'Участие в PvP бое');
+    await setPVPCooldown(attackerId, 5, 'pvp_battle', 'Участие в PvP бое');
+    await setPVPCooldown(defenderId, 5, 'pvp_battle', 'Участие в PvP бое');
     
     return match;
 }
@@ -174,9 +174,10 @@ async function createPVPMatch(attackerId, defenderId, locationId) {
  * @param {number} winnerId - ID победителя
  * @param {number} loserId - ID проигравшего
  * @param {object} rewards - Награды
+ * @param {boolean} winnerWasAttacker - был ли победитель атакующим
  */
-async function finishPVPMatch(matchId, winnerId, loserId, rewards) {
-    const client = await require('./database').pool.connect();
+async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAttacker = true) {
+    const client = await pool.connect();
     
     try {
         await client.query('BEGIN');
@@ -205,6 +206,19 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards) {
         );
         
         // Обновляем статистику победителя
+        // Логика подсчёта урона:
+        // - Если победил атакующий: учитываем его урон (attackerDamageDealt)
+        // - Если победил защищающийся: учитываем его урон от контратак (defenderDamageDealt)
+        // Это отражает реальный вклад в победу
+        const winnerDamageDealt = winnerWasAttacker 
+            ? attackerDamageDealt 
+            : defenderDamageDealt;
+        
+        // Логирование для отладки (только в dev режиме)
+        if (process.env.NODE_ENV !== 'production') {
+            console.log(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
+        }
+        
         const winner = await client.query(
             `UPDATE players SET 
                 pvp_wins = pvp_wins + 1,
@@ -217,7 +231,7 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards) {
                 inventory = inventory || $4::jsonb
              WHERE id = $5
              RETURNING *`,
-            [attackerDamageDealt + defenderDamageDealt, experienceGained, 
+            [winnerDamageDealt, experienceGained, 
              coinsStolen, JSON.stringify(itemsStolen), winnerId]
         );
 
@@ -313,8 +327,8 @@ function calculatePVPDamage(attacker, defender) {
     }
     
     // Защита брони
-    const defense = defender.equipment?.body?.stats?.defense || 0;
-    defense += defender.equipment?.head?.stats?.defense || 0;
+    const defense = (defender.equipment?.body?.stats?.defense || 0) + 
+                    (defender.equipment?.head?.stats?.defense || 0);
     damage = Math.max(1, damage - defense);
     
     // Контратака защищающегося (шанс зависит от ловкости)
@@ -335,10 +349,14 @@ function getRandomItemsToSteal(inventory, maxItems = 3) {
         .filter(([itemId, qty]) => qty > 0)
         .map(([itemId, quantity]) => ({ itemId: parseInt(itemId), quantity }));
     
-    // Перемешиваем и выбираем случайные предметы
-    const shuffled = items.sort(() => Math.random() - 0.5);
-    const count = Math.min(maxItems, shuffled.length);
+    // Fisher-Yates shuffle
+    const shuffled = [...items];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
     
+    const count = Math.min(maxItems, shuffled.length);
     const stolenItems = [];
     for (let i = 0; i < count; i++) {
         const item = shuffled[i];
@@ -384,8 +402,8 @@ function calculatePVPRewardExperience(loserLevel, winnerLevel) {
 module.exports = {
     isRedZone,
     isProtectedFromPVP,
-    getPVP_cooldown,
-    setPVP_cooldown,
+    getPVPCooldown,
+    setPVPCooldown,
     getPlayersInLocation,
     getPVPStats,
     createPVPMatch,

@@ -125,20 +125,22 @@ async function transaction(fn) {
 }
 
 /**
- * Простая транзакция без поддержки вложенных вызовов
- * @param {Function} fn - Функция-обработчик
+ * Транзакция с использованием client
+ * @param {Function} fn - Функция-обработчик с client
  * @returns {Promise<any>} Результат
  */
 async function tx(fn) {
-    await query('BEGIN');
-    
+    const client = await pool.connect();
     try {
-        const result = await fn();
-        await query('COMMIT');
+        await client.query('BEGIN');
+        const result = await fn(client);
+        await client.query('COMMIT');
         return result;
     } catch (e) {
-        await query('ROLLBACK');
+        await client.query('ROLLBACK');
         throw e;
+    } finally {
+        client.release();
     }
 }
 
@@ -178,14 +180,11 @@ async function initDatabase() {
             -- Состояния
             health INTEGER DEFAULT 100,
             max_health INTEGER DEFAULT 100,
-            -- hunger/thirst удалены в миграции дебаффов
             radiation JSONB DEFAULT '{"level": 0}',
             fatigue INTEGER DEFAULT 0,
             energy INTEGER DEFAULT 50,
             max_energy INTEGER DEFAULT 50,
-            -- infection_count удалён, используется infections JSONB
             infections JSONB DEFAULT '[]',
-            -- broken_bones, broken_leg, broken_arm удалены в миграции
             -- Позиция
             current_location_id INTEGER DEFAULT 1,
             -- Инвентарь (JSONB)
@@ -413,41 +412,6 @@ async function initDatabase() {
             completed BOOLEAN DEFAULT false,
             UNIQUE(player_id, task_type, expires_at)
         );
-        -- Таблица сезонов
-        CREATE TABLE IF NOT EXISTS seasons (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            description TEXT,
-            start_date TIMESTAMP NOT NULL,
-            end_date TIMESTAMP NOT NULL,
-            is_active BOOLEAN DEFAULT false,
-            is_completed BOOLEAN DEFAULT false,
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-        -- Таблица событий сезонов
-        CREATE TABLE IF NOT EXISTS season_events (
-            id SERIAL PRIMARY KEY,
-            season_id INTEGER REFERENCES seasons(id),
-            event_type VARCHAR(50) NOT NULL,
-            name VARCHAR(100) NOT NULL,
-            description TEXT,
-            modifiers JSONB DEFAULT '{}',  -- Модификаторы события: {experience_multiplier, drop_multiplier, etc}
-            start_date TIMESTAMP NOT NULL,
-            end_date TIMESTAMP NOT NULL,
-            is_active BOOLEAN DEFAULT false
-        );
-        -- Таблица участников сезона
-        CREATE TABLE IF NOT EXISTS season_participants (
-            id SERIAL PRIMARY KEY,
-            season_id INTEGER REFERENCES seasons(id),
-            player_id INTEGER REFERENCES players(id),
-            points INTEGER DEFAULT 0,
-            rank INTEGER,
-            tasks_completed INTEGER DEFAULT 0,
-            rewards_claimed JSONB DEFAULT '[]',
-            last_activity TIMESTAMP DEFAULT NOW(),
-            UNIQUE(season_id, player_id)
-        );
         -- Таблица клановых боссов
         CREATE TABLE IF NOT EXISTS clan_bosses (
             id SERIAL PRIMARY KEY,
@@ -466,19 +430,6 @@ async function initDatabase() {
             killed_at TIMESTAMP,
             is_active BOOLEAN DEFAULT true,
             UNIQUE(clan_id, is_active)
-        );
-        -- Таблица ежедневных заданий сезона
-        CREATE TABLE IF NOT EXISTS season_daily_tasks (
-            id SERIAL PRIMARY KEY,
-            season_id INTEGER REFERENCES seasons(id),
-            player_id INTEGER REFERENCES players(id),
-            task_type VARCHAR(50) NOT NULL,
-            target_value INTEGER NOT NULL,
-            current_value INTEGER DEFAULT 0,
-            reward JSONB NOT NULL,
-            expires_at TIMESTAMP NOT NULL,
-            completed BOOLEAN DEFAULT false,
-            UNIQUE(season_id, player_id, task_type, expires_at)
         );
         -- Таблица рефералов
         CREATE TABLE IF NOT EXISTS referrals (
@@ -1014,35 +965,37 @@ async function buyFromMarket(buyerId, listingId) {
     });
 }
 async function cancelMarketListing(sellerId, listingId) {
-    const listing = await queryOne(
-        'SELECT * FROM market_listings WHERE id = $1 AND seller_id = $2',
-        [listingId, sellerId]
-    );
-    if (!listing) {
-        return { success: false, error: 'Объявление не найдено или не принадлежит вам' };
-    }
-    if (listing.status !== 'active') {
-        return { success: false, error: 'Объявление уже неактивно' };
-    }
-    const player = await queryOne('SELECT inventory FROM players WHERE telegram_id = $1', [sellerId]);
-    if (!player) return { success: false, error: 'Игрок не найден' };
-    const inventory = player.inventory || {};
-    const itemData = listing.item_data;
-    const itemKey = itemData.id.toString();
-    if (inventory[itemKey]) {
-        inventory[itemKey] += listing.quantity;
-    } else {
-        inventory[itemKey] = listing.quantity;
-    }
-    await query('UPDATE players SET inventory = $1 WHERE telegram_id = $2', [inventory, sellerId]);
-    await query(
-        `UPDATE market_listings SET status = 'cancelled' WHERE id = $1`,
-        [listingId]
-    );
-    return {
-        success: true,
-        message: 'Объявление отменено, предметы возвращены в инвентарь'
-    };
+    return await tx(async (client) => {
+        const listing = await client.query(
+            'SELECT * FROM market_listings WHERE id = $1 AND seller_id = $2',
+            [listingId, sellerId]
+        );
+        if (!listing.rows[0]) {
+            return { success: false, error: 'Объявление не найдено или не принадлежит вам' };
+        }
+        if (listing.rows[0].status !== 'active') {
+            return { success: false, error: 'Объявление уже неактивно' };
+        }
+        const player = await client.query('SELECT inventory FROM players WHERE telegram_id = $1', [sellerId]);
+        if (!player.rows[0]) return { success: false, error: 'Игрок не найден' };
+        const inventory = player.rows[0].inventory || {};
+        const itemData = listing.rows[0].item_data;
+        const itemKey = itemData.id.toString();
+        if (inventory[itemKey]) {
+            inventory[itemKey] += listing.rows[0].quantity;
+        } else {
+            inventory[itemKey] = listing.rows[0].quantity;
+        }
+        await client.query('UPDATE players SET inventory = $1 WHERE telegram_id = $2', [inventory, sellerId]);
+        await client.query(
+            `UPDATE market_listings SET status = 'cancelled' WHERE id = $1`,
+            [listingId]
+        );
+        return {
+            success: true,
+            message: 'Объявление отменено, предметы возвращены в инвентарь'
+        };
+    });
 }
 async function renewMarketListing(sellerId, listingId, hours) {
     const listing = await queryOne(
@@ -1366,12 +1319,10 @@ async function checkPlayerStatus(playerId) {
         energy: player.energy,
         max_energy: player.max_energy,
         radiation: radiation,
-        // hunger/thirst удалены
-        // broken_bones, broken_leg, broken_arm удалены
         infections: infections,
         is_alive: player.health > 0,
         radiation_death: radiation.level >= 5,
-        can_walk: true, // переломы удалены
+        can_walk: true,
         can_attack: true,
         can_travel: true
     };

@@ -33,14 +33,11 @@ async function createTables() {
             -- Состояние
             health INTEGER DEFAULT 100,
             max_health INTEGER DEFAULT 100,
-            -- hunger/thirst удалены в миграции дебаффов
             radiation JSONB DEFAULT '{"level": 0}',
             fatigue INTEGER DEFAULT 0,
             energy INTEGER DEFAULT 50,
             max_energy INTEGER DEFAULT 50,
-            -- infection_count удалён, используется infections JSONB
             infections JSONB DEFAULT '[]',
-            -- broken_bones, broken_leg, broken_arm удалены в миграции
             
             -- Локация
             current_location_id INTEGER DEFAULT 1,

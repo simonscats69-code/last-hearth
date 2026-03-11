@@ -240,15 +240,15 @@ router.post('/pvp/attack', async (req, res) => {
                 throw new Error('Игрок не на этой локации');
             }
 
-            // Обновляем энергию
-            await playerHelper.updateEnergy(playerId, 0);
-            
-            // Получаем актуальные данные атакующего
+            // Проверяем наличие энергии для атаки
             const attacker = await playerHelper.getById(playerId);
 
-            if (attacker.energy < 1) {
+            if (!attacker || attacker.energy < 1) {
                 throw new Error('Нужна энергия для атаки');
             }
+
+            // Обновляем энергию (вычитаем 1 за атаку)
+            await playerHelper.updateEnergy(playerId, -1);
 
             // Создаём сессию боя
             const battleId = await pvp.startBattle(playerId, target_id);

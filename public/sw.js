@@ -31,6 +31,9 @@ self.addEventListener('install', (event) => {
                 return cache.addAll(STATIC_ASSETS);
             })
             .then(() => self.skipWaiting())
+            .catch((err) => {
+                console.error('Ошибка кэширования:', err);
+            })
     );
 });
 
@@ -76,12 +79,15 @@ self.addEventListener('fetch', (event) => {
         const cached = await caches.match(event.request);
         if (cached) {
             // Возвращаем кэш и обновляем в фоне
+            // ВАЖНО: waitUntil ДО return
             event.waitUntil((async () => {
                 try {
                     const networkResponse = await fetch(event.request);
                     if (networkResponse.ok) {
                         const cache = await caches.open(CACHE_NAME);
-                        await cache.put(event.request, networkResponse.clone());
+                        await cache.put(event.request, networkResponse.clone()).catch(err => {
+                            console.error('Ошибка обновления кэша:', err);
+                        });
                     }
                 } catch (error) {
                     // Тихо игнорируем ошибки обновления кэша
@@ -95,7 +101,9 @@ self.addEventListener('fetch', (event) => {
             const networkResponse = await fetch(event.request);
             if (networkResponse.ok) {
                 const cache = await caches.open(CACHE_NAME);
-                await cache.put(event.request, networkResponse.clone());
+                await cache.put(event.request, networkResponse.clone()).catch(err => {
+                    console.error('Ошибка кэширования:', err);
+                });
             }
             return networkResponse;
         } catch (error) {
