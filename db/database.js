@@ -792,7 +792,7 @@ async function seedDatabase() {
             INSERT INTO item_sets (name, description, icon, bonus_2, bonus_3, bonus_4)
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT DO NOTHING
-        `, [set.name, set.description, set.icon, set.bonus_2, set.bonus_3, set.bonus_4]);
+        `, [set.name, set.description, set.icon, JSON.stringify(set.bonus_2), JSON.stringify(set.bonus_3), JSON.stringify(set.bonus_4)]);
     }
     const bosses = [
         { name: 'Крысиный король', description: 'Огромная радиоактивная крыса', level: 1, health: 500, damage: 10, reward_experience: 50, reward_coins: 25, key_drop_chance: 1.0, icon: '🐀' },
@@ -867,7 +867,7 @@ async function seedDatabase() {
             ON CONFLICT DO NOTHING
         `, [
             item.name, item.description, item.type, item.category, item.rarity || 'common',
-            item.stackable !== false, item.slot || null, item.stats || '{}',
+            item.stackable !== false, item.slot || null, JSON.stringify(item.stats || {}),
             item.durability || 100, item.max_durability || 100, item.price, item.icon
         ]);
     }
