@@ -80,7 +80,7 @@ function onScreenOpen(screenName) {
             
         case 'inventory':
             // Загружаем инвентарь
-            openInventory();
+            loadInventory();
             break;
             
         case 'craft':
@@ -144,8 +144,8 @@ function initNavigationHandlers() {
     
     // Обработчики кнопок главного меню
     const mainButtons = {
-        'btn-map': 'map',
-        'btn-inventory': 'inventory',
+        'map-btn': 'map',
+        'inventory-btn': 'inventory',
         'btn-craft': 'craft',
         'btn-bosses': 'bosses',
         'btn-shop': 'shop',
@@ -227,9 +227,8 @@ function showProfile() {
 function showBossFight(bossId) {
     const boss = gameState.bosses?.find(b => b.id === bossId);
     if (boss) {
-        gameState.currentBoss = boss;
-        renderBossFight(boss);
-        showScreen('boss-fight');
+        // Используем существующую функцию startBossFight
+        startBossFight(boss);
     }
 }
 
@@ -240,3 +239,16 @@ function backToBosses() {
     gameState.currentBoss = null;
     showScreen('bosses');
 }
+
+// ============================================================================
+// ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ ВИДИМОСТИ
+// ============================================================================
+
+// Экспортируем расширенную версию showScreen (перезаписывает базовую из game-utils)
+window.showScreen = showScreen;
+window.onScreenOpen = onScreenOpen;
+window.goToMain = goToMain;
+window.showProfile = showProfile;
+window.showBossFight = showBossFight;
+window.backToBosses = backToBosses;
+window.hideLoadingScreen = hideLoadingScreen;

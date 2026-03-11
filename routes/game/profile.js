@@ -122,6 +122,17 @@ router.get('/profile', async (req, res) => {
 
         // Safe JSON parsing для infections
         const infectionsList = safeJsonParse(player.infections, []);
+        // Парсим radiation (может быть old INTEGER или new JSONB)
+        let radiationLevel = 0;
+        if (player.radiation) {
+            if (typeof player.radiation === 'object') {
+                radiationLevel = player.radiation.level || 0;
+            } else if (typeof player.radiation === 'number') {
+                radiationLevel = player.radiation;
+            }
+        }
+        // Вычисляем общий уровень инфекций
+        const infectionLevel = infectionsList.reduce((sum, i) => sum + (i.level || 0), 0);
         
         // Safe JSON parsing для inventory и equipment
         const inventory = safeJsonParse(player.inventory, []);
@@ -164,16 +175,12 @@ router.get('/profile', async (req, res) => {
                 status: {
                     health: player.health,
                     max_health: player.max_health,
-                    hunger: player.hunger,
-                    thirst: player.thirst,
-                    radiation: player.radiation,
+                    radiation: radiationLevel,
                     fatigue: player.fatigue,
                     energy: player.energy,
                     max_energy: player.max_energy,
-                    broken_bones: player.broken_bones,
-                    broken_leg: player.broken_leg,
-                    broken_arm: player.broken_arm,
-                    infections: player.infection_count,
+                    // broken_bones, broken_leg, broken_arm удалены в миграции дебаффов
+                    infections: infectionLevel,
                     infections_list: infectionsList
                 },
                 location: {
@@ -265,16 +272,12 @@ router.get('/profile-legacy', async (req, res) => {
             status: {
                 health: player.health,
                 max_health: player.max_health,
-                hunger: player.hunger,
-                thirst: player.thirst,
-                radiation: player.radiation,
+                radiation: radiationLevel,
                 fatigue: player.fatigue,
                 energy: player.energy,
                 max_energy: player.max_energy,
-                broken_bones: player.broken_bones,
-                broken_leg: player.broken_leg,
-                broken_arm: player.broken_arm,
-                infections: player.infection_count,
+                // broken_bones, broken_leg, broken_arm удалены в миграции дебаффов
+                infections: infectionLevel,
                 infections_list: infectionsList
             },
             location: {

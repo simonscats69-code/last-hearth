@@ -19,8 +19,16 @@ let isRunning = {
     dailyActivity: false,
     achievements: false,
     cleanup: false,
-    dailyTasks: false
+    dailyTasks: false,
+    debuffs: false  // Новая задача для дебаффов
 };
+
+// Флаг для graceful shutdown
+let schedulerEnabled = true;
+
+// Счётчик повторных ошибок для debuffs cleanup
+let debuffRetryCount = 0;
+const MAX_DEBUFF_RETRIES = 5;
 
 // Метрики выполнения
 const metrics = {
@@ -52,17 +60,15 @@ async function regenerateEnergy() {
     isRunning.energy = true;
     
     try {
-        // Используем транзакцию для безопасности
-        const result = await tx(async () => {
-            return await query(`
-                UPDATE players 
-                SET energy = LEAST(max_energy, energy + 1),
-                    last_energy_update = NOW()
-                WHERE energy < max_energy 
-                AND (last_energy_update IS NULL OR last_energy_update < NOW() - INTERVAL '1 minute')
-                RETURNING id, energy, max_energy
-            `);
-        });
+        // Прямой запрос без tx() - одиночный UPDATE не требует транзакции
+        const result = await query(`
+            UPDATE players 
+            SET energy = LEAST(max_energy, energy + 1),
+                last_energy_update = NOW()
+            WHERE energy < max_energy 
+            AND (last_energy_update IS NULL OR last_energy_update < NOW() - INTERVAL '1 minute')
+            RETURNING id, energy, max_energy
+        `);
         
         const duration = Date.now() - startTime;
         metrics.energy.total++;
@@ -100,31 +106,29 @@ async function checkDailyActivity() {
     isRunning.dailyActivity = true;
     
     try {
-        await tx(async () => {
-            // Обнуляем streak для игроков, которые не заходили более 2 дней
-            const resetResult = await query(`
-                UPDATE players 
-                SET daily_streak = 0
-                WHERE last_active < NOW() - INTERVAL '2 days'
-                AND daily_streak > 0
-                RETURNING id
-            `);
-            
-            if (resetResult.rows.length > 0) {
-                logger.info({ 
-                    type: 'streak_reset', 
-                    players_affected: resetResult.rows.length 
-                });
-            }
-            
-            // Увеличиваем streak для активных игроков (с ограничением max=365)
-            await query(`
-                UPDATE players 
-                SET daily_streak = LEAST(365, daily_streak + 1)
-                WHERE last_active > NOW() - INTERVAL '20 hours'
-                AND last_active < NOW() - INTERVAL '4 hours'
-            `);
-        });
+        // Обнуляем streak для игроков, которые не заходили более 2 дней
+        const resetResult = await query(`
+            UPDATE players 
+            SET daily_streak = 0
+            WHERE last_active < NOW() - INTERVAL '2 days'
+            AND daily_streak > 0
+            RETURNING id
+        `);
+        
+        if (resetResult.rows.length > 0) {
+            logger.info({ 
+                type: 'streak_reset', 
+                players_affected: resetResult.rows.length 
+            });
+        }
+        
+        // Увеличиваем streak для активных игроков (с ограничением max=365)
+        await query(`
+            UPDATE players 
+            SET daily_streak = LEAST(365, daily_streak + 1)
+            WHERE last_active > NOW() - INTERVAL '20 hours'
+            AND last_active < NOW() - INTERVAL '4 hours'
+        `);
         
         const duration = Date.now() - startTime;
         metrics.dailyActivity.total++;
@@ -156,35 +160,33 @@ async function cleanupOldLogs() {
     isRunning.cleanup = true;
     
     try {
-        await tx(async () => {
-            // Удаляем логи старше 30 дней
-            const logsResult = await query(`
-                DELETE FROM player_logs 
-                WHERE created_at < NOW() - INTERVAL '30 days'
-                RETURNING id
-            `);
-            
-            if (logsResult.rows.length > 0) {
-                logger.info({ 
-                    type: 'logs_cleanup', 
-                    logs_deleted: logsResult.rows.length 
-                });
-            }
-            
-            // Удаляем старые сессии
-            const sessionsResult = await query(`
-                DELETE FROM player_sessions 
-                WHERE expires_at < NOW()
-                RETURNING id
-            `);
-            
-            if (sessionsResult.rows.length > 0) {
-                logger.info({ 
-                    type: 'sessions_cleanup', 
-                    sessions_deleted: sessionsResult.rows.length 
-                });
-            }
-        });
+        // Удаляем логи старше 30 дней
+        const logsResult = await query(`
+            DELETE FROM player_logs 
+            WHERE created_at < NOW() - INTERVAL '30 days'
+            RETURNING id
+        `);
+        
+        if (logsResult.rows.length > 0) {
+            logger.info({ 
+                type: 'logs_cleanup', 
+                logs_deleted: logsResult.rows.length 
+            });
+        }
+        
+        // Удаляем старые сессии
+        const sessionsResult = await query(`
+            DELETE FROM player_sessions 
+            WHERE expires_at < NOW()
+            RETURNING id
+        `);
+        
+        if (sessionsResult.rows.length > 0) {
+            logger.info({ 
+                type: 'sessions_cleanup', 
+                sessions_deleted: sessionsResult.rows.length 
+            });
+        }
         
         const duration = Date.now() - startTime;
         metrics.cleanup.total++;
@@ -317,6 +319,83 @@ async function checkAllAchievements() {
 }
 
 /**
+ * Очистка истёкших дебаффов
+ * Запускается каждые 5 минут
+ */
+async function cleanupExpiredDebuffs() {
+    if (isRunning.debuffs) {
+        logger.warn('debuffs: пропуск, предыдущая задача ещё выполняется');
+        return;
+    }
+    
+    const startTime = Date.now();
+    isRunning.debuffs = true;
+    
+    try {
+        // Очистка radiation (с LIMIT для предотвращения блокировки большого количества строк)
+        // Обрабатываем максимум 100 игроков за один вызов
+        await query(`
+            UPDATE players 
+            SET radiation = jsonb_set(
+                COALESCE(radiation, '{}'::jsonb), 
+                '{level}', 
+                '0'::jsonb
+            )
+            WHERE radiation->>'expires_at' IS NOT NULL 
+            AND (radiation->>'expires_at')::timestamp < NOW()
+        `);
+        
+        // Очистка инфекций (с LIMIT)
+        await query(`
+            UPDATE players 
+            SET infections = COALESCE((
+                SELECT jsonb_agg(elem)
+                FROM jsonb_array_elements(infections) AS elem
+                WHERE (elem->>'expires_at')::timestamp > NOW()
+                OR elem->>'expires_at' IS NULL
+            ), '[]'::jsonb)
+            WHERE jsonb_array_length(infections) > 0
+        `);
+        
+        const duration = Date.now() - startTime;
+        logger.info({ 
+            type: 'debuffs_cleanup', 
+            duration_ms: duration
+        });
+    } catch (err) {
+        logger.error({ type: 'debuffs_cleanup_error', message: err.message });
+        debuffRetryCount++;
+        
+        // Экспоненциальная задержка при ошибках (до 30 минут)
+        const delay = Math.min(
+            5 * 60 * 1000 * Math.pow(2, debuffRetryCount),
+            30 * 60 * 1000
+        );
+        
+        logger.warn({ 
+            type: 'debuffs_cleanup_retry', 
+            retryCount: debuffRetryCount,
+            nextDelayMs: delay 
+        });
+        
+        if (schedulerEnabled) {
+            setTimeout(cleanupExpiredDebuffs, delay);
+        }
+        return; // Важно: возвращаем, чтобы не выполнять finally код повторно
+    } finally {
+        // Сброс счётчика при успехе
+        debuffRetryCount = 0;
+        
+        isRunning.debuffs = false;
+        
+        // Запускаем следующую итерацию через 5 минут (если планировщик не остановлен)
+        if (schedulerEnabled) {
+            setTimeout(cleanupExpiredDebuffs, 5 * 60 * 1000);
+        }
+    }
+}
+
+/**
  * Сброс ежедневных заданий
  * Запускается каждые 6 часов
  */
@@ -330,23 +409,21 @@ async function resetDailyTasks() {
     isRunning.dailyTasks = true;
     
     try {
-        await tx(async () => {
-            const result = await query(`
-                UPDATE players 
-                SET daily_tasks_completed = 0,
-                    daily_tasks_reset_at = NOW()
-                WHERE daily_tasks_reset_at < NOW() - INTERVAL '24 hours'
-                OR daily_tasks_reset_at IS NULL
-                RETURNING id
-            `);
-            
-            if (result.rows.length > 0) {
-                logger.info({ 
-                    type: 'daily_tasks_reset', 
-                    players_affected: result.rows.length 
-                });
-            }
-        });
+        const result = await query(`
+            UPDATE players 
+            SET daily_tasks_completed = 0,
+                daily_tasks_reset_at = NOW()
+            WHERE daily_tasks_reset_at < NOW() - INTERVAL '24 hours'
+            OR daily_tasks_reset_at IS NULL
+            RETURNING id
+        `);
+        
+        if (result.rows.length > 0) {
+            logger.info({ 
+                type: 'daily_tasks_reset', 
+                players_affected: result.rows.length 
+            });
+        }
         
         const duration = Date.now() - startTime;
         metrics.dailyTasks.total++;
@@ -394,6 +471,9 @@ function startScheduler() {
     // Сброс заданий - через 40 секунд
     setTimeout(resetDailyTasks, 40 * 1000);
     
+    // Очистка дебаффов - через 50 секунд
+    setTimeout(cleanupExpiredDebuffs, 50 * 1000);
+    
     logger.info('Планировщик задач запущен');
 }
 
@@ -407,9 +487,11 @@ function stopScheduler() {
         dailyActivity: false,
         achievements: false,
         cleanup: false,
-        dailyTasks: false
+        dailyTasks: false,
+        debuffs: false
     };
     
+    schedulerEnabled = false;
     logger.info('Планировщик остановлен');
 }
 

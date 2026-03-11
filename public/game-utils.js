@@ -289,7 +289,7 @@ window.formatPercent = formatPercent;
 window.formatTime = formatTime;
 window.showModal = showModal;
 window.closeModal = closeModal;
-window.showScreen = showScreen;
+// showScreen удалён - используется расширенная версия из game-screens.js
 window.getItemCategory = getItemCategory;
 window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;

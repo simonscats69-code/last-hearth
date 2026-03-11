@@ -139,11 +139,11 @@ async function moveToLocation(locationId) {
 
 /**
  * Использование предмета
- * @param {number} itemId - ID предмета
+ * @param {number} itemIndex - индекс предмета в инвентаре
  * @returns {Promise<Object>} результат
  */
-async function useItem(itemId) {
-    return apiPost('/game/item/use', { item_id: itemId });
+async function useItem(itemIndex) {
+    return apiPost('/game/use-item', { item_index: itemIndex });
 }
 
 /**
@@ -166,10 +166,11 @@ async function loadRecipes() {
 /**
  * Нападение на босса
  * @param {number} bossId - ID босса
+ * @param {boolean} isRaid - участвует ли в рейде
  * @returns {Promise<Object>} результат
  */
-async function attackBoss(bossId) {
-    return apiPost('/game/boss/attack', { boss_id: bossId });
+async function attackBoss(bossId, isRaid = false) {
+    return apiPost('/game/attack-boss', { boss_id: bossId, is_raid: isRaid });
 }
 
 /**
@@ -195,24 +196,7 @@ async function checkPlayerStatus() {
  * @returns {Promise<Object>} результат
  */
 async function buyItem(itemId, currency = 'coins') {
-    return apiPost('/game/shop/buy', { item_id: itemId, currency });
-}
-
-/**
- * Загрузка заданий
- * @returns {Promise<Object>} задания
- */
-async function loadQuests() {
-    return apiGet('/game/quests');
-}
-
-/**
- * Выполнение задания
- * @param {number} questId - ID задания
- * @returns {Promise<Object>} результат
- */
-async function completeQuest(questId) {
-    return apiPost('/game/quests/complete', { quest_id: questId });
+    return apiPost('/game/purchase', { item_id: parseInt(itemId), currency });
 }
 
 /**
@@ -229,7 +213,8 @@ async function loadAchievements() {
  * @returns {Promise<Object>} рейтинг
  */
 async function loadRatings(type = 'players') {
-    return apiGet(`/game/ratings/${type}`);
+    const endpoint = type === 'clans' ? '/rating/clans' : '/rating/players';
+    return apiGet(endpoint);
 }
 
 /**
@@ -237,17 +222,17 @@ async function loadRatings(type = 'players') {
  * @returns {Promise<Object>} объявления
  */
 async function loadMarket() {
-    return apiGet('/game/market');
+    return apiGet('/game/market/listings-v2');
 }
 
 /**
  * Размещение на рынке
- * @param {number} itemId - ID предмета
+ * @param {number} itemIndex - индекс предмета в инвентаре
  * @param {number} price - цена
  * @returns {Promise<Object>} результат
  */
-async function listOnMarket(itemId, price) {
-    return apiPost('/game/market/list', { item_id: itemId, price });
+async function listOnMarket(itemIndex, price) {
+    return apiPost('/game/market/create', { item_index: itemIndex, price });
 }
 
 /**
@@ -307,15 +292,7 @@ async function pvpAttack(targetId) {
  * @returns {Promise<Object>} сезонные данные
  */
 async function loadSeasonData() {
-    return apiGet('/game/season');
-}
-
-/**
- * Получение награды за рекламу
- * @returns {Promise<Object>} награда
- */
-async function claimAdReward() {
-    return apiPost('/game/ads/reward', {});
+    return apiGet('/game/seasons/current');
 }
 
 /**
@@ -323,7 +300,7 @@ async function claimAdReward() {
  * @returns {Promise<Object>} данные
  */
 async function checkReferralBonus() {
-    return apiGet('/game/referral/check');
+    return apiGet('/game/referral/code');
 }
 
 /**
@@ -332,7 +309,7 @@ async function checkReferralBonus() {
  * @returns {Promise<Object>} результат
  */
 async function activateReferralCode(code) {
-    return apiPost('/game/referral/activate', { code });
+    return apiPost('/game/referral/use', { code });
 }
 
 // ==================== КЛАНОВЫЕ БОССЫ ====================
@@ -360,12 +337,4 @@ async function spawnClanBoss() {
  */
 async function attackClanBoss(damage) {
     return apiPost('/game/clan-boss/attack', { damage });
-}
-
-/**
- * Получить историю боссов
- * @returns {Promise<Object>} история
- */
-async function loadClanBossHistory() {
-    return apiGet('/game/clan-boss/history');
 }

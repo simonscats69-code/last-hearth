@@ -455,6 +455,163 @@ router.post('/clan-boss/attack', wrap(async (req, res) => {
     ok(res, result);
 }));
 
+/**
+ * Получение сообщений кланового чата
+ * GET /clan/chat
+ */
+router.get('/clan/chat', wrap(async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
+    
+    try {
+        const messages = await queryAll(`
+            SELECT cm.id, cm.message, cm.created_at, 
+                   p.username, p.first_name, p.level, p.avatar_url
+            FROM clan_messages cm
+            JOIN players p ON cm.player_id = p.id
+            WHERE cm.clan_id = $1
+            ORDER BY cm.created_at DESC
+            LIMIT 50
+        `, [player.clan_id]);
+        
+        // Логируем просмотр чата
+        await logPlayerAction(pool, playerId, 'clan_chat_view', {
+            clan_id: player.clan_id,
+            messages_count: messages.length
+        });
+        
+        // Возвращаем в правильном порядке (старые сверху)
+        ok(res, { messages: messages.reverse() });
+    } catch (e) {
+        logger.error('Ошибка получения чата клана:', e);
+        fail(res, 'Ошибка загрузки чата', 'CHAT_LOAD_ERROR');
+    }
+}));
+
+/**
+ * Отправка сообщения в клановый чат
+ * POST /clan/chat
+ */
+router.post('/clan/chat', wrap(async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    const { message } = req.body;
+    
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
+    
+    // Валидация сообщения
+    if (!message || typeof message !== 'string') {
+        return fail(res, 'Сообщение не может быть пустым', 'EMPTY_MESSAGE');
+    }
+    
+    const trimmedMessage = message.trim();
+    if (trimmedMessage.length === 0) {
+        return fail(res, 'Сообщение не может быть пустым', 'EMPTY_MESSAGE');
+    }
+    
+    if (trimmedMessage.length > 500) {
+        return fail(res, 'Сообщение слишком длинное (макс. 500 символов)', 'MESSAGE_TOO_LONG');
+    }
+    
+    try {
+        const result = await query(
+            `INSERT INTO clan_messages (clan_id, player_id, message, created_at)
+             VALUES ($1, $2, $3, NOW())
+             RETURNING id, created_at`,
+            [player.clan_id, playerId, trimmedMessage]
+        );
+        
+        // Логируем отправку сообщения
+        await logPlayerAction(pool, playerId, 'clan_chat_send', {
+            clan_id: player.clan_id,
+            message_length: trimmedMessage.length
+        });
+        
+        ok(res, { 
+            success: true, 
+            message: 'Сообщение отправлено',
+            message_id: result.rows[0].id
+        });
+    } catch (e) {
+        logger.error('Ошибка отправки сообщения в чат клана:', e);
+        fail(res, 'Ошибка отправки сообщения', 'SEND_MESSAGE_ERROR');
+    }
+}));
+
+/**
+ * Пожертвование в клан
+ * POST /clan/donate
+ */
+router.post('/clan/donate', wrap(async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    const { amount } = req.body;
+    
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
+    
+    // Валидация суммы
+    const donation = parseInt(amount);
+    if (!donation || isNaN(donation) || donation <= 0) {
+        return fail(res, 'Неверная сумма пожертвования', 'INVALID_AMOUNT');
+    }
+    
+    if (donation > 1000000) {
+        return fail(res, 'Слишком большая сумма (макс. 1,000,000)', 'AMOUNT_TOO_BIG');
+    }
+    
+    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+        if (!lockedPlayer) {
+            throw new Error('Игрок не найден');
+        }
+
+        if (lockedPlayer.coins < donation) {
+            throw new Error('Недостаточно монет');
+        }
+
+        // Списание с игрока и добавление в казну клана
+        await query(
+            `UPDATE players SET coins = coins - $1, clan_donated = clan_donated + $1 
+             WHERE id = $2`,
+            [donation, playerId]
+        );
+        
+        await query(
+            `UPDATE clans SET total_donated = total_donated + $1 WHERE id = $2`,
+            [donation, player.clan_id]
+        );
+        
+        // Получаем обновленную сумму пожертвований клана
+        const clanResult = await queryOne(
+            `SELECT total_donated FROM clans WHERE id = $1`,
+            [player.clan_id]
+        );
+
+        // Логируем пожертвование
+        await logPlayerAction(pool, playerId, 'clan_donate', {
+            clan_id: player.clan_id,
+            amount: donation,
+            new_balance: lockedPlayer.coins - donation
+        });
+
+        return { 
+            success: true,
+            donated: donation,
+            new_balance: lockedPlayer.coins - donation,
+            clan_total: clanResult?.total_donated || donation
+        };
+    });
+    
+    ok(res, result);
+}));
+
 // ============================================================================
 // Namespace экспорт
 // ============================================================================

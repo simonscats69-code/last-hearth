@@ -60,7 +60,26 @@ const gameState = {
     loginStreak: 0,
     
     // Последний вход
-    lastLogin: null
+    lastLogin: null,
+    
+    // Активные дебаффы
+    debuffs: {
+        radiation: {
+            level: 0,
+            expiresAt: null,
+            active: false
+        },
+        infections: []
+    },
+    
+    // Модификаторы от дебаффов
+    modifiers: {
+        damage: 1.0,
+        luck: 1.0,
+        searchTime: 1.0,
+        dropChance: 1.0,
+        endurance: 1.0
+    }
 };
 
 /**
@@ -135,22 +154,15 @@ function updateUI() {
         hpEl.style.width = `${(gameState.player.hp / maxHp) * 100}%`;
     }
     
-    // Обновляем радиацию
+    // Обновляем радиацию (теперь это уровень 0-10 из JSONB)
     const radEl = document.getElementById('player-radiation');
     if (radEl && gameState.player.radiation !== undefined) {
-        radEl.textContent = gameState.player.radiation;
-    }
-    
-    // Обновляем голод
-    const hungerEl = document.getElementById('player-hunger');
-    if (hungerEl && gameState.player.hunger !== undefined) {
-        hungerEl.textContent = gameState.player.hunger;
-    }
-    
-    // Обновляем жажду
-    const thirstEl = document.getElementById('player-thirst');
-    if (thirstEl && gameState.player.thirst !== undefined) {
-        thirstEl.textContent = gameState.player.thirst;
+        // radiation может быть числом (новый формат) или объектом
+        let radValue = gameState.player.radiation;
+        if (typeof radValue === 'object' && radValue !== null) {
+            radValue = radValue.level || 0;
+        }
+        radEl.textContent = radValue;
     }
     
     // Обновляем статы
@@ -234,4 +246,120 @@ function getStreakReward() {
     };
     
     return rewards[Math.min(streak, 7)];
+}
+
+/**
+ * Обновить дебаффы из ответа сервера
+ * @param {Object} debuffsData - данные дебаффов от сервера
+ */
+function updateDebuffs(debuffsData) {
+    if (!debuffsData) return;
+    
+    gameState.debuffs = {
+        radiation: {
+            level: debuffsData.radiation?.level || 0,
+            expiresAt: debuffsData.radiation?.expires_at,
+            active: (debuffsData.radiation?.level || 0) > 0
+        },
+        infections: debuffsData.infections || []
+    };
+    
+    gameState.modifiers = debuffsData.modifiers || {
+        damage: 1.0,
+        luck: 1.0,
+        searchTime: 1.0,
+        dropChance: 1.0,
+        endurance: 1.0
+    };
+    
+    renderDebuffsPanel();
+}
+
+/**
+ * Проверить есть ли активные дебаффы
+ * @returns {boolean}
+ */
+function hasActiveDebuffs() {
+    return gameState.debuffs.radiation.level > 0 || 
+           gameState.debuffs.infections.length > 0;
+}
+
+/**
+ * Форматировать оставшееся время дебаффа
+ * @param {string|null} expiresAt - timestamp истечения
+ * @returns {string}
+ */
+function formatTimeRemaining(expiresAt) {
+    if (!expiresAt) return '';
+    
+    const now = new Date();
+    const expires = new Date(expiresAt);
+    const diff = expires - now;
+    
+    if (diff <= 0) return 'истёк';
+    
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (hours > 0) {
+        return `${hours}ч ${minutes}м`;
+    }
+    return `${minutes}м`;
+}
+
+/**
+ * Отобразить панель дебаффов
+ */
+function renderDebuffsPanel() {
+    const panel = document.getElementById('debuffs-panel');
+    if (!panel) return;
+    
+    if (!hasActiveDebuffs()) {
+        panel.classList.add('hidden');
+        return;
+    }
+    
+    panel.classList.remove('hidden');
+    
+    // Обновляем радиацию
+    const radLevel = gameState.debuffs.radiation.level;
+    const radBar = document.getElementById('debuff-radiation-bar');
+    const radTimer = document.getElementById('debuff-radiation-timer');
+    const radPanel = document.getElementById('debuff-radiation-panel');
+    
+    if (radPanel) {
+        if (radLevel > 0) {
+            radPanel.classList.remove('hidden');
+            if (radBar) radBar.style.width = `${radLevel * 10}%`;
+            if (radTimer) radTimer.textContent = formatTimeRemaining(gameState.debuffs.radiation.expiresAt);
+        } else {
+            radPanel.classList.add('hidden');
+        }
+    }
+    
+    // Обновляем инфекции
+    const totalInfection = gameState.debuffs.infections.reduce((sum, i) => sum + (i.level || 0), 0);
+    const infBar = document.getElementById('debuff-infection-bar');
+    const infTimer = document.getElementById('debuff-infection-timer');
+    const infPanel = document.getElementById('debuff-infection-panel');
+    
+    if (infPanel) {
+        if (totalInfection > 0) {
+            infPanel.classList.remove('hidden');
+            if (infBar) infBar.style.width = `${totalInfection * 10}%`;
+            
+            // Находим максимальное время истечения
+            const maxExpires = gameState.debuffs.infections.reduce((max, i) => {
+                if (!i.expires_at) return max;
+                const exp = new Date(i.expires_at);
+                return exp > max ? exp : max;
+            }, new Date(0));
+            
+            if (infTimer && maxExpires > new Date()) {
+                infTimer.textContent = formatTimeRemaining(maxExpires.toISOString());
+            }
+        } else {
+            infPanel.classList.add('hidden');
+        }
+    }
 }

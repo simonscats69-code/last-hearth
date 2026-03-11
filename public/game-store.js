@@ -8,6 +8,37 @@
  * - Косметика (эффекты, скины)
  */
 
+// Маппинг строковых ID в числовые для бэкенда
+const ITEM_ID_MAP = {
+    // Баффы
+    'buff_loot_1h': 1,
+    'buff_energy_1h': 2,
+    'buff_craft_1h': 3,
+    'buff_radiation_1h': 4,
+    'buff_exp_1h': 5,
+    'buff_loot_daily': 6,
+    // Косметика
+    'cosm_glow_gold': 101,
+    'cosm_glow_blue': 102,
+    'cosm_frame_elite': 103,
+    'cosm_title_veteran': 104,
+    'cosm_particles_fire': 105,
+};
+
+/**
+ * Получение числового ID для API
+ * @param {string} itemId - строковый ID товара
+ * @returns {number} числовой ID для бэкенда
+ */
+function getNumericItemId(itemId) {
+    if (ITEM_ID_MAP[itemId] !== undefined) {
+        return ITEM_ID_MAP[itemId];
+    }
+    // Пробуем извлечь число из строки
+    const num = parseInt(itemId.replace(/[^0-9]/g, ''));
+    return num || 0;
+}
+
 // Данные товаров магазина
 const SHOP_ITEMS = {
     // Баффы
@@ -130,8 +161,9 @@ async function buyShopItem(itemId, category) {
     
     // Покупка
     try {
-        const result = await apiPost('/game/shop/buy', { 
-            item_id: itemId,
+        const numericId = getNumericItemId(itemId);
+        const result = await apiPost('/game/purchase', {
+            item_id: numericId,
             currency: item.currency
         });
         
@@ -141,10 +173,19 @@ async function buyShopItem(itemId, category) {
                 applyBuff(item);
             }
             
-            // Обновляем валюту
-            if (player.stars !== undefined) {
-                player.stars = result.new_stars ?? player.stars - (item.currency === 'stars' ? item.price : 0);
-                player.coins = result.new_coins ?? player.coins - (item.currency === 'coins' ? item.price : 0);
+            // Обновляем валюту из правильных полей ответа
+            if (result.balance !== undefined) {
+                player.balance = result.balance;
+            }
+            if (result.coins !== undefined) {
+                player.coins = result.coins;
+            }
+            // Для совместимости со старым API
+            if (result.new_stars !== undefined) {
+                player.stars = result.new_stars;
+            }
+            if (result.new_coins !== undefined) {
+                player.coins = result.new_coins;
             }
             
             showModal('✅ Успешно!', `Куплено: ${item.name}`);
@@ -276,9 +317,19 @@ async function spinSlots() {
         payout = bet * 5;
     }
     
-    // Обновляем монеты
+    // Обновляем монеты локально
     player.coins = (player.coins || 0) - bet + payout;
     document.getElementById('player-coins').textContent = player.coins;
+    
+    // Синхронизация с сервером
+    const totalWin = payout;
+    if (totalWin > 0) {
+        try {
+            await apiPost('/game/slots/win', { amount: totalWin });
+        } catch (e) {
+            console.error('Ошибка синхронизации слотов:', e);
+        }
+    }
     
     btn.disabled = false;
     btn.textContent = `🎰 Крутить (${bet} монет)`;
@@ -319,12 +370,21 @@ function spinWheelFree() {
 /**
  * Платное вращение колеса
  */
-function spinWheelPaid() {
+async function spinWheelPaid() {
     const player = gameState.player;
     if (!player || (player.stars || 0) < 1) {
         showModal('❌ Недостаточно Stars', 'Купите Stars в Telegram!');
         return;
     }
+    
+    // Синхронизация с сервером перед списанием
+    try {
+        await apiPost('/game/wheel/spin', { is_paid: true });
+    } catch (e) {
+        showModal('❌ Ошибка', 'Не удалось начать вращение');
+        return;
+    }
+    
     player.stars -= 1;
     spinWheel(true);
 }
@@ -370,10 +430,18 @@ async function spinWheel(isPaid) {
     }, 3000);
 }
 
+// Флаг инициализации обработчиков магазина
+let shopHandlersInitialized = false;
+
 /**
  * Инициализация обработчиков магазина
+ * Защита от повторного добавления EventListener
  */
 function initShopHandlers() {
+    if (shopHandlersInitialized) {
+        return; // Защита от повторной инициализации
+    }
+    shopHandlersInitialized = true;
     // Обработчики табов магазина
     document.querySelectorAll('.shop-tab').forEach(btn => {
         btn.addEventListener('click', () => {

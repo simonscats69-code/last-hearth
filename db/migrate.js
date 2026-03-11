@@ -258,7 +258,9 @@ async function createTables() {
         `CREATE INDEX IF NOT EXISTS idx_locations_radiation ON locations(radiation)`,
         `CREATE INDEX IF NOT EXISTS idx_market_listings_seller ON market_listings(seller_id)`,
         `CREATE INDEX IF NOT EXISTS idx_pvp_matches_attacker ON pvp_matches(attacker_id)`,
-        `CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_date ON daily_tasks(player_id, date)`
+        `CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_date ON daily_tasks(player_id, date)`,
+        `CREATE INDEX IF NOT EXISTS idx_players_radiation_expires ON players((radiation->>'expires_at')) WHERE radiation IS NOT NULL`,
+        `CREATE INDEX IF NOT EXISTS idx_players_infections_expires ON players((infections[0]->>'expires_at')) WHERE infections IS NOT NULL AND jsonb_array_length(infections) > 0`
     ];
 
     for (const sql of tables) {
@@ -399,6 +401,10 @@ async function main() {
     try {
         await createDatabase();
         await createTables();
+        
+        // Миграция дебаффов
+        await migrateDebuffs();
+        
         console.log('\n✅ Миграция успешно завершена!');
         process.exit(0);
     } catch (error) {
@@ -406,6 +412,151 @@ async function main() {
         process.exit(1);
     } finally {
         await pool.end();
+    }
+}
+
+/**
+ * Миграция системы дебаффов
+ * - Удаление старых полей: hunger, thirst, broken_bones, broken_leg, broken_arm
+ * - Изменение radiation: INTEGER -> JSONB
+ * - Конвертация infection_count в массив infections
+ */
+async function migrateDebuffs() {
+    console.log('\n🔄 Миграция системы дебаффов...');
+    
+    const gamePool = new Pool(poolConfig);
+    
+    try {
+        // 1. Удаляем старые поля состояния
+        console.log('📝 Удаление старых полей состояния...');
+        
+        const oldFields = [
+            'hunger',
+            'thirst', 
+            'broken_bones',
+            'broken_leg',
+            'broken_arm'
+        ];
+        
+        for (const field of oldFields) {
+            try {
+                await gamePool.query(`ALTER TABLE players DROP COLUMN IF EXISTS ${field}`);
+                console.log(`   ✅ ${field} удалён`);
+            } catch (err) {
+                console.log(`   ⚠️ ${field}: ${err.message}`);
+            }
+        }
+        
+        // 2. Конвертируем radiation из INTEGER в JSONB
+        console.log('📝 Конвертация radiation в JSONB...');
+        
+        const radCheck = await gamePool.query(`
+            SELECT column_name, data_type 
+            FROM information_schema.columns 
+            WHERE table_name = 'players' AND column_name = 'radiation'
+        `);
+        
+        if (radCheck.rows.length > 0 && radCheck.rows[0].data_type === 'integer') {
+            // Конвертируем INTEGER -> JSONB
+            await gamePool.query(`
+                UPDATE players 
+                SET radiation = jsonb_build_object(
+                    'level',
+                    CASE 
+                        WHEN radiation > 10 THEN 10 
+                        WHEN radiation < 0 THEN 0 
+                        ELSE radiation 
+                    END,
+                    'expires_at',
+                    CASE 
+                        WHEN radiation > 0 THEN NOW() + INTERVAL '6 hours'
+                        ELSE NULL
+                    END,
+                    'applied_at',
+                    CASE 
+                        WHEN radiation > 0 THEN NOW()
+                        ELSE NULL
+                    END
+                )
+                WHERE radiation > 0 OR radiation IS NOT NULL
+            `);
+            console.log('   ✅ radiation конвертирован в JSONB');
+        } else {
+            console.log('   ✅ radiation уже в формате JSONB');
+        }
+        
+        // 3. Конвертируем infection_count в массив infections
+        console.log('📝 Конвертация infection_count в infections...');
+        
+        const infCheck = await gamePool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'players' AND column_name = 'infection_count'
+        `);
+        
+        if (infCheck.rows.length > 0) {
+            // Переносим infection_count в infections как первый элемент
+            await gamePool.query(`
+                UPDATE players 
+                SET infections = jsonb_build_array(
+                    jsonb_build_object(
+                        'type', 'zombie_infection',
+                        'level', GREATEST(0, infection_count),
+                        'expires_at', CASE WHEN infection_count > 0 THEN NOW() + INTERVAL '12 hours' ELSE NULL END,
+                        'applied_at', CASE WHEN infection_count > 0 THEN NOW() ELSE NULL END
+                    )
+                )
+                WHERE infection_count > 0
+            `);
+            
+            // Удаляем колонку infection_count
+            await gamePool.query(`ALTER TABLE players DROP COLUMN IF EXISTS infection_count`);
+            console.log('   ✅ infection_count конвертирован в infections');
+        } else {
+            console.log('   ✅ infections уже в правильном формате');
+        }
+        
+        // 4. Обновляем предметы для лечения дебаффов
+        console.log('📝 Обновление предметов лечения дебаффов...');
+        
+        // Антибиотики (от инфекций)
+        await gamePool.query(`
+            UPDATE items 
+            SET stats = stats || '{"infection_cure": 2}'::jsonb
+            WHERE name = 'Антибиотики' AND (stats->>'infection_cure') IS NULL
+        `);
+        
+        // Аптечка (от радиации + здоровье)
+        await gamePool.query(`
+            UPDATE items 
+            SET stats = COALESCE(stats, '{}'::jsonb) || '{"radiation_cure": 2, "heal": 30}'::jsonb
+            WHERE name = 'Аптечка' 
+        `);
+        
+        // Антирад (мощное средство от радиации)
+        await gamePool.query(`
+            UPDATE items 
+            SET stats = stats || '{"radiation_cure": 4}'::jsonb
+            WHERE name = 'Антирад' AND (stats->>'radiation_cure') IS NULL
+        `);
+        
+        // Добавляем укол если его нет
+        const injectionExists = await gamePool.query(
+            `SELECT id FROM items WHERE name = 'Укол' LIMIT 1`
+        );
+        
+        if (injectionExists.rows.length === 0) {
+            await gamePool.query(`
+                INSERT INTO items (name, description, type, rarity, stats, sell_price, buy_price)
+                VALUES ('Укол', 'Инъекция от инфекций', 'medicine', 'epic', '{"infection_cure": 3}', 150, 300)
+            `);
+            console.log('   ✅ Добавлен предмет: Укол');
+        }
+        
+        console.log('✅ Миграция дебаффов завершена!');
+        
+    } finally {
+        await gamePool.end();
     }
 }
 

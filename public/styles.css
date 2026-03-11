@@ -103,6 +103,21 @@
     66% { content: '...'; }
 }
 
+@keyframes fadeOut {
+    to { opacity: 0; }
+}
+
+@keyframes slideIn {
+    from { 
+        transform: translateX(-20px); 
+        opacity: 0; 
+    }
+    to { 
+        transform: translateX(0); 
+        opacity: 1; 
+    }
+}
+
 /* Классы анимаций */
 .animate-fadeIn {
     animation: fadeIn 0.3s ease-out;
@@ -126,6 +141,14 @@
 
 .animate-bounce {
     animation: bounce 0.5s;
+}
+
+.animate-fadeOut {
+    animation: fadeOut 0.3s ease-out;
+}
+
+.animate-slideIn {
+    animation: slideIn 0.3s ease-out;
 }
 
 .animate-spin {

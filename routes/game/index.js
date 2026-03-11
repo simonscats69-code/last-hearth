@@ -54,6 +54,7 @@ const seasonsRouter = require('./seasons');
 const purchaseRouter = require('./purchase');
 const itemsRouter = require('./items');
 const profileRouter = require('./profile');
+const debuffsRouter = require('./debuffs');
 
 // Используем модули
 router.use(locationsRouter);
@@ -71,6 +72,7 @@ router.use(seasonsRouter);
 router.use(purchaseRouter);
 router.use(itemsRouter);
 router.use(profileRouter);
+router.use(debuffsRouter);
 
 // Экспортируем для использования в других модулях
 module.exports = router;

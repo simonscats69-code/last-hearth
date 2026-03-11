@@ -17,8 +17,9 @@ const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
-const { calculateDropChance, rollItemRarity, rollLootDrop, getLootTable } = require('../../utils/gameConstants');
+const { calculateDropChance, rollItemRarity, rollLootDrop, getLootTable, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
 const { logger } = require('../../utils/logger');
+const { DebuffAPI } = require('./debuffs');
 
 /**
  * Универсальный обработчик ошибок
@@ -154,18 +155,41 @@ router.post('/search', async (req, res) => {
             
             const locationData = location.rows[0];
             
-            // Радиация
-            const radiationDamage = locationData.radiation;
-            let newRadiation = updatedPlayer.radiation + radiationDamage;
+            // === СИСТЕМА ДЕБАФФОВ: Радиация от локации ===
+            let radiationGain = 0;
+            let radiationDefense = 0;
+            let appliedRadiation = null;
             
-            // Проверяем защиту от радиации
-            const equipment = safeJsonParse(updatedPlayer.equipment, {});
-            const radiationProtection = (equipment.armor?.radiation_resistance || 0) + 
-                                        (equipment.helmet?.radiation_resistance || 0);
-            newRadiation = Math.max(0, newRadiation - radiationProtection);
+            if (locationData.radiation > 0) {
+                // Базовая радиация от локации
+                const baseRadiation = Math.ceil(locationData.radiation / 10);
+                
+                // Защита от радиации из экипировки
+                const equipment = safeJsonParse(updatedPlayer.equipment, {});
+                radiationDefense = calculateRadiationDefense(equipment);
+                
+                // Итоговая радиация с случайностью (±30%)
+                const randomFactor = 0.7 + Math.random() * 0.6;
+                radiationGain = Math.max(0, Math.ceil((baseRadiation - radiationDefense) * randomFactor));
+                
+                // Применяем дебафф если есть радиация
+                if (radiationGain > 0) {
+                    try {
+                        appliedRadiation = await DebuffAPI.apply(playerId, 'radiation', radiationGain, {
+                            source: `location_${locationData.id}`
+                        });
+                    } catch (err) {
+                        logger.warn(`[locations] Ошибка применения радиации: ${err.message}`);
+                    }
+                }
+            }
             
-            // Вычисляем шанс дропа
-            const dropChance = calculateDropChance(updatedPlayer.luck, useLuckySearch);
+            // Расчёт модификаторов от дебаффов
+            const modifiers = calculateDebuffModifiers(updatedPlayer);
+            
+            // Вычисляем шанс дропа с учётом дебаффов
+            const baseDropChance = calculateDropChance(updatedPlayer.luck, useLuckySearch);
+            const dropChance = Math.max(0.01, baseDropChance * modifiers.dropChance);
             const rolled = Math.random() * 100;
             
             let foundItem = null;
@@ -243,9 +267,10 @@ router.post('/search', async (req, res) => {
                     restored: 0
                 },
                 radiation: {
-                    current: newRadiation,
-                    damage: radiationDamage,
-                    effect: radiationEffect
+                    // Новый формат: уровень из JSONB или старое значение
+                    level: appliedRadiation?.newLevel || 0,
+                    gained: radiationGain,
+                    defense: radiationDefense
                 },
                 location: {
                     name: locationData.name,

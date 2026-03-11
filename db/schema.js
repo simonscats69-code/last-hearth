@@ -33,17 +33,14 @@ async function createTables() {
             -- Состояние
             health INTEGER DEFAULT 100,
             max_health INTEGER DEFAULT 100,
-            hunger INTEGER DEFAULT 100,
-            thirst INTEGER DEFAULT 100,
-            radiation INTEGER DEFAULT 0,
+            -- hunger/thirst удалены в миграции дебаффов
+            radiation JSONB DEFAULT '{"level": 0}',
             fatigue INTEGER DEFAULT 0,
             energy INTEGER DEFAULT 50,
             max_energy INTEGER DEFAULT 50,
-            infection_count INTEGER DEFAULT 0,
+            -- infection_count удалён, используется infections JSONB
             infections JSONB DEFAULT '[]',
-            broken_bones BOOLEAN DEFAULT false,
-            broken_leg BOOLEAN DEFAULT false,
-            broken_arm BOOLEAN DEFAULT false,
+            -- broken_bones, broken_leg, broken_arm удалены в миграции
             
             -- Локация
             current_location_id INTEGER DEFAULT 1,
@@ -176,6 +173,17 @@ async function createTables() {
             leader_id VARCHAR(50),
             total_donated INTEGER DEFAULT 0,
             is_open BOOLEAN DEFAULT true,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `);
+
+    // Сообщения кланового чата
+    await query(`
+        CREATE TABLE IF NOT EXISTS clan_messages (
+            id SERIAL PRIMARY KEY,
+            clan_id INTEGER REFERENCES clans(id),
+            player_id INTEGER REFERENCES players(id),
+            message TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT NOW()
         )
     `);

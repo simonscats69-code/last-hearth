@@ -246,11 +246,215 @@ function getItemCategory(itemId) {
     return 'unknown';
 }
 
+// =============================================================================
+// СИСТЕМА ДЕБАФФОВ
+// =============================================================================
+
+// Типы дебаффов
+const DEBUFF_TYPES = {
+    RADIATION: 'radiation',
+    INFECTION: 'zombie_infection'
+};
+
+// Конфигурация дебаффов
+const DEBUFF_CONFIG = {
+    // Радиация
+    radiation: {
+        baseDurationMs: 6 * 60 * 60 * 1000,  // 6 часов в мс
+        durationPerLevelMs: 2 * 60 * 60 * 1000,  // +2 часа за уровень
+        maxLevel: 10,
+        minLevel: 1,
+        damagePerLevel: 2,  // урон здоровью в час при level >= 5
+        regenRateMs: 30 * 60 * 1000  // естественное снижение каждые 30 мин
+    },
+    // Инфекция
+    infection: {
+        baseDurationMs: 12 * 60 * 60 * 1000,  // 12 часов
+        durationPerLevelMs: 4 * 60 * 60 * 1000,  // +4 часа за уровень
+        maxLevel: 10,
+        minLevel: 1,
+        damagePerLevel: 3,  // урон здоровью в час
+        regenRateMs: 60 * 60 * 1000  // естественное снижение каждый час
+    }
+};
+
+// Множители влияния на статы (за каждый уровень дебаффа)
+const DEBUFF_EFFECTS = {
+    // Радиация: сильно бьёт по удаче и поиску
+    radiation: {
+        strength: -0.03,      // -3% к урону за уровень
+        luck: -0.05,          // -5% к удаче за уровень
+        searchTime: 0.10,    // +10% ко времени поиска за уровень
+        dropChance: -0.03    // -3% к шансу дропа за уровень
+    },
+    // Инфекция: сильно бьёт по силе и выносливости
+    infection: {
+        strength: -0.05,      // -5% к урону за уровень
+        endurance: -0.03,    // -3% к выносливости за уровень
+        searchTime: 0.05,    // +5% ко времени поиска за уровень
+        dropChance: -0.02    // -2% к шансу дропа за уровень
+    }
+};
+
+// Предметы для лечения дебаффов
+const DEBUFF_CURES = {
+    // Радиация
+    antiraid: {
+        radiationReduction: 4,
+        itemId: 'antiraid',
+        name: 'Антирад'
+    },
+    medkit: {
+        radiationReduction: 2,
+        itemId: 'medkit',
+        name: 'Аптечка'
+    },
+    // Инфекция
+    antibiotic: {
+        infectionReduction: 2,
+        itemId: 'antibiotic',
+        name: 'Антибиотики'
+    },
+    injection: {
+        infectionReduction: 3,
+        itemId: 'injection',
+        name: 'Укол'
+    }
+};
+
+/**
+ * Получить влияние дебаффа на характеристики
+ * @param {string} type - тип дебаффа
+ * @returns {object} влияние на статы
+ */
+function getDebuffEffect(type) {
+    return DEBUFF_EFFECTS[type] || {
+        strength: 0,
+        luck: 0,
+        searchTime: 0,
+        dropChance: 0,
+        endurance: 0
+    };
+}
+
+/**
+ * Рассчитать модификаторы от дебаффов
+ * @param {object} player - объект игрока
+ * @returns {object} модификаторы (множители)
+ */
+function calculateDebuffModifiers(player) {
+    // Парсим дебаффы (могут быть JSON строкой или объектом)
+    let radiation = { level: 0 };
+    let infections = [];
+    
+    if (player.radiation) {
+        if (typeof player.radiation === 'string') {
+            try {
+                radiation = JSON.parse(player.radiation);
+            } catch {
+                radiation = { level: 0 };
+            }
+        } else {
+            radiation = player.radiation || { level: 0 };
+        }
+    }
+    
+    if (player.infections) {
+        if (typeof player.infections === 'string') {
+            try {
+                infections = JSON.parse(player.infections);
+            } catch {
+                infections = [];
+            }
+        } else {
+            infections = player.infections || [];
+        }
+    }
+    
+    const radLevel = radiation.level || 0;
+    const infLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
+    
+    // Базовые множители (1.0 = без изменений)
+    const modifiers = {
+        damage: 1.0,
+        luck: 1.0,
+        searchTime: 1.0,
+        dropChance: 1.0,
+        endurance: 1.0
+    };
+    
+    // Применяем влияние радиации
+    if (radLevel > 0) {
+        const effect = DEBUFF_EFFECTS.radiation;
+        modifiers.damage += radLevel * effect.strength;
+        modifiers.luck += radLevel * effect.luck;
+        modifiers.searchTime += radLevel * effect.searchTime;
+        modifiers.dropChance += radLevel * effect.dropChance;
+    }
+    
+    // Применяем влияние инфекций
+    if (infLevel > 0) {
+        const effect = DEBUFF_EFFECTS.infection;
+        modifiers.damage += infLevel * effect.strength;
+        modifiers.endurance += infLevel * effect.endurance;
+        modifiers.searchTime += infLevel * effect.searchTime;
+        modifiers.dropChance += infLevel * effect.dropChance;
+    }
+    
+    // Ограничиваем минимальные значения
+    modifiers.damage = Math.max(0.1, modifiers.damage);
+    modifiers.luck = Math.max(0.1, modifiers.luck);
+    modifiers.dropChance = Math.max(0.01, modifiers.dropChance);
+    modifiers.searchTime = Math.min(3.0, modifiers.searchTime);
+    modifiers.endurance = Math.max(0.1, modifiers.endurance);
+    
+    return modifiers;
+}
+
+/**
+ * Рассчитать защиту от радиации из экипировки
+ * @param {object} equipment - экипировка игрока
+ * @returns {number} защита от радиации
+ */
+function calculateRadiationDefense(equipment) {
+    if (!equipment) return 0;
+    
+    let defense = 0;
+    
+    // Поддержка старого формата (armor/helmet -> radiation_resistance)
+    if (equipment.armor?.stats?.radiation_resistance) {
+        defense += equipment.armor.stats.radiation_resistance;
+    }
+    if (equipment.helmet?.stats?.radiation_resistance) {
+        defense += equipment.helmet.stats.radiation_resistance;
+    }
+    
+    // Поддержка нового формата (body/head -> radiationDefense)
+    if (equipment.body?.stats?.radiationDefense) {
+        defense += equipment.body.stats.radiationDefense;
+    }
+    if (equipment.head?.stats?.radiationDefense) {
+        defense += equipment.head.stats.radiationDefense;
+    }
+    // Альтернативные слоты (helmet)
+    if (equipment.helmet?.stats?.radiationDefense) {
+        defense += equipment.helmet.stats.radiationDefense;
+    }
+    
+    return defense;
+}
+
 module.exports = {
     GAME_CONFIG,
     LOOT_TABLES,
     EXP_FORMULA,
     ITEM_CATEGORIES,
+    // Дебаффы
+    DEBUFF_TYPES,
+    DEBUFF_CONFIG,
+    DEBUFF_EFFECTS,
+    DEBUFF_CURES,
+    // Экспорт функций
     getExpForLevel,
     getTotalExpForLevel,
     getLuckMultiplier,
@@ -261,5 +465,9 @@ module.exports = {
     getLootTable,
     rollItemRarity,
     rollLootDrop,
-    getItemCategory
+    getItemCategory,
+    // Дебаффы
+    getDebuffEffect,
+    calculateDebuffModifiers,
+    calculateRadiationDefense
 };

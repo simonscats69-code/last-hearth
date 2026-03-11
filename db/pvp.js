@@ -53,12 +53,18 @@ async function getPVP_cooldown(playerId) {
  * @param {string} reason - Причина
  */
 async function setPVP_cooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя') {
+    // Валидация minutes для предотвращения SQL-инъекции
+    const validatedMinutes = parseInt(minutes);
+    if (!Number.isInteger(validatedMinutes) || validatedMinutes <= 0 || validatedMinutes > 10080) {
+        throw new Error('Недопустимое значение minutes (должно быть 1-10080)');
+    }
+    
     await query(
         `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at, reason)
-         VALUES ($1, $2, NOW() + INTERVAL '${minutes} minutes', $3)
+         VALUES ($1, $2, NOW() + INTERVAL '1 minute' * $3, $4)
          ON CONFLICT (player_id, cooldown_type) 
-         DO UPDATE SET expires_at = NOW() + INTERVAL '${minutes} minutes', reason = $3`,
-        [playerId, type, reason]
+         DO UPDATE SET expires_at = NOW() + INTERVAL '1 minute' * $3, reason = $4`,
+        [playerId, type, validatedMinutes, reason]
     );
 }
 

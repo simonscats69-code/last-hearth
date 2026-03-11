@@ -97,20 +97,25 @@
             <!-- Статусы персонажа -->
             <section class="status-section">
                 <div class="status-grid">
-                    <div class="status-item">
-                        <span class="status-icon">🍞</span>
-                        <span class="status-value" id="hunger-value">100%</span>
-                        <span class="status-label">Голод</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-icon">💧</span>
-                        <span class="status-value" id="thirst-value">100%</span>
-                        <span class="status-label">Жажда</span>
-                    </div>
-                    <div class="status-item danger">
+                    <!-- Радиация -->
+                    <div class="status-item danger" id="debuff-radiation-panel">
                         <span class="status-icon">☢️</span>
                         <span class="status-value" id="radiation-value">0</span>
                         <span class="status-label">Радиация</span>
+                        <div class="debuff-mini-bar">
+                            <div class="debuff-mini-fill" id="debuff-radiation-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="debuff-timer" id="debuff-radiation-timer"></span>
+                    </div>
+                    <!-- Инфекция -->
+                    <div class="status-item danger" id="debuff-infection-panel">
+                        <span class="status-icon">🦠</span>
+                        <span class="status-value" id="infection-value">0</span>
+                        <span class="status-label">Инфекция</span>
+                        <div class="debuff-mini-bar">
+                            <div class="debuff-mini-fill" id="debuff-infection-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="debuff-timer" id="debuff-infection-timer"></span>
                     </div>
                     <div class="status-item">
                         <span class="status-icon">💰</span>

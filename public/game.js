@@ -16,8 +16,17 @@ const tg = window.Telegram?.WebApp || {
 };
 
 // Определение цветовой схемы Telegram
+function isColorDark(hexColor) {
+    if (!hexColor) return false;
+    const r = parseInt(hexColor.slice(1, 3), 16);
+    const g = parseInt(hexColor.slice(3, 5), 16);
+    const b = parseInt(hexColor.slice(5, 7), 16);
+    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+    return brightness < 128;
+}
+
 const isDarkTheme = tg.themeParams && tg.themeParams.bg_color 
-    ? false
+    ? isColorDark(tg.themeParams.bg_color)
     : false;
 
 // Применяем тему Telegram
@@ -54,70 +63,6 @@ if (typeof AdsgramInit === 'function' && ADSGRAM_APP_ID) {
         });
     } catch (e) {
         console.warn('AdsGram инициализация не удалась:', e);
-    }
-}
-
-/**
- * API запросы
- */
-async function apiRequest(endpoint, options = {}) {
-    const telegramId = getTelegramId();
-    
-    const defaultOptions = {
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Telegram-ID': telegramId
-        }
-    };
-
-    const mergedOptions = { ...defaultOptions, ...options };
-    
-    if (mergedOptions.body && typeof mergedOptions.body === 'object') {
-        mergedOptions.body = JSON.stringify(mergedOptions.body);
-    }
-
-    try {
-        const response = await fetch(`${API_URL}${endpoint}`, mergedOptions);
-        
-        // Проверяем статус ответа ДО парсинга JSON
-        if (!response.ok) {
-            // Пытаемся получить текст ошибки
-            let errorMessage = 'Ошибка запроса';
-            try {
-                const errorData = await response.json();
-                errorMessage = errorData.error || errorMessage;
-            } catch (e) {
-                // Если не JSON, используем статус
-                errorMessage = `Ошибка ${response.status}`;
-            }
-            
-            if (response.status === 401 || response.status === 403) {
-                showModal('⚠️ Сессия истекла', 'Пожалуйста, перезапустите приложение');
-                setTimeout(() => {
-                    if (tg) {
-                        tg.close();
-                    } else {
-                        window.location.reload();
-                    }
-                }, 2000);
-                return { success: false, error: 'Сессия истекла' };
-            }
-            throw new Error(errorMessage);
-        }
-        
-        const data = await response.json();
-        return data;
-    } catch (error) {
-        console.error('API Error:', error);
-        
-        // Более подробная обработка ошибок
-        let errorMsg = error.message;
-        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-            errorMsg = 'Не удаётся подключиться к серверу. Проверьте интернет-соединение и попробуйте позже.';
-        }
-        
-        showModal('Ошибка', errorMsg);
-        throw error;
     }
 }
 
@@ -246,9 +191,7 @@ async function updateProfileUI(player) {
     document.getElementById('energy-bar').style.width = 
         `${((status.energy || 0) / (status.max_energy || 100)) * 100}%`;
     
-    // Статусы
-    document.getElementById('hunger-value').textContent = `${status.hunger || 0}%`;
-    document.getElementById('thirst-value').textContent = `${status.thirst || 0}%`;
+    // Статусы (голода и жажды больше нет - удалено в миграции дебаффов)
     document.getElementById('radiation-value').textContent = status.radiation || 0;
     document.getElementById('coins-value').textContent = player.coins || 0;
     
@@ -835,9 +778,9 @@ async function loadClan() {
     try {
         const data = await apiRequest('/api/game/clan');
         
-        if (data.in_clan) {
-            clanState.clan = data.clan;
-            renderClanScreen(data);
+        if (data.success && data.data.in_clan) {
+            clanState.clan = data.data.clan;
+            renderClanScreen(data.data);
         } else {
             renderNoClanScreen();
         }
@@ -1182,7 +1125,7 @@ async function donateToClan(amount) {
         });
         
         if (result.success) {
-            showModal('✅ Успех', result.message);
+            showModal('✅ Успех', `Пожертвование принято! Вы пожертвовали ${amount} монет.`);
             gameState.player.coins -= amount;
             loadClan();
         } else {
@@ -1215,7 +1158,7 @@ function showClanSettings() {
 async function loadClanChat() {
     try {
         const data = await apiRequest('/api/game/clan/chat');
-        if (data.success) renderClanChat(data.messages);
+        if (data.success) renderClanChat(data.data.messages);
     } catch (error) {
         console.error('Load chat error:', error);
     }
@@ -1234,10 +1177,12 @@ function renderClanChat(messages) {
     
     container.innerHTML = messages.map(msg => {
         const time = new Date(msg.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        // Используем first_name если доступен, иначе username
+        const playerName = msg.first_name || msg.username || 'Игрок';
         return '<div class="chat-message">' +
             '<div class="chat-header">' +
-                '<span class="chat-author">' + msg.player_name + '</span>' +
-                '<span class="chat-level">[' + msg.player_level + ']</span>' +
+                '<span class="chat-author">' + playerName + '</span>' +
+                '<span class="chat-level">[' + msg.level + ']</span>' +
                 '<span class="chat-time">' + time + '</span>' +
             '</div>' +
             '<div class="chat-text">' + escapeHtml(msg.message) + '</div>' +
@@ -1774,7 +1719,7 @@ async function healInfections() {
  * Визуальный эффект при получении лута
  */
 function showLootAnimation(item) {
-    const app = document.getElementById('app');
+    const container = document.getElementById('loading-screen') || document.body;
     
     // Создаём элемент анимации
     const lootEl = document.createElement('div');
@@ -1784,7 +1729,7 @@ function showLootAnimation(item) {
         <div class="loot-name">${item.name || 'Предмет'}</div>
     `;
     
-    app.appendChild(lootEl);
+    container.appendChild(lootEl);
     
     // Анимация
     lootEl.style.animation = 'slideUp 1s ease-out forwards';
@@ -1793,6 +1738,61 @@ function showLootAnimation(item) {
     setTimeout(() => {
         lootEl.remove();
     }, 1000);
+}
+
+/**
+ * Обновление отображения баланса игрока
+ */
+function updateBalanceDisplay(newBalance) {
+    const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display');
+    balanceElements.forEach(el => {
+        if (el) el.textContent = formatNumber(newBalance);
+    });
+    if (gameState) gameState.player.balance = newBalance;
+}
+
+/**
+ * Загрузка данных магазина
+ */
+function loadShop() {
+    return apiRequest('/api/game/shop');
+}
+
+// Функция openShop() перенесена в game-store.js
+
+/**
+ * Отрисовка локаций на карте
+ */
+function renderLocations(locations) {
+    const container = document.getElementById('locations-grid');
+    if (!container) return;
+    container.innerHTML = locations.map(loc => `
+        <div class="location-card" data-location-id="${loc.id}">
+            <img src="${loc.image_url || ''}" alt="${loc.name}">
+            <div class="location-name">${loc.name}</div>
+            <div class="location-level">Уровень: ${loc.min_level || 1}</div>
+        </div>
+    `).join('');
+}
+
+/**
+ * Загрузка списка заданий
+ */
+async function loadQuests() {
+    try {
+        const data = await apiRequest('/api/game/quests');
+        return data;
+    } catch (e) {
+        console.error('Ошибка загрузки квестов:', e);
+        return [];
+    }
+}
+
+/**
+ * Загрузка рейтинга игроков
+ */
+function loadRatings(type = 'score') {
+    return apiRequest(`/api/rating/${type}`);
 }
 
 /**
@@ -1985,6 +1985,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Обновление summary при изменении полей
     document.getElementById('market-quantity')?.addEventListener('input', updateMarketSummary);
     document.getElementById('market-price')?.addEventListener('input', updateMarketSummary);
+
+    // Инициализация обработчиков навигации (кнопки меню, табы)
+    initNavigationHandlers();
 
     // Запуск игры
     initGame();

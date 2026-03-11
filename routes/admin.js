@@ -70,7 +70,7 @@ router.get('/player/:telegramId', requireAdmin, async (req, res) => {
         
         const result = await query(
             `SELECT telegram_id, username, level, strength, endurance, agility, 
-                    intelligence, luck, health, hunger, thirst, radiation,
+                    intelligence, luck, health, radiation,
                     energy, max_energy, experience, created_at, last_active
              FROM players WHERE telegram_id = $1`,
             [telegramId]

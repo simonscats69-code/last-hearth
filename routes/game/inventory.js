@@ -14,9 +14,10 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query, queryOne } = require('../../db/database');
+const { pool, query, queryOne, tx } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
+const { DEBUFF_CURES } = require('../../utils/gameConstants');
 
 /**
  * Универсальный обработчик ошибок
@@ -212,36 +213,11 @@ router.post('/use-item', async (req, res) => {
                 // Удаляем предмет из инвентаря
                 const newInventory = inventory.filter((_, i) => i !== item_index);
                 
-                if (item.type === 'food') {
-                    const hungerRestored = item.hunger || 10;
-                    await client.query(`
-                        UPDATE players 
-                        SET hunger = LEAST(100, hunger + $1),
-                            inventory = $2
-                        WHERE id = $3
-                    `, [hungerRestored, JSON.stringify(newInventory), playerId]);
-                    
-                    message = `Съели ${item.name}. Голод +${hungerRestored}`;
-                    updated = true;
-                    
-                } else if (item.type === 'water') {
-                    const thirstRestored = item.thirst || 15;
-                    await client.query(`
-                        UPDATE players 
-                        SET thirst = LEAST(100, thirst + $1),
-                            inventory = $2
-                        WHERE id = $3
-                    `, [thirstRestored, JSON.stringify(newInventory), playerId]);
-                    
-                    message = `Выпили ${item.name}. Жажда +${thirstRestored}`;
-                    updated = true;
-                    
-                } else if (item.type === 'medicine') {
+                if (item.type === 'medicine') {
                     const healthRestored = item.heal || 20;
                     await client.query(`
                         UPDATE players 
                         SET health = LEAST(max_health, health + $1),
-                            infection_count = GREATEST(0, infection_count - 1),
                             inventory = $2
                         WHERE id = $3
                     `, [healthRestored, JSON.stringify(newInventory), playerId]);
@@ -250,36 +226,52 @@ router.post('/use-item', async (req, res) => {
                     updated = true;
                     
                 } else if (item.type === 'antirad') {
-                    const radRemoved = item.rad_removal || 30;
+                    // Антирад - лечим радиацию через систему дебаффов
+                    const radiationCure = item.stats?.radiation_cure || item.rad_removal || 2;
+                    
+                    // Лечим радиацию в той же транзакции
+                    const currentPlayer = await client.query(
+                        `SELECT radiation FROM players WHERE id = $1`,
+                        [playerId]
+                    );
+                    
+                    let currentRadiation = { level: 0 };
+                    if (currentPlayer.rows[0]?.radiation) {
+                        if (typeof currentPlayer.rows[0].radiation === 'object') {
+                            currentRadiation = currentPlayer.rows[0].radiation;
+                        } else {
+                            // Старый формат INTEGER - конвертируем
+                            currentRadiation = { level: currentPlayer.rows[0].radiation || 0 };
+                        }
+                    }
+                    
+                    const newLevel = Math.max(0, currentRadiation.level - radiationCure);
+                    
+                    // Пересчитываем время истечения пропорционально
+                    let newExpiresAt = null;
+                    if (newLevel > 0 && currentRadiation.expires_at && currentRadiation.level > 0) {
+                        const oldExpires = new Date(currentRadiation.expires_at);
+                        const now = new Date();
+                        const safeLevel = Math.max(1, currentRadiation.level);
+                        const reductionRatio = radiationCure / safeLevel;
+                        const reduction = (oldExpires - now) * reductionRatio;
+                        newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
+                    }
+                    
                     await client.query(`
                         UPDATE players 
-                        SET radiation = GREATEST(0, radiation - $1),
+                        SET radiation = $1,
                             inventory = $2
                         WHERE id = $3
-                    `, [radRemoved, JSON.stringify(newInventory), playerId]);
+                    `, [JSON.stringify({ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }), JSON.stringify(newInventory), playerId]);
                     
-                    message = `Выпили ${item.name}. Радиация -${radRemoved}`;
+                    message = `Использовали ${item.name}. Радиация снижена с ${currentRadiation.level} до ${newLevel}`;
                     updated = true;
                     
                 } else if (item.type === 'bandage') {
-                    // Лечим переломы
-                    if (player.broken_leg || player.broken_arm) {
-                        await client.query(`
-                            UPDATE players 
-                            SET broken_leg = false, broken_arm = false,
-                                inventory = $1
-                            WHERE id = $2
-                        `, [JSON.stringify(newInventory), playerId]);
-                        
-                        message = `Перевязали ${item.name}. Переломы излечены`;
-                    } else {
-                        await client.query('ROLLBACK');
-                        return res.status(400).json({
-                            success: false,
-                            error: 'Нет переломов для лечения',
-                            code: 'NO_BROKEN_BONES'
-                        });
-                    }
+                    // Перевязочные материалы - просто расходуются
+                    // Система переломов удалена
+                    message = `Использовали ${item.name}. Перевязочные материалы израсходованы`;
                     updated = true;
                     
                 } else {

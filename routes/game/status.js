@@ -5,9 +5,10 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne } = require('../../db/database');
+const { query, queryOne, tx } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
+const { DEBUFF_CONFIG } = require('../../utils/gameConstants');
 
 // =============================================================================
 // Утилиты
@@ -129,21 +130,28 @@ router.get('/status', async (req, res) => {
         
         // Парсим infections безопасно
         const infections = safeJsonParse(player.infections, []);
+        // Парсим radiation (может быть old INTEGER или new JSONB)
+        let radiationLevel = 0;
+        if (player.radiation) {
+            if (typeof player.radiation === 'object') {
+                radiationLevel = player.radiation.level || 0;
+            } else if (typeof player.radiation === 'number') {
+                radiationLevel = player.radiation;
+            }
+        }
+        // Вычисляем общий уровень инфекций
+        const infectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
         
         res.json({
             success: true,
             health: player.health,
             max_health: player.max_health,
-            hunger: player.hunger,
-            thirst: player.thirst,
-            radiation: player.radiation,
+            radiation: radiationLevel,
             fatigue: player.fatigue,
             energy: player.energy,
             max_energy: player.max_energy,
-            broken_bones: player.broken_bones,
-            broken_leg: player.broken_leg,
-            broken_arm: player.broken_arm,
-            infections: player.infection_count,
+            // broken_bones, broken_leg, broken_arm удалены
+            infections: infectionLevel,
             infections_list: infections
         });
         
@@ -165,7 +173,7 @@ router.post('/status/check', async (req, res) => {
         const result = await tx(async () => {
             // Блокируем строку игрока для избежания race condition
             const lockResult = await query(
-                `SELECT health, hunger, thirst, fatigue, radiation, infection_count 
+                `SELECT health, fatigue, radiation, infections 
                  FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
@@ -176,43 +184,36 @@ router.post('/status/check', async (req, res) => {
             
             const p = lockResult.rows[0];
             
-            // Проверяем голод
-            let hungerDamage = 0;
-            if (p.hunger <= 0) {
-                hungerDamage = 5;
-            }
-            
-            // Проверяем жажду
-            let thirstDamage = 0;
-            if (p.thirst <= 0) {
-                thirstDamage = 7;
-            }
-            
             // Проверяем усталость
             let fatigueDamage = 0;
             if (p.fatigue >= 100) {
                 fatigueDamage = 3;
             }
             
-            // Радиация
+            // Радиация (теперь JSONB: {level, expires_at, applied_at})
+            // Урон от радиации: level >= 5, урон = (level - 4) * damagePerLevel
             let radDamage = 0;
-            if (p.radiation >= 100) {
-                radDamage = 10;
+            const radiation = safeJsonParse(p.radiation, { level: 0 });
+            const radConfig = DEBUFF_CONFIG.radiation;
+            if (radiation.level >= 5) {
+                radDamage = (radiation.level - 4) * radConfig.damagePerLevel;
             }
             
-            // Инфекции
-            if (p.infection_count > 0 && Math.random() < 0.1) {
-                radDamage += p.infection_count * 2;
+            // Инфекции (теперь массив JSONB)
+            const infections = safeJsonParse(p.infections, []);
+            const totalInfectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
+            const infConfig = DEBUFF_CONFIG.infection;
+            if (totalInfectionLevel > 0 && Math.random() < 0.1) {
+                radDamage += totalInfectionLevel * infConfig.damagePerLevel;
             }
             
-            const totalDamage = hungerDamage + thirstDamage + fatigueDamage + radDamage;
+            // Урон только от усталости и дебаффов (голода и жажды больше нет)
+            const totalDamage = fatigueDamage + radDamage;
             
             if (totalDamage > 0) {
                 await query(`
                     UPDATE players 
                     SET health = GREATEST(0, health - $1),
-                        hunger = GREATEST(0, hunger - 10),
-                        thirst = GREATEST(0, thirst - 10),
                         fatigue = GREATEST(0, fatigue - 20)
                     WHERE id = $2
                 `, [totalDamage, playerId]);
@@ -221,10 +222,9 @@ router.post('/status/check', async (req, res) => {
             return {
                 totalDamage,
                 effects: {
-                    hunger: hungerDamage,
-                    thirst: thirstDamage,
                     fatigue: fatigueDamage,
-                    radiation: radDamage
+                    radiation: radDamage,
+                    infections: totalInfectionLevel > 0 ? totalInfectionLevel * DEBUFF_CONFIG.infection.damagePerLevel : 0
                 }
             };
         });
@@ -240,7 +240,7 @@ router.post('/status/check', async (req, res) => {
             checked: true,
             damage: result.totalDamage,
             effects: result.effects,
-            message: result.totalDamage > 0 ? 'Получено урона от состояния!' : 'Всё в порядке'
+            message: result.totalDamage > 0 ? 'Получено урона от дебаффов!' : 'Всё в порядке'
         });
         
     } catch (error) {
@@ -267,7 +267,7 @@ router.post('/status/heal', async (req, res) => {
             });
         }
         
-        const validTypes = ['health', 'hunger', 'thirst', 'radiation', 'broken'];
+        const validTypes = ['health', 'radiation', 'debuff'];
         if (!validTypes.includes(type)) {
             return res.status(400).json({
                 success: false,
@@ -285,7 +285,7 @@ router.post('/status/heal', async (req, res) => {
         const result = await tx(async () => {
             // Блокируем строку игрока
             const lockResult = await query(
-                `SELECT inventory, health, max_health, hunger, thirst, radiation, broken_leg, broken_arm 
+                `SELECT inventory, health, max_health, radiation, infections
                  FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
@@ -298,7 +298,7 @@ router.post('/status/heal', async (req, res) => {
             const inventory = safeJsonParse(p.inventory, []);
             
             // Для типов, требующих item_id
-            if (['health', 'hunger', 'thirst', 'radiation'].includes(type)) {
+            if (['health', 'radiation', 'debuff'].includes(type)) {
                 if (!item_id) {
                     throw { message: 'item_id обязателен для этого типа', code: 'MISSING_ITEM_ID', statusCode: 400 };
                 }
@@ -318,22 +318,6 @@ router.post('/status/heal', async (req, res) => {
                         UPDATE players SET health = LEAST(max_health, health + $1) WHERE id = $2
                     `, [healAmount, playerId]);
                     message = 'Здоровье +' + healAmount;
-                    healed = true;
-                    
-                } else if (type === 'hunger') {
-                    healAmount = item.hunger || 10;
-                    await query(`
-                        UPDATE players SET hunger = LEAST(100, hunger + $1) WHERE id = $2
-                    `, [healAmount, playerId]);
-                    message = 'Голод +' + healAmount;
-                    healed = true;
-                    
-                } else if (type === 'thirst') {
-                    healAmount = item.thirst || 15;
-                    await query(`
-                        UPDATE players SET thirst = LEAST(100, thirst + $1) WHERE id = $2
-                    `, [healAmount, playerId]);
-                    message = 'Жажда +' + healAmount;
                     healed = true;
                     
                 } else if (type === 'radiation') {
@@ -366,31 +350,7 @@ router.post('/status/heal', async (req, res) => {
                     };
                 }
                 
-            } else if (type === 'broken') {
-                if (!p.broken_leg && !p.broken_arm) {
-                    return {
-                        success: false,
-                        message: 'Нет переломов',
-                        code: 'NO_BROKEN_BONES'
-                    };
-                }
-                
-                await query(`
-                    UPDATE players SET broken_leg = false, broken_arm = false WHERE id = $1
-                `, [playerId]);
-                
-                // Логируем действие
-                await logPlayerAction(playerId, 'status_heal', {
-                    type: 'broken',
-                    healed_leg: p.broken_leg,
-                    healed_arm: p.broken_arm
-                });
-                
-                return {
-                    success: true,
-                    message: 'Переломы излечены'
-                };
-            }
+            } // 'broken' тип удалён - система переломов упразднена
             
             return {
                 success: false,
@@ -418,20 +378,28 @@ const StatusAPI = {
      */
     getStatus(player) {
         const infections = safeJsonParse(player.infections, []);
+        // Парсим radiation (может быть old INTEGER или new JSONB)
+        let radiationLevel = 0;
+        if (player.radiation) {
+            if (typeof player.radiation === 'object') {
+                radiationLevel = player.radiation.level || 0;
+            } else if (typeof player.radiation === 'number') {
+                radiationLevel = player.radiation;
+            }
+        }
+        // Вычисляем общий уровень инфекций
+        const infectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
+        
         return {
             success: true,
             health: player.health,
             max_health: player.max_health,
-            hunger: player.hunger,
-            thirst: player.thirst,
-            radiation: player.radiation,
+            radiation: radiationLevel,
             fatigue: player.fatigue,
             energy: player.energy,
             max_energy: player.max_energy,
-            broken_bones: player.broken_bones,
-            broken_leg: player.broken_leg,
-            broken_arm: player.broken_arm,
-            infections: player.infection_count,
+            // broken_bones, broken_leg, broken_arm удалены
+            infections: infectionLevel,
             infections_list: infections
         };
     },
@@ -446,7 +414,7 @@ const StatusAPI = {
         
         return await tx(async () => {
             const lockResult = await query(
-                `SELECT health, hunger, thirst, fatigue, radiation, infection_count 
+                `SELECT health, fatigue, radiation, infections 
                  FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
@@ -457,23 +425,33 @@ const StatusAPI = {
             
             const p = lockResult.rows[0];
             
-            let hungerDamage = p.hunger <= 0 ? 5 : 0;
-            let thirstDamage = p.thirst <= 0 ? 7 : 0;
+            // Усталость
             let fatigueDamage = p.fatigue >= 100 ? 3 : 0;
-            let radDamage = p.radiation >= 100 ? 10 : 0;
             
-            if (p.infection_count > 0 && Math.random() < 0.1) {
-                radDamage += p.infection_count * 2;
+            // Радиация (JSONB)
+            // Урон от радиации: level >= 5, урон = (level - 4) * damagePerLevel
+            let radDamage = 0;
+            const radiation = safeJsonParse(p.radiation, { level: 0 });
+            const radConfig = DEBUFF_CONFIG.radiation;
+            if (radiation.level >= 5) {
+                radDamage = (radiation.level - 4) * radConfig.damagePerLevel;
             }
             
-            const totalDamage = hungerDamage + thirstDamage + fatigueDamage + radDamage;
+            // Инфекции (массив JSONB)
+            const infections = safeJsonParse(p.infections, []);
+            const totalInfectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
+            const infConfig = DEBUFF_CONFIG.infection;
+            if (totalInfectionLevel > 0 && Math.random() < 0.1) {
+                radDamage += totalInfectionLevel * infConfig.damagePerLevel;
+            }
+            
+            // Урон только от усталости и дебаффов
+            const totalDamage = fatigueDamage + radDamage;
             
             if (totalDamage > 0) {
                 await query(`
                     UPDATE players 
                     SET health = GREATEST(0, health - $1),
-                        hunger = GREATEST(0, hunger - 10),
-                        thirst = GREATEST(0, thirst - 10),
                         fatigue = GREATEST(0, fatigue - 20)
                     WHERE id = $2
                 `, [totalDamage, playerId]);
@@ -481,7 +459,7 @@ const StatusAPI = {
             
             await logPlayerAction(playerId, 'status_check_api', {
                 damage: totalDamage,
-                effects: { hunger: hungerDamage, thirst: thirstDamage, fatigue: fatigueDamage, radiation: radDamage }
+                effects: { fatigue: fatigueDamage, radiation: radDamage, infections: totalInfectionLevel > 0 ? totalInfectionLevel * infConfig.damagePerLevel : 0 }
             });
             
             return {
@@ -489,10 +467,9 @@ const StatusAPI = {
                 checked: true,
                 damage: totalDamage,
                 effects: {
-                    hunger: hungerDamage,
-                    thirst: thirstDamage,
                     fatigue: fatigueDamage,
-                    radiation: radDamage
+                    radiation: radDamage,
+                    infections: totalInfectionLevel > 0 ? totalInfectionLevel * infConfig.damagePerLevel : 0
                 }
             };
         });
@@ -512,7 +489,8 @@ const StatusAPI = {
             throw { message: 'type обязателен', code: 'INVALID_TYPE', statusCode: 400 };
         }
         
-        if (['health', 'hunger', 'thirst', 'radiation'].includes(type) && !itemId) {
+        // Голода и жажды больше нет, используем debuff для лечения дебаффов
+        if (['health', 'radiation', 'debuff'].includes(type) && !itemId) {
             throw { message: 'item_id обязателен', code: 'MISSING_ITEM_ID', statusCode: 400 };
         }
         
@@ -520,7 +498,7 @@ const StatusAPI = {
         
         return await tx(async () => {
             const lockResult = await query(
-                `SELECT inventory, health, max_health, hunger, thirst, radiation, broken_leg, broken_arm 
+                `SELECT inventory, health, max_health, radiation, infections
                  FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
@@ -532,7 +510,8 @@ const StatusAPI = {
             const p = lockResult.rows[0];
             const inventory = safeJsonParse(p.inventory, []);
             
-            const validTypes = ['health', 'hunger', 'thirst', 'radiation', 'broken'];
+            // Убраны типы hunger, thirst, broken, добавлен debuff
+            const validTypes = ['health', 'radiation', 'debuff'];
             if (!validTypes.includes(type)) {
                 throw { message: 'Неверный тип', code: 'INVALID_TYPE', statusCode: 400 };
             }
