@@ -115,7 +115,8 @@ app.set('trust proxy', 1);
 
 app.use(helmet({
     contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+    frameguard: false
 }));
 
 const limiter = rateLimit({
