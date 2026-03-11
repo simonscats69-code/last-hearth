@@ -110,7 +110,7 @@ router.post('/search', async (req, res) => {
         
         try {
             // Обновляем энергию и получаем игрока с блокировкой
-            await playerHelper.updateEnergy(playerId);
+            await playerHelper.updateEnergy(playerId, 0);
             
             const playerResult = await client.query(`
                 SELECT * FROM players WHERE id = $1 FOR UPDATE

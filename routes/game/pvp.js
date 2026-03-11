@@ -241,7 +241,7 @@ router.post('/pvp/attack', async (req, res) => {
             }
 
             // Обновляем энергию
-            await playerHelper.updateEnergy(playerId);
+            await playerHelper.updateEnergy(playerId, 0);
             
             // Получаем актуальные данные атакующего
             const attacker = await playerHelper.getById(playerId);
