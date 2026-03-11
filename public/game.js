@@ -133,11 +133,11 @@ async function initGame() {
  * Загрузка профиля игрока
  */
 async function loadProfile() {
-    const data = await apiRequest('/game/profile');
+    const data = await apiRequest('/api/game/profile');
     
     // Также загружаем статус переломов и инфекций
     try {
-        const statusData = await apiRequest('/game/status');
+        const statusData = await apiRequest('/api/game/status');
         // Добавляем расширенный статус к данным игрока
         data.status.broken_bones = statusData.broken_bones?.count || 0;
         data.status.broken_leg = statusData.broken_bones?.broken_leg || false;
@@ -168,7 +168,7 @@ async function updateProfileUI(player) {
     
     // Загружаем звание
     try {
-        const rankData = await apiRequest('/game/rank');
+        const rankData = await apiRequest('/api/game/rank');
         if (rankData && rankData.rank) {
             const rankEl = document.getElementById('player-rank');
             if (rankEl) {
@@ -273,7 +273,7 @@ function updateConditionsUI(status) {
  * Загрузка списка локаций
  */
 async function loadLocations() {
-    const data = await apiRequest('/game/locations');
+    const data = await apiRequest('/api/game/locations');
     gameState.locations = data.locations;
 }
 
@@ -290,7 +290,7 @@ async function searchLoot() {
     btn.classList.add('shake');
     
     try {
-        const result = await apiRequest('/game/search', {
+        const result = await apiRequest('/api/game/search', {
             method: 'POST',
             body: {}
         });
@@ -337,7 +337,7 @@ async function searchLoot() {
  */
 async function moveToLocation(locationId) {
     try {
-        const result = await apiRequest('/game/move', {
+        const result = await apiRequest('/api/game/move', {
             method: 'POST',
             body: { location_id: locationId }
         });
@@ -361,7 +361,7 @@ async function moveToLocation(locationId) {
  */
 async function loadInventory() {
     try {
-        const data = await apiRequest('/game/inventory');
+        const data = await apiRequest('/api/game/inventory');
         gameState.inventory = data.items;
         
         // Обновляем статистику
@@ -488,7 +488,7 @@ function renderInventory(items) {
  */
 async function loadRecipes() {
     try {
-        const data = await apiRequest('/game/craft/recipes');
+        const data = await apiRequest('/api/game/craft/recipes');
         gameState.recipes = data.recipes;
         
         // Обновляем энергию
@@ -558,7 +558,7 @@ function renderRecipes(recipes) {
  */
 async function craftItem(recipeId) {
     try {
-        const data = await apiRequest('/game/craft', {
+        const data = await apiRequest('/api/game/craft', {
             method: 'POST',
             body: JSON.stringify({ recipe_id: recipeId })
         });
@@ -582,7 +582,7 @@ async function craftItem(recipeId) {
  */
 async function useItem(itemId) {
     try {
-        const result = await apiRequest('/game/use-item', {
+        const result = await apiRequest('/api/game/use-item', {
             method: 'POST',
             body: { item_id: parseInt(itemId) }
         });
@@ -608,7 +608,7 @@ async function useItem(itemId) {
  */
 async function loadBosses() {
     try {
-        const data = await apiRequest('/game/bosses');
+        const data = await apiRequest('/api/game/bosses');
         gameState.bosses = data.bosses;
         
         renderBosses(data.bosses);
@@ -696,7 +696,7 @@ async function attackBoss() {
     btn.disabled = true;
     
     try {
-        const result = await apiRequest('/game/attack-boss', {
+        const result = await apiRequest('/api/game/attack-boss', {
             method: 'POST',
             body: { boss_id: gameState.currentBoss.id }
         });
@@ -776,7 +776,7 @@ let clanState = {
  */
 async function loadClan() {
     try {
-        const data = await apiRequest('/game/clan');
+        const data = await apiRequest('/api/game/clan');
         
         if (data.success && data.data.in_clan) {
             clanState.clan = data.data.clan;
@@ -940,7 +940,7 @@ async function createClan() {
     }
     
     try {
-        const result = await apiRequest('/game/clan/create', {
+        const result = await apiRequest('/api/game/clan/create', {
             method: 'POST',
             body: { name, description, is_public: isPublic }
         });
@@ -964,7 +964,7 @@ async function createClan() {
  */
 async function loadClansList(search = '') {
     try {
-        const url = search ? '/game/clans?search=' + encodeURIComponent(search) : '/game/clans';
+        const url = search ? '/api/game/clans?search=' + encodeURIComponent(search) : '/api/game/clans';
         const data = await apiRequest(url);
         renderClansList(data.clans);
     } catch (error) {
@@ -1004,7 +1004,7 @@ function renderClansList(clans) {
  */
 async function joinClan(clanId) {
     try {
-        const result = await apiRequest('/game/clan/join', {
+        const result = await apiRequest('/api/game/clan/join', {
             method: 'POST',
             body: { clan_id: clanId }
         });
@@ -1030,7 +1030,7 @@ async function leaveClan() {
     if (!confirm('Ты уверен, что хочешь покинуть клан?')) return;
     
     try {
-        const result = await apiRequest('/game/clan/leave', {
+        const result = await apiRequest('/api/game/clan/leave', {
             method: 'POST',
             body: {}
         });
@@ -1052,7 +1052,7 @@ async function leaveClan() {
  */
 async function loadClanMembers() {
     try {
-        const data = await apiRequest('/game/clan/members');
+        const data = await apiRequest('/api/game/clan/members');
         if (data.success) showClanMembersModal(data.members);
     } catch (error) {
         console.error('Load members error:', error);
@@ -1119,7 +1119,7 @@ async function donateToClan(amount) {
     }
     
     try {
-        const result = await apiRequest('/game/clan/donate', {
+        const result = await apiRequest('/api/game/clan/donate', {
             method: 'POST',
             body: { amount }
         });
@@ -1157,7 +1157,7 @@ function showClanSettings() {
  */
 async function loadClanChat() {
     try {
-        const data = await apiRequest('/game/clan/chat');
+        const data = await apiRequest('/api/game/clan/chat');
         if (data.success) renderClanChat(data.data.messages);
     } catch (error) {
         console.error('Load chat error:', error);
@@ -1202,7 +1202,7 @@ async function sendClanMessage() {
     if (!message) return;
     
     try {
-        const result = await apiRequest('/game/clan/chat', {
+        const result = await apiRequest('/api/game/clan/chat', {
             method: 'POST',
             body: { message }
         });
@@ -1235,7 +1235,7 @@ async function restoreEnergy() {
     }
     
     try {
-        const result = await apiRequest('/game/restore-energy', {
+        const result = await apiRequest('/api/game/restore-energy', {
             method: 'POST',
             body: { amount: 10 }
         });
@@ -1254,7 +1254,7 @@ async function restoreEnergy() {
  */
 async function loadRating(type = 'players') {
     try {
-        const data = await apiRequest(`/rating/${type}`);
+        const data = await apiRequest(`/api/rating/${type}`);
         
         renderRating(data.rating, type);
     } catch (error) {
@@ -1344,10 +1344,10 @@ async function watchAd() {
 async function loadBase() {
     try {
         // Загружаем данные о базе
-        const baseData = await apiRequest('/game/base');
+        const baseData = await apiRequest('/api/game/base');
         
         // Загружаем список доступных построек
-        const buildingsData = await apiRequest('/game/base/buildings');
+        const buildingsData = await apiRequest('/api/game/base/buildings');
         
         // Отображаем бонусы базы
         renderBaseBonuses(baseData);
@@ -1580,7 +1580,7 @@ function filterBuildings(type, buildings) {
  */
 async function buildBuilding(buildingCode) {
     try {
-        const result = await apiRequest('/game/base/build', {
+        const result = await apiRequest('/api/game/base/build', {
             method: 'POST',
             body: { building_code: buildingCode }
         });
@@ -1623,7 +1623,7 @@ async function checkPlayerStatus() {
     if (!gameState.player) return;
     
     try {
-        const result = await apiRequest('/game/status/check', {
+        const result = await apiRequest('/api/game/status/check', {
             method: 'POST',
             body: {}
         });
@@ -1667,7 +1667,7 @@ async function healBrokenBones() {
     
     // Пробуем лечение
     try {
-        const result = await apiRequest('/game/status/heal', {
+        const result = await apiRequest('/api/game/status/heal', {
             method: 'POST',
             body: { type: 'bone', use_stars: false }
         });
@@ -1697,7 +1697,7 @@ async function healInfections() {
     }
     
     try {
-        const result = await apiRequest('/game/status/heal', {
+        const result = await apiRequest('/api/game/status/heal', {
             method: 'POST',
             body: { type: 'infection', use_stars: false }
         });
@@ -1755,7 +1755,7 @@ function updateBalanceDisplay(newBalance) {
  * Загрузка данных магазина
  */
 function loadShop() {
-    return apiRequest('/game/shop');
+    return apiRequest('/api/game/shop');
 }
 
 // Функция openShop() перенесена в game-store.js
@@ -1780,7 +1780,7 @@ function renderLocations(locations) {
  */
 async function loadQuests() {
     try {
-        const data = await apiRequest('/game/quests');
+        const data = await apiRequest('/api/game/quests');
         return data;
     } catch (e) {
         console.error('Ошибка загрузки квестов:', e);
@@ -1792,7 +1792,7 @@ async function loadQuests() {
  * Загрузка рейтинга игроков
  */
 function loadRatings(type = 'score') {
-    return apiRequest(`/rating/${type}`);
+    return apiRequest(`/api/rating/${type}`);
 }
 
 /**
@@ -2005,7 +2005,7 @@ let currentAchievementCategory = null;
  */
 async function loadAchievements() {
     try {
-        const data = await apiRequest('/game/achievements/progress');
+        const data = await apiRequest('/api/game/achievements/progress');
         
         if (data && data.progress) {
             renderAchievementsStats(data.stats);
@@ -2137,7 +2137,7 @@ function renderAchievementsList(achievements) {
  */
 async function claimAchievement(achievementId) {
     try {
-        const data = await apiRequest('/game/achievements/claim', 'POST', { achievement_id: achievementId });
+        const data = await apiRequest('/api/game/achievements/claim', 'POST', { achievement_id: achievementId });
         
         if (data.success) {
             alert(data.message);
@@ -2169,7 +2169,7 @@ async function loadMarketListings() {
         const type = document.getElementById('market-type-filter')?.value || '';
         const sort = document.getElementById('market-sort-filter')?.value || 'date';
 
-        let url = '/game/market/listings?';
+        let url = '/api/game/market/listings?';
         if (search) url += `search=${encodeURIComponent(search)}&`;
         if (type) url += `type=${encodeURIComponent(type)}&`;
         url += `sort=${encodeURIComponent(sort)}`;
@@ -2231,7 +2231,7 @@ function renderMarketListings(listings) {
 async function openBuyModal(listingId) {
     try {
         // Находим объявление
-        const data = await apiRequest('/game/market/listings');
+        const data = await apiRequest('/api/game/market/listings');
         const listing = data.listings?.find(l => l.id === listingId);
 
         if (!listing) {
@@ -2286,7 +2286,7 @@ async function confirmBuyFromMarket() {
     if (!currentBuyListingId) return;
 
     try {
-        const result = await apiRequest('/game/market/buy', {
+        const result = await apiRequest('/api/game/market/buy', {
             method: 'POST',
             body: { listing_id: currentBuyListingId }
         });
@@ -2317,7 +2317,7 @@ async function confirmBuyFromMarket() {
  */
 async function loadMyListings() {
     try {
-        const data = await apiRequest('/game/market/my');
+        const data = await apiRequest('/api/game/market/my');
         
         // Обновляем информацию о лимитах
         const infoDiv = document.getElementById('market-my-info');
@@ -2413,7 +2413,7 @@ async function renewListing(listingId) {
     }
 
     try {
-        const result = await apiRequest('/game/market/renew', {
+        const result = await apiRequest('/api/game/market/renew', {
             method: 'POST',
             body: { listing_id: listingId, duration }
         });
@@ -2438,7 +2438,7 @@ async function cancelListing(listingId) {
     }
 
     try {
-        const result = await apiRequest('/game/market/cancel', {
+        const result = await apiRequest('/api/game/market/cancel', {
             method: 'POST',
             body: { listing_id: listingId }
         });
@@ -2460,7 +2460,7 @@ async function cancelListing(listingId) {
  */
 async function loadMarketHistory() {
     try {
-        const data = await apiRequest('/game/market/history');
+        const data = await apiRequest('/api/game/market/history');
         
         // Обновляем статистику
         const statsDiv = document.getElementById('market-history-stats');
@@ -2527,7 +2527,7 @@ function renderMarketHistory(history) {
  */
 async function loadMarketCreateForm() {
     try {
-        const data = await apiRequest('/game/inventory');
+        const data = await apiRequest('/api/game/inventory');
         const items = data.items;
         
         const grid = document.getElementById('market-inventory-grid');
@@ -2538,7 +2538,7 @@ async function loadMarketCreateForm() {
         }
 
         // Получаем информацию о предметах
-        const itemsInfo = await apiRequest('/game/items');
+        const itemsInfo = await apiRequest('/api/game/items');
         const itemsMap = {};
         itemsInfo.items?.forEach(item => {
             itemsMap[item.id] = item;
@@ -2636,7 +2636,7 @@ async function createMarketListing() {
     }
 
     try {
-        const result = await apiRequest('/game/market/create', {
+        const result = await apiRequest('/api/game/market/create', {
             method: 'POST',
             body: {
                 item_id: marketSelectedItem.id,
@@ -2675,7 +2675,7 @@ async function createMarketListing() {
  */
 async function loadPVPGamePlayers() {
     try {
-        const result = await apiRequest('/game/pvp/players');
+        const result = await apiRequest('/api/game/pvp/players');
         
         const indicator = document.getElementById('pvp-zone-indicator');
         const list = document.getElementById('pvp-players-list');
@@ -2723,7 +2723,7 @@ async function loadPVPGamePlayers() {
  */
 async function startPVPFight(targetId, targetName, targetLevel, targetHealth, targetMaxHealth) {
     try {
-        const result = await apiRequest('/game/pvp/attack', {
+        const result = await apiRequest('/api/game/pvp/attack', {
             method: 'POST',
             body: { targetId: targetId }
         });
@@ -2774,7 +2774,7 @@ async function attackPVPTarget() {
     }
     
     try {
-        const result = await apiRequest('/game/pvp/attack-hit', {
+        const result = await apiRequest('/api/game/pvp/attack-hit', {
             method: 'POST',
             body: { matchId: gameState.pvpMatch.matchId }
         });
@@ -2880,7 +2880,7 @@ async function claimPVPRewards() {
  */
 async function loadPVPStats() {
     try {
-        const result = await apiRequest('/game/pvp/stats');
+        const result = await apiRequest('/api/game/pvp/stats');
         
         if (result.success && result.stats) {
             const stats = result.stats;
@@ -2962,7 +2962,7 @@ async function loadPVPStats() {
  */
 async function loadReferralCode() {
     try {
-        const result = await apiRequest('/game/referral/code');
+        const result = await apiRequest('/api/game/referral/code');
         
         if (result.success) {
             document.getElementById('referral-code').textContent = result.code;
@@ -2985,7 +2985,7 @@ async function loadReferralCode() {
  */
 async function loadReferralStats() {
     try {
-        const result = await apiRequest('/game/referral/stats');
+        const result = await apiRequest('/api/game/referral/stats');
         
         if (result.success) {
             document.getElementById('total-referrals').textContent = result.stats.total_referrals;
@@ -3002,7 +3002,7 @@ async function loadReferralStats() {
  */
 async function loadReferralsList() {
     try {
-        const result = await apiRequest('/game/referral/list');
+        const result = await apiRequest('/api/game/referral/list');
         
         const listContainer = document.getElementById('referrals-list');
         
@@ -3064,7 +3064,7 @@ async function loadSeasonsScreen() {
  */
 async function loadCurrentSeason() {
     try {
-        const result = await apiRequest('/game/seasons/current');
+        const result = await apiRequest('/api/game/seasons/current');
         
         const seasonCurrent = document.getElementById('season-current');
         const seasonJoinSection = document.getElementById('season-join-section');
@@ -3115,7 +3115,7 @@ async function loadCurrentSeason() {
  */
 async function loadSeasonEvents() {
     try {
-        const result = await apiRequest('/game/seasons/events');
+        const result = await apiRequest('/api/game/seasons/events');
         
         const eventsList = document.getElementById('events-list');
         const modifiersList = document.getElementById('modifiers-list');
@@ -3200,7 +3200,7 @@ async function loadSeasonEvents() {
  */
 async function loadSeasonRating() {
     try {
-        const result = await apiRequest('/game/seasons/rating');
+        const result = await apiRequest('/api/game/seasons/rating');
         
         const topRating = document.getElementById('season-top-rating');
         const myRating = document.getElementById('season-my-rating');
@@ -3254,7 +3254,7 @@ async function loadSeasonRating() {
  */
 async function loadDailyTasks() {
     try {
-        const result = await apiRequest('/game/daily-tasks');
+        const result = await apiRequest('/api/game/daily-tasks');
         
         const tasksProgress = document.getElementById('daily-tasks-progress');
         const tasksList = document.getElementById('daily-tasks-list');
@@ -3360,7 +3360,7 @@ function setupSeasonRatingTabs() {
  */
 async function joinSeason() {
     try {
-        const result = await apiRequest('/game/seasons/join', {
+        const result = await apiRequest('/api/game/seasons/join', {
             method: 'POST'
         });
         
@@ -3382,7 +3382,7 @@ async function joinSeason() {
  */
 async function claimDailyTask(taskId) {
     try {
-        const result = await apiRequest('/game/daily-tasks/claim', {
+        const result = await apiRequest('/api/game/daily-tasks/claim', {
             method: 'POST',
             body: JSON.stringify({ task_id: taskId })
         });
@@ -3427,7 +3427,7 @@ async function changeReferralCode() {
     }
     
     try {
-        const result = await apiRequest('/game/referral/code', {
+        const result = await apiRequest('/api/game/referral/code', {
             method: 'PUT',
             body: JSON.stringify({ new_code: newCode })
         });
@@ -3459,7 +3459,7 @@ async function useReferralCode() {
     }
     
     try {
-        const result = await apiRequest('/game/referral/use', {
+        const result = await apiRequest('/api/game/referral/use', {
             method: 'POST',
             body: JSON.stringify({ code: code })
         });
