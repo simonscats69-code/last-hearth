@@ -113,7 +113,7 @@ function updatePlayerState(playerData) {
     gameState.player = playerData;
     
     // Обновляем отображение
-    updateUI();
+    updateProfileUI();
 }
 
 /**

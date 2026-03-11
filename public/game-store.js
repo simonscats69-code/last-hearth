@@ -466,3 +466,6 @@ function initShopHandlers() {
         wheelPaidBtn.addEventListener('click', spinWheelPaid);
     }
 }
+
+// Экспорт функции openShop в window для использования в других модулях
+window.openShop = openShop;

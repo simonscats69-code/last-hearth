@@ -220,7 +220,7 @@ const Templates = {
             <div class="modal active">
                 <div class="modal-overlay"></div>
                 <div class="modal-content">
-                    <h3>${escape(title)}</h3>
+                    <h3>${escapeHtml(title)}</h3>
                     <div class="modal-body">${content}</div>
                     ${buttons || '<button class="btn modal-close">OK</button>'}
                 </div>
@@ -234,7 +234,7 @@ const Templates = {
             <div class="item-card rarity-${item.rarity || 'common'}" 
                  data-id="${item.id}" onclick="useItem(${item.id})">
                 <span class="item-icon">${item.icon || '📦'}</span>
-                <span class="item-name">${escape(item.name)}</span>
+                <span class="item-name">${escapeHtml(item.name)}</span>
                 ${item.count ? `<span class="item-count">x${item.count}</span>` : ''}
                 ${actions}
             </div>
@@ -248,7 +248,7 @@ const Templates = {
             <div class="boss-card" data-id="${boss.id}">
                 <div class="boss-header">
                     <span class="boss-icon">${boss.icon || '👹'}</span>
-                    <span class="boss-name">${escape(boss.name)}</span>
+                    <span class="boss-name">${escapeHtml(boss.name)}</span>
                 </div>
                 <div class="boss-hp-bar">
                     <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
@@ -261,17 +261,17 @@ const Templates = {
     
     // Кнопка
     button(text, onClick, type = 'primary', extra = '') {
-        return `<button class="btn btn-${type}" onclick="${escape(onClick, true)}" ${extra}>${escape(text)}</button>`;
+        return `<button class="btn btn-${type}" onclick="${escapeHtml(onClick)}" ${extra}>${escapeHtml(text)}</button>`;
     },
     
     // Уведомление
     notification(message, type = 'info') {
-        return `<div class="notification notification-${type}">${escape(message)}</div>`;
+        return `<div class="notification notification-${type}">${escapeHtml(message)}</div>`;
     },
     
     // Пустое состояние
     empty(message = 'Пусто') {
-        return `<div class="empty-message">${escape(message)}</div>`;
+        return `<div class="empty-message">${escapeHtml(message)}</div>`;
     },
     
     // Слот инвентаря
@@ -428,7 +428,7 @@ function render(containerIdOrEl, data, template, options = {}) {
     // Пустые данные
     const isArray = Array.isArray(data);
     if (!data || (isArray && data.length === 0)) {
-        container.innerHTML = `<div class="empty-message">${escape(emptyMessage)}</div>`;
+        container.innerHTML = `<div class="empty-message">${escapeHtml(emptyMessage)}</div>`;
         return;
     }
     

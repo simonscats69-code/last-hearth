@@ -780,7 +780,7 @@ async function loadPVPGamePlayers() {
                         <span>Серия: ${player.pvpStreak || 0}</span>
                     </div>
                 </div>
-                <button class="pvp-attack-player-btn" onclick="startPVPFight(${player.id}, '${escapeAttr(player.username) || 'Игрок'}', ${player.level}, ${player.health}, ${player.max_health})">
+                <button class="pvp-attack-player-btn" onclick="startPVPFight(${player.id}, '${escapeHtml(player.username) || 'Игрок'}', ${player.level}, ${player.health}, ${player.max_health})">
                     ⚔️ Атаковать
                 </button>
             </div>
