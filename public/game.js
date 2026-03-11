@@ -94,7 +94,7 @@ async function initGame() {
         }
 
         // Проверяем/создаём игрока
-        await apiRequest('/api/verify-telegram', {
+        await apiRequest('/verify-telegram', {
             method: 'POST',
             body: { telegram_id: telegramId }
         });
