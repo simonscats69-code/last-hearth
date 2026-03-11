@@ -80,18 +80,8 @@ async function logPlayerAction(playerId, action, metadata = {}) {
 
 /**
  * Транзакция с автocommit/rollback
+ * Теперь импортируется из db/database
  */
-const tx = async (fn) => {
-    await query('BEGIN');
-    try {
-        const result = await fn();
-        await query('COMMIT');
-        return result;
-    } catch (e) {
-        await query('ROLLBACK');
-        throw e;
-    }
-};
 
 // =============================================================================
 // Валидация
