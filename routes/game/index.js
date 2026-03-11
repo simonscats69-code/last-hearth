@@ -66,8 +66,8 @@ const seasonsRouter = safeRequire('./seasons');
 const purchaseRouter = safeRequire('./purchase');
 const itemsRouter = safeRequire('./items');
 const profileRouter = safeRequire('./profile');
-const debuffsModule = safeRequire('./debuffs');
-const debuffsRouter = debuffsModule ? debuffsModule.router : null;
+const debuffsModule = require('./debuffs');
+const debuffsRouter = debuffsModule.router || debuffsModule;
 
 // Используем модули с проверкой
 if (locationsRouter) router.use(locationsRouter);
