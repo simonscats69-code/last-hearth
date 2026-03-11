@@ -45,6 +45,27 @@ const leaderboardRouter = require('./routes/leaderboard');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware для логирования всех запросов
+app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        if (res.statusCode >= 400) {
+            console.error(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
+        } else {
+            console.log(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
+        }
+    });
+    next();
+});
+
+// Middleware для обработки ошибок
+app.use((err, req, res, next) => {
+    console.error(`[ERROR] ${req.method} ${req.path}:`, err.message);
+    console.error('[ERROR STACK]:', err.stack);
+    res.status(500).json({ success: false, error: err.message });
+});
+
 // Разрешённые источники для CORS
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
 const ALLOWED_ORIGINS = [
