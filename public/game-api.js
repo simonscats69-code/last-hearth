@@ -68,12 +68,13 @@ const endpoints = {
 };
 
 /**
- * Выполнение запроса к API
+ * Выполнение запроса к API с таймаутом и повторами
  * @param {string} endpoint - endpoint API
  * @param {Object} options - дополнительные опции
+ * @param {number} retries - количество повторов (по умолчанию 2)
  * @returns {Promise<Object>} ответ сервера
  */
-async function apiRequest(endpoint, options = {}) {
+async function apiRequest(endpoint, options = {}, retries = 2) {
     const normalizedEndpoint = API_BASE.endsWith('/api') && endpoint.startsWith('/api/')
         ? endpoint.slice(4)
         : endpoint;
@@ -95,51 +96,67 @@ async function apiRequest(endpoint, options = {}) {
         config.body = JSON.stringify(config.body);
     }
     
-    try {
-        // Добавляем timeout для предотвращения зависания
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        
-        const response = await fetch(url, {
-            ...config,
-            signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+    // Показываем индикатор загрузки если долго
+    const loadingTimeout = setTimeout(() => {
+        if (options.showLoading !== false) {
+            showNotification('Соединение...', 'info');
         }
-        
-        const data = await response.json();
-        
-        // Обработка ошибок от сервера
-        if (data.error) {
-            console.error('API Error:', data.error);
-            throw new Error(data.message || 'Unknown error');
-        }
-        
-        return data;
-    } catch (error) {
-        console.error('API Request failed:', error);
-        console.error('URL:', url);
-        console.error('Config:', config);
-        
-        // Показываем ошибку пользователю
-        if (options.showError !== false) {
-            let errorMessage = 'Ошибка соединения';
-            if (error.name === 'AbortError') {
-                errorMessage = 'Время ожидания истекло. Попробуйте ещё раз.';
-            } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-                errorMessage = 'Не удаётся подключиться к серверу. Проверьте интернет и попробуйте позже.';
-            } else if (error.message.includes('HTTP error')) {
-                errorMessage = 'Сервер вернул ошибку: ' + error.message;
-            } else {
-                errorMessage = 'Ошибка: ' + error.message;
+    }, 2000);
+    
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            
+            const response = await fetch(url, {
+                ...config,
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            clearTimeout(loadingTimeout);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
-            showNotification(errorMessage, 'error');
+            
+            const data = await response.json();
+            
+            // Обработка ошибок от сервера
+            if (data.error) {
+                console.error('API Error:', data.error);
+                throw new Error(data.message || 'Unknown error');
+            }
+            
+            return data;
+        } catch (error) {
+            const isLastAttempt = attempt === retries;
+            
+            clearTimeout(loadingTimeout);
+            
+            if (error.name === 'AbortError') {
+                // Timeout - пробуем ещё раз
+                if (isLastAttempt) {
+                    showNotification('Сервер не отвечает. Попробуй позже.', 'error');
+                    throw error;
+                }
+                // Ждём перед повтором (1с, 2с)
+                await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+                continue;
+            }
+            
+            if (isLastAttempt) {
+                console.error('API Request failed:', error);
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    showNotification('Пропал интернет. Проверь соединение.', 'error');
+                } else {
+                    showNotification('Ошибка: ' + error.message, 'error');
+                }
+                throw error;
+            }
+            
+            // Ждём перед повтором
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
         }
-        
-        throw error;
     }
 }
 

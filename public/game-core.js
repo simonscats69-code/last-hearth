@@ -1,0 +1,734 @@
+/**
+ * game-core.js - Ядро игры
+ * Основные константы, утилиты и система управления состоянием
+ * 
+ * Подключение: после game-state.js, game-utils.js, game-api.js
+ * Зависимости: gameState, getTelegramId, showNotification, apiRequest
+ */
+
+// ============================================================================
+// КОНСТАНТЫ
+// ============================================================================
+
+const CONSTANTS = {
+    // API
+    API_TIMEOUT: 8000,
+    API_RETRIES: 2,
+    
+    // Лимиты ввода
+    MAX_PRICE: 1000000000,
+    MAX_QUANTITY: 1000,
+    MAX_STARS_PRICE: 10000,
+    MIN_REFERRAL_LENGTH: 3,
+    MAX_REFERRAL_LENGTH: 20,
+    REFERRAL_REGEX: /^[A-Z0-9_]+$/i,
+    
+    // UI
+    NOTIFICATION_DURATION: 3000,
+    CONFIRM_THRESHOLD: 5000,
+    
+    // Интервалы
+    INTERVALS: {
+        ENERGY_UPDATE: 60000,
+        STATUS_CHECK: 600000
+    },
+    
+    // Цвета
+    COLORS: {
+        SUCCESS: '#00C851',
+        ERROR: '#ff4444',
+        INFO: '#33b5e5',
+        WARNING: '#ff8800'
+    },
+    
+    // Редкость
+    RARITY_ORDER: {
+        legendary: 5,
+        epic: 4,
+        rare: 3,
+        uncommon: 2,
+        common: 1
+    }
+};
+
+// ============================================================================
+// МЕНЕДЖЕР ИНТЕРВАЛОВ (защита от утечек памяти)
+// ============================================================================
+
+const activeIntervals = [];
+
+/**
+ * Безопасное создание интервала с автоматической очисткой
+ * @param {Function} callback - функция
+ * @param {number} delay - задержка в мс
+ * @returns {number} id интервала
+ */
+function safeSetInterval(callback, delay) {
+    const id = setInterval(callback, delay);
+    activeIntervals.push(id);
+    return id;
+}
+
+/**
+ * Очистка всех интервалов при выходе
+ */
+function clearAllIntervals() {
+    activeIntervals.forEach(id => clearInterval(id));
+    activeIntervals.length = 0;
+}
+
+// Очищаем интервалы при закрытии страницы
+window.addEventListener('beforeunload', clearAllIntervals);
+window.addEventListener('pagehide', clearAllIntervals);
+
+// ============================================================================
+// БЛОКИРОВКИ ОПЕРАЦИЙ (защита от состояний гонки)
+// ============================================================================
+
+const actionLocks = {
+    crafting: false,
+    marketBuy: false,
+    marketCreate: false,
+    marketCancel: false,
+    marketRenew: false,
+    healing: false,
+    clanCreate: false,
+    clanJoin: false,
+    clanLeave: false,
+    clanDonate: false,
+    pvpAttack: false,
+    useItem: false,
+    purchase: false,
+    referral: false,
+    searchLoot: false,
+    attackBoss: false
+};
+
+/**
+ * Блокировка операции
+ * @param {string} name - имя операции
+ * @returns {boolean} true если заблокировано
+ */
+function lockAction(name) {
+    if (actionLocks[name]) {
+        showNotification?.('Подождите, выполняется другое действие...', 'warning');
+        return false;
+    }
+    actionLocks[name] = true;
+    return true;
+}
+
+/**
+ * Разблокировка операции
+ * @param {string} name - имя операции
+ */
+function unlockAction(name) {
+    actionLocks[name] = false;
+}
+
+// ============================================================================
+// КЭШИРОВАНИЕ РЕНДЕРИНГА
+// ============================================================================
+
+const RenderCache = {
+    inventory: { html: '', key: '' },
+    market: { html: '', key: '' },
+    bosses: { html: '', key: '' },
+    
+    get(section, renderFn, key) {
+        const cache = this[section];
+        if (!cache) return renderFn();
+        
+        if (cache.key === key && cache.html) {
+            return cache.html;
+        }
+        
+        const html = renderFn();
+        cache.html = html;
+        cache.key = key;
+        return html;
+    },
+    
+    clear(section) {
+        if (section && this[section]) {
+            this[section] = { html: '', key: '' };
+        } else {
+            this.inventory = { html: '', key: '' };
+            this.market = { html: '', key: '' };
+            this.bosses = { html: '', key: '' };
+        }
+    }
+};
+
+// ============================================================================
+// LOADER - объединённый объект загрузки
+// ============================================================================
+
+const Loader = {
+    _element: null,
+    
+    show(message = 'Загрузка...') {
+        if (!this._element) {
+            this._element = document.createElement('div');
+            this._element.id = 'global-loader';
+            this._element.innerHTML = `
+                <div class="loader-overlay">
+                    <div class="loader-spinner"></div>
+                    <div class="loader-text"></div>
+                </div>
+            `;
+            document.body.appendChild(this._element);
+        }
+        this._element.querySelector('.loader-text').textContent = message;
+        this._element.classList.add('active');
+        if (typeof AppState !== 'undefined') {
+            AppState.ui.loading = true;
+        }
+    },
+    
+    hide() {
+        if (this._element) {
+            this._element.classList.remove('active');
+        }
+        if (typeof AppState !== 'undefined') {
+            AppState.ui.loading = false;
+        }
+    },
+    
+    async wrap(fn, message = 'Загрузка...') {
+        if (typeof AppState !== 'undefined' && AppState.ui.loading) {
+            console.log('Уже грузится, пропускаем');
+            return;
+        }
+        this.show(message);
+        try {
+            return await fn();
+        } finally {
+            this.hide();
+        }
+    }
+};
+
+// ============================================================================
+// TEMPLATES - часто используемые шаблоны
+// ============================================================================
+
+const Templates = {
+    // Модальное окно
+    modal(title, content, buttons = '') {
+        return `
+            <div class="modal active">
+                <div class="modal-overlay"></div>
+                <div class="modal-content">
+                    <h3>${escape(title)}</h3>
+                    <div class="modal-body">${content}</div>
+                    ${buttons || '<button class="btn modal-close">OK</button>'}
+                </div>
+            </div>
+        `;
+    },
+    
+    // Карточка предмета
+    itemCard(item, actions = '') {
+        return `
+            <div class="item-card rarity-${item.rarity || 'common'}" 
+                 data-id="${item.id}" onclick="useItem(${item.id})">
+                <span class="item-icon">${item.icon || '📦'}</span>
+                <span class="item-name">${escape(item.name)}</span>
+                ${item.count ? `<span class="item-count">x${item.count}</span>` : ''}
+                ${actions}
+            </div>
+        `;
+    },
+    
+    // Карточка босса
+    bossCard(boss) {
+        const hpPercent = boss.current_hp / boss.max_hp * 100;
+        return `
+            <div class="boss-card" data-id="${boss.id}">
+                <div class="boss-header">
+                    <span class="boss-icon">${boss.icon || '👹'}</span>
+                    <span class="boss-name">${escape(boss.name)}</span>
+                </div>
+                <div class="boss-hp-bar">
+                    <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
+                </div>
+                <div class="boss-hp-text">${boss.current_hp}/${boss.max_hp} HP</div>
+                <button class="btn attack-btn" onclick="attackBoss(${boss.id})">Атаковать</button>
+            </div>
+        `;
+    },
+    
+    // Кнопка
+    button(text, onClick, type = 'primary', extra = '') {
+        return `<button class="btn btn-${type}" onclick="${escape(onClick, true)}" ${extra}>${escape(text)}</button>`;
+    },
+    
+    // Уведомление
+    notification(message, type = 'info') {
+        return `<div class="notification notification-${type}">${escape(message)}</div>`;
+    },
+    
+    // Пустое состояние
+    empty(message = 'Пусто') {
+        return `<div class="empty-message">${escape(message)}</div>`;
+    },
+    
+    // Слот инвентаря
+    inventorySlot(item) {
+        return `
+            <div class="inventory-slot rarity-${item.rarity || 'common'}" 
+                 onclick="useItem(${item.id})" data-id="${item.id}">
+                <span class="item-icon">${item.icon || '📦'}</span>
+                ${item.count > 1 ? `<span class="item-count">${item.count}</span>` : ''}
+            </div>
+        `;
+    }
+};
+
+// ============================================================================
+// API - универсальная загрузка данных
+// ============================================================================
+
+const API = {
+    // Маппинг типов на эндпоинты
+    endpoints: {
+        profile: '/api/game/profile',
+        inventory: '/api/game/inventory',
+        locations: '/api/game/locations',
+        bosses: '/api/game/bosses',
+        recipes: '/api/game/craft/recipes',
+        clan: '/api/game/clan',
+        market: '/api/game/market/listings',
+        pvp: '/api/game/pvp/players',
+        seasons: '/api/game/seasons/current',
+        achievements: '/api/game/achievements/progress',
+        status: '/api/game/status',
+        energy: '/api/game/energy'
+    },
+    
+    // GET запрос
+    async get(endpoint) {
+        return apiRequest(endpoint);
+    },
+    
+    // POST запрос
+    async post(endpoint, data) {
+        return apiRequest(endpoint, { method: 'POST', body: data });
+    },
+    
+    // PUT запрос
+    async put(endpoint, data) {
+        return apiRequest(endpoint, { method: 'PUT', body: data });
+    },
+    
+    // DELETE запрос
+    async delete(endpoint) {
+        return apiRequest(endpoint, { method: 'DELETE' });
+    },
+    
+    // Универсальная загрузка
+    async load(type, id = null) {
+        const endpoint = this.endpoints[type];
+        if (!endpoint) {
+            throw new Error(`Неизвестный тип: ${type}`);
+        }
+        
+        let url = endpoint;
+        if (id) url += `/${id}`;
+        
+        const data = await this.get(url);
+        
+        // Автоматическое обновление gameState
+        if (type === 'profile' && typeof gameState !== 'undefined') {
+            gameState.player = data;
+        }
+        if (type === 'inventory' && typeof gameState !== 'undefined') {
+            gameState.inventory = data.items || data;
+        }
+        if (type === 'locations' && typeof gameState !== 'undefined') {
+            gameState.locations = data.locations || data;
+        }
+        if (type === 'bosses' && typeof gameState !== 'undefined') {
+            gameState.bosses = data.bosses || data;
+        }
+        
+        return data;
+    }
+};
+
+// ============================================================================
+// DataLoader - очередь загрузки данных
+// ============================================================================
+
+const DataLoader = {
+    queue: [],
+    loading: false,
+    
+    // Добавить в очередь
+    async add(type, callback, message = null) {
+        this.queue.push({ type, callback, message });
+        if (!this.loading) await this.process();
+    },
+    
+    // Обработать очередь
+    async process() {
+        this.loading = true;
+        while (this.queue.length > 0) {
+            const { type, callback, message } = this.queue.shift();
+            const msg = message || `Загрузка ${type}...`;
+            await Loader.wrap(async () => {
+                try {
+                    const data = await API.load(type);
+                    if (callback) callback(data);
+                    return data;
+                } catch (e) {
+                    console.error(`Ошибка загрузки ${type}:`, e);
+                    showNotification?.(`Ошибка загрузки ${type}`, 'error');
+                }
+            }, msg);
+        }
+        this.loading = false;
+    },
+    
+    // Загрузить всё сразу
+    async loadAll(loaders) {
+        await Loader.wrap(async () => {
+            const promises = loaders.map(({ type, callback }) => 
+                API.load(type).then(data => ({ type, data, callback }))
+            );
+            const results = await Promise.all(promises);
+            results.forEach(({ type, data, callback }) => {
+                if (callback) callback(data);
+            });
+        }, 'Загрузка данных...');
+    }
+};
+
+// ============================================================================
+// УНИВЕРСАЛЬНЫЙ RENDER
+// ============================================================================
+
+/**
+ * Универсальный рендер - заменяет renderList и renderListAdvanced
+ * @param {string|HTMLElement} containerIdOrEl - id контейнера или элемент
+ * @param {Array|Object} data - массив или объект для рендера
+ * @param {Function} template - функция-шаблон для каждого элемента
+ * @param {Object} options - { emptyMessage, cacheKey, cacheSection }
+ */
+function render(containerIdOrEl, data, template, options = {}) {
+    const container = typeof containerIdOrEl === 'string' 
+        ? document.getElementById(containerIdOrEl) 
+        : containerIdOrEl;
+    
+    const { emptyMessage = 'Пусто', cacheKey = null, cacheSection = null } = options;
+    
+    if (!container) return;
+    
+    // Пустые данные
+    const isArray = Array.isArray(data);
+    if (!data || (isArray && data.length === 0)) {
+        container.innerHTML = `<div class="empty-message">${escape(emptyMessage)}</div>`;
+        return;
+    }
+    
+    // Кэширование
+    if (cacheKey && cacheSection && typeof RenderCache !== 'undefined') {
+        const key = cacheKey + (isArray ? `_${data.length}` : '');
+        const html = RenderCache.get(cacheSection, () => {
+            return isArray 
+                ? data.map(item => template(item)).join('')
+                : template(data);
+        }, key);
+        container.innerHTML = html;
+        return;
+    }
+    
+    // Обычный рендер
+    container.innerHTML = isArray 
+        ? data.map(item => template(item)).join('')
+        : template(data);
+}
+
+/**
+ * Универсальный рендер списка с опциями (используйте render())
+ * @param {HTMLElement} container - контейнер
+ * @param {Array} items - массив элементов
+ * @param {Object} options - опции рендеринга
+ * @deprecated Используйте render()
+ */
+function renderListAdvanced(container, items, options = {}) {
+    const {
+        emptyHtml = Templates.empty(),
+        itemHtml = null,
+        itemFn = null,
+        cacheKey = null,
+        cacheSection = null
+    } = options;
+    
+    if (!container) return;
+    
+    // Пустой список
+    if (!items || items.length === 0) {
+        container.innerHTML = emptyHtml;
+        return;
+    }
+    
+    // Кэширование
+    if (cacheKey && cacheSection && typeof RenderCache !== 'undefined') {
+        const cached = RenderCache.get(cacheSection, () => {
+            return items.map(item => 
+                itemFn ? itemFn(item) : (itemHtml ? itemHtml(item) : '')
+            ).join('');
+        }, cacheKey);
+        container.innerHTML = cached;
+        return;
+    }
+    
+    // Без кэша
+    container.innerHTML = items.map(item => 
+        itemFn ? itemFn(item) : (itemHtml ? itemHtml(item) : '')
+    ).join('');
+}
+
+// ============================================================================
+// performAction - универсальный обработчик действий
+// ============================================================================
+
+/**
+ * Универсальное выполнение действия с подтверждением и обработкой
+ * @param {string} type - тип действия (craft, market/buy, pvp/attack и т.д.)
+ * @param {Object} data - данные для отправки
+ * @param {Object} options - опции
+ */
+async function performAction(type, data, options = {}) {
+    const {
+        confirmMsg = null,
+        confirmPrice = 0,
+        successMsg = '✅ Успешно',
+        errorMsg = '❌ Ошибка',
+        onSuccess = null,
+        lockKey = null
+    } = options;
+    
+    // Блокировка
+    const lockName = lockKey || type.replace(/[\/]/g, '');
+    if (!lockAction(lockName)) return;
+    
+    // Подтверждение
+    if (confirmMsg || confirmPrice > 0) {
+        const confirmed = await confirmAction(
+            confirmMsg || 'Подтвердите действие',
+            confirmPrice,
+            CONSTANTS.CONFIRM_THRESHOLD
+        );
+        if (!confirmed) {
+            unlockAction(lockName);
+            return;
+        }
+    }
+    
+    try {
+        const result = await apiRequest(`/api/game/${type}`, data);
+        
+        if (result.success) {
+            showNotification?.(result.message || successMsg, 'success');
+            if (typeof playSound === 'function') playSound('success');
+            if (onSuccess) await onSuccess(result);
+            // Инвалидировать кэш
+            if (typeof RenderCache !== 'undefined') RenderCache.clear();
+        } else {
+            showNotification?.(result.message || errorMsg, 'error');
+        }
+        
+        return result;
+    } catch (error) {
+        console.error(`${type} error:`, error);
+        showNotification?.('Произошла ошибка', 'error');
+    } finally {
+        unlockAction(lockName);
+    }
+}
+
+// ============================================================================
+// УТИЛИТЫ DOM И РЕНДЕРИНГА
+// ============================================================================
+
+/**
+ * Получить элемент по id
+ */
+function getEl(id) {
+    return document.getElementById(id);
+}
+
+/**
+ * Безопасно установить innerHTML
+ */
+function setHtml(elementOrId, html) {
+    const el = typeof elementOrId === 'string' ? getEl(elementOrId) : elementOrId;
+    if (!el) return null;
+    el.innerHTML = html;
+    return el;
+}
+
+/**
+ * Унифицированный рендер списка
+ */
+function renderList(container, items, renderItem, emptyHtml = '<div class="empty-message">Пусто</div>') {
+    if (!container) return;
+    if (!items || items.length === 0) {
+        container.innerHTML = emptyHtml;
+        return;
+    }
+    container.innerHTML = items.map(renderItem).join('');
+}
+
+/**
+ * Рассчитать статус доступной постройки
+ */
+function getBuildingStatus(building) {
+    if (!building.requirements?.has_required_building) {
+        return {
+            statusClass: 'locked',
+            statusText: `Требуется: ${building.requirements?.required_building}`,
+            buttonDisabled: 'disabled'
+        };
+    }
+
+    if ((gameState?.player?.level || 1) < building.required_level) {
+        return {
+            statusClass: 'locked',
+            statusText: `Требуется уровень: ${building.required_level}`,
+            buttonDisabled: 'disabled'
+        };
+    }
+
+    if (building.current_level >= building.max_level) {
+        return {
+            statusClass: 'maxed',
+            statusText: 'Макс. уровень',
+            buttonDisabled: 'disabled'
+        };
+    }
+
+    if (building.is_built) {
+        return {
+            statusClass: 'upgradable',
+            statusText: `Уровень ${building.current_level}/${building.max_level}`,
+            buttonDisabled: ''
+        };
+    }
+
+    return {
+        statusClass: 'available',
+        statusText: 'Доступно',
+        buttonDisabled: ''
+    };
+}
+
+/**
+ * Шаблон карточки доступной постройки
+ */
+function renderAvailableBuildingCard(building, includeResources = true) {
+    const { statusClass, statusText, buttonDisabled } = getBuildingStatus(building);
+
+    return `
+        <div class="available-building-item ${statusClass}" style="border-left: 4px solid ${building.color}">
+            <div class="building-header">
+                <span class="building-icon">${building.icon}</span>
+                <span class="building-name">${building.name}</span>
+                ${building.current_level > 0 ? `<span class="building-level">Ур. ${building.current_level}</span>` : ''}
+            </div>
+            <div class="building-desc">${building.description || ''}</div>
+            <div class="building-cost">
+                <span class="cost-coins">💰 ${building.upgrade_cost?.coins || 0}</span>
+                ${includeResources && building.upgrade_cost?.resources
+                    ? Object.entries(building.upgrade_cost.resources).map(([k, v]) => 
+                        `<span class="cost-resource">${k}: ${v}</span>`
+                    ).join('')
+                    : ''}
+            </div>
+            <div class="building-status">${statusText}</div>
+            <button class="build-btn" onclick="buildBuilding('${building.code}')" ${buttonDisabled}>
+                ${building.is_built ? 'Улучшить' : 'Построить'}
+            </button>
+        </div>
+    `;
+}
+
+// ============================================================================
+// ПОДТВЕРЖДЕНИЕ ОПАСНЫХ ДЕЙСТВИЙ
+// ============================================================================
+
+/**
+ * Запрос подтверждения для дорогих операций
+ */
+async function confirmAction(message, price = 0, threshold = 5000) {
+    if (price > threshold) {
+        return confirm(`⚠️ ${message}\nСумма: ${price} 🪙\nТочно продолжить?`);
+    }
+    if (message) {
+        return confirm(message);
+    }
+    return true;
+}
+
+// ============================================================================
+// SERVICE WORKER
+// ============================================================================
+
+// Регистрация Service Worker
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+            .then((registration) => {
+                console.log('SW зарегистрирован:', registration.scope);
+            })
+            .catch((error) => {
+                console.log('SW ошибка:', error);
+            });
+    });
+}
+
+// ============================================================================
+// ADSGRAM
+// ============================================================================
+
+const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || '';
+
+// AdsGram инициализация
+let Adsgram = null;
+if (typeof AdsgramInit === 'function' && ADSGRAM_APP_ID) {
+    try {
+        Adsgram = AdsgramInit({
+            appId: ADSGRAM_APP_ID
+        });
+    } catch (e) {
+        console.warn('AdsGram инициализация не удалась:', e);
+    }
+}
+
+// ============================================================================
+// ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
+// ============================================================================
+
+window.safeSetInterval = safeSetInterval;
+window.clearAllIntervals = clearAllIntervals;
+window.lockAction = lockAction;
+window.unlockAction = unlockAction;
+window.render = render;
+window.renderListAdvanced = renderListAdvanced;
+window.performAction = performAction;
+window.getEl = getEl;
+window.setHtml = setHtml;
+window.renderList = renderList;
+window.getBuildingStatus = getBuildingStatus;
+window.renderAvailableBuildingCard = renderAvailableBuildingCard;
+window.confirmAction = confirmAction;
+window.CONSTANTS = CONSTANTS;
+window.Loader = Loader;
+window.Templates = Templates;
+window.API = API;
+window.DataLoader = DataLoader;
+window.RenderCache = RenderCache;
+window.Adsgram = Adsgram;
