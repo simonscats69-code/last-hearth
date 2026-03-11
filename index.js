@@ -4,6 +4,17 @@
  * Точка входа сервера
  */
 
+// Глобальные обработчики ошибок для отладки
+process.on('uncaughtException', (err) => {
+    console.error('UNCAUGHT EXCEPTION:', err.message);
+    console.error('STACK:', err.stack);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('UNHANDLED REJECTION:', reason);
+    if (reason?.stack) console.error('STACK:', reason.stack);
+});
+
 const express = require('express');
 const path = require('path');
 const compression = require('compression');
