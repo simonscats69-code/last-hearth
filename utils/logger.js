@@ -29,11 +29,16 @@ const consoleFormat = winston.format.combine(
     winston.format.printf(({ level, message, timestamp, stack, ...meta }) => {
         let msg = message;
         // Если message объект - выводим как JSON
-        if (typeof message === 'object') {
+        if (typeof message === 'object' && message !== null) {
             msg = JSON.stringify(message, null, 2);
         }
-        // Также логируем метаданные если есть
-        const metaStr = Object.keys(meta).length > 0 ? ' ' + JSON.stringify(meta) : '';
+        // Убираем служебные ключи из meta
+        const cleanMeta = { ...meta };
+        delete cleanMeta.level;
+        delete cleanMeta.message;
+        delete cleanMeta.timestamp;
+        delete cleanMeta.stack;
+        const metaStr = Object.keys(cleanMeta).length > 0 ? ' ' + JSON.stringify(cleanMeta) : '';
         if (stack) {
             return `${timestamp} [${level.toUpperCase()}]: ${msg}${metaStr}\n${stack}`;
         }
