@@ -549,6 +549,7 @@ router.options('/verify-telegram', (req, res) => {
 
 router.post('/verify-telegram', async (req, res) => {
     try {
+        console.log('[verify-telegram] req.body:', JSON.stringify(req.body).substring(0, 200));
         const { telegram_id, hash } = req.body;
 
         if (!telegram_id) {
