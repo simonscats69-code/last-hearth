@@ -28,6 +28,10 @@ async function apiRequest(endpoint, options = {}) {
     };
     
     const config = { ...defaultOptions, ...options };
+
+    if (config.body && typeof config.body === 'object') {
+        config.body = JSON.stringify(config.body);
+    }
     
     try {
         const response = await fetch(url, config);
