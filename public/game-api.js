@@ -3,10 +3,69 @@
  * API ЗАПРОСЫ (API Requests)
  * ============================================
  * Управление запросами к серверу
+ * Оптимизировано с использованием Proxy и словаря эндпоинтов
  */
 
 // Базовый URL API (используем HTTPS для работы с BotHost)
-const API_BASE = 'https://last-hearth.bothost.ru';
+const API_BASE = 'https://last-hearth.bothost.ru/api';
+
+// ============================================
+// СЛОВАРЬ ЭНДПОИНТОВ
+// ============================================
+const endpoints = {
+    // Регистрация и профиль
+    register: { endpoint: '/game/register', method: 'POST' },
+    profile: { endpoint: '/game/profile', method: 'GET' },
+    inventory: { endpoint: '/game/inventory', method: 'GET' },
+    
+    // Исследование и перемещение
+    search: { endpoint: '/game/search', method: 'POST' },
+    move: { endpoint: '/game/move', method: 'POST' },
+    
+    // Предметы
+    useItem: { endpoint: '/game/use-item', method: 'POST' },
+    craft: { endpoint: '/game/craft', method: 'POST' },
+    recipes: { endpoint: '/game/craft/recipes', method: 'GET' },
+    
+    // Боссы
+    attackBoss: { endpoint: '/game/attack-boss', method: 'POST' },
+    bosses: { endpoint: '/game/bosses', method: 'GET' },
+    
+    // Статус и магазин
+    statusCheck: { endpoint: '/game/status/check', method: 'POST' },
+    purchase: { endpoint: '/game/purchase', method: 'POST' },
+    achievements: { endpoint: '/game/achievements', method: 'GET' },
+    
+    // Рейтинги
+    ratingsPlayers: { endpoint: '/rating/players', method: 'GET' },
+    ratingsClans: { endpoint: '/rating/clans', method: 'GET' },
+    
+    // Рынок
+    marketList: { endpoint: '/game/market/listings-v2', method: 'GET' },
+    marketCreate: { endpoint: '/game/market/create', method: 'POST' },
+    marketBuy: { endpoint: '/game/market/buy', method: 'POST' },
+    
+    // Клан
+    clan: { endpoint: '/game/clan', method: 'GET' },
+    clanCreate: { endpoint: '/game/clan/create', method: 'POST' },
+    clanJoin: { endpoint: '/game/clan/join', method: 'POST' },
+    clanLeave: { endpoint: '/game/clan/leave', method: 'POST' },
+    
+    // PvP
+    pvpAttack: { endpoint: '/game/pvp/attack', method: 'POST' },
+    
+    // Сезоны
+    seasonsCurrent: { endpoint: '/game/seasons/current', method: 'GET' },
+    
+    // Рефералы
+    referralCode: { endpoint: '/game/referral/code', method: 'GET' },
+    referralUse: { endpoint: '/game/referral/use', method: 'POST' },
+    
+    // Клановые боссы
+    clanBoss: { endpoint: '/game/clan-boss', method: 'GET' },
+    clanBossSpawn: { endpoint: '/game/clan-boss/spawn', method: 'POST' },
+    clanBossAttack: { endpoint: '/game/clan-boss/attack', method: 'POST' }
+};
 
 /**
  * Выполнение запроса к API
@@ -34,7 +93,15 @@ async function apiRequest(endpoint, options = {}) {
     }
     
     try {
-        const response = await fetch(url, config);
+        // Добавляем timeout для предотвращения зависания
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        const response = await fetch(url, {
+            ...config,
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
         
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -56,10 +123,11 @@ async function apiRequest(endpoint, options = {}) {
         
         // Показываем ошибку пользователю
         if (options.showError !== false) {
-            // Более подробное сообщение об ошибке
             let errorMessage = 'Ошибка соединения';
-            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-                errorMessage = 'Не удаётся连接到 серверу. Проверьте интернет и попробуйте позже.';
+            if (error.name === 'AbortError') {
+                errorMessage = 'Время ожидания истекло. Попробуйте ещё раз.';
+            } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                errorMessage = 'Не удаётся подключиться к серверу. Проверьте интернет и попробуйте позже.';
             } else if (error.message.includes('HTTP error')) {
                 errorMessage = 'Сервер вернул ошибку: ' + error.message;
             } else {
@@ -95,250 +163,140 @@ async function apiPost(endpoint, body = {}) {
 }
 
 // ============================================
-// ИГРОВЫЕ API МЕТОДЫ
+// КЭШ ДАННЫХ (опционально, для часто используемых данных)
+// ============================================
+const apiCache = new Map();
+const CACHE_TTL = 30000; // 30 секунд кэширование
+
+function getCached(key) {
+    const cached = apiCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.data;
+    }
+    apiCache.delete(key);
+    return null;
+}
+
+function setCached(key, data) {
+    apiCache.set(key, { data, timestamp: Date.now() });
+}
+
+function invalidateCache(key) {
+    apiCache.delete(key);
+}
+
+// ============================================
+// ПРОКСИ ДЛЯ ДИНАМИЧЕСКОЙ ГЕНЕРАЦИИ МЕТОДОВ
 // ============================================
 
 /**
- * Регистрация игрока
- * @param {number} telegramId - ID Telegram
- * @param {string} username - username
- * @returns {Promise<Object>} данные игрока
+ * Создаёт API метод на основе словаря эндпоинтов
+ * @param {string} name - имя эндпоинта
+ * @returns {Function} функция API
  */
-async function registerPlayer(telegramId, username) {
-    return apiPost('/game/register', { telegram_id: telegramId, username });
+function createApiMethod(name) {
+    const config = endpoints[name];
+    if (!config) {
+        return () => { throw new Error(`Unknown endpoint: ${name}`); };
+    }
+    
+    if (config.method === 'GET') {
+        return async function(body = {}, options = {}) {
+            // Проверяем кэш для GET запросов без параметров
+            const cacheKey = name;
+            if (Object.keys(body).length === 0) {
+                const cached = getCached(cacheKey);
+                if (cached) return cached;
+                const data = await apiGet(config.endpoint);
+                setCached(cacheKey, data);
+                return data;
+            }
+            return apiGet(config.endpoint);
+        };
+    } else {
+        return async function(body = {}, options = {}) {
+            // Инвалидируем кэш после POST запросов
+            invalidateCache(name);
+            return apiPost(config.endpoint, body);
+        };
+    }
 }
 
 /**
- * Получение профиля игрока
- * @returns {Promise<Object>} профиль
+ * Динамический API через Proxy
+ * Позволяет вызывать методы как gameApi.profile() или gameApi.purchase({...})
  */
-async function loadProfile() {
-    return apiGet('/game/profile');
-}
+const gameApi = new Proxy({}, {
+    get(target, name) {
+        // Проверяем статические методы
+        if (name === 'get') return apiGet;
+        if (name === 'post') return apiPost;
+        if (name === 'endpoints') return endpoints;
+        if (name === 'cache') return { get: getCached, set: setCached, invalidate: invalidateCache };
+        
+        // Создаём метод на лету
+        return createApiMethod(name);
+    }
+});
 
-/**
- * Получение инвентаря
- * @returns {Promise<Object>} инвентарь
- */
-async function loadInventory() {
-    return apiGet('/game/inventory');
-}
+// ============================================
+// АЛИАСЫ (для обратной совместимости)
+// ============================================
 
-/**
- * Поиск лута в текущей локации
- * @returns {Promise<Object>} результат поиска
- */
-async function searchLoot() {
-    return apiPost('/game/search');
-}
+// Регистрация и профиль
+const registerPlayer = (telegramId, username) => gameApi.register({ telegram_id: telegramId, username });
+const loadProfile = () => gameApi.profile();
+const loadInventory = () => gameApi.inventory();
 
-/**
- * Переход к локации
- * @param {number} locationId - ID локации
- * @returns {Promise<Object>} результат
- */
-async function moveToLocation(locationId) {
-    return apiPost('/game/move', { location_id: locationId });
-}
+// Исследование и перемещение
+const searchLoot = () => gameApi.search();
+const moveToLocation = (locationId) => gameApi.move({ location_id: locationId });
 
-/**
- * Использование предмета
- * @param {number} itemIndex - индекс предмета в инвентаре
- * @returns {Promise<Object>} результат
- */
-async function useItem(itemIndex) {
-    return apiPost('/game/use-item', { item_index: itemIndex });
-}
+// Предметы
+const useItem = (itemIndex) => gameApi.useItem({ item_index: itemIndex });
+const craftItem = (recipeId) => gameApi.craft({ recipe_id: recipeId });
+const loadRecipes = () => gameApi.recipes();
 
-/**
- * Крафт предмета
- * @param {number} recipeId - ID рецепта
- * @returns {Promise<Object>} результат
- */
-async function craftItem(recipeId) {
-    return apiPost('/game/craft', { recipe_id: recipeId });
-}
+// Боссы
+const attackBoss = (bossId, isRaid = false) => gameApi.attackBoss({ boss_id: bossId, is_raid: isRaid });
+const loadBosses = () => gameApi.bosses();
 
-/**
- * Получение списка рецептов
- * @returns {Promise<Object>} рецепты
- */
-async function loadRecipes() {
-    return apiGet('/game/craft/recipes');
-}
+// Статус и магазин
+const checkPlayerStatus = () => gameApi.statusCheck({});
+const buyItem = (itemId, currency = 'coins') => gameApi.purchase({ item_id: parseInt(itemId), currency });
+const loadAchievements = () => gameApi.achievements();
 
-/**
- * Нападение на босса
- * @param {number} bossId - ID босса
- * @param {boolean} isRaid - участвует ли в рейде
- * @returns {Promise<Object>} результат
- */
-async function attackBoss(bossId, isRaid = false) {
-    return apiPost('/game/attack-boss', { boss_id: bossId, is_raid: isRaid });
-}
-
-/**
- * Получение списка боссов
- * @returns {Promise<Object>} боссы
- */
-async function loadBosses() {
-    return apiGet('/game/bosses');
-}
-
-/**
- * Проверка статуса игрока
- * @returns {Promise<Object>} статус
- */
-async function checkPlayerStatus() {
-    return apiPost('/game/status/check', {});
-}
-
-/**
- * Покупка в магазине
- * @param {number} itemId - ID предмета
- * @param {string} currency - валюта (coins/stars)
- * @returns {Promise<Object>} результат
- */
-async function buyItem(itemId, currency = 'coins') {
-    return apiPost('/game/purchase', { item_id: parseInt(itemId), currency });
-}
-
-/**
- * Загрузка достижений
- * @returns {Promise<Object>} достижения
- */
-async function loadAchievements() {
-    return apiGet('/game/achievements');
-}
-
-/**
- * Получение рейтинга
- * @param {string} type - тип (players/clans)
- * @returns {Promise<Object>} рейтинг
- */
-async function loadRatings(type = 'players') {
-    const endpoint = type === 'clans' ? '/rating/clans' : '/rating/players';
+// Рейтинги
+const loadRatings = (type = 'players') => {
+    const endpoint = type === 'clans' ? endpoints.ratingsClans.endpoint : endpoints.ratingsPlayers.endpoint;
     return apiGet(endpoint);
-}
+};
 
-/**
- * Загрузка рынка
- * @returns {Promise<Object>} объявления
- */
-async function loadMarket() {
-    return apiGet('/game/market/listings-v2');
-}
+// Рынок
+const loadMarket = () => gameApi.marketList();
+const listOnMarket = (itemIndex, price) => gameApi.marketCreate({ item_index: itemIndex, price });
+const buyFromMarket = (listingId) => gameApi.marketBuy({ listing_id: listingId });
 
-/**
- * Размещение на рынке
- * @param {number} itemIndex - индекс предмета в инвентаре
- * @param {number} price - цена
- * @returns {Promise<Object>} результат
- */
-async function listOnMarket(itemIndex, price) {
-    return apiPost('/game/market/create', { item_index: itemIndex, price });
-}
+// Клан
+const loadClan = () => gameApi.clan();
+const createClan = (name) => gameApi.clanCreate({ name });
+const joinClan = (clanId) => gameApi.clanJoin({ clan_id: clanId });
+const leaveClan = () => gameApi.clanLeave({});
 
-/**
- * Покупка с рынка
- * @param {number} listingId - ID объявления
- * @returns {Promise<Object>} результат
- */
-async function buyFromMarket(listingId) {
-    return apiPost('/game/market/buy', { listing_id: listingId });
-}
+// PvP
+const pvpAttack = (targetId) => gameApi.pvpAttack({ target_id: targetId });
 
-/**
- * Загрузка клана
- * @returns {Promise<Object>} данные клана
- */
-async function loadClan() {
-    return apiGet('/game/clan');
-}
+// Сезоны
+const loadSeasonData = () => gameApi.seasonsCurrent();
 
-/**
- * Создание клана
- * @param {string} name - название
- * @returns {Promise<Object>} результат
- */
-async function createClan(name) {
-    return apiPost('/game/clan/create', { name });
-}
+// Рефералы
+const checkReferralBonus = () => gameApi.referralCode();
+const activateReferralCode = (code) => gameApi.referralUse({ code });
 
-/**
- * Вступление в клан
- * @param {number} clanId - ID клана
- * @returns {Promise<Object>} результат
- */
-async function joinClan(clanId) {
-    return apiPost('/game/clan/join', { clan_id: clanId });
-}
+// Клановые боссы
+const loadClanBoss = () => gameApi.clanBoss();
+const spawnClanBoss = () => gameApi.clanBossSpawn({});
+const attackClanBoss = (damage) => gameApi.clanBossAttack({ damage });
 
-/**
- * Выход из клана
- * @returns {Promise<Object>} результат
- */
-async function leaveClan() {
-    return apiPost('/game/clan/leave', {});
-}
-
-/**
- * PvP атака на игрока
- * @param {number} targetId - ID цели
- * @returns {Promise<Object>} результат
- */
-async function pvpAttack(targetId) {
-    return apiPost('/game/pvp/attack', { target_id: targetId });
-}
-
-/**
- * Загрузка сезонных данных
- * @returns {Promise<Object>} сезонные данные
- */
-async function loadSeasonData() {
-    return apiGet('/game/seasons/current');
-}
-
-/**
- * Проверка реферального бонуса
- * @returns {Promise<Object>} данные
- */
-async function checkReferralBonus() {
-    return apiGet('/game/referral/code');
-}
-
-/**
- * Активация реферального бонуса
- * @param {string} code - реферальный код
- * @returns {Promise<Object>} результат
- */
-async function activateReferralCode(code) {
-    return apiPost('/game/referral/use', { code });
-}
-
-// ==================== КЛАНОВЫЕ БОССЫ ====================
-
-/**
- * Получить текущего босса клана
- * @returns {Promise<Object>} данные босса
- */
-async function loadClanBoss() {
-    return apiGet('/game/clan-boss');
-}
-
-/**
- * Вызвать босса (только лидер клана)
- * @returns {Promise<Object>} результат
- */
-async function spawnClanBoss() {
-    return apiPost('/game/clan-boss/spawn', {});
-}
-
-/**
- * Атаковать босса
- * @param {number} damage - урон
- * @returns {Promise<Object>} результат
- */
-async function attackClanBoss(damage) {
-    return apiPost('/game/clan-boss/attack', { damage });
-}
+// Экспорт
+window.gameApi = gameApi;

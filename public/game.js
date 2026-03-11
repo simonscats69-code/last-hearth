@@ -48,8 +48,113 @@ if ('serviceWorker' in navigator) {
 }
 
 // Конфигурация
-const API_URL = 'https://last-hearth.bothost.ru';
 const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || ''; // Загружается из env или пустая строка
+
+// ============================================
+// УТИЛИТЫ DOM И РЕНДЕРИНГА
+// ============================================
+
+/**
+ * Получить элемент по id
+ */
+function getEl(id) {
+    return document.getElementById(id);
+}
+
+/**
+ * Безопасно установить innerHTML
+ */
+function setHtml(elementOrId, html) {
+    const el = typeof elementOrId === 'string' ? getEl(elementOrId) : elementOrId;
+    if (!el) return null;
+    el.innerHTML = html;
+    return el;
+}
+
+/**
+ * Унифицированный рендер списка
+ */
+function renderList(container, items, renderItem, emptyHtml = '<div class="empty-message">Пусто</div>') {
+    if (!container) return;
+    if (!items || items.length === 0) {
+        container.innerHTML = emptyHtml;
+        return;
+    }
+    container.innerHTML = items.map(renderItem).join('');
+}
+
+/**
+ * Рассчитать статус доступной постройки
+ */
+function getBuildingStatus(building) {
+    if (!building.requirements?.has_required_building) {
+        return {
+            statusClass: 'locked',
+            statusText: `Требуется: ${building.requirements?.required_building}`,
+            buttonDisabled: 'disabled'
+        };
+    }
+
+    if ((gameState.player?.level || 1) < building.required_level) {
+        return {
+            statusClass: 'locked',
+            statusText: `Требуется уровень: ${building.required_level}`,
+            buttonDisabled: 'disabled'
+        };
+    }
+
+    if (building.current_level >= building.max_level) {
+        return {
+            statusClass: 'maxed',
+            statusText: 'Макс. уровень',
+            buttonDisabled: 'disabled'
+        };
+    }
+
+    if (building.is_built) {
+        return {
+            statusClass: 'upgradable',
+            statusText: `Уровень ${building.current_level}/${building.max_level}`,
+            buttonDisabled: ''
+        };
+    }
+
+    return {
+        statusClass: 'available',
+        statusText: 'Доступно',
+        buttonDisabled: ''
+    };
+}
+
+/**
+ * Шаблон карточки доступной постройки
+ */
+function renderAvailableBuildingCard(building, includeResources = true) {
+    const { statusClass, statusText, buttonDisabled } = getBuildingStatus(building);
+
+    return `
+        <div class="available-building-item ${statusClass}" style="border-left: 4px solid ${building.color}">
+            <div class="building-header">
+                <span class="building-icon">${building.icon}</span>
+                <span class="building-name">${building.name}</span>
+                ${building.current_level > 0 ? `<span class="building-level">Ур. ${building.current_level}</span>` : ''}
+            </div>
+            <div class="building-desc">${building.description || ''}</div>
+            <div class="building-cost">
+                <span class="cost-coins">💰 ${building.upgrade_cost?.coins || 0}</span>
+                ${includeResources && building.upgrade_cost?.resources
+                    ? Object.entries(building.upgrade_cost.resources).map(([k, v]) => 
+                        `<span class="cost-resource">${k}: ${v}</span>`
+                    ).join('')
+                    : ''}
+            </div>
+            <div class="building-status">${statusText}</div>
+            <button class="build-btn" onclick="buildBuilding('${building.code}')" ${buttonDisabled}>
+                ${building.is_built ? 'Улучшить' : 'Построить'}
+            </button>
+        </div>
+    `;
+}
 
 // Состояние игры (уже определено в game-state.js)
 // gameState доступен глобально
@@ -94,7 +199,7 @@ async function initGame() {
         }
 
         // Проверяем/создаём игрока
-        await apiRequest('/api/verify-telegram', {
+        await apiRequest('/verify-telegram', {
             method: 'POST',
             body: { telegram_id: telegramId }
         });
@@ -133,11 +238,16 @@ async function initGame() {
  * Загрузка профиля игрока
  */
 async function loadProfile() {
-    const data = await apiRequest('/api/game/profile');
+    const data = await apiRequest('/game/profile');
+    
+    // Гарантируем наличие объекта статуса
+    if (!data.status) {
+        data.status = {};
+    }
     
     // Также загружаем статус переломов и инфекций
     try {
-        const statusData = await apiRequest('/api/game/status');
+        const statusData = await apiRequest('/game/status');
         // Добавляем расширенный статус к данным игрока
         data.status.broken_bones = statusData.broken_bones?.count || 0;
         data.status.broken_leg = statusData.broken_bones?.broken_leg || false;
@@ -168,7 +278,7 @@ async function updateProfileUI(player) {
     
     // Загружаем звание
     try {
-        const rankData = await apiRequest('/api/game/rank');
+        const rankData = await apiRequest('/game/rank');
         if (rankData && rankData.rank) {
             const rankEl = document.getElementById('player-rank');
             if (rankEl) {
@@ -273,7 +383,7 @@ function updateConditionsUI(status) {
  * Загрузка списка локаций
  */
 async function loadLocations() {
-    const data = await apiRequest('/api/game/locations');
+    const data = await apiRequest('/game/locations');
     gameState.locations = data.locations;
 }
 
@@ -290,7 +400,7 @@ async function searchLoot() {
     btn.classList.add('shake');
     
     try {
-        const result = await apiRequest('/api/game/search', {
+        const result = await apiRequest('/game/search', {
             method: 'POST',
             body: {}
         });
@@ -337,7 +447,7 @@ async function searchLoot() {
  */
 async function moveToLocation(locationId) {
     try {
-        const result = await apiRequest('/api/game/move', {
+        const result = await apiRequest('/game/move', {
             method: 'POST',
             body: { location_id: locationId }
         });
@@ -361,7 +471,7 @@ async function moveToLocation(locationId) {
  */
 async function loadInventory() {
     try {
-        const data = await apiRequest('/api/game/inventory');
+        const data = await apiRequest('/game/inventory');
         gameState.inventory = data.items;
         
         // Обновляем статистику
@@ -371,7 +481,7 @@ async function loadInventory() {
         // Применяем фильтр и сортировку
         renderInventoryWithFilters(data.items);
         
-        // Инициализируем обработчики фильтров
+        // Инициализируем обработчики фильтров (только один раз)
         initInventoryControls();
     } catch (error) {
         console.error('Inventory error:', error);
@@ -383,11 +493,15 @@ async function loadInventory() {
  */
 let currentInventoryFilter = 'all';
 let currentInventorySort = 'id';
+let inventoryControlsInitialized = false;
 
 /**
  * Инициализация обработчиков кнопок фильтрации и сортировки
  */
 function initInventoryControls() {
+    if (inventoryControlsInitialized) return;
+    inventoryControlsInitialized = true;
+
     // Кнопки фильтров
     const filterBtns = document.querySelectorAll('.filter-btn');
     filterBtns.forEach(btn => {
@@ -463,6 +577,7 @@ function renderInventoryWithFilters(items) {
  */
 function renderInventory(items) {
     const grid = document.getElementById('inventory-grid');
+    if (!grid) return;
     grid.innerHTML = '';
     
     // Сортируем предметы по ID
@@ -488,7 +603,7 @@ function renderInventory(items) {
  */
 async function loadRecipes() {
     try {
-        const data = await apiRequest('/api/game/craft/recipes');
+        const data = await apiRequest('/game/craft/recipes');
         gameState.recipes = data.recipes;
         
         // Обновляем энергию
@@ -505,6 +620,7 @@ async function loadRecipes() {
  */
 function renderRecipes(recipes) {
     const list = document.getElementById('recipes-list');
+    if (!list) return;
     list.innerHTML = '';
     
     if (!recipes || recipes.length === 0) {
@@ -558,9 +674,9 @@ function renderRecipes(recipes) {
  */
 async function craftItem(recipeId) {
     try {
-        const data = await apiRequest('/api/game/craft', {
+        const data = await apiRequest('/game/craft', {
             method: 'POST',
-            body: JSON.stringify({ recipe_id: recipeId })
+            body: { recipe_id: recipeId }
         });
         
         if (data.success) {
@@ -582,7 +698,7 @@ async function craftItem(recipeId) {
  */
 async function useItem(itemId) {
     try {
-        const result = await apiRequest('/api/game/use-item', {
+        const result = await apiRequest('/game/use-item', {
             method: 'POST',
             body: { item_id: parseInt(itemId) }
         });
@@ -608,7 +724,7 @@ async function useItem(itemId) {
  */
 async function loadBosses() {
     try {
-        const data = await apiRequest('/api/game/bosses');
+        const data = await apiRequest('/game/bosses');
         gameState.bosses = data.bosses;
         
         renderBosses(data.bosses);
@@ -622,6 +738,7 @@ async function loadBosses() {
  */
 function renderBosses(bosses) {
     const list = document.getElementById('bosses-list');
+    if (!list) return;
     list.innerHTML = '';
     
     for (const boss of bosses) {
@@ -696,7 +813,7 @@ async function attackBoss() {
     btn.disabled = true;
     
     try {
-        const result = await apiRequest('/api/game/attack-boss', {
+        const result = await apiRequest('/game/attack-boss', {
             method: 'POST',
             body: { boss_id: gameState.currentBoss.id }
         });
@@ -776,9 +893,9 @@ let clanState = {
  */
 async function loadClan() {
     try {
-        const data = await apiRequest('/api/game/clan');
+        const data = await apiRequest('/game/clan');
         
-        if (data.success && data.data.in_clan) {
+        if (data?.success && data?.data?.in_clan) {
             clanState.clan = data.data.clan;
             renderClanScreen(data.data);
         } else {
@@ -794,6 +911,7 @@ async function loadClan() {
  */
 function renderClanScreen(data) {
     const content = document.getElementById('clan-content');
+    if (!content) return;
     const clan = data.clan;
     
     const roleEmoji = { leader: '👑', officer: '⭐', member: '👤' };
@@ -892,6 +1010,7 @@ function renderClanScreen(data) {
  */
 function renderNoClanScreen() {
     const content = document.getElementById('clan-content');
+    if (!content) return;
     
     content.innerHTML = `
         <div class="no-clan-card">
@@ -940,7 +1059,7 @@ async function createClan() {
     }
     
     try {
-        const result = await apiRequest('/api/game/clan/create', {
+        const result = await apiRequest('/game/clan/create', {
             method: 'POST',
             body: { name, description, is_public: isPublic }
         });
@@ -964,7 +1083,7 @@ async function createClan() {
  */
 async function loadClansList(search = '') {
     try {
-        const url = search ? '/api/game/clans?search=' + encodeURIComponent(search) : '/api/game/clans';
+        const url = search ? '/game/clans?search=' + encodeURIComponent(search) : '/game/clans';
         const data = await apiRequest(url);
         renderClansList(data.clans);
     } catch (error) {
@@ -976,23 +1095,24 @@ async function loadClansList(search = '') {
  * Отрисовка списка кланов
  */
 function renderClansList(clans) {
-    const list = document.getElementById('clans-list');
+    const list = getEl('clans-list');
+    if (!list) return;
     
-    if (!clans || clans.length === 0) {
-        list.innerHTML = '<div class="empty-message">Нет доступных кланов</div>';
-        return;
-    }
-    
-    list.innerHTML = clans.map(clan => {
-        return '<div class="clan-list-item" data-clan-id="' + clan.id + '">' +
-            '<div class="clan-list-icon">🏰</div>' +
-            '<div class="clan-list-info">' +
-                '<div class="clan-list-name">' + clan.name + '</div>' +
-                '<div class="clan-list-stats">👥 ' + (clan.member_count || 1) + ' | Уровень ' + clan.level + '</div>' +
-            '</div>' +
-            '<button class="join-btn" data-clan-id="' + clan.id + '">Вступить</button>' +
-        '</div>';
-    }).join('');
+    renderList(
+        list,
+        clans,
+        (clan) => {
+            return '<div class="clan-list-item" data-clan-id="' + clan.id + '">' +
+                '<div class="clan-list-icon">🏰</div>' +
+                '<div class="clan-list-info">' +
+                    '<div class="clan-list-name">' + clan.name + '</div>' +
+                    '<div class="clan-list-stats">👥 ' + (clan.member_count || 1) + ' | Уровень ' + clan.level + '</div>' +
+                '</div>' +
+                '<button class="join-btn" data-clan-id="' + clan.id + '">Вступить</button>' +
+            '</div>';
+        },
+        '<div class="empty-message">Нет доступных кланов</div>'
+    );
     
     list.querySelectorAll('.join-btn').forEach(btn => {
         btn.addEventListener('click', () => joinClan(parseInt(btn.dataset.clanId)));
@@ -1004,7 +1124,7 @@ function renderClansList(clans) {
  */
 async function joinClan(clanId) {
     try {
-        const result = await apiRequest('/api/game/clan/join', {
+        const result = await apiRequest('/game/clan/join', {
             method: 'POST',
             body: { clan_id: clanId }
         });
@@ -1030,7 +1150,7 @@ async function leaveClan() {
     if (!confirm('Ты уверен, что хочешь покинуть клан?')) return;
     
     try {
-        const result = await apiRequest('/api/game/clan/leave', {
+        const result = await apiRequest('/game/clan/leave', {
             method: 'POST',
             body: {}
         });
@@ -1052,7 +1172,7 @@ async function leaveClan() {
  */
 async function loadClanMembers() {
     try {
-        const data = await apiRequest('/api/game/clan/members');
+        const data = await apiRequest('/game/clan/members');
         if (data.success) showClanMembersModal(data.members);
     } catch (error) {
         console.error('Load members error:', error);
@@ -1119,7 +1239,7 @@ async function donateToClan(amount) {
     }
     
     try {
-        const result = await apiRequest('/api/game/clan/donate', {
+        const result = await apiRequest('/game/clan/donate', {
             method: 'POST',
             body: { amount }
         });
@@ -1157,7 +1277,7 @@ function showClanSettings() {
  */
 async function loadClanChat() {
     try {
-        const data = await apiRequest('/api/game/clan/chat');
+        const data = await apiRequest('/game/clan/chat');
         if (data.success) renderClanChat(data.data.messages);
     } catch (error) {
         console.error('Load chat error:', error);
@@ -1168,26 +1288,27 @@ async function loadClanChat() {
  * Отрисовка чата клана
  */
 function renderClanChat(messages) {
-    const container = document.getElementById('clan-chat-messages');
+    const container = getEl('clan-chat-messages');
+    if (!container) return;
     
-    if (!messages || messages.length === 0) {
-        container.innerHTML = '<div class="empty-message">Сообщений пока нет</div>';
-        return;
-    }
-    
-    container.innerHTML = messages.map(msg => {
-        const time = new Date(msg.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-        // Используем first_name если доступен, иначе username
-        const playerName = msg.first_name || msg.username || 'Игрок';
-        return '<div class="chat-message">' +
-            '<div class="chat-header">' +
-                '<span class="chat-author">' + playerName + '</span>' +
-                '<span class="chat-level">[' + msg.level + ']</span>' +
-                '<span class="chat-time">' + time + '</span>' +
-            '</div>' +
-            '<div class="chat-text">' + escapeHtml(msg.message) + '</div>' +
-        '</div>';
-    }).join('');
+    renderList(
+        container,
+        messages,
+        (msg) => {
+            const time = new Date(msg.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            // Используем first_name если доступен, иначе username
+            const playerName = msg.first_name || msg.username || 'Игрок';
+            return '<div class="chat-message">' +
+                '<div class="chat-header">' +
+                    '<span class="chat-author">' + playerName + '</span>' +
+                    '<span class="chat-level">[' + msg.level + ']</span>' +
+                    '<span class="chat-time">' + time + '</span>' +
+                '</div>' +
+                '<div class="chat-text">' + escapeHtml(msg.message) + '</div>' +
+            '</div>';
+        },
+        '<div class="empty-message">Сообщений пока нет</div>'
+    );
     
     container.scrollTop = container.scrollHeight;
 }
@@ -1202,7 +1323,7 @@ async function sendClanMessage() {
     if (!message) return;
     
     try {
-        const result = await apiRequest('/api/game/clan/chat', {
+        const result = await apiRequest('/game/clan/chat', {
             method: 'POST',
             body: { message }
         });
@@ -1235,7 +1356,7 @@ async function restoreEnergy() {
     }
     
     try {
-        const result = await apiRequest('/api/game/restore-energy', {
+        const result = await apiRequest('/game/restore-energy', {
             method: 'POST',
             body: { amount: 10 }
         });
@@ -1254,7 +1375,7 @@ async function restoreEnergy() {
  */
 async function loadRating(type = 'players') {
     try {
-        const data = await apiRequest(`/api/rating/${type}`);
+        const data = await apiRequest(`/rating/${type}`);
         
         renderRating(data.rating, type);
     } catch (error) {
@@ -1267,7 +1388,13 @@ async function loadRating(type = 'players') {
  */
 function renderRating(items, type) {
     const list = document.getElementById('rating-list');
+    if (!list) return;
     list.innerHTML = '';
+    
+    if (!items || items.length === 0) {
+        list.innerHTML = '<div class="empty-message">Нет данных для отображения</div>';
+        return;
+    }
     
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -1344,10 +1471,10 @@ async function watchAd() {
 async function loadBase() {
     try {
         // Загружаем данные о базе
-        const baseData = await apiRequest('/api/game/base');
+        const baseData = await apiRequest('/game/base');
         
         // Загружаем список доступных построек
-        const buildingsData = await apiRequest('/api/game/base/buildings');
+        const buildingsData = await apiRequest('/game/base/buildings');
         
         // Отображаем бонусы базы
         renderBaseBonuses(baseData);
@@ -1368,6 +1495,7 @@ async function loadBase() {
  */
 function renderBaseBonuses(baseData) {
     const bonusesGrid = document.getElementById('bonuses-grid');
+    if (!bonusesGrid) return;
     const bonuses = baseData.total_bonuses || {};
     
     if (Object.keys(bonuses).length === 0) {
@@ -1411,6 +1539,7 @@ function renderBaseBonuses(baseData) {
  */
 function renderPlayerBuildings(buildings) {
     const buildingsList = document.getElementById('buildings-list');
+    if (!buildingsList) return;
     
     if (!buildings || buildings.length === 0) {
         buildingsList.innerHTML = '<p class="no-buildings">У вас пока нет построек</p>';
@@ -1442,63 +1571,15 @@ function renderPlayerBuildings(buildings) {
  * Отображение доступных построек
  */
 function renderAvailableBuildings(buildings) {
-    const availableList = document.getElementById('available-list');
+    const availableList = getEl('available-list');
+    if (!availableList) return;
     
     if (!buildings || buildings.length === 0) {
         availableList.innerHTML = '<p>Нет доступных построек</p>';
         return;
     }
     
-    availableList.innerHTML = buildings.map(b => {
-        const isBuilt = b.is_built;
-        const canBuild = b.requirements?.has_required_building && 
-                         (gameState.player?.level || 1) >= b.required_level;
-        
-        let statusClass = '';
-        let statusText = '';
-        let buttonDisabled = '';
-        
-        if (!b.requirements?.has_required_building) {
-            statusClass = 'locked';
-            statusText = `Требуется: ${b.requirements?.required_building}`;
-            buttonDisabled = 'disabled';
-        } else if ((gameState.player?.level || 1) < b.required_level) {
-            statusClass = 'locked';
-            statusText = `Требуется уровень: ${b.required_level}`;
-            buttonDisabled = 'disabled';
-        } else if (b.current_level >= b.max_level) {
-            statusClass = 'maxed';
-            statusText = 'Макс. уровень';
-            buttonDisabled = 'disabled';
-        } else if (isBuilt) {
-            statusClass = 'upgradable';
-            statusText = `Уровень ${b.current_level}/${b.max_level}`;
-        } else {
-            statusClass = 'available';
-            statusText = 'Доступно';
-        }
-        
-        return `
-            <div class="available-building-item ${statusClass}" style="border-left: 4px solid ${b.color}">
-                <div class="building-header">
-                    <span class="building-icon">${b.icon}</span>
-                    <span class="building-name">${b.name}</span>
-                    ${b.current_level > 0 ? `<span class="building-level">Ур. ${b.current_level}</span>` : ''}
-                </div>
-                <div class="building-desc">${b.description || ''}</div>
-                <div class="building-cost">
-                    <span class="cost-coins">💰 ${b.upgrade_cost?.coins || 0}</span>
-                    ${b.upgrade_cost?.resources ? Object.entries(b.upgrade_cost.resources).map(([k, v]) => 
-                        `<span class="cost-resource">${k}: ${v}</span>`
-                    ).join('') : ''}
-                </div>
-                <div class="building-status">${statusText}</div>
-                <button class="build-btn" onclick="buildBuilding('${b.code}')" ${buttonDisabled}>
-                    ${isBuilt ? 'Улучшить' : 'Построить'}
-                </button>
-            </div>
-        `;
-    }).join('');
+    availableList.innerHTML = buildings.map((b) => renderAvailableBuildingCard(b, true)).join('');
     
     // Добавляем обработчики для табов
     document.querySelectorAll('.build-tab').forEach(tab => {
@@ -1514,7 +1595,8 @@ function renderAvailableBuildings(buildings) {
  * Фильтрация построек по типу
  */
 function filterBuildings(type, buildings) {
-    const availableList = document.getElementById('available-list');
+    const availableList = getEl('available-list');
+    if (!availableList) return;
     
     const filtered = type === 'all' 
         ? buildings 
@@ -1526,53 +1608,7 @@ function filterBuildings(type, buildings) {
         return;
     }
     
-    availableList.innerHTML = filtered.map(b => {
-            const isBuilt = b.is_built;
-            const canBuild = b.requirements?.has_required_building && 
-                             (gameState.player?.level || 1) >= b.required_level;
-            
-            let statusClass = '';
-            let statusText = '';
-            let buttonDisabled = '';
-            
-            if (!b.requirements?.has_required_building) {
-                statusClass = 'locked';
-                statusText = `Требуется: ${b.requirements?.required_building}`;
-                buttonDisabled = 'disabled';
-            } else if ((gameState.player?.level || 1) < b.required_level) {
-                statusClass = 'locked';
-                statusText = `Требуется уровень: ${b.required_level}`;
-                buttonDisabled = 'disabled';
-            } else if (b.current_level >= b.max_level) {
-                statusClass = 'maxed';
-                statusText = 'Макс. уровень';
-                buttonDisabled = 'disabled';
-            } else if (isBuilt) {
-                statusClass = 'upgradable';
-                statusText = `Уровень ${b.current_level}/${b.max_level}`;
-            } else {
-                statusClass = 'available';
-                statusText = 'Доступно';
-            }
-            
-            return `
-                <div class="available-building-item ${statusClass}" style="border-left: 4px solid ${b.color}">
-                    <div class="building-header">
-                        <span class="building-icon">${b.icon}</span>
-                        <span class="building-name">${b.name}</span>
-                        ${b.current_level > 0 ? `<span class="building-level">Ур. ${b.current_level}</span>` : ''}
-                    </div>
-                    <div class="building-desc">${b.description || ''}</div>
-                    <div class="building-cost">
-                        <span class="cost-coins">💰 ${b.upgrade_cost?.coins || 0}</span>
-                    </div>
-                    <div class="building-status">${statusText}</div>
-                    <button class="build-btn" onclick="buildBuilding('${b.code}')" ${buttonDisabled}>
-                        ${isBuilt ? 'Улучшить' : 'Построить'}
-                    </button>
-                </div>
-            `;
-        }).join('');
+    availableList.innerHTML = filtered.map((b) => renderAvailableBuildingCard(b, false)).join('');
 }
 
 /**
@@ -1580,7 +1616,7 @@ function filterBuildings(type, buildings) {
  */
 async function buildBuilding(buildingCode) {
     try {
-        const result = await apiRequest('/api/game/base/build', {
+        const result = await apiRequest('/game/base/build', {
             method: 'POST',
             body: { building_code: buildingCode }
         });
@@ -1623,7 +1659,7 @@ async function checkPlayerStatus() {
     if (!gameState.player) return;
     
     try {
-        const result = await apiRequest('/api/game/status/check', {
+        const result = await apiRequest('/game/status/check', {
             method: 'POST',
             body: {}
         });
@@ -1667,7 +1703,7 @@ async function healBrokenBones() {
     
     // Пробуем лечение
     try {
-        const result = await apiRequest('/api/game/status/heal', {
+        const result = await apiRequest('/game/status/heal', {
             method: 'POST',
             body: { type: 'bone', use_stars: false }
         });
@@ -1697,7 +1733,7 @@ async function healInfections() {
     }
     
     try {
-        const result = await apiRequest('/api/game/status/heal', {
+        const result = await apiRequest('/game/status/heal', {
             method: 'POST',
             body: { type: 'infection', use_stars: false }
         });
@@ -1748,14 +1784,14 @@ function updateBalanceDisplay(newBalance) {
     balanceElements.forEach(el => {
         if (el) el.textContent = formatNumber(newBalance);
     });
-    if (gameState) gameState.player.balance = newBalance;
+    if (gameState?.player) gameState.player.balance = newBalance;
 }
 
 /**
  * Загрузка данных магазина
  */
 function loadShop() {
-    return apiRequest('/api/game/shop');
+    return apiRequest('/game/shop');
 }
 
 // Функция openShop() перенесена в game-store.js
@@ -1780,7 +1816,7 @@ function renderLocations(locations) {
  */
 async function loadQuests() {
     try {
-        const data = await apiRequest('/api/game/quests');
+        const data = await apiRequest('/game/quests');
         return data;
     } catch (e) {
         console.error('Ошибка загрузки квестов:', e);
@@ -1792,7 +1828,7 @@ async function loadQuests() {
  * Загрузка рейтинга игроков
  */
 function loadRatings(type = 'score') {
-    return apiRequest(`/api/rating/${type}`);
+    return loadRating(type);
 }
 
 /**
@@ -1860,29 +1896,29 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // Кнопка поиска
-    document.getElementById('search-btn').addEventListener('click', searchLoot);
+    document.getElementById('search-btn')?.addEventListener('click', searchLoot);
     
     // Кнопка карты
-    document.getElementById('map-btn').addEventListener('click', () => showScreen('map'));
+    document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
     
     // Кнопка инвентаря
-    document.getElementById('inventory-btn').addEventListener('click', () => showScreen('inventory'));
+    document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
     
     // Кнопка боссов
-    document.getElementById('bosses-btn').addEventListener('click', () => showScreen('bosses'));
+    document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
     
     // Кнопка магазина
-    document.getElementById('shop-btn').addEventListener('click', () => showScreen('shop'));
+    document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
     
     // Кнопка рейтинга
-    document.getElementById('rating-btn').addEventListener('click', () => showScreen('rating'));
+    document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
     
     // Кнопка PvP
-    document.getElementById('pvp-btn').addEventListener('click', () => showScreen('pvp-players'));
+    document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
     
     // Кнопки лечения переломов и инфекций
-    document.getElementById('heal-bones-btn').addEventListener('click', healBrokenBones);
-    document.getElementById('heal-infections-btn').addEventListener('click', healInfections);
+    document.getElementById('heal-bones-btn')?.addEventListener('click', healBrokenBones);
+    document.getElementById('heal-infections-btn')?.addEventListener('click', healInfections);
     
     // Кнопка присоединения к сезону
     document.getElementById('season-join-btn')?.addEventListener('click', joinSeason);
@@ -1894,17 +1930,17 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('pvp-claim-rewards-btn')?.addEventListener('click', claimPVPRewards);
     
     // Атака босса
-    document.getElementById('attack-boss-btn').addEventListener('click', attackBoss);
+    document.getElementById('attack-boss-btn')?.addEventListener('click', attackBoss);
     
     // Закрытие модального окна
-    document.getElementById('modal-close').addEventListener('click', () => {
-        document.getElementById('modal').classList.remove('active');
+    document.getElementById('modal-close')?.addEventListener('click', () => {
+        document.getElementById('modal')?.classList.remove('active');
     });
     
     // Закрытие модального по клику вне
-    document.getElementById('modal').addEventListener('click', (e) => {
+    document.getElementById('modal')?.addEventListener('click', (e) => {
         if (e.target.id === 'modal') {
-            document.getElementById('modal').classList.remove('active');
+            document.getElementById('modal')?.classList.remove('active');
         }
     });
     
@@ -2005,7 +2041,7 @@ let currentAchievementCategory = null;
  */
 async function loadAchievements() {
     try {
-        const data = await apiRequest('/api/game/achievements/progress');
+        const data = await apiRequest('/game/achievements/progress');
         
         if (data && data.progress) {
             renderAchievementsStats(data.stats);
@@ -2137,7 +2173,10 @@ function renderAchievementsList(achievements) {
  */
 async function claimAchievement(achievementId) {
     try {
-        const data = await apiRequest('/api/game/achievements/claim', 'POST', { achievement_id: achievementId });
+        const data = await apiRequest('/game/achievements/claim', {
+            method: 'POST',
+            body: { achievement_id: achievementId }
+        });
         
         if (data.success) {
             alert(data.message);
@@ -2169,7 +2208,7 @@ async function loadMarketListings() {
         const type = document.getElementById('market-type-filter')?.value || '';
         const sort = document.getElementById('market-sort-filter')?.value || 'date';
 
-        let url = '/api/game/market/listings?';
+        let url = '/game/market/listings?';
         if (search) url += `search=${encodeURIComponent(search)}&`;
         if (type) url += `type=${encodeURIComponent(type)}&`;
         url += `sort=${encodeURIComponent(sort)}`;
@@ -2185,39 +2224,40 @@ async function loadMarketListings() {
  * Отображение списка объявлений
  */
 function renderMarketListings(listings) {
-    const container = document.getElementById('market-listings-list');
-    
-    if (!listings || listings.length === 0) {
-        container.innerHTML = '<div class="empty-message">На рынке пока нет объявлений</div>';
-        return;
-    }
+    const container = getEl('market-listings-list');
+    if (!container) return;
 
-    container.innerHTML = listings.map(listing => {
-        const item = listing.item;
-        const rarityClass = `rarity-${item.rarity || 'common'}`;
-        const expiresAt = new Date(listing.expires_at);
-        const now = new Date();
-        const hoursLeft = Math.max(0, Math.floor((expiresAt - now) / 3600000));
+    renderList(
+        container,
+        listings,
+        (listing) => {
+            const item = listing.item;
+            const rarityClass = `rarity-${item.rarity || 'common'}`;
+            const expiresAt = new Date(listing.expires_at);
+            const now = new Date();
+            const hoursLeft = Math.max(0, Math.floor((expiresAt - now) / 3600000));
 
-        return `
-            <div class="market-listing-card ${rarityClass}" data-listing-id="${listing.id}">
-                <div class="listing-item-icon">${item.icon || '📦'}</div>
-                <div class="listing-item-info">
-                    <div class="listing-item-name">${item.name}</div>
-                    <div class="listing-item-meta">
-                        <span class="quantity">x${listing.quantity}</span>
-                        <span class="seller">Продавец: ${listing.seller?.name || 'Неизвестный'} (ур. ${listing.seller?.level || 1})</span>
+            return `
+                <div class="market-listing-card ${rarityClass}" data-listing-id="${listing.id}">
+                    <div class="listing-item-icon">${item.icon || '📦'}</div>
+                    <div class="listing-item-info">
+                        <div class="listing-item-name">${item.name}</div>
+                        <div class="listing-item-meta">
+                            <span class="quantity">x${listing.quantity}</span>
+                            <span class="seller">Продавец: ${listing.seller?.name || 'Неизвестный'} (ур. ${listing.seller?.level || 1})</span>
+                        </div>
+                        <div class="listing-expiry">Осталось: ${hoursLeft}ч</div>
                     </div>
-                    <div class="listing-expiry">Осталось: ${hoursLeft}ч</div>
+                    <div class="listing-price">
+                        <div class="price-coins">${listing.total_price} 🪙</div>
+                        ${listing.stars_price > 0 ? `<div class="price-stars">${listing.stars_price * listing.quantity} ⭐</div>` : ''}
+                        <button class="buy-btn" data-listing-id="${listing.id}">Купить</button>
+                    </div>
                 </div>
-                <div class="listing-price">
-                    <div class="price-coins">${listing.total_price} 🪙</div>
-                    ${listing.stars_price > 0 ? `<div class="price-stars">${listing.stars_price * listing.quantity} ⭐</div>` : ''}
-                    <button class="buy-btn" data-listing-id="${listing.id}">Купить</button>
-                </div>
-            </div>
-        `;
-    }).join('');
+            `;
+        },
+        '<div class="empty-message">На рынке пока нет объявлений</div>'
+    );
 
     // Обработчики кнопок покупки
     container.querySelectorAll('.buy-btn').forEach(btn => {
@@ -2231,7 +2271,7 @@ function renderMarketListings(listings) {
 async function openBuyModal(listingId) {
     try {
         // Находим объявление
-        const data = await apiRequest('/api/game/market/listings');
+        const data = await apiRequest('/game/market/listings');
         const listing = data.listings?.find(l => l.id === listingId);
 
         if (!listing) {
@@ -2245,6 +2285,8 @@ async function openBuyModal(listingId) {
         const modal = document.getElementById('market-buy-modal');
         const infoDiv = document.getElementById('market-buy-item-info');
         const summaryDiv = document.getElementById('market-buy-summary');
+
+        if (!modal || !infoDiv || !summaryDiv) return;
 
         infoDiv.innerHTML = `
             <div class="buy-item-display">
@@ -2286,7 +2328,7 @@ async function confirmBuyFromMarket() {
     if (!currentBuyListingId) return;
 
     try {
-        const result = await apiRequest('/api/game/market/buy', {
+        const result = await apiRequest('/game/market/buy', {
             method: 'POST',
             body: { listing_id: currentBuyListingId }
         });
@@ -2317,17 +2359,19 @@ async function confirmBuyFromMarket() {
  */
 async function loadMyListings() {
     try {
-        const data = await apiRequest('/api/game/market/my');
+        const data = await apiRequest('/game/market/my');
         
         // Обновляем информацию о лимитах
         const infoDiv = document.getElementById('market-my-info');
-        infoDiv.innerHTML = `
-            <div class="market-limits">
-                <span>Лимит: ${data.limit}</span>
-                <span>Активных: ${data.active_count}</span>
-                <span>Свободно: ${data.remaining_slots}</span>
-            </div>
-        `;
+        if (infoDiv) {
+            infoDiv.innerHTML = `
+                <div class="market-limits">
+                    <span>Лимит: ${data.limit}</span>
+                    <span>Активных: ${data.active_count}</span>
+                    <span>Свободно: ${data.remaining_slots}</span>
+                </div>
+            `;
+        }
 
         renderMyListings(data.listings);
     } catch (error) {
@@ -2339,53 +2383,54 @@ async function loadMyListings() {
  * Отображение своих объявлений
  */
 function renderMyListings(listings) {
-    const container = document.getElementById('market-my-list');
+    const container = getEl('market-my-list');
+    if (!container) return;
 
-    if (!listings || listings.length === 0) {
-        container.innerHTML = '<div class="empty-message">У вас пока нет объявлений</div>';
-        return;
-    }
+    renderList(
+        container,
+        listings,
+        (listing) => {
+            const item = listing.item;
+            const rarityClass = `rarity-${item.rarity || 'common'}`;
+            const statusColors = {
+                'active': '#4CAF50',
+                'sold': '#2196F3',
+                'cancelled': '#FF9800',
+                'expired': '#9E9E9E'
+            };
+            const statusText = {
+                'active': 'Активно',
+                'sold': 'Продано',
+                'cancelled': 'Отменено',
+                'expired': 'Истекло'
+            };
 
-    container.innerHTML = listings.map(listing => {
-        const item = listing.item;
-        const rarityClass = `rarity-${item.rarity || 'common'}`;
-        const statusColors = {
-            'active': '#4CAF50',
-            'sold': '#2196F3',
-            'cancelled': '#FF9800',
-            'expired': '#9E9E9E'
-        };
-        const statusText = {
-            'active': 'Активно',
-            'sold': 'Продано',
-            'cancelled': 'Отменено',
-            'expired': 'Истекло'
-        };
-
-        return `
-            <div class="market-listing-card my-listing ${rarityClass}">
-                <div class="listing-status" style="background: ${statusColors[listing.status]}">${statusText[listing.status]}</div>
-                <div class="listing-item-icon">${item.icon || '📦'}</div>
-                <div class="listing-item-info">
-                    <div class="listing-item-name">${item.name}</div>
-                    <div class="listing-item-meta">
-                        <span class="quantity">x${listing.quantity}</span>
-                        <span class="price">${listing.total_price} 🪙</span>
+            return `
+                <div class="market-listing-card my-listing ${rarityClass}">
+                    <div class="listing-status" style="background: ${statusColors[listing.status]}">${statusText[listing.status]}</div>
+                    <div class="listing-item-icon">${item.icon || '📦'}</div>
+                    <div class="listing-item-info">
+                        <div class="listing-item-name">${item.name}</div>
+                        <div class="listing-item-meta">
+                            <span class="quantity">x${listing.quantity}</span>
+                            <span class="price">${listing.total_price} 🪙</span>
+                        </div>
+                        <div class="listing-stats">
+                            <span>Просмотров: ${listing.views}</span>
+                            <span>Продлений: ${listing.times_renewed}/3</span>
+                        </div>
                     </div>
-                    <div class="listing-stats">
-                        <span>Просмотров: ${listing.views}</span>
-                        <span>Продлений: ${listing.times_renewed}/3</span>
+                    ${listing.status === 'active' ? `
+                    <div class="listing-actions">
+                        <button class="renew-btn" data-listing-id="${listing.id}">Продлить</button>
+                        <button class="cancel-btn" data-listing-id="${listing.id}">Отменить</button>
                     </div>
+                    ` : ''}
                 </div>
-                ${listing.status === 'active' ? `
-                <div class="listing-actions">
-                    <button class="renew-btn" data-listing-id="${listing.id}">Продлить</button>
-                    <button class="cancel-btn" data-listing-id="${listing.id}">Отменить</button>
-                </div>
-                ` : ''}
-            </div>
-        `;
-    }).join('');
+            `;
+        },
+        '<div class="empty-message">У вас пока нет объявлений</div>'
+    );
 
     // Обработчики кнопок
     container.querySelectorAll('.renew-btn').forEach(btn => {
@@ -2413,7 +2458,7 @@ async function renewListing(listingId) {
     }
 
     try {
-        const result = await apiRequest('/api/game/market/renew', {
+        const result = await apiRequest('/game/market/renew', {
             method: 'POST',
             body: { listing_id: listingId, duration }
         });
@@ -2438,7 +2483,7 @@ async function cancelListing(listingId) {
     }
 
     try {
-        const result = await apiRequest('/api/game/market/cancel', {
+        const result = await apiRequest('/game/market/cancel', {
             method: 'POST',
             body: { listing_id: listingId }
         });
@@ -2460,26 +2505,28 @@ async function cancelListing(listingId) {
  */
 async function loadMarketHistory() {
     try {
-        const data = await apiRequest('/api/game/market/history');
+        const data = await apiRequest('/game/market/history');
         
         // Обновляем статистику
         const statsDiv = document.getElementById('market-history-stats');
-        statsDiv.innerHTML = `
-            <div class="history-stats-grid">
-                <div class="stat-box">
-                    <span class="stat-label">Всего продано</span>
-                    <span class="stat-value">${data.total_sales} 🪙</span>
+        if (statsDiv) {
+            statsDiv.innerHTML = `
+                <div class="history-stats-grid">
+                    <div class="stat-box">
+                        <span class="stat-label">Всего продано</span>
+                        <span class="stat-value">${data.total_sales} 🪙</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">Всего куплено</span>
+                        <span class="stat-value">${data.total_purchases} 🪙</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">Комиссия</span>
+                        <span class="stat-value">${data.total_commission} 🪙</span>
+                    </div>
                 </div>
-                <div class="stat-box">
-                    <span class="stat-label">Всего куплено</span>
-                    <span class="stat-value">${data.total_purchases} 🪙</span>
-                </div>
-                <div class="stat-box">
-                    <span class="stat-label">Комиссия</span>
-                    <span class="stat-value">${data.total_commission} 🪙</span>
-                </div>
-            </div>
-        `;
+            `;
+        }
 
         renderMarketHistory(data.all);
     } catch (error) {
@@ -2491,14 +2538,13 @@ async function loadMarketHistory() {
  * Отображение истории сделок
  */
 function renderMarketHistory(history) {
-    const container = document.getElementById('market-history-list');
+    const container = getEl('market-history-list');
+    if (!container) return;
 
-    if (!history || history.length === 0) {
-        container.innerHTML = '<div class="empty-message">История пуста</div>';
-        return;
-    }
-
-    container.innerHTML = history.map(item => {
+    renderList(
+        container,
+        history,
+        (item) => {
         const itemData = item.item;
         const isSale = item.transaction_type === 'sale';
         const date = new Date(item.created_at).toLocaleDateString('ru-RU');
@@ -2519,7 +2565,9 @@ function renderMarketHistory(history) {
                 </div>
             </div>
         `;
-    }).join('');
+        },
+        '<div class="empty-message">История пуста</div>'
+    );
 }
 
 /**
@@ -2527,10 +2575,11 @@ function renderMarketHistory(history) {
  */
 async function loadMarketCreateForm() {
     try {
-        const data = await apiRequest('/api/game/inventory');
+        const data = await apiRequest('/game/inventory');
         const items = data.items;
         
         const grid = document.getElementById('market-inventory-grid');
+        if (!grid) return;
         
         if (!items || Object.keys(items).length === 0) {
             grid.innerHTML = '<div class="empty-message">Инвентарь пуст</div>';
@@ -2538,7 +2587,7 @@ async function loadMarketCreateForm() {
         }
 
         // Получаем информацию о предметах
-        const itemsInfo = await apiRequest('/api/game/items');
+        const itemsInfo = await apiRequest('/game/items');
         const itemsMap = {};
         itemsInfo.items?.forEach(item => {
             itemsMap[item.id] = item;
@@ -2577,16 +2626,20 @@ async function loadMarketCreateForm() {
 
                 // Обновляем отображение выбранного предмета
                 const display = document.getElementById('market-selected-item');
-                display.innerHTML = `
-                    <span class="selected-icon">${itemInfo.icon || '📦'}</span>
-                    <span class="selected-name">${itemInfo.name}</span>
-                    <span class="selected-qty">x${quantity} в наличии</span>
-                `;
+                if (display) {
+                    display.innerHTML = `
+                        <span class="selected-icon">${itemInfo.icon || '📦'}</span>
+                        <span class="selected-name">${itemInfo.name}</span>
+                        <span class="selected-qty">x${quantity} в наличии</span>
+                    `;
+                }
 
                 // Обновляем макс. количество
                 const qtyInput = document.getElementById('market-quantity');
-                qtyInput.max = quantity;
-                qtyInput.value = Math.min(quantity, 1);
+                if (qtyInput) {
+                    qtyInput.max = quantity;
+                    qtyInput.value = Math.min(quantity, 1);
+                }
 
                 updateMarketSummary();
             });
@@ -2636,7 +2689,7 @@ async function createMarketListing() {
     }
 
     try {
-        const result = await apiRequest('/api/game/market/create', {
+        const result = await apiRequest('/game/market/create', {
             method: 'POST',
             body: {
                 item_id: marketSelectedItem.id,
@@ -2652,10 +2705,10 @@ async function createMarketListing() {
             
             // Очищаем форму
             marketSelectedItem = null;
-            document.getElementById('market-selected-item').innerHTML = '<span class="placeholder">Выберите предмет</span>';
-            document.getElementById('market-quantity').value = 1;
-            document.getElementById('market-price').value = '';
-            document.getElementById('market-stars-price').value = 0;
+            document.getElementById('market-selected-item')?.innerHTML = '<span class="placeholder">Выберите предмет</span>';
+            document.getElementById('market-quantity')?.value = 1;
+            document.getElementById('market-price')?.value = '';
+            document.getElementById('market-stars-price')?.value = 0;
             
             // Возвращаемся на экран барахолки
             showScreen('market');
@@ -2675,13 +2728,14 @@ async function createMarketListing() {
  */
 async function loadPVPGamePlayers() {
     try {
-        const result = await apiRequest('/api/game/pvp/players');
+        const result = await apiRequest('/game/pvp/players');
         
         const indicator = document.getElementById('pvp-zone-indicator');
         const list = document.getElementById('pvp-players-list');
+        if (!indicator || !list) return;
         
-        if (!result.isRedZone) {
-            indicator.innerHTML = '<div class="pvp-zone-safe">🛡️ Безопасная зона - PvP недоступно</div>';
+        if (result.available === false) {
+            indicator.innerHTML = `<div class="pvp-zone-safe">🛡️ ${result.message || 'PvP недоступно'}</div>`;
             list.innerHTML = '<div class="empty-message">Перейдите в локацию с опасностью 6+ для PvP</div>';
             return;
         }
@@ -2699,7 +2753,7 @@ async function loadPVPGamePlayers() {
                     <div class="pvp-player-name">${player.username || 'Игрок'}</div>
                     <div class="pvp-player-stats">
                         <span>Уровень: ${player.level}</span>
-                        <span>HP: ${player.health}/${player.maxHealth}</span>
+                        <span>HP: ${player.health}/${player.max_health}</span>
                     </div>
                     <div class="pvp-player-pvp">
                         <span>Побед: ${player.pvpWins || 0}</span>
@@ -2707,7 +2761,7 @@ async function loadPVPGamePlayers() {
                         <span>Серия: ${player.pvpStreak || 0}</span>
                     </div>
                 </div>
-                <button class="pvp-attack-player-btn" onclick="startPVPFight(${player.id}, '${player.username || 'Игрок'}', ${player.level}, ${player.health}, ${player.maxHealth})">
+                <button class="pvp-attack-player-btn" onclick="startPVPFight(${player.id}, '${player.username || 'Игрок'}', ${player.level}, ${player.health}, ${player.max_health})">
                     ⚔️ Атаковать
                 </button>
             </div>
@@ -2723,15 +2777,15 @@ async function loadPVPGamePlayers() {
  */
 async function startPVPFight(targetId, targetName, targetLevel, targetHealth, targetMaxHealth) {
     try {
-        const result = await apiRequest('/api/game/pvp/attack', {
+        const result = await apiRequest('/game/pvp/attack', {
             method: 'POST',
-            body: { targetId: targetId }
+            body: { target_id: targetId }
         });
         
         if (result.success) {
             // Сохраняем данные боя
             gameState.pvpMatch = {
-                matchId: result.matchId,
+                battleId: result.battle_id,
                 targetId: targetId,
                 targetName: targetName,
                 targetLevel: targetLevel
@@ -2743,7 +2797,11 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
             document.getElementById('pvp-attacker-name').textContent = 'Вы';
             document.getElementById('pvp-attacker-level').textContent = `Уровень: ${gameState.player?.level || 1}`;
             
-            updatePVPHealth('attacker', gameState.player?.health || 100, gameState.player?.maxHealth || 100);
+            updatePVPHealth(
+                'attacker',
+                gameState.player?.status?.health || 100,
+                gameState.player?.status?.max_health || 100
+            );
             updatePVPHealth('defender', targetHealth, targetMaxHealth);
             
             document.getElementById('pvp-battle-log').innerHTML = `
@@ -2768,15 +2826,15 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
  * Атака в PvP
  */
 async function attackPVPTarget() {
-    if (!gameState.pvpMatch || !gameState.pvpMatch.matchId) {
+    if (!gameState.pvpMatch || !gameState.pvpMatch.battleId) {
         showModal('❌ Ошибка', 'Бой не найден');
         return;
     }
     
     try {
-        const result = await apiRequest('/api/game/pvp/attack-hit', {
+        const result = await apiRequest('/game/pvp/attack-hit', {
             method: 'POST',
-            body: { matchId: gameState.pvpMatch.matchId }
+            body: { battle_id: gameState.pvpMatch.battleId }
         });
         
         if (result.success) {
@@ -2788,13 +2846,19 @@ async function attackPVPTarget() {
             } else {
                 // Обновляем здоровье
                 if (result.hit) {
-                    updatePVPHealth('attacker', result.hit.yourHealth, gameState.player?.maxHealth || 100);
+                    updatePVPHealth(
+                        'attacker',
+                        result.hit.yourHealth,
+                        gameState.player?.status?.max_health || 100
+                    );
                     updatePVPHealth('defender', result.hit.targetHealth, result.hit.maxHealth);
                     
                     // Добавляем в лог
                     const log = document.getElementById('pvp-battle-log');
-                    log.innerHTML += `<p>${result.message}</p>`;
-                    log.scrollTop = log.scrollHeight;
+                    if (log) {
+                        log.innerHTML += `<p>${result.message}</p>`;
+                        log.scrollTop = log.scrollHeight;
+                    }
                 }
             }
             
@@ -2880,7 +2944,7 @@ async function claimPVPRewards() {
  */
 async function loadPVPStats() {
     try {
-        const result = await apiRequest('/api/game/pvp/stats');
+        const result = await apiRequest('/game/pvp/stats');
         
         if (result.success && result.stats) {
             const stats = result.stats;
@@ -2907,6 +2971,10 @@ async function loadPVPStats() {
                     const diff = expiresAt - now;
                     if (diff <= 0) {
                         cooldownDiv.style.display = 'none';
+                        if (window.pvpCooldownTimerId) {
+                            clearInterval(window.pvpCooldownTimerId);
+                            window.pvpCooldownTimerId = null;
+                        }
                         return;
                     }
                     const minutes = Math.floor(diff / 60000);
@@ -2915,9 +2983,14 @@ async function loadPVPStats() {
                 };
                 
                 updateTimer();
-                setInterval(updateTimer, 1000);
+                if (window.pvpCooldownTimerId) clearInterval(window.pvpCooldownTimerId);
+                window.pvpCooldownTimerId = setInterval(updateTimer, 1000);
             } else {
                 cooldownDiv.style.display = 'none';
+                if (window.pvpCooldownTimerId) {
+                    clearInterval(window.pvpCooldownTimerId);
+                    window.pvpCooldownTimerId = null;
+                }
             }
             
             // Последние бои
@@ -2962,7 +3035,7 @@ async function loadPVPStats() {
  */
 async function loadReferralCode() {
     try {
-        const result = await apiRequest('/api/game/referral/code');
+        const result = await apiRequest('/game/referral/code');
         
         if (result.success) {
             document.getElementById('referral-code').textContent = result.code;
@@ -2985,7 +3058,7 @@ async function loadReferralCode() {
  */
 async function loadReferralStats() {
     try {
-        const result = await apiRequest('/api/game/referral/stats');
+        const result = await apiRequest('/game/referral/stats');
         
         if (result.success) {
             document.getElementById('total-referrals').textContent = result.stats.total_referrals;
@@ -3002,7 +3075,7 @@ async function loadReferralStats() {
  */
 async function loadReferralsList() {
     try {
-        const result = await apiRequest('/api/game/referral/list');
+        const result = await apiRequest('/game/referral/list');
         
         const listContainer = document.getElementById('referrals-list');
         
@@ -3064,7 +3137,7 @@ async function loadSeasonsScreen() {
  */
 async function loadCurrentSeason() {
     try {
-        const result = await apiRequest('/api/game/seasons/current');
+        const result = await apiRequest('/game/seasons/current');
         
         const seasonCurrent = document.getElementById('season-current');
         const seasonJoinSection = document.getElementById('season-join-section');
@@ -3115,7 +3188,7 @@ async function loadCurrentSeason() {
  */
 async function loadSeasonEvents() {
     try {
-        const result = await apiRequest('/api/game/seasons/events');
+        const result = await apiRequest('/game/seasons/events');
         
         const eventsList = document.getElementById('events-list');
         const modifiersList = document.getElementById('modifiers-list');
@@ -3200,7 +3273,7 @@ async function loadSeasonEvents() {
  */
 async function loadSeasonRating() {
     try {
-        const result = await apiRequest('/api/game/seasons/rating');
+        const result = await apiRequest('/game/seasons/rating');
         
         const topRating = document.getElementById('season-top-rating');
         const myRating = document.getElementById('season-my-rating');
@@ -3254,7 +3327,7 @@ async function loadSeasonRating() {
  */
 async function loadDailyTasks() {
     try {
-        const result = await apiRequest('/api/game/daily-tasks');
+        const result = await apiRequest('/game/daily-tasks');
         
         const tasksProgress = document.getElementById('daily-tasks-progress');
         const tasksList = document.getElementById('daily-tasks-list');
@@ -3360,7 +3433,7 @@ function setupSeasonRatingTabs() {
  */
 async function joinSeason() {
     try {
-        const result = await apiRequest('/api/game/seasons/join', {
+        const result = await apiRequest('/game/seasons/join', {
             method: 'POST'
         });
         
@@ -3382,9 +3455,9 @@ async function joinSeason() {
  */
 async function claimDailyTask(taskId) {
     try {
-        const result = await apiRequest('/api/game/daily-tasks/claim', {
+        const result = await apiRequest('/game/daily-tasks/claim', {
             method: 'POST',
-            body: JSON.stringify({ task_id: taskId })
+            body: { task_id: taskId }
         });
         
         if (result.success) {
@@ -3427,9 +3500,9 @@ async function changeReferralCode() {
     }
     
     try {
-        const result = await apiRequest('/api/game/referral/code', {
+        const result = await apiRequest('/game/referral/code', {
             method: 'PUT',
-            body: JSON.stringify({ new_code: newCode })
+            body: { new_code: newCode }
         });
         
         if (result.success) {
@@ -3459,9 +3532,9 @@ async function useReferralCode() {
     }
     
     try {
-        const result = await apiRequest('/api/game/referral/use', {
+        const result = await apiRequest('/game/referral/use', {
             method: 'POST',
-            body: JSON.stringify({ code: code })
+            body: { code: code }
         });
         
         if (result.success) {
