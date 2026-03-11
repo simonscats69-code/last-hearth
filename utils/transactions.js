@@ -451,6 +451,7 @@ function parseJSONField(str, defaultValue = {}) {
     try {
         return JSON.parse(str);
     } catch (error) {
+        console.error('JSON.parse failed in transactions.js:', typeof str, str?.toString?.().substring(0, 100));
         return defaultValue;
     }
 }

@@ -48,7 +48,7 @@ function validateTelegramInitData(initData, botToken) {
             const userData = JSON.parse(data.user);
             userId = userData.id;
         } catch (e) {
-            // ignore parse errors
+            console.error('JSON.parse user failed:', typeof data.user, data.user?.toString?.().substring(0, 100));
         }
         
         // Сортируем данные (кроме hash) и создаём строку
@@ -84,7 +84,13 @@ function validateTelegramInitData(initData, botToken) {
         }
 
         // Парсим данные пользователя
-        const user = JSON.parse(data.user);
+        let user;
+        try {
+            user = JSON.parse(data.user);
+        } catch(e) {
+            console.error('JSON.parse user failed:', typeof data.user, data.user?.toString?.().substring(0, 100));
+            throw e;
+        }
         
         return {
             user: user,

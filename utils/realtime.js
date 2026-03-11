@@ -367,6 +367,7 @@ function initWebSocket(server) {
                 const data = JSON.parse(message);
                 handleMessage(parseInt(playerId), data, ws);
             } catch (err) {
+                console.error('JSON.parse ws message failed:', typeof message, message?.toString?.().substring(0, 100));
                 logger.error({ type: 'ws_message_error', playerId, message: err.message });
             }
         });
