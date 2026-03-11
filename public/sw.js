@@ -3,7 +3,7 @@
  * Кэширование статических ресурсов для офлайн работы
  */
 
-const CACHE_NAME = 'last-hearth-v1';
+const CACHE_NAME = 'last-hearth-v2';
 const STATIC_ASSETS = [
     '/',
     '/index.html',
