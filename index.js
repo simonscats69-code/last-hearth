@@ -110,6 +110,22 @@ app.use((req, res, next) => {
     next();
 });
 
+// Middleware для отладки входящих данных
+app.use((req, res, next) => {
+    if ((req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') && req.originalUrl.includes('verify-telegram')) {
+        let rawData = '';
+        req.on('data', chunk => {
+            rawData += chunk.toString();
+        });
+        req.on('end', () => {
+            console.log('[RAW BODY]:', rawData.substring(0, 200));
+            next();
+        });
+    } else {
+        next();
+    }
+});
+
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
