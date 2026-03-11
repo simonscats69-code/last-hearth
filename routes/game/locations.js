@@ -230,7 +230,7 @@ router.post('/search', async (req, res) => {
             
             // Проверяем последствия радиации
             let radiationEffect = null;
-            if (newRadiation >= 100) {
+            if (radiationGain >= 100) {
                 radiationEffect = 'critical';
                 // Наносим урон от радиации
                 await client.query(`
