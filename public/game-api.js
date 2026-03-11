@@ -74,7 +74,10 @@ const endpoints = {
  * @returns {Promise<Object>} ответ сервера
  */
 async function apiRequest(endpoint, options = {}) {
-    const url = `${API_BASE}${endpoint}`;
+    const normalizedEndpoint = API_BASE.endsWith('/api') && endpoint.startsWith('/api/')
+        ? endpoint.slice(4)
+        : endpoint;
+    const url = `${API_BASE}${normalizedEndpoint}`;
     
     // Получаем telegram_id из Telegram WebApp
     const telegramId = getTelegramId();
