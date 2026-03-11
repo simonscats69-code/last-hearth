@@ -2705,10 +2705,16 @@ async function createMarketListing() {
             
             // Очищаем форму
             marketSelectedItem = null;
-            document.getElementById('market-selected-item')?.innerHTML = '<span class="placeholder">Выберите предмет</span>';
-            document.getElementById('market-quantity')?.value = 1;
-            document.getElementById('market-price')?.value = '';
-            document.getElementById('market-stars-price')?.value = 0;
+            const marketSelectedItemEl = document.getElementById('market-selected-item');
+            if (marketSelectedItemEl) {
+                marketSelectedItemEl.innerHTML = '<span class="placeholder">Выберите предмет</span>';
+            }
+            const marketQuantityEl = document.getElementById('market-quantity');
+            if (marketQuantityEl) marketQuantityEl.value = 1;
+            const marketPriceEl = document.getElementById('market-price');
+            if (marketPriceEl) marketPriceEl.value = '';
+            const marketStarsPriceEl = document.getElementById('market-stars-price');
+            if (marketStarsPriceEl) marketStarsPriceEl.value = 0;
             
             // Возвращаемся на экран барахолки
             showScreen('market');
