@@ -1344,8 +1344,19 @@ async function checkPlayerStatus(playerId) {
     if (!player) return null;
     
     // Парсим radiation и infections (могут быть JSONB)
-    const radiation = typeof player.radiation === 'object' ? player.radiation : { level: player.radiation || 0 };
-    const infections = typeof player.infections === 'string' ? JSON.parse(player.infections) : (player.infections || []);
+    let radiation, infections;
+    try {
+        radiation = typeof player.radiation === 'object' ? player.radiation : { level: player.radiation || 0 };
+    } catch(e) {
+        console.error('JSON.parse radiation failed:', player.radiation);
+        radiation = { level: player.radiation || 0 };
+    }
+    try {
+        infections = typeof player.infections === 'string' ? JSON.parse(player.infections) : (player.infections || []);
+    } catch(e) {
+        console.error('JSON.parse infections failed:', player.infections);
+        infections = [];
+    }
     const totalInfectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
     
     return {
@@ -1434,9 +1445,15 @@ async function updateAchievementProgress(playerId, achievementType, value = 1) {
             SELECT * FROM achievements WHERE condition->>'type' = $1
         `, [achievementType]);
         for (const achievement of achievements) {
-            const condition = typeof achievement.condition === 'string' 
-                ? JSON.parse(achievement.condition) 
-                : achievement.condition;
+            let condition;
+            try {
+                condition = typeof achievement.condition === 'string' 
+                    ? JSON.parse(achievement.condition) 
+                    : achievement.condition;
+            } catch(e) {
+                console.error('JSON.parse condition failed:', achievement.condition);
+                continue;
+            }
             const targetValue = condition.value;
             let currentValue = 0;
             switch (achievementType) {

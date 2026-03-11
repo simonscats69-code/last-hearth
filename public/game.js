@@ -2091,7 +2091,13 @@ function renderAchievementsList(achievements) {
     let html = '';
     
     for (const ach of achievements) {
-        const reward = typeof ach.reward === 'string' ? JSON.parse(ach.reward) : ach.reward;
+        let reward;
+        try {
+            reward = typeof ach.reward === 'string' ? JSON.parse(ach.reward) : ach.reward;
+        } catch(e) {
+            console.error('JSON.parse reward failed:', ach.reward);
+            reward = ach.reward;
+        }
         const rarityClass = `rarity-${ach.rarity || 'common'}`;
         
         html += `

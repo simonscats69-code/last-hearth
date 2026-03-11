@@ -362,9 +362,15 @@ router.post('/achievements/claim', async (req, res) => {
 
         // Если записи нет, создаём
         if (!playerAchievement) {
-            const condition = typeof achievement.condition === 'string' 
-                ? JSON.parse(achievement.condition) 
-                : achievement.condition;
+            let condition;
+            try {
+                condition = typeof achievement.condition === 'string' 
+                    ? JSON.parse(achievement.condition) 
+                    : achievement.condition;
+            } catch(e) {
+                console.error('JSON.parse condition failed:', achievement.condition);
+                throw e;
+            }
             
             await query(`
                 INSERT INTO player_achievements (player_id, achievement_id, progress_value, completed)
@@ -375,9 +381,15 @@ router.post('/achievements/claim', async (req, res) => {
         }
 
         // Проверяем, выполнено ли достижение
-        const condition = typeof achievement.condition === 'string' 
-            ? JSON.parse(achievement.condition) 
-            : achievement.condition;
+        let condition;
+        try {
+            condition = typeof achievement.condition === 'string' 
+                ? JSON.parse(achievement.condition) 
+                : achievement.condition;
+        } catch(e) {
+            console.error('JSON.parse condition failed:', achievement.condition);
+            throw e;
+        }
         
         let currentValue = 0;
         switch (condition.type) {
@@ -401,9 +413,15 @@ router.post('/achievements/claim', async (req, res) => {
         }
 
         // Получаем награду
-        const reward = typeof achievement.reward === 'string' 
-            ? JSON.parse(achievement.reward) 
-            : achievement.reward;
+        let reward;
+        try {
+            reward = typeof achievement.reward === 'string' 
+                ? JSON.parse(achievement.reward) 
+                : achievement.reward;
+        } catch(e) {
+            console.error('JSON.parse reward failed:', achievement.reward);
+            throw e;
+        }
 
         // Обновляем баланс игрока
         const updates = [];

@@ -26,11 +26,18 @@ const jsonFormat = winston.format.combine(
 const consoleFormat = winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.errors({ stack: true }),
-    winston.format.printf(({ level, message, timestamp, stack }) => {
-        if (stack) {
-            return `${timestamp} [${level.toUpperCase()}]: ${message}\n${stack}`;
+    winston.format.printf(({ level, message, timestamp, stack, ...meta }) => {
+        let msg = message;
+        // Если message объект - выводим как JSON
+        if (typeof message === 'object') {
+            msg = JSON.stringify(message, null, 2);
         }
-        return `${timestamp} [${level.toUpperCase()}]: ${message}`;
+        // Также логируем метаданные если есть
+        const metaStr = Object.keys(meta).length > 0 ? ' ' + JSON.stringify(meta) : '';
+        if (stack) {
+            return `${timestamp} [${level.toUpperCase()}]: ${msg}${metaStr}\n${stack}`;
+        }
+        return `${timestamp} [${level.toUpperCase()}]: ${msg}${metaStr}`;
     })
 );
 
