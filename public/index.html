@@ -950,14 +950,15 @@
     <script src="game-utils.js" defer></script>
     <script src="game-state.js" defer></script>
     <script src="game-api.js?v=2" defer></script>
+    <!-- Основной скрипт игры (разбит на 3 модуля) - должны загружаться до game-screens.js -->
+    <script src="game-core.js" defer></script>
+    <script src="game-systems.js" defer></script>
+    <script src="game-ui.js" defer></script>
+    <!-- Управление экранами -->
     <script src="game-screens.js" defer></script>
     <script src="game-store.js" defer></script>
     <script src="game-particles.js" defer></script>
     <script src="game-map.js" defer></script>
     <script src="game-animations.js" defer></script>
-    <!-- Основной скрипт игры (разбит на 3 модуля) -->
-    <script src="game-core.js" defer></script>
-    <script src="game-systems.js" defer></script>
-    <script src="game-ui.js" defer></script>
 </body>
 </html>

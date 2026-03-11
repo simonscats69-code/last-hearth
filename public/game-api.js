@@ -259,64 +259,6 @@ const gameApi = new Proxy({}, {
     }
 });
 
-// ============================================
-// АЛИАСЫ (для обратной совместимости)
-// ============================================
-
-// Регистрация и профиль
-const registerPlayer = (telegramId, username) => gameApi.register({ telegram_id: telegramId, username });
-const loadProfile = () => gameApi.profile();
-const loadInventory = () => gameApi.inventory();
-
-// Исследование и перемещение
-const searchLoot = () => gameApi.search();
-const moveToLocation = (locationId) => gameApi.move({ location_id: locationId });
-
-// Предметы
-const useItem = (itemIndex) => gameApi.useItem({ item_index: itemIndex });
-const craftItem = (recipeId) => gameApi.craft({ recipe_id: recipeId });
-const loadRecipes = () => gameApi.recipes();
-
-// Боссы
-const attackBoss = (bossId, isRaid = false) => gameApi.attackBoss({ boss_id: bossId, is_raid: isRaid });
-const loadBosses = () => gameApi.bosses();
-
-// Статус и магазин
-const checkPlayerStatus = () => gameApi.statusCheck({});
-const buyItem = (itemId, currency = 'coins') => gameApi.purchase({ item_id: parseInt(itemId), currency });
-const loadAchievements = () => gameApi.achievements();
-
-// Рейтинги
-const loadRatings = (type = 'players') => {
-    const endpoint = type === 'clans' ? endpoints.ratingsClans.endpoint : endpoints.ratingsPlayers.endpoint;
-    return apiGet(endpoint);
-};
-
-// Рынок
-const loadMarket = () => gameApi.marketList();
-const listOnMarket = (itemIndex, price) => gameApi.marketCreate({ item_index: itemIndex, price });
-const buyFromMarket = (listingId) => gameApi.marketBuy({ listing_id: listingId });
-
-// Клан
-const loadClan = () => gameApi.clan();
-const createClan = (name) => gameApi.clanCreate({ name });
-const joinClan = (clanId) => gameApi.clanJoin({ clan_id: clanId });
-const leaveClan = () => gameApi.clanLeave({});
-
-// PvP
-const pvpAttack = (targetId) => gameApi.pvpAttack({ target_id: targetId });
-
-// Сезоны
-const loadSeasonData = () => gameApi.seasonsCurrent();
-
-// Рефералы
-const checkReferralBonus = () => gameApi.referralCode();
-const activateReferralCode = (code) => gameApi.referralUse({ code });
-
-// Клановые боссы
-const loadClanBoss = () => gameApi.clanBoss();
-const spawnClanBoss = () => gameApi.clanBossSpawn({});
-const attackClanBoss = (damage) => gameApi.clanBossAttack({ damage });
-
-// Экспорт
-window.gameApi = gameApi;
+// ============================================================================
+// API ЗАПРОСЫ - используются через game-systems.js и game-ui.js
+// ============================================================================

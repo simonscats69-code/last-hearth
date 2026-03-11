@@ -1737,6 +1737,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Инициализация
     initGame();
     initReferralHandlers();
+    
+    // Инициализация навигации из game-screens.js
+    if (typeof initNavigationHandlers === 'function') {
+        initNavigationHandlers();
+    }
 });
 
 // ============================================================================
