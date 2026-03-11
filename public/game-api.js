@@ -90,7 +90,7 @@ async function apiGet(endpoint) {
 async function apiPost(endpoint, body = {}) {
     return apiRequest(endpoint, {
         method: 'POST',
-        body: JSON.stringify(body)
+        body: body
     });
 }
 
