@@ -3,11 +3,14 @@
  * Кэширование статических ресурсов для офлайн работы
  */
 
-const CACHE_NAME = 'last-hearth-v2';
+const CACHE_NAME = 'last-hearth-v3';
 const STATIC_ASSETS = [
     '/',
     '/index.html',
     '/styles.css',
+    '/game-core.js',
+    '/game-systems.js',
+    '/game-ui.js',
     '/game.js',
     '/game-api.js',
     '/game-utils.js',
