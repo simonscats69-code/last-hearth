@@ -6,7 +6,7 @@
  */
 
 // Базовый URL API (используем HTTPS для работы с BotHost)
-const API_BASE = 'https://last-hearth.bothost.ru/api';
+const API_BASE = 'https://last-hearth.bothost.ru';
 
 /**
  * Выполнение запроса к API
