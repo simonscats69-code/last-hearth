@@ -359,15 +359,20 @@ router.post('/pvp/attack-hit', async (req, res) => {
                 ended = true;
 
                 // Награда победителю
-                const coinsReward = Math.floor(defender.coins * 0.1);
+                // Ограничиваем максимальную награду
+                const MAX_PVP_COINS = 10000;
+                const coinsReward = Math.min(
+                    Math.floor(defender.coins * 0.1),
+                    MAX_PVP_COINS
+                );
 
                 await query(`
                     UPDATE players SET coins = coins + $1 WHERE id = $2
                 `, [coinsReward, attackerId]);
 
-                // Шанс украсть предмет
+                // Шанс украсть предмет (снижено с 30% до 10%)
                 const inventory = safeParse(defender.inventory, []);
-                if (inventory.length > 0 && Math.random() < 0.3) {
+                if (inventory.length > 0 && Math.random() < 0.1) {
                     const stolenItem = inventory[Math.floor(Math.random() * inventory.length)];
 
                     // Добавляем предмет атакующему

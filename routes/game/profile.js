@@ -224,6 +224,26 @@ router.get('/profile-legacy', async (req, res) => {
             return res.status(404).json({ error: 'Игрок не найден' });
         }
 
+        // Парсим radiation и infection
+        let radiationLevel = 0;
+        let infectionLevel = 0;
+        
+        if (player.radiation) {
+            if (typeof player.radiation === 'object') {
+                radiationLevel = player.radiation.level || 0;
+            } else if (typeof player.radiation === 'number') {
+                radiationLevel = player.radiation;
+            }
+        }
+        
+        if (player.infections) {
+            if (typeof player.infections === 'object') {
+                infectionLevel = player.infections.level || 0;
+            } else if (typeof player.infections === 'number') {
+                infectionLevel = player.infections;
+            }
+        }
+
         // Получаем ключи боссов
         const keys = await queryAll(`
             SELECT bk.boss_id, b.name as boss_name, bk.quantity

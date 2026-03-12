@@ -121,6 +121,18 @@ function createLoadingTimeout(showLoading) {
 }
 
 /**
+ * Получить initData для авторизации
+ * @returns {string|null}
+ */
+function getInitData() {
+    if (!window.Telegram?.WebApp) {
+        // Для разработки - используем localStorage
+        return localStorage.getItem('init_data');
+    }
+    return window.Telegram.WebApp.initData || null;
+}
+
+/**
  * Выполнение запроса к API с таймаутом и повторами
  * @param {string} endpoint - endpoint API
  * @param {Object} options - дополнительные опции
@@ -137,12 +149,13 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         : '';
     const url = `${API_BASE}${normalizedEndpoint.startsWith('/') ? '' : '/'}${normalizedEndpoint}${queryString}`;
     
-    const telegramId = getTelegramId();
+    // Получаем initData для авторизации
+    const initData = getInitData();
     
     const config = {
         headers: {
             'Content-Type': 'application/json',
-            'x-telegram-id': telegramId || ''
+            'x-init-data': initData || ''  // Используем x-init-data для безопасной авторизации
         },
         ...options
     };

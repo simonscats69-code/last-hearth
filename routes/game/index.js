@@ -43,13 +43,15 @@ const generalLimiter = rateLimit({
  */
 async function authenticatePlayer(req, res, next) {
     try {
-        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
         const initData = req.headers['x-init-data'];
+        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
         const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        
+        const isDevelopment = !botToken;  // Нет токена = режим разработки
         
         let player;
         
-        // Режим 1: Проверка через initData (более безопасный)
+        // Режим 1: Проверка через initData (безопасный, обязательный в production)
         if (initData && botToken) {
             const validated = validateTelegramInitData(initData, botToken);
             if (!validated) {
@@ -69,20 +71,25 @@ async function authenticatePlayer(req, res, next) {
                 path: req.path 
             });
         } 
-        // Режим 2: Простой x-telegram-id (для обратной совместимости)
-        else if (telegramId) {
+        // Режим 2: x-telegram-id только в разработке!
+        else if (telegramId && isDevelopment) {
             player = await queryOne(
                 'SELECT * FROM players WHERE telegram_id = $1',
                 [telegramId]
             );
             
-            logger.info('[game] Авторизация через telegram_id', { 
+            logger.info('[game] Авторизация через telegram_id (DEV MODE)', { 
                 telegramId, 
                 path: req.path 
             });
-        } 
+        }
         else {
-            return res.status(401).json({ error: 'Требуется авторизация' });
+            // В production требуем initData
+            return res.status(401).json({ 
+                error: isDevelopment 
+                    ? 'Требуется x-telegram-id (DEV)' 
+                    : 'Требуется x-init-data (авторизуйтесь через Telegram)'
+            });
         }
 
         if (!player) {

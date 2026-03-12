@@ -46,27 +46,6 @@ const GAME_CONFIG = {
     BASE_CRAFT_SUCCESS: 50,      // Базовый шанс успешного крафта (%)
     MAX_CRAFT_SUCCESS: 95,       // Максимальный шанс крафта (%)
 
-    // Множители удачи для дропа (монотонно убывающие, но гарантирующие рост)
-    LUCK_MULTIPLIERS: [
-        { min: 0, max: 10, multiplier: 0.5 },
-        { min: 11, max: 30, multiplier: 0.45 },
-        { min: 31, max: 50, multiplier: 0.4 },
-        { min: 51, max: 70, multiplier: 0.35 },
-        { min: 71, max: 90, multiplier: 0.32 },
-        { min: 91, max: 100, multiplier: 0.30 },
-        { min: 101, max: Infinity, multiplier: 0.28 }
-    ],
-
-    // Множители мастерства для крафта
-    CRAFT_MULTIPLIERS: [
-        { min: 1, max: 10, multiplier: 1.5 },
-        { min: 11, max: 30, multiplier: 1.2 },
-        { min: 31, max: 50, multiplier: 1.0 },
-        { min: 51, max: 70, multiplier: 0.8 },
-        { min: 71, max: 90, multiplier: 0.6 },
-        { min: 91, max: Infinity, multiplier: 0.5 }
-    ],
-
     // Штраф за редкость при крафте
     RARITY_CRAFT_PENALTIES: {
         common: 1.0,
@@ -76,37 +55,6 @@ const GAME_CONFIG = {
         legendary: 0.4
     }
 };
-
-/**
- * Получить множитель удачи
- * @param {number} luck - Значение удачи игрока
- * @returns {number} Множитель
- */
-function getLuckMultiplier(luck) {
-    // Защита от отрицательной или нулевой удачи
-    if (luck <= 0) return 0.5;
-    
-    for (const tier of GAME_CONFIG.LUCK_MULTIPLIERS) {
-        if (luck >= tier.min && luck <= tier.max) {
-            return tier.multiplier;
-        }
-    }
-    return GAME_CONFIG.LUCK_MULTIPLIERS[GAME_CONFIG.LUCK_MULTIPLIERS.length - 1].multiplier;
-}
-
-/**
- * Получить множитель мастерства крафта
- * @param {number} crafting - Значение мастерства
- * @returns {number} Множитель
- */
-function getCraftMultiplier(crafting) {
-    for (const tier of GAME_CONFIG.CRAFT_MULTIPLIERS) {
-        if (crafting >= tier.min && crafting <= tier.max) {
-            return tier.multiplier;
-        }
-    }
-    return GAME_CONFIG.CRAFT_MULTIPLIERS[GAME_CONFIG.CRAFT_MULTIPLIERS.length - 1].multiplier;
-}
 
 /**
  * Получить штраф за редкость предмета при крафте
@@ -459,8 +407,6 @@ module.exports = {
     // Экспорт функций
     getExpForLevel,
     getTotalExpForLevel,
-    getLuckMultiplier,
-    getCraftMultiplier,
     getRarityPenalty,
     calculateDropChance,
     calculateCraftSuccess,

@@ -481,7 +481,7 @@ async function logPlayerAction(poolConnection, playerId, action, meta = {}) {
     try {
         const serializedMeta = serializeJSONField(meta);
         await poolConnection.query(
-            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, meta, created_at) 
+            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, metadata, created_at) 
              VALUES ($1, $2, $3, NOW())`,
             [playerId, action, serializedMeta]
         );
@@ -502,7 +502,7 @@ async function logPlayerActionWithTx(tx, playerId, action, meta = {}) {
     try {
         const serializedMeta = serializeJSONField(meta);
         await tx.query(
-            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, meta, created_at) 
+            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, metadata, created_at) 
              VALUES ($1, $2, $3, NOW())`,
             [playerId, action, serializedMeta]
         );

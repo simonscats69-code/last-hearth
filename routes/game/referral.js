@@ -4,7 +4,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, queryAll } = require('../../db/database');
+const { query, queryOne, queryAll, transaction } = require('../../db/database');
 
 /**
  * Получение реферального кода
@@ -66,15 +66,16 @@ async function useReferralCode(player, code, res) {
         });
     }
     
-    // Устанавливаем реферала
-    await query(`
-        UPDATE players SET referred_by = $1 WHERE id = $2
-    `, [referrer.id, player.id]);
-    
-    // Даём бонус рефереру
-    await query(`
-        UPDATE players SET coins = coins + 100 WHERE id = $1
-    `, [referrer.id]);
+    // Устанавливаем реферала и даём бонус в транзакции
+    await transaction(async (client) => {
+        await client.query(`
+            UPDATE players SET referred_by = $1 WHERE id = $2
+        `, [referrer.id, player.id]);
+        
+        await client.query(`
+            UPDATE players SET coins = coins + 100 WHERE id = $1
+        `, [referrer.id]);
+    });
     
     return res.json({
         success: true,

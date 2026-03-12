@@ -158,14 +158,15 @@ async function updatePlayerExperienceNoLevelUp(playerId, exp, client = null) {
  */
 async function levelUpPlayer(playerId, client = null) {
     const exec = getExecutor(client);
+    // При level up: увеличиваем max_energy и max_health, восстанавливаем energy и health
     const result = await exec(
         `UPDATE players 
          SET level = level + 1,
              experience = 0,
              max_energy = max_energy + 5,
              max_health = max_health + 10,
-             energy = max_energy + 5,
-             health = max_health + 10,
+             energy = (max_energy + 5),
+             health = (max_health + 10),
              updated_at = NOW() 
          WHERE id = $1 
          RETURNING *`,

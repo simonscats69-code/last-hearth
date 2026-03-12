@@ -246,11 +246,12 @@ router.post('/attack-boss', bossAttackLimiter, async (req, res) => {
             
             const boss = bossResult.rows[0];
             
-            // Проверяем ключи
+            // Проверяем ключи с блокировкой (чтобы избежать race condition)
             if (boss_id > 1) {
                 const keyRecord = await client.query(`
                     SELECT quantity FROM boss_keys 
                     WHERE player_id = $1 AND boss_id = $2
+                    FOR UPDATE
                 `, [playerId, boss_id]);
                 
                 const keyCount = keyRecord.rows[0]?.quantity || 0;

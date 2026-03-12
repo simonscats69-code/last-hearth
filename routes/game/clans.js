@@ -18,6 +18,23 @@ const { withPlayerLock, withClanLock, withPlayerAndClanLock } = require('../../u
 const { validateId, validateString, sanitizeName, validatePositiveInt, validateRange } = require('../../utils/apiHelpers');
 const { ok, fail, error, notFound, badRequest, guard, wrap } = require('../../utils/apiHelpers');
 const { logPlayerAction, parseJSONField, serializeJSONField } = require('../../utils/transactions');
+
+// =============================================================================
+// УТИЛИТЫ
+// =============================================================================
+
+/**
+ * Безопасный парсинг JSON
+ */
+function safeJsonParse(value, fallback = {}) {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'object') return value;
+    try {
+        return typeof value === 'string' ? JSON.parse(value) : value;
+    } catch {
+        return fallback;
+    }
+}
 const { pool } = require('../../db/database');
 const { logger } = require('../../utils/logger');
 
@@ -407,7 +424,27 @@ router.post('/clan-boss/attack', wrap(async (req, res) => {
         return fail(res, 'Слишком быстро, подожди 1 секунду', 'ATTACK_TOO_FAST', 429);
     }
     
-    const damage = Math.max(1, Math.floor(player.strength * 2 + player.agility * 0.5));
+    // Получаем экипировку игрока
+    const equipment = safeJsonParse(player.equipment, {});
+    const weapon = equipment.weapon || {};
+    
+    // Расчёт урона (аналогично обычному боссу)
+    let damage = (player.strength * 2) + (player.agility * 0.5);
+    
+    // Бонус от оружия
+    if (weapon.damage) {
+        damage += weapon.damage;
+    }
+    
+    // Модификации оружия
+    if (weapon.modifications?.sharpening) {
+        damage += weapon.modifications.sharpening * 2;
+    }
+    
+    // Бонус уровня (+10% за уровень)
+    damage *= (1 + player.level * 0.1);
+    
+    damage = Math.max(1, Math.floor(damage));
     
     const result = await withPlayerLock(playerId, async (lockedPlayer) => {
         if (!lockedPlayer) {

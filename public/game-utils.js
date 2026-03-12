@@ -24,6 +24,18 @@ function getTelegramId() {
 }
 
 /**
+ * Получить initData для авторизации
+ * @returns {string|null}
+ */
+function getInitData() {
+    // Проверяем существование Telegram WebApp
+    if (!window.Telegram?.WebApp) {
+        return localStorage.getItem('init_data');
+    }
+    return window.Telegram.WebApp.initData || null;
+}
+
+/**
  * Определение тёмной темы
  * @param {string} hexColor - Hex код цвета
  * @returns {boolean}
@@ -279,6 +291,7 @@ function isInRange(value, min, max) {
 
 // Делаем функции глобальными для обратной совместимости
 window.getTelegramId = getTelegramId;
+window.getInitData = getInitData;
 window.isColorDark = isColorDark;
 window.hapticImpact = hapticImpact;
 window.hapticNotification = hapticNotification;

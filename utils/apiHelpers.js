@@ -95,11 +95,19 @@ function validateBoolean(value, fieldName = 'значение') {
         return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
     }
     
-    if (typeof value !== 'boolean') {
-        return { valid: false, error: `${fieldName} должно быть булевым значением`, code: 'INVALID_TYPE' };
+    // Разрешаем boolean или строки "true"/"false"
+    if (typeof value === 'boolean') {
+        return { valid: true };
     }
     
-    return { valid: true };
+    if (typeof value === 'string') {
+        const lower = value.toLowerCase();
+        if (lower === 'true' || lower === 'false') {
+            return { valid: true };
+        }
+    }
+    
+    return { valid: false, error: `${fieldName} должно быть булевым значением`, code: 'INVALID_TYPE' };
 }
 
 /**

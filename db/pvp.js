@@ -3,7 +3,7 @@
  * Управление PvP боями, кулдаунами и статистикой
  */
 
-const { query, queryOne, queryAll, updateAchievementProgress, pool } = require('./database');
+const { query, queryOne, queryAll, pool } = require('./database');
 
 /**
  * Проверка, является ли локация красной зоной (PvP разрешено)

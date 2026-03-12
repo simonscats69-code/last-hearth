@@ -184,8 +184,8 @@ async function addExperience(playerId, exp, client = null) {
     // Иначе создаём свою транзакцию (обратная совместимость)
     const { tx } = require('../db/database');
     
-    const result = await tx(async () => {
-        return await db.addExperienceWithLevelUp(client, playerId, exp, getExpForLevel);
+    const result = await tx(async (txClient) => {
+        return await db.addExperienceWithLevelUp(txClient, playerId, exp, getExpForLevel);
     });
     
     return { success: true, ...result };

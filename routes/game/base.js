@@ -244,12 +244,15 @@ router.post('/base/build', async (req, res) => {
             // Строим/улучшаем
             base[building_id] = currentLevel + 1;
 
-            // Обновляем в транзакции
-            await query(`
+            // Обновляем в транзакции с RETURNING
+            const updated = await query(`
                 UPDATE players 
                 SET base = $1, coins = coins - $2
                 WHERE id = $3
+                RETURNING coins
             `, [safeStringify(base), cost, playerId]);
+            
+            const coinsRemaining = updated.rows[0]?.coins || 0;
 
             // Логируем действие
             await logPlayerAction(playerId, 'build_structure', {
@@ -269,7 +272,7 @@ router.post('/base/build', async (req, res) => {
                     name: BUILDINGS[building_id].name
                 },
                 coins_spent: cost,
-                coins_remaining: currentCoins - cost
+                coins_remaining: coinsRemaining
             };
         });
 

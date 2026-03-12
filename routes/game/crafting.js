@@ -11,6 +11,7 @@
  * - Централизованный обработчик ошибок
  */
 
+const express = require('express');
 const { randomInt } = require('crypto');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
