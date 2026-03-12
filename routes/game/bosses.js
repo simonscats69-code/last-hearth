@@ -19,6 +19,21 @@ const { pool, query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
 const { notifyBossAttack, getConnectedCount } = require('../../utils/realtime');
+const rateLimit = require('express-rate-limit');
+
+// Rate limiter для атаки босса - 10 запросов в минуту
+const bossAttackLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    message: {
+        success: false,
+        error: 'Слишком много атак. Подождите минуту.',
+        code: 'RATE_LIMIT_EXCEEDED'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.player?.id || req.ip
+});
 
 /**
  * Универсальный обработчик ошибок
@@ -58,7 +73,6 @@ function safeJsonParse(value, fallback = {}) {
         try {
             return JSON.parse(value);
         } catch (e) {
-            console.error('JSON.parse failed:', typeof value, value.substring(0, 100));
             logger.warn('[bosses] Ошибка парсинга JSON', { value: value.substring(0, 100) });
             return fallback;
         }
@@ -78,11 +92,27 @@ function validateBossId(bossId) {
 
 /**
  * Валидация булева параметра
+ * Поддерживает: true/false, "true"/"false", 1/0
  * @param {any} value - значение для валидации
  * @returns {boolean} результат валидации
  */
 function validateBoolean(value) {
-    return typeof value === 'boolean';
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const lower = value.toLowerCase();
+        if (lower === 'true' || lower === '1' || lower === 'yes') {
+            return true;
+        }
+        if (lower === 'false' || lower === '0' || lower === 'no') {
+            return false;
+        }
+    }
+    if (typeof value === 'number') {
+        return value !== 0;
+    }
+    return false;
 }
 
 /**
@@ -158,12 +188,14 @@ router.get('/bosses', async (req, res) => {
 
 /**
  * Атака босса (обычная или рейд)
+ * Защищено rate limit: 10 атак в минуту
  */
-router.post('/attack-boss', async (req, res) => {
+router.post('/attack-boss', bossAttackLimiter, async (req, res) => {
     const client = await pool.connect();
     
     try {
-        const { boss_id, is_raid = false } = req.body;
+        const { boss_id } = req.body;
+        let is_raid = req.body.is_raid ?? false;
         const playerId = req.player.id;
         
         // Валидация входных данных
@@ -186,10 +218,13 @@ router.post('/attack-boss', async (req, res) => {
         if (!validateBoolean(is_raid)) {
             return res.status(400).json({
                 success: false,
-                error: 'Параметр is_raid должен быть boolean',
+                error: 'Параметр is_raid должен быть boolean или "true"/"false"',
                 code: 'INVALID_RAID_TYPE'
             });
         }
+        
+        // Нормализуем is_raid к boolean
+        is_raid = validateBoolean(is_raid);
         
         // Используем транзакцию для атомарности
         await client.query('BEGIN');
@@ -353,6 +388,9 @@ router.post('/attack-boss', async (req, res) => {
 /**
  * Выдача наград за убийство босса
  * Унифицированная функция для одиночной и рейд-атаки
+ * @param {object} client - Клиент транзакции
+ * @param {number} playerId - ID игрока
+ * @param {object} boss - Объект босса
  */
 async function grantRewards(client, playerId, boss) {
     const rewards = {
@@ -369,9 +407,9 @@ async function grantRewards(client, playerId, boss) {
             `, [boss.reward_coins, playerId]);
         }
         
-        // Выдаём опыт
+        // Выдаём опыт (передаём client для единой транзакции)
         if (boss.reward_exp) {
-            await playerHelper.addExperience(playerId, boss.reward_exp);
+            await playerHelper.addExperience(playerId, boss.reward_exp, client);
         }
         
         // Обновляем счётчик убитых боссов
@@ -463,6 +501,12 @@ async function handleRaidAttack(client, playerId, boss, damage, isRaid) {
 async function handleSoloAttack(client, playerId, boss, damage, isRaid) {
     const newHp = Math.max(0, boss.hp - damage);
     
+    // Сохраняем HP босса в БД
+    await client.query(
+        `UPDATE bosses SET hp = $1 WHERE id = $2`,
+        [newHp, boss.id]
+    );
+    
     // Проверяем победу
     let killed = false;
     let rewards = null;
@@ -533,8 +577,7 @@ router.get('/bosses-legacy', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /bosses:', error);
-        res.status(500).json({ error: 'Ошибка получения боссов' });
+        handleError(res, error, 'bosses_list_legacy');
     }
 });
 

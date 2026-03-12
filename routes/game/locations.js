@@ -207,9 +207,10 @@ router.post('/search', async (req, res) => {
                 foundItem = rollLootDrop(lootTable, updatedPlayer.luck, itemRarity);
                 
                 if (foundItem) {
-                    // Добавляем в инвентарь
-                    const inventory = safeJsonParse(updatedPlayer.inventory, []);
-                    inventory.push(foundItem);
+                    // Добавляем в инвентарь (объект {itemId: quantity})
+                    const inventory = safeJsonParse(updatedPlayer.inventory, {});
+                    const itemKey = String(foundItem.id);
+                    inventory[itemKey] = (inventory[itemKey] || 0) + 1;
                     
                     await client.query(`
                         UPDATE players 
@@ -270,7 +271,8 @@ router.post('/search', async (req, res) => {
                     // Новый формат: уровень из JSONB или старое значение
                     level: appliedRadiation?.newLevel || 0,
                     gained: radiationGain,
-                    defense: radiationDefense
+                    defense: radiationDefense,
+                    effect: radiationEffect
                 },
                 location: {
                     name: locationData.name,
@@ -418,9 +420,9 @@ router.get('/locations', async (req, res) => {
         
         // Получаем локации с пагинацией
         const locations = await queryAll(`
-            SELECT DISTINCT ON (name) id, name, radiation, required_luck, description, is_red_zone
+            SELECT id, name, radiation, required_luck, description, is_red_zone
             FROM locations
-            ORDER BY name, id ASC
+            ORDER BY required_luck ASC
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
         
@@ -488,8 +490,7 @@ router.get('/locations-legacy', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /locations:', error);
-        res.status(500).json({ error: 'Ошибка получения локаций' });
+        handleError(res, error, 'locations_list_legacy');
     }
 });
 

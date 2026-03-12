@@ -23,127 +23,93 @@ function requireAuth(req, res, next) {
 router.use(telegramAuthMiddleware);
 router.use(requireAuth);
 
-// Получить топ игроков по уровню
-router.get('/players/level', async (req, res) => {
+/**
+ * Получить топ игроков с гибкой сортировкой
+ * GET /players?sort=level|strength|bosses|pvp&limit=10
+ * 
+ * Примеры:
+ * GET /players?sort=level - по уровню
+ * GET /players?sort=strength - по силе
+ * GET /players?sort=bosses - по убитым боссам
+ * GET /players?sort=pvp - по победам в PvP
+ */
+router.get('/players', async (req, res) => {
     try {
+        const sort = req.query.sort || 'level';
         const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
         
+        // Определяем поле сортировки и дополнительные поля
+        let orderBy, whereClause, selectFields;
+        
+        switch (sort) {
+            case 'strength':
+                orderBy = 'strength DESC';
+                whereClause = 'WHERE banned = false';
+                selectFields = 'telegram_id, username, level, strength';
+                break;
+            case 'bosses':
+                orderBy = 'bosses_killed DESC';
+                whereClause = 'WHERE banned = false AND bosses_killed > 0';
+                selectFields = 'telegram_id, username, level, bosses_killed';
+                break;
+            case 'pvp':
+                orderBy = 'pvp_wins DESC';
+                whereClause = 'WHERE banned = false AND (pvp_wins > 0 OR pvp_losses > 0)';
+                selectFields = 'telegram_id, username, level, pvp_wins, pvp_losses';
+                break;
+            case 'level':
+            default:
+                orderBy = 'level DESC, experience DESC';
+                whereClause = 'WHERE banned = false';
+                selectFields = 'telegram_id, username, level, strength, experience';
+                break;
+        }
+        
+        // Оптимизировано: COUNT(*) OVER() вместо подзапроса
         const result = await query(
-            `SELECT telegram_id, username, level, strength, experience, 
-                    (SELECT COUNT(*) FROM players) as total_players
+            `SELECT ${selectFields}, COUNT(*) OVER() as total_players
              FROM players 
-             WHERE banned = false
-             ORDER BY level DESC, experience DESC 
+             ${orderBy} 
              LIMIT $1`,
             [limit]
         );
         
-        const leaderboard = result.rows.map((player, index) => ({
-            rank: index + 1,
-            telegram_id: player.telegram_id,
-            username: player.username,
-            level: player.level,
-            strength: player.strength,
-            experience: player.experience,
-            total_players: parseInt(player.total_players, 10)
-        }));
+        const leaderboard = result.rows.map((player, index) => {
+            const entry = {
+                rank: index + 1,
+                telegram_id: player.telegram_id,
+                username: player.username,
+                level: player.level,
+                total_players: parseInt(player.total_players, 10)
+            };
+            
+            // Добавляем специфичные поля в зависимости от сортировки
+            switch (sort) {
+                case 'strength':
+                case 'level':
+                    entry.strength = player.strength;
+                    break;
+                case 'level':
+                    entry.experience = player.experience;
+                    break;
+                case 'bosses':
+                    entry.bosses_killed = player.bosses_killed;
+                    break;
+                case 'pvp':
+                    entry.pvp_wins = player.pvp_wins;
+                    entry.pvp_losses = player.pvp_losses;
+                    entry.win_rate = player.pvp_losses > 0 
+                        ? Math.round((player.pvp_wins / (player.pvp_wins + player.pvp_losses)) * 100)
+                        : 100;
+                    break;
+            }
+            
+            return entry;
+        });
         
-        res.json({ success: true, leaderboard });
+        res.json({ success: true, leaderboard, sort });
     } catch (err) {
-        res.status(500).json({ error: 'Ошибка получения рейтинга' });
-    }
-});
-
-// Получить топ игроков по силе
-router.get('/players/strength', async (req, res) => {
-    try {
-        const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
-        
-        const result = await query(
-            `SELECT telegram_id, username, level, strength,
-                    (SELECT COUNT(*) FROM players) as total_players
-             FROM players 
-             WHERE banned = false
-             ORDER BY strength DESC 
-             LIMIT $1`,
-            [limit]
-        );
-        
-        const leaderboard = result.rows.map((player, index) => ({
-            rank: index + 1,
-            telegram_id: player.telegram_id,
-            username: player.username,
-            level: player.level,
-            strength: player.strength,
-            total_players: parseInt(player.total_players, 10)
-        }));
-        
-        res.json({ success: true, leaderboard });
-    } catch (err) {
-        res.status(500).json({ error: 'Ошибка получения рейтинга' });
-    }
-});
-
-// Получить топ игроков по убитым боссам
-router.get('/players/bosses', async (req, res) => {
-    try {
-        const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
-        
-        const result = await query(
-            `SELECT telegram_id, username, level, bosses_killed,
-                    (SELECT COUNT(*) FROM players) as total_players
-             FROM players 
-             WHERE banned = false AND bosses_killed > 0
-             ORDER BY bosses_killed DESC 
-             LIMIT $1`,
-            [limit]
-        );
-        
-        const leaderboard = result.rows.map((player, index) => ({
-            rank: index + 1,
-            telegram_id: player.telegram_id,
-            username: player.username,
-            level: player.level,
-            bosses_killed: player.bosses_killed,
-            total_players: parseInt(player.total_players, 10)
-        }));
-        
-        res.json({ success: true, leaderboard });
-    } catch (err) {
-        res.status(500).json({ error: 'Ошибка получения рейтинга' });
-    }
-});
-
-// Получить топ игроков в PvP
-router.get('/players/pvp', async (req, res) => {
-    try {
-        const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
-        
-        const result = await query(
-            `SELECT telegram_id, username, level, pvp_wins, pvp_losses,
-                    (SELECT COUNT(*) FROM players) as total_players
-             FROM players 
-             WHERE banned = false AND (pvp_wins > 0 OR pvp_losses > 0)
-             ORDER BY pvp_wins DESC 
-             LIMIT $1`,
-            [limit]
-        );
-        
-        const leaderboard = result.rows.map((player, index) => ({
-            rank: index + 1,
-            telegram_id: player.telegram_id,
-            username: player.username,
-            level: player.level,
-            pvp_wins: player.pvp_wins,
-            pvp_losses: player.pvp_losses,
-            win_rate: player.pvp_losses > 0 
-                ? Math.round((player.pvp_wins / (player.pvp_wins + player.pvp_losses)) * 100)
-                : 100,
-            total_players: parseInt(player.total_players, 10)
-        }));
-        
-        res.json({ success: true, leaderboard });
-    } catch (err) {
+        logger.error('[leaderboard] Ошибка получения рейтинга игроков', { error: err.message });
         res.status(500).json({ error: 'Ошибка получения рейтинга' });
     }
 });
@@ -156,7 +122,7 @@ router.get('/clans', async (req, res) => {
         const result = await query(
             `SELECT c.id, c.name, c.leader_id, c.level, c.members_count,
                     COALESCE(SUM(p.level), 0) as total_levels,
-                    (SELECT COUNT(*) FROM clans) as total_clans
+                    COUNT(*) OVER() as total_clans
              FROM clans c
              LEFT JOIN players p ON p.clan_id = c.id
              GROUP BY c.id
@@ -178,6 +144,7 @@ router.get('/clans', async (req, res) => {
         
         res.json({ success: true, leaderboard });
     } catch (err) {
+        logger.error('[leaderboard] Ошибка получения рейтинга кланов', { error: err.message });
         res.status(500).json({ error: 'Ошибка получения рейтинга' });
     }
 });
@@ -222,6 +189,7 @@ router.get('/my-position/:telegramId', async (req, res) => {
             }
         });
     } catch (err) {
+        logger.error('[leaderboard] Ошибка получения позиции', { error: err.message });
         res.status(500).json({ error: 'Ошибка получения позиции' });
     }
 });

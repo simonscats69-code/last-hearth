@@ -75,9 +75,10 @@ const PlayerHelper = {
      * Добавить опыт
      * @param {number} playerId - ID игрока
      * @param {number} exp - Опыт
+     * @param {object} client - Опциональный клиент транзакции
      */
-    async addExperience(playerId, exp) {
-        return await playerService.addExperience(playerId, exp);
+    async addExperience(playerId, exp, client = null) {
+        return await playerService.addExperience(playerId, exp, client);
     }
 };
 

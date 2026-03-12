@@ -7,22 +7,83 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne } = require('../../db/database');
 const { logger } = require('../../utils/logger');
+const { validateTelegramInitData } = require('../../utils/telegramAuth');
+const rateLimit = require('express-rate-limit');
 
-// Мидлвар для проверки игрока
-async function authenticatePlayer(req, res, next) {
-    const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
-    
-    console.log('Auth attempt - x-telegram-id:', req.headers['x-telegram-id'], 'query:', req.query.telegram_id);
-    
-    if (!telegramId) {
-        return res.status(401).json({ error: 'Требуется авторизация' });
+// Rate limiter для критических endpoints (атака босса, PvP)
+const criticalActionLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 минута
+    max: 30, // 30 запросов в минуту
+    message: { error: 'Слишком много запросов. Попробуйте позже.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        // Используем telegramId или IP
+        return req.player?.id || req.ip;
     }
+});
 
+// Rate limiter для обычных endpoints
+const generalLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 минута
+    max: 100, // 100 запросов в минуту
+    message: { error: 'Слишком много запросов. Попробуйте позже.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        return req.player?.id || req.ip;
+    }
+});
+
+/**
+ * Унифицированный middleware авторизации
+ * Поддерживает:
+ * 1. x-telegram-id (простой режим для backend запросов)
+ * 2. x-init-data (безопасный режим для Telegram Mini App)
+ */
+async function authenticatePlayer(req, res, next) {
     try {
-        const player = await queryOne(
-            'SELECT * FROM players WHERE telegram_id = $1',
-            [telegramId]
-        );
+        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
+        const initData = req.headers['x-init-data'];
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        
+        let player;
+        
+        // Режим 1: Проверка через initData (более безопасный)
+        if (initData && botToken) {
+            const validated = validateTelegramInitData(initData, botToken);
+            if (!validated) {
+                logger.warn('[game] Неверная подпись initData', { path: req.path });
+                return res.status(401).json({ error: 'Неверная подпись initData' });
+            }
+            
+            // Получаем игрока по telegram id из валидированных данных
+            const telegramUserId = String(validated.user.id);
+            player = await queryOne(
+                'SELECT * FROM players WHERE telegram_id = $1',
+                [telegramUserId]
+            );
+            
+            logger.info('[game] Авторизация через initData', { 
+                telegramId: telegramUserId, 
+                path: req.path 
+            });
+        } 
+        // Режим 2: Простой x-telegram-id (для обратной совместимости)
+        else if (telegramId) {
+            player = await queryOne(
+                'SELECT * FROM players WHERE telegram_id = $1',
+                [telegramId]
+            );
+            
+            logger.info('[game] Авторизация через telegram_id', { 
+                telegramId, 
+                path: req.path 
+            });
+        } 
+        else {
+            return res.status(401).json({ error: 'Требуется авторизация' });
+        }
 
         if (!player) {
             return res.status(404).json({ error: 'Игрок не найден. Начните игру через /start' });
@@ -31,78 +92,68 @@ async function authenticatePlayer(req, res, next) {
         req.player = player;
         next();
     } catch (error) {
-        console.error('Ошибка авторизации:', error);
+        logger.error('[game] Ошибка авторизации', { error: error.message, stack: error.stack });
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 }
 
 router.use(authenticatePlayer);
 
-// Функция для безопасной загрузки модулей с логированием
-function safeRequire(path) {
+/**
+ * Безопасная загрузка модулей - выбрасывает ошибку если модуль не найден
+ * @param {string} path - Путь к модулю
+ * @param {string} name - Имя модуля для логирования
+ */
+function safeRequire(path, name) {
     try {
         const mod = require(path);
-        console.log(`[OK] Загружен роутер: ${path}`);
+        logger.info(`[game] Загружен роутер: ${name}`);
         return mod;
     } catch(e) {
-        console.error(`[FATAL] Не удалось загрузить роутер: ${path}`, e.message);
-        return null;
+        logger.error(`[FATAL] Не удалось загрузить роутер: ${name}`, { path, error: e.message });
+        throw new Error(`Не удалось загрузить роутер ${name}: ${e.message}`);
     }
 }
 
-// Подключаем все модули
-const locationsRouter = safeRequire('./locations');
-const inventoryRouter = safeRequire('./inventory');
-const bossesRouter = safeRequire('./bosses');
-const craftingRouter = safeRequire('./crafting');
-const baseRouter = safeRequire('./base');
-const clansRouter = safeRequire('./clans');
-const pvpRouter = safeRequire('./pvp');
-const statusRouter = safeRequire('./status');
-const marketRouter = safeRequire('./market');
-const energyRouter = safeRequire('./energy');
-const referralRouter = safeRequire('./referral');
-const seasonsRouter = safeRequire('./seasons');
-const purchaseRouter = safeRequire('./purchase');
-const itemsRouter = safeRequire('./items');
-const profileRouter = safeRequire('./profile');
-const debuffsModule = require('./debuffs');
-const debuffsRouter = debuffsModule.router || debuffsModule;
+// Подключаем все модули с явными namespace
+const locationsRouter = safeRequire('./locations', 'locations');
+const inventoryRouter = safeRequire('./inventory', 'inventory');
+const bossesRouter = safeRequire('./bosses', 'bosses');
+const craftingRouter = safeRequire('./crafting', 'crafting');
+const baseRouter = safeRequire('./base', 'base');
+const clansRouter = safeRequire('./clans', 'clans');
+const pvpRouter = safeRequire('./pvp', 'pvp');
+const statusRouter = safeRequire('./status', 'status');
+const marketRouter = safeRequire('./market', 'market');
+const energyRouter = safeRequire('./energy', 'energy');
+const referralRouter = safeRequire('./referral', 'referral');
+const seasonsRouter = safeRequire('./seasons', 'seasons');
+const purchaseRouter = safeRequire('./purchase', 'purchase');
+const itemsRouter = safeRequire('./items', 'items');
+const profileRouter = safeRequire('./profile', 'profile');
+const debuffsRouter = safeRequire('./debuffs', 'debuffs');
 
-// Используем модули с проверкой
-if (locationsRouter) router.use(locationsRouter);
-else console.error('[FATAL] locationsRouter = null');
-if (inventoryRouter) router.use(inventoryRouter);
-else console.error('[FATAL] inventoryRouter = null');
-if (bossesRouter) router.use(bossesRouter);
-else console.error('[FATAL] bossesRouter = null');
-if (craftingRouter) router.use(craftingRouter);
-else console.error('[FATAL] craftingRouter = null');
-if (baseRouter) router.use(baseRouter);
-else console.error('[FATAL] baseRouter = null');
-if (clansRouter) router.use(clansRouter);
-else console.error('[FATAL] clansRouter = null');
-if (pvpRouter) router.use(pvpRouter);
-else console.error('[FATAL] pvpRouter = null');
-if (statusRouter) router.use(statusRouter);
-else console.error('[FATAL] statusRouter = null');
-if (marketRouter) router.use(marketRouter);
-else console.error('[FATAL] marketRouter = null');
-if (energyRouter) router.use(energyRouter);
-else console.error('[FATAL] energyRouter = null');
-if (referralRouter) router.use(referralRouter);
-else console.error('[FATAL] referralRouter = null');
-if (seasonsRouter) router.use(seasonsRouter);
-else console.error('[FATAL] seasonsRouter = null');
-if (purchaseRouter) router.use(purchaseRouter);
-else console.error('[FATAL] purchaseRouter = null');
-if (itemsRouter) router.use(itemsRouter);
-else console.error('[FATAL] itemsRouter = null');
-if (profileRouter) router.use(profileRouter);
-else console.error('[FATAL] profileRouter = null');
-if (debuffsRouter) router.use(debuffsRouter);
-else console.error('[FATAL] debuffsRouter = null');
+// Используем модули с namespace
+router.use('/locations', locationsRouter);
+router.use('/inventory', inventoryRouter);
+router.use('/bosses', bossesRouter);
+router.use('/crafting', craftingRouter);
+router.use('/base', baseRouter);
+router.use('/clans', clansRouter);
+router.use('/pvp', pvpRouter);
+router.use('/status', statusRouter);
+router.use('/market', marketRouter);
+router.use('/energy', energyRouter);
+router.use('/referral', referralRouter);
+router.use('/seasons', seasonsRouter);
+router.use('/purchase', purchaseRouter);
+router.use('/items', itemsRouter);
+router.use('/profile', profileRouter);
+router.use('/debuffs', debuffsRouter);
 
-// Экспортируем для использования в других модулях
-module.exports = router;
-module.exports.authenticatePlayer = authenticatePlayer;
+// Экспортируем всё необходимое
+module.exports = Object.assign(router, { 
+    authenticatePlayer, 
+    criticalActionLimiter, 
+    generalLimiter 
+});

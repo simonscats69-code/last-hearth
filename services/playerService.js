@@ -163,8 +163,11 @@ async function regenerateEnergy(playerId) {
  * Добавить опыт и проверить повышение уровня
  * Бизнес-логика: проверка на level up
  * Использует транзакцию с блокировкой для избежания race condition
+ * @param {number} playerId - ID игрока
+ * @param {number} exp - Количество опыта
+ * @param {object} client - Опциональный клиент транзакции (для использования внутри внешней транзакции)
  */
-async function addExperience(playerId, exp) {
+async function addExperience(playerId, exp, client = null) {
     if (!Number.isInteger(playerId) || playerId <= 0) {
         throw { message: 'Некорректный ID игрока', code: 'INVALID_PLAYER_ID', statusCode: 400 };
     }
@@ -172,64 +175,20 @@ async function addExperience(playerId, exp) {
         throw { message: 'exp должен быть положительным числом', code: 'INVALID_EXP', statusCode: 400 };
     }
     
-    // Используем транзакцию с блокировкой строки игрока
+    // Если передан client, используем его (для внешней транзакции)
+    if (client) {
+        const result = await db.addExperienceWithLevelUp(client, playerId, exp, getExpForLevel);
+        return { success: true, ...result };
+    }
+    
+    // Иначе создаём свою транзакцию (обратная совместимость)
     const { tx } = require('../db/database');
     
     const result = await tx(async () => {
-        // Блокируем строку игрока
-        const lockedPlayer = await db.lockPlayer(playerId);
-        
-        if (!lockedPlayer) {
-            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-        }
-        
-        // Добавляем опыт
-        let newExperience = lockedPlayer.experience + exp;
-        let newLevel = lockedPlayer.level;
-        let leveledUp = false;
-        
-        // Проверяем нужен ли level up
-        const expNeeded = getExpForLevel(lockedPlayer.level);
-        
-        if (newExperience >= expNeeded) {
-            // Level up!
-            newLevel = lockedPlayer.level + 1;
-            newExperience = newExperience - expNeeded;
-            
-            // Обновляем с учётом level up
-            await db.levelUpPlayer(playerId);
-            leveledUp = true;
-            
-            await db.logPlayerAction(playerId, 'level_up', { 
-                old_level: lockedPlayer.level, 
-                new_level: newLevel,
-                exp_gained: exp
-            });
-            
-            logger.info(`Игрок ${playerId} повысил уровень до ${newLevel}!`);
-        } else {
-            // Просто обновляем опыт
-            await db.updatePlayerExperienceNoLevelUp(playerId, exp);
-            
-            await db.logPlayerAction(playerId, 'add_experience', { 
-                exp_gained: exp,
-                total_exp: newExperience,
-                level: newLevel
-            });
-        }
-        
-        return { 
-            level: newLevel, 
-            experience: newExperience,
-            leveled_up: leveledUp,
-            exp_needed: getExpForLevel(newLevel)
-        };
+        return await db.addExperienceWithLevelUp(client, playerId, exp, getExpForLevel);
     });
     
-    return { 
-        success: true, 
-        ...result
-    };
+    return { success: true, ...result };
 }
 
 module.exports = {
