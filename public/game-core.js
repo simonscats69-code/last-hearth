@@ -254,7 +254,7 @@ const Templates = {
                     <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
                 </div>
                 <div class="boss-hp-text">${boss.current_hp}/${boss.max_hp} HP</div>
-                <button class="btn attack-btn" onclick="attackBoss(${boss.id})">Атаковать</button>
+                <button class="btn attack-btn" onclick="attackBoss()">Атаковать</button>
             </div>
         `;
     },
@@ -296,7 +296,7 @@ const API = {
         profile: '/api/game/profile',
         inventory: '/api/game/inventory',
         locations: '/api/game/locations',
-        bosses: '/api/game/bosses',
+        bosses: '/game/bosses',
         recipes: '/api/game/crafting/recipes',
         clan: '/api/game/clans/clan',
         market: '/api/game/market/listings',
@@ -434,7 +434,15 @@ function render(containerIdOrEl, data, template, options = {}) {
     
     // Кэширование
     if (cacheKey && cacheSection && typeof RenderCache !== 'undefined') {
-        const key = cacheKey + (isArray ? `_${data.length}` : '');
+        // Создаём хеш для надёжного ключа кэша
+        const dataStr = JSON.stringify(data);
+        let hash = 0;
+        for (let i = 0; i < dataStr.length; i++) {
+            const char = dataStr.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        const key = cacheKey + '_' + hash;
         const html = RenderCache.get(cacheSection, () => {
             return isArray 
                 ? data.map(item => template(item)).join('')
@@ -450,48 +458,7 @@ function render(containerIdOrEl, data, template, options = {}) {
         : template(data);
 }
 
-/**
- * Универсальный рендер списка с опциями (используйте render())
- * @param {HTMLElement} container - контейнер
- * @param {Array} items - массив элементов
- * @param {Object} options - опции рендеринга
- * @deprecated Используйте render()
- */
-function renderListAdvanced(container, items, options = {}) {
-    const {
-        emptyHtml = Templates.empty(),
-        itemHtml = null,
-        itemFn = null,
-        cacheKey = null,
-        cacheSection = null
-    } = options;
-    
-    if (!container) return;
-    
-    // Пустой список
-    if (!items || items.length === 0) {
-        container.innerHTML = emptyHtml;
-        return;
-    }
-    
-    // Кэширование
-    if (cacheKey && cacheSection && typeof RenderCache !== 'undefined') {
-        const cached = RenderCache.get(cacheSection, () => {
-            return items.map(item => 
-                itemFn ? itemFn(item) : (itemHtml ? itemHtml(item) : '')
-            ).join('');
-        }, cacheKey);
-        container.innerHTML = cached;
-        return;
-    }
-    
-    // Без кэша
-    container.innerHTML = items.map(item => 
-        itemFn ? itemFn(item) : (itemHtml ? itemHtml(item) : '')
-    ).join('');
-}
 
-// ============================================================================
 // performAction - универсальный обработчик действий
 // ============================================================================
 
@@ -529,7 +496,7 @@ async function performAction(type, data, options = {}) {
     }
     
     try {
-        const result = await apiRequest(`/api/game/${type}`, data);
+        const result = await apiRequest(`/api/game/${type}`, { method: 'POST', body: data });
         
         if (result.success) {
             showNotification?.(result.message || successMsg, 'success');
@@ -717,7 +684,6 @@ window.clearAllIntervals = clearAllIntervals;
 window.lockAction = lockAction;
 window.unlockAction = unlockAction;
 window.render = render;
-window.renderListAdvanced = renderListAdvanced;
 window.performAction = performAction;
 window.getEl = getEl;
 window.setHtml = setHtml;
