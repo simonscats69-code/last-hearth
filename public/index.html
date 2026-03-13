@@ -21,6 +21,22 @@
     <!-- Telegram WebApp API -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
+    <!-- Глобальный обработчик ошибок -->
+    <script>
+        // Отлавливаем необработанные ошибки промисов
+        window.addEventListener('unhandledrejection', function(event) {
+            console.error('[Global] Unhandled Promise Rejection:', event.reason);
+            // Не показываем пользователю технические ошибки
+        });
+        
+        // Отлавливаем ошибки скриптов
+        window.addEventListener('error', function(event) {
+            console.error('[Global] Script Error:', event.message, 'at', event.filename + ':' + event.lineno);
+        });
+        
+        console.log('[index.html] Страница загружена, версия: 4');
+    </script>
+    
     <!-- Предподключение для внешних ресурсов -->
     <link rel="preconnect" href="https://telegram.org">
     <link rel="preconnect" href="https://adsgram.app">

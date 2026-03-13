@@ -25,14 +25,11 @@ function getTelegramId() {
 
 /**
  * Получить initData для авторизации
+ * ВАЖНО: Никогда не использовать localStorage - initData имеет срок жизни
  * @returns {string|null}
  */
 function getInitData() {
-    // Проверяем существование Telegram WebApp
-    if (!window.Telegram?.WebApp) {
-        return localStorage.getItem('init_data');
-    }
-    return window.Telegram.WebApp.initData || null;
+    return window.Telegram?.WebApp?.initData || null;
 }
 
 /**

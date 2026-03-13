@@ -11,10 +11,49 @@
 // ============================================================================
 
 /**
+ * Ожидание загрузки Telegram WebApp
+ * @returns {Promise<void>}
+ */
+async function waitForTelegramWebApp(maxWait = 5000) {
+    const startTime = Date.now();
+    
+    return new Promise((resolve) => {
+        // Если уже загружен - сразу разрешаем
+        if (window.Telegram?.WebApp?.initData) {
+            console.log('[waitForTelegramWebApp] Telegram WebApp уже загружен');
+            resolve();
+            return;
+        }
+        
+        // Функция проверки
+        const check = () => {
+            if (window.Telegram?.WebApp?.initData) {
+                console.log('[waitForTelegramWebApp] Telegram WebApp загружен');
+                resolve();
+                return;
+            }
+            
+            if (Date.now() - startTime > maxWait) {
+                console.warn('[waitForTelegramWebApp] Таймаут ожидания Telegram WebApp');
+                resolve(); // Всё равно продолжаем - может работать через localStorage
+                return;
+            }
+            
+            setTimeout(check, 100);
+        };
+        
+        check();
+    });
+}
+
+/**
  * Инициализация игры
  */
 async function initGame() {
     try {
+        // Ждём пока загрузится Telegram WebApp
+        await waitForTelegramWebApp();
+        
         // Инициализируем Telegram WebApp
         if (window.Telegram?.WebApp) {
             window.Telegram.WebApp.ready();
@@ -23,16 +62,28 @@ async function initGame() {
         
         const telegramId = getTelegramId();
         if (!telegramId) {
-            showModal('Ошибка', 'Не удалось определить пользователя Telegram');
+            showModal('Ошибка', 'Не удалось определить пользователя Telegram. Откройте игру через бота @LastHearthBot');
             return;
         }
 
+        // Проверяем доступность initData
+        const initData = getInitData();
+        if (!initData) {
+            console.warn('[initGame] initData не доступен, пробуем из localStorage');
+            // Пробуем получить из localStorage
+            const storedInitData = localStorage.getItem('init_data');
+            if (!storedInitData) {
+                showModal('Ошибка авторизации', 'Откройте игру через бота @LastHearthBot');
+                return;
+            }
+        }
+
         // Проверяем/создаём игрока
-        await apiRequest('/verify-telegram', {
+        const verifyResult = await apiRequest('/verify-telegram', {
             method: 'POST',
             body: { telegram_id: telegramId }
         });
-
+        
         // Загружаем профиль
         await loadProfile();
         
@@ -57,12 +108,23 @@ async function initGame() {
     } catch (error) {
         console.error('Init error:', error);
         const loadingScreen = document.getElementById('loading-screen');
+        
+        // Проверяем тип ошибки для более понятного сообщения
+        let errorMessage = 'Напиши /start боту';
+        if (error.message && error.message.includes('401')) {
+            errorMessage = 'Ошибка авторизации. Обновите игру';
+        } else if (error.message && error.message.includes('Игрок не найден')) {
+            errorMessage = 'Напиши /start боту';
+        } else if (error.message && error.message.includes('network') || error.message?.includes('fetch')) {
+            errorMessage = 'Нет соединения. Проверь интернет';
+        }
+        
         if (loadingScreen) {
             loadingScreen.innerHTML = `
                 <div class="loader">
                     <div class="loader-icon">😿</div>
                     <h1>Ошибка</h1>
-                    <p>Напиши /start боту</p>
+                    <p>${errorMessage}</p>
                 </div>
             `;
         }

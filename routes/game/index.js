@@ -49,10 +49,19 @@ async function authenticatePlayer(req, res, next) {
         const initData = req.headers['x-init-data'];
         const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
+        // Логируем информацию о запросе для отладки
+        logger.info('[game] authenticatePlayer вызван', {
+            path: req.path,
+            hasInitData: !!initData,
+            initDataLength: initData?.length || 0
+        });
+
         // Проверяем наличие initData
         if (!initData) {
+            logger.warn('[game] Отсутствует initData', { path: req.path, headers: Object.keys(req.headers) });
             return res.status(401).json({ 
-                error: 'Требуется авторизация. Откройте игру через Telegram.' 
+                error: 'Требуется авторизация. Откройте игру через Telegram.',
+                code: 'NO_INIT_DATA'
             });
         }
 
@@ -61,12 +70,28 @@ async function authenticatePlayer(req, res, next) {
             logger.error('[game] TELEGRAM_BOT_TOKEN не настроен');
             return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
         }
+        
+        // Проверяем что токен не placeholder
+        if (botToken === 'YOUR_BOT_TOKEN_HERE' || botToken.includes('your_')) {
+            logger.error('[game] TELEGRAM_BOT_TOKEN установлен как placeholder! нужно заменить на реальный токен');
+            return res.status(500).json({ 
+                error: 'Ошибка конфигурации сервера. Токен бота не настроен.',
+                code: 'BOT_TOKEN_NOT_CONFIGURED'
+            });
+        }
 
         // Валидация подписи initData
         const validated = validateTelegramInitData(initData, botToken);
         if (!validated) {
-            logger.warn('[game] Неверная подпись initData', { path: req.path });
-            return res.status(401).json({ error: 'Неверная подпись авторизации' });
+            logger.warn('[game] Неверная подпись initData', { 
+                path: req.path, 
+                initDataLength: initData.length,
+                initDataPrefix: initData.substring(0, 100)
+            });
+            return res.status(401).json({ 
+                error: 'Неверная подпись авторизации. Обновите игру.',
+                code: 'INVALID_SIGNATURE'
+            });
         }
 
         // Получаем ID пользователя из данных Telegram
@@ -79,8 +104,13 @@ async function authenticatePlayer(req, res, next) {
         );
 
         if (!player) {
+            logger.warn('[game] Игрок не найден в БД', { 
+                telegramId: telegramUserId, 
+                path: req.path 
+            });
             return res.status(404).json({ 
-                error: 'Игрок не найден. Начните игру через /start в боте.' 
+                error: 'Игрок не найден. Начните игру через /start в боте.',
+                code: 'PLAYER_NOT_FOUND'
             });
         }
 

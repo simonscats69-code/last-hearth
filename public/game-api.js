@@ -122,14 +122,19 @@ function createLoadingTimeout(showLoading) {
 
 /**
  * Получить initData для авторизации
+ * ВАЖНО: Никогда не использовать localStorage - initData имеет срок жизни (auth_date)
+ * и становится invalid через некоторое время
  * @returns {string|null}
  */
 function getInitData() {
-    if (!window.Telegram?.WebApp) {
-        // Для разработки - используем localStorage
-        return localStorage.getItem('init_data');
+    // Всегда используем только initData от Telegram WebApp
+    const initData = window.Telegram?.WebApp?.initData || null;
+    
+    if (!initData) {
+        console.error('[getInitData] Telegram WebApp initData отсутствует');
     }
-    return window.Telegram.WebApp.initData || null;
+    
+    return initData;
 }
 
 /**
@@ -159,6 +164,13 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         },
         ...options
     };
+
+    console.log('[apiRequest] Отправка запроса', {
+        url,
+        method: options.method || 'GET',
+        hasInitData: !!initData,
+        initDataLength: initData?.length || 0
+    });
 
     if (config.body && typeof config.body === 'object') {
         config.body = JSON.stringify(config.body);
@@ -205,7 +217,10 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             
             if (isLastAttempt) {
                 console.error('API Request failed:', error);
-                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                // Проверяем код ошибки для более понятного сообщения
+                if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+                    showNotification('Ошибка авторизации. Обновите игру через Telegram.', 'error');
+                } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
                     showNotification('Пропал интернет. Проверь соединение.', 'error');
                 } else {
                     showNotification('Ошибка: ' + error.message, 'error');

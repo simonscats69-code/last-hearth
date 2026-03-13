@@ -14,6 +14,7 @@ const logger = require('./logger');
  */
 function validateTelegramInitData(initData, botToken) {
     if (!initData || !botToken) {
+        logger.warn('[telegramAuth] Отсутствуют параметры', { hasInitData: !!initData, hasBotToken: !!botToken });
         return null;
     }
 
@@ -27,19 +28,28 @@ function validateTelegramInitData(initData, botToken) {
 
         // Проверяем наличие обязательных полей
         if (!data.hash || !data.user || !data.auth_date) {
+            logger.warn('[telegramAuth] Отсутствуют обязательные поля', { 
+                hasHash: !!data.hash, 
+                hasUser: !!data.user, 
+                hasAuthDate: !!data.auth_date,
+                keys: Object.keys(data)
+            });
             return null;
         }
 
-        // Проверяем время (не старше 24 часов)
+        // Проверяем время (не старше 15 минут - рекомендация Telegram)
         const authDate = parseInt(data.auth_date, 10);
         const now = Math.floor(Date.now() / 1000);
-        if (now - authDate > 86400) {
+        const age = now - authDate;
+        if (age > 900) { // 15 минут = 900 секунд
+            logger.warn('[telegramAuth] initData истёк', { age, authDate, now, maxAge: 900 });
             return null;
         }
 
-        // Проверяем подпись
+        // Создаём секретный ключ по алгоритму Telegram
+        // secret_key = HMAC_SHA256("WebAppData", bot_token)
         const secretKey = crypto
-            .createHash('sha256')
+            .createHmac('sha256', 'WebAppData')
             .update(botToken)
             .digest();
         
@@ -59,19 +69,37 @@ function validateTelegramInitData(initData, botToken) {
             .map(key => `${key}=${data[key]}`)
             .join('\n');
 
+        logger.info('[telegramAuth] Проверка подписи', {
+            userId,
+            dataKeys: Object.keys(data),
+            dataCheckStringLength: dataCheckString.length
+        });
+
+        // Проверяем подпись: hash = HMAC_SHA256(secret_key, data_check_string)
         const hash = crypto
             .createHmac('sha256', secretKey)
             .update(dataCheckString)
             .digest('hex');
 
-        // Безопасное сравнение хешей с использованием timingSafeEqual
+        // Безопасное сравнение хешей
         let isValid = false;
         try {
-            const hashBuf = Buffer.from(hash);
-            const dataHashBuf = Buffer.from(data.hash);
+            const hashBuf = Buffer.from(hash, 'hex');
+            const dataHashBuf = Buffer.from(data.hash, 'hex');
+            
+            logger.info('[telegramAuth] Сравнение хешей', {
+                userId,
+                computedHash: hash,
+                receivedHash: data.hash,
+                hashMatch: hash === data.hash,
+                computedLength: hashBuf.length,
+                receivedLength: dataHashBuf.length
+            });
             
             if (hashBuf.length === dataHashBuf.length) {
                 isValid = crypto.timingSafeEqual(hashBuf, dataHashBuf);
+            } else {
+                logger.warn('[telegramAuth] Разная длина хешей', { expectedLength: hashBuf.length, actualLength: dataHashBuf.length });
             }
         } catch (e) {
             // Ошибка при сравнении - считаем невалидным
@@ -80,7 +108,7 @@ function validateTelegramInitData(initData, botToken) {
         }
         
         if (!isValid) {
-            logger.warn({ type: 'ws_auth_failed', reason: 'hash_mismatch', userId });
+            logger.warn({ type: 'ws_auth_failed', reason: 'hash_mismatch', userId, computedHash: hash, receivedHash: data.hash });
             return null;
         }
 
