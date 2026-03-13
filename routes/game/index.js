@@ -1,6 +1,23 @@
 /**
  * Главный файл игровых роутеров
  * Объединяет все модули game API
+ *
+ * КОНФИГУРАЦИЯ RATE LIMITER:
+ * ========================
+ * Оптимизировано на основе анализа HTTP методов:
+ * - GET: ~27 endpoints (чтение) - высокий лимит
+ * - POST/PUT: ~35 endpoints (запись) - средний лимит
+ *
+ * Лимиты:
+ * - criticalActionLimiter: 15/мин (PvP атака)
+ * - clanBossActionLimiter: 20/мин (клан-босс)
+ * - bossClickLimiter: БЕЗ ОГРАНИЧЕНИЙ (атака босса - защита energy + cooldown)
+ * - generalActionLimiter: 50/мин (крафтинг, перемещение, поиск)
+ * - readLimiter: 200/мин (GET запросы - статус, профиль, локации)
+ * - purchaseLimiter: 10/мин (покупки - с запасом для промо-акций)
+ *
+ * ВАЖНО: Атака босса НЕ ограничена rate limiter!
+ * Защита: energy (1 за клик) + cooldown (500ms)
  */
 
 const express = require('express');
@@ -16,11 +33,29 @@ const log = {
     error: (...args) => console.error('[game]', ...args)
 };
 
-// Rate limiter для критических endpoints (атака босса, PvP)
+// ============================================================================
+// КОНФИГУРАЦИЯ RATE LIMITER
+// ============================================================================
+
+/**
+ * Критические действия - PvP атака
+ * Лимит: 15 запросов в минуту
+ * 
+ * ВАЖНО: Атака босса НЕ ограничена rate limiter'ом!
+ * Защита обеспечивается:
+ * - Energy: каждый клик тратит 1 энергию
+ * - Cooldown: 500ms между атаками (проверка на сервере)
+ * 
+ * Endpoints: pvp/attack, pvp/attack-hit
+ */
 const criticalActionLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 минута
-    max: 30, // 30 запросов в минуту
-    message: { error: 'Слишком много запросов. Попробуйте позже.' },
+    max: 15, // 15 запросов в минуту
+    message: { 
+        error: 'Слишком много атак. Отдохните минуту.', 
+        code: 'CRITICAL_ACTION_LIMIT',
+        retryAfter: 60 
+    },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
@@ -28,17 +63,134 @@ const criticalActionLimiter = rateLimit({
     }
 });
 
-// Rate limiter для обычных endpoints
-const generalLimiter = rateLimit({
+/**
+ * Клан-босс - отдельный лимитер
+ * Лимит: 20 запросов в минуту (координированная атака клана)
+ * 
+ * Endpoints: clans/clan-boss/attack, clans/clan-boss/spawn
+ */
+const clanBossActionLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 минута
-    max: 100, // 100 запросов в минуту
-    message: { error: 'Слишком много запросов. Попробуйте позже.' },
+    max: 20, // 20 запросов в минуту
+    message: { 
+        error: 'Слишком много атак на кланового босса.', 
+        code: 'CLAN_BOSS_LIMIT',
+        retryAfter: 60 
+    },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
         return req.player?.id || req.ip;
     }
 });
+
+/**
+ * Безлимитный режим для кликов (атака босса)
+ * НЕ ограничивает rate limiter, защита обеспечивается:
+ * - Energy: каждый клик тратит 1 энергию
+ * - Cooldown: 500ms между атаками
+ * 
+ * Endpoints: bosses/attack-boss, bosses/raid/:id/attack
+ */
+const bossClickLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 1000, // Высокий лимит только для формальности
+    message: { error: 'Подождите...' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.player?.id || req.ip,
+    // Пропускаем все запросы - реальная защита через energy + cooldown
+    skip: () => true
+});
+
+/**
+ * Обычные действия - крафтинг, перемещение, поиск
+ * Средний лимит: 50 запросов в минуту
+ * 
+ * Endpoints: crafting, locations/move, locations/search,
+ *            items/upgrade-item, base/build, market/create
+ */
+const generalActionLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 минута
+    max: 50, // 50 запросов в минуту
+    message: { 
+        error: 'Слишком много запросов. Попробуйте позже.', 
+        code: 'ACTION_LIMIT',
+        retryAfter: 60 
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        return req.player?.id || req.ip;
+    }
+});
+
+/**
+ * GET запросы - чтение данных
+ * Высокий лимит: 200 запросов в минуту
+ * 
+ * Endpoints: status, profile, inventory, locations,
+ *            achievements, seasons, market listings
+ */
+const readLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 минута
+    max: 200, // 200 GET запросов в минуту
+    message: { 
+        error: 'Слишком много запросов на чтение.', 
+        code: 'READ_LIMIT',
+        retryAfter: 60 
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        return req.player?.id || req.ip;
+    }
+});
+
+/**
+ * Покупки - особо строгий лимит
+ * Лимит: 10 запросов в минуту (с запасом для мульти-покупок)
+ * 
+ * Защищает от:
+ * - Покупки/продажи ценных предметов ботами
+ * - Дублирования транзакций
+ * 
+ * Endpoints: purchase, market/buy
+ */
+const purchaseLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 минута
+    max: 10, // 10 запросов в минуту (с запасом для промо-акций)
+    message: { 
+        error: 'Слишком много покупок. Подождите минуту.', 
+        code: 'PURCHASE_LIMIT',
+        retryAfter: 60 
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        return req.player?.id || req.ip;
+    },
+    // Важно: не пропускаем запросы
+    skip: () => false
+});
+
+/**
+ * Inline rate limit для особо критических случаев
+ * Используется непосредственно в роутерах
+ */
+const createInlineLimiter = (maxRequests, windowMs = 60000) => {
+    return rateLimit({
+        windowMs,
+        max: maxRequests,
+        message: { 
+            error: 'Слишком много запросов. Попробуйте позже.',
+            code: 'INLINE_LIMIT'
+        },
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: (req) => req.player?.id || req.ip
+    });
+};
 
 /**
  * Middleware авторизации для Telegram Mini App
@@ -195,6 +347,11 @@ router.use('/debuffs', debuffsRouter);
 // Экспортируем всё необходимое
 module.exports = Object.assign(router, { 
     authenticatePlayer, 
-    criticalActionLimiter, 
-    generalLimiter 
+    criticalActionLimiter,     // 15/мин - PvP атака
+    clanBossActionLimiter,     // 20/мин - клан-босс
+    bossClickLimiter,          // безлимитный - клики (защита energy + cooldown)
+    generalActionLimiter,      // 50/мин - крафтинг, перемещение
+    readLimiter,               // 200/мин - GET запросы
+    purchaseLimiter,           // 10/мин - покупки
+    createInlineLimiter        // для особых случаев
 });
