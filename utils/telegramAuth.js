@@ -27,6 +27,13 @@ function validateTelegramInitData(initData, botToken) {
         }
 
         // Логируем информацию о запросе для отладки
+        console.log('[telegramAuth] Валидация initData', {
+            hasDataHash: !!data.hash,
+            hasDataUser: !!data.user,
+            hasAuthDate: !!data.auth_date,
+            authDate: data.auth_date,
+            userPreview: data.user?.substring(0, 50)
+        });
         logger.info('[telegramAuth] Валидация initData', {
             hasDataHash: !!data.hash,
             hasDataUser: !!data.user,
@@ -89,6 +96,13 @@ function validateTelegramInitData(initData, botToken) {
             .createHmac('sha256', secretKey)
             .update(dataCheckString)
             .digest('hex');
+
+        console.log('[telegramAuth] Сравнение хешей', {
+            userId,
+            dataCheckStringPreview: dataCheckString.substring(0, 100),
+            computedHash: hash,
+            receivedHash: data.hash
+        });
 
         // Безопасное сравнение хешей
         let isValid = false;
