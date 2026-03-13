@@ -262,25 +262,6 @@ function getClanRoleEmoji(role) {
 // ВАЛИДАЦИЯ
 // ============================================================================
 
-/**
- * Проверить корректность числа
- * @param {any} value - Значение
- * @returns {boolean}
- */
-function isValidNumber(value) {
-    return typeof value === 'number' && !isNaN(value) && isFinite(value);
-}
-
-/**
- * Проверить диапазон числа
- * @param {number} value - Значение
- * @param {number} min - Минимум
- * @param {number} max - Максимум
- * @returns {boolean}
- */
-function isInRange(value, min, max) {
-    return isValidNumber(value) && value >= min && value <= max;
-}
 
 // ============================================================================
 // ЭКСПОРТ
@@ -303,5 +284,3 @@ window.closeModal = closeModal;
 window.getItemCategory = getItemCategory;
 window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;
-window.isValidNumber = isValidNumber;
-window.isInRange = isInRange;

@@ -67,16 +67,11 @@ function showScreen(screenName) {
 function onScreenOpen(screenName) {
     switch (screenName) {
         case 'main':
-            // Обновляем главный экран
-            loadProfile();
+            // Обновляем главный экран (данные уже загружены)
+            renderMain();
             break;
             
         case 'map':
-            // Рисуем карту
-            renderLocations();
-            break;
-            
-        case 'inventory':
             // Загружаем инвентарь
             loadInventory();
             break;
@@ -98,7 +93,7 @@ function onScreenOpen(screenName) {
             
         case 'rating':
             // Загружаем рейтинг
-            loadRatings();
+            loadRating();
             break;
             
         case 'clan':
@@ -122,8 +117,10 @@ function onScreenOpen(screenName) {
             break;
             
         case 'profile':
-            // Загружаем профиль
-            loadProfile();
+            // Профиль уже загружен, обновляем UI из кэша
+            if (gameState.player) {
+                updateProfileUI(gameState.player);
+            }
             break;
     }
 }
@@ -174,23 +171,13 @@ function initTabHandlers() {
     document.querySelectorAll('.rating-tab').forEach(tab => {
         tab.addEventListener('click', () => {
             const tabName = tab.dataset.tab;
-            loadRatings(tabName);
+            loadRating(tabName);
         });
     });
     
     // Табы магазина (если ещё не инициализированы)
     if (typeof initShopHandlers === 'function') {
         initShopHandlers();
-    }
-}
-
-/**
- * Показать экран загрузки
- */
-function showLoadingScreen() {
-    const loading = document.getElementById('loading-screen');
-    if (loading) {
-        loading.style.display = 'flex';
     }
 }
 

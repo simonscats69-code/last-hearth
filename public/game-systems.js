@@ -142,15 +142,6 @@ async function loadProfile() {
         data.status = {};
     }
     
-    // Также загружаем статус переломов и инфекций
-    try {
-        const statusData = await apiRequest('/api/game/status');
-        // Добавляем расширенный статус к данным игрока
-        data.status.infections = statusData.infections?.count || 0;
-    } catch (e) {
-        console.log('Статус недоступен:', e);
-    }
-    
     gameState.player = data;
     
     // Обновляем UI
@@ -171,17 +162,12 @@ async function updateProfileUI(player) {
     const levelEl = document.getElementById('player-level');
     if (levelEl) levelEl.textContent = player.level || 1;
     
-    // Загружаем звание
-    try {
-        const rankData = await apiRequest('/api/game/profile'); // TODO: добавить /rank эндпоинт
-        if (rankData && rankData.rank) {
-            const rankEl = document.getElementById('player-rank');
-            if (rankEl) {
-                rankEl.textContent = `${rankData.rank.icon} ${rankData.rank.name}`;
-            }
+    // Звание игрока (из данных профиля)
+    if (player.rank) {
+        const rankEl = document.getElementById('player-rank');
+        if (rankEl) {
+            rankEl.textContent = `${player.rank.icon} ${player.rank.name}`;
         }
-    } catch (error) {
-        console.error('Ошибка загрузки звания:', error);
     }
     
     // Статы - с защитой от null
@@ -365,11 +351,25 @@ async function moveToLocation(locationId) {
 }
 
 /**
- * Обновление отображения энергии
+ * Обновление отображения энергии (локальное обновление без запроса к API)
  */
 function updateEnergyDisplay() {
-    if (gameState.player) {
-        loadProfile(); // Просто перезагружаем профиль
+    if (!gameState.player || !gameState.player.status) return;
+    
+    const status = gameState.player.status;
+    const maxEnergy = status.max_energy || 100;
+    const currentEnergy = status.energy || 0;
+    
+    // Обновляем текст энергии
+    const energyText = document.getElementById('energy-text');
+    if (energyText) {
+        energyText.textContent = `${currentEnergy}/${maxEnergy}`;
+    }
+    
+    // Обновляем прогресс-бар энергии
+    const energyBar = document.getElementById('energy-bar');
+    if (energyBar) {
+        energyBar.style.width = `${(currentEnergy / maxEnergy) * 100}%`;
     }
 }
 
@@ -666,14 +666,6 @@ async function loadBosses() {
         renderBosses(gameState.bosses);
     } catch (error) {
         console.error('Bosses error:', error);
-        // Пробуем старый API как fallback
-        try {
-            const data = await apiRequest('/api/game/bosses');
-            gameState.bosses = data.bosses;
-            renderBosses(data.bosses);
-        } catch (fallbackError) {
-            console.error('Fallback bosses error:', fallbackError);
-        }
     }
 }
 
@@ -930,8 +922,10 @@ async function attackBoss() {
                 }, 3000);
             }
             
-            // Обновляем профиль
-            await loadProfile();
+            // Обновляем энергию локально (уже обновлена выше из result.player_energy)
+            if (gameState.player?.status) {
+                gameState.player.status.energy = result.player_energy;
+            }
             
             playSound('attack');
         } else {
@@ -951,14 +945,36 @@ async function attackBoss() {
 
 /**
  * Показать анимацию урона
+ * @param {number} damage - количество нанесённого урона (опционально)
  */
-function showDamageAnimation() {
+function showDamageAnimation(damage) {
     const bossIcon = document.getElementById('boss-icon');
     if (bossIcon) {
         bossIcon.classList.add('damage-shake');
         setTimeout(() => {
             bossIcon.classList.remove('damage-shake');
         }, 300);
+    }
+    
+    // Показываем значение урона если передан
+    if (damage !== undefined && damage !== null) {
+        const damageText = document.createElement('div');
+        damageText.className = 'damage-text';
+        damageText.textContent = `-${damage}`;
+        damageText.style.cssText = `
+            position: absolute;
+            color: #ff4444;
+            font-size: 24px;
+            font-weight: bold;
+            animation: fadeUp 1s ease-out forwards;
+            pointer-events: none;
+        `;
+        
+        const bossContainer = document.querySelector('.boss-fight-container');
+        if (bossContainer) {
+            bossContainer.appendChild(damageText);
+            setTimeout(() => damageText.remove(), 1000);
+        }
     }
     
     // Создаём эффект частиц
@@ -1704,12 +1720,6 @@ function renderRating(items, type) {
     }
 }
 
-/**
- * Загрузка рейтинга игроков
- */
-function loadRatings(type = 'score') {
-    return loadRating(type);
-}
 
 // ============================================================================
 // РЕКЛАМА
@@ -1827,18 +1837,6 @@ function showDamageEffect() {
     }
 }
 
-/**
- * Визуальный эффект при получении лечения
- */
-function showHealEffect() {
-    const app = document.getElementById('app');
-    if (app) {
-        app.style.animation = 'healFlash 0.3s';
-        setTimeout(() => {
-            app.style.animation = '';
-        }, 300);
-    }
-}
 
 /**
  * Звуковые эффекты (упрощённо)
@@ -1868,28 +1866,14 @@ function playSound(type) {
 /**
  * Обновление отображения баланса игрока
  */
-function updateBalanceDisplay(newBalance) {
+function updateBalanceDisplay(newCoins) {
     const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display');
     balanceElements.forEach(el => {
-        if (el) el.textContent = formatNumber(newBalance);
+        if (el) el.textContent = formatNumber(newCoins);
     });
-    if (gameState?.player) gameState.player.balance = newBalance;
+    if (gameState?.player) gameState.player.coins = newCoins;
 }
 
-/**
- * Отрисовка локаций на карте
- */
-function renderLocations(locations) {
-    const container = document.getElementById('locations-grid');
-    if (!container) return;
-    container.innerHTML = locations.map(loc => `
-        <div class="location-card" data-location-id="${loc.id}">
-            <img src="${loc.image_url || ''}" alt="${loc.name}">
-            <div class="location-name">${loc.name}</div>
-            <div class="location-level">Уровень: ${loc.min_level || 1}</div>
-        </div>
-    `).join('');
-}
 
 /**
  * Загрузка списка заданий
@@ -1971,7 +1955,7 @@ function renderRaids(raids) {
             <div class="raid-item" data-raid-id="${raid.id}" data-boss-id="${raid.boss.id}">
                 <div class="raid-boss-icon">${raid.boss.icon || '👾'}</div>
                 <div class="raid-info">
-                    <div class="raid-boss-name">${raid.boss.name} (ур. ${raid.boss.level})</div>
+                    <div class="raid-boss-name">${raid.boss.name}</div>
                     <div class="raid-hp-bar">
                         <div class="raid-hp-fill" style="width: ${hpPercent}%"></div>
                     </div>
@@ -2140,13 +2124,10 @@ window.upgradeBuilding = upgradeBuilding;
 window.restoreEnergy = restoreEnergy;
 window.loadRating = loadRating;
 window.renderRating = renderRating;
-window.loadRatings = loadRatings;
 window.watchAd = watchAd;
 window.healInfections = healInfections;
 window.showLootAnimation = showLootAnimation;
 window.showDamageEffect = showDamageEffect;
-window.showHealEffect = showHealEffect;
 window.playSound = playSound;
 window.updateBalanceDisplay = updateBalanceDisplay;
-window.renderLocations = renderLocations;
 window.loadQuests = loadQuests;
