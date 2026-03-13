@@ -140,9 +140,9 @@ const logPlayerAction = async (playerId, action, metadata = {}) => {
 
 /**
  * Получение списка рецептов с пагинацией
- * GET /craft/recipes?limit=20&offset=0
+ * GET /recipes?limit=20&offset=0
  */
-router.get('/craft/recipes', async (req, res) => {
+router.get('/recipes', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
@@ -234,9 +234,9 @@ router.get('/craft/recipes', async (req, res) => {
 
 /**
  * Крафт предмета (основная операция с транзакцией)
- * POST /craft
+ * POST /
  */
-router.post('/craft', async (req, res) => {
+router.post('/', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
 
@@ -408,7 +408,7 @@ router.post('/craft', async (req, res) => {
  * @deprecated Используйте /craft/recipes с параметрами limit и offset
  * Получение списка рецептов (старый формат)
  */
-router.get('/craft/recipes/old', async (req, res) => {
+router.get('/recipes/old', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     

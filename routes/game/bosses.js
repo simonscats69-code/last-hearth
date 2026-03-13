@@ -216,7 +216,7 @@ function calculateDamage(bossId, playerLevel, player, masteries = []) {
  * 
  * Ключи списываются здесь, а не при каждой атаке!
  */
-router.post('/boss/start', async (req, res) => {
+router.post('/start', async (req, res) => {
     const client = await pool.connect();
     
     try {
@@ -350,7 +350,7 @@ router.post('/boss/start', async (req, res) => {
  * - Бонус за убийства каждого босса
  * - Итоговый бонус для каждого босса
  */
-router.get('/boss-bonuses', async (req, res) => {
+router.get('/bonuses', async (req, res) => {
     try {
         const player = req.player;
         

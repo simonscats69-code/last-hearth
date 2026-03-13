@@ -416,7 +416,7 @@ async function checkPlayerStatus() {
  */
 async function loadRecipes() {
     try {
-        const data = await apiRequest('/api/game/craft/recipes');
+        const data = await apiRequest('/api/game/crafting/recipes');
         gameState.recipes = data.recipes;
         
         // Обновляем энергию
@@ -986,7 +986,7 @@ let clanState = {
  */
 async function loadClan() {
     try {
-        const data = await apiRequest('/api/game/clan');
+        const data = await apiRequest('/api/game/clans/clan');
         
         if (data?.success && data?.data?.in_clan) {
             clanState.clan = data.data.clan;
@@ -1156,7 +1156,7 @@ async function createClan() {
     }
     
     try {
-        const result = await apiRequest('/api/game/clan/create', {
+        const result = await apiRequest('/api/game/clans/clan/create', {
             method: 'POST',
             body: { name, description, is_public: isPublic }
         });
@@ -1221,7 +1221,7 @@ function renderClansList(clans) {
  */
 async function joinClan(clanId) {
     try {
-        const result = await apiRequest('/api/game/clan/join', {
+        const result = await apiRequest('/api/game/clans/clan/join', {
             method: 'POST',
             body: { clan_id: clanId }
         });
@@ -1247,7 +1247,7 @@ async function leaveClan() {
     if (!confirm('Ты уверен, что хочешь покинуть клан?')) return;
     
     try {
-        const result = await apiRequest('/api/game/clan/leave', {
+        const result = await apiRequest('/api/game/clans/clan/leave', {
             method: 'POST',
             body: {}
         });
@@ -1269,7 +1269,7 @@ async function leaveClan() {
  */
 async function loadClanMembers() {
     try {
-        const data = await apiRequest('/api/game/clan/members');
+        const data = await apiRequest('/api/game/clans/clan/members');
         if (data.success) showClanMembersModal(data.members);
     } catch (error) {
         console.error('Load members error:', error);
@@ -1339,7 +1339,7 @@ async function donateToClan(amount) {
     }
     
     try {
-        const result = await apiRequest('/api/game/clan/donate', {
+        const result = await apiRequest('/api/game/clans/clan/donate', {
             method: 'POST',
             body: { amount }
         });
@@ -1382,7 +1382,7 @@ function showClanSettings() {
  */
 async function loadClanChat() {
     try {
-        const data = await apiRequest('/api/game/clan/chat');
+        const data = await apiRequest('/api/game/clans/clan/chat');
         if (data.success) renderClanChat(data.data.messages);
     } catch (error) {
         console.error('Load chat error:', error);
@@ -1427,7 +1427,7 @@ async function sendClanMessage() {
     if (!message) return;
     
     try {
-        const result = await apiRequest('/api/game/clan/chat', {
+        const result = await apiRequest('/api/game/clans/clan/chat', {
             method: 'POST',
             body: { message }
         });
