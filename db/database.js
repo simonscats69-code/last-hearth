@@ -302,7 +302,6 @@ async function initDatabase() {
             description TEXT,
             -- Характеристики босса
             level INTEGER DEFAULT 1,
-            health INTEGER DEFAULT 1000,
             max_health INTEGER DEFAULT 1000,
             damage INTEGER DEFAULT 10,
             -- Награда
