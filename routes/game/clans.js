@@ -14,27 +14,15 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
-const { withPlayerLock, withClanLock, withPlayerAndClanLock } = require('../../utils/transactions');
-const { validateId, validateString, sanitizeName, validatePositiveInt, validateRange } = require('../../utils/apiHelpers');
-const { ok, fail, error, notFound, badRequest, guard, wrap } = require('../../utils/apiHelpers');
-const { logPlayerAction, parseJSONField, serializeJSONField } = require('../../utils/transactions');
+const { withPlayerLock } = require('../../utils/transactions');
+const { validateId, sanitizeName } = require('../../utils/apiHelpers');
+const { ok, fail, notFound, badRequest, wrap } = require('../../utils/apiHelpers');
+const { logPlayerAction } = require('../../utils/transactions');
 
 // =============================================================================
 // УТИЛИТЫ
 // =============================================================================
 
-/**
- * Безопасный парсинг JSON
- */
-function safeJsonParse(value, fallback = {}) {
-    if (value === null || value === undefined) return fallback;
-    if (typeof value === 'object') return value;
-    try {
-        return typeof value === 'string' ? JSON.parse(value) : value;
-    } catch {
-        return fallback;
-    }
-}
 const { pool } = require('../../db/database');
 const { logger } = require('../../utils/logger');
 
@@ -329,168 +317,6 @@ router.get('/', wrap(async (req, res) => {
             total
         }
     });
-}));
-
-/**
- * Получение информации о клановом боссе
- * GET /clan-boss
- */
-router.get('/clan-boss', wrap(async (req, res) => {
-    const player = req.player;
-    const playerId = player?.id;
-    
-    if (!player.clan_id) {
-        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
-    }
-    
-    const boss = await queryOne(
-        `SELECT * FROM clan_bosses WHERE clan_id = $1 AND status = 'active' 
-         ORDER BY started_at DESC LIMIT 1`, 
-        [player.clan_id]
-    );
-    
-    if (!boss) return ok(res, { active: false, message: 'Нет активного кланового босса' });
-    
-    ok(res, { active: true, boss });
-}));
-
-/**
- * Вызов кланового босса
- * POST /clan-boss/spawn
- */
-router.post('/clan-boss/spawn', wrap(async (req, res) => {
-    const player = req.player;
-    const playerId = player?.id;
-    
-    if (!player.clan_id) {
-        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
-    }
-    
-    if (player.clan_role !== 'leader') {
-        return fail(res, 'Только лидер может вызвать босса', 'NOT_LEADER', 403);
-    }
-    
-    if (player.coins < 500) {
-        return fail(res, 'Нужно 500 монет', 'NOT_ENOUGH_COINS');
-    }
-    
-    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
-        if (!lockedPlayer) {
-            throw new Error('Игрок не найден');
-        }
-
-        if (lockedPlayer.coins < 500) {
-            throw new Error('Недостаточно монет');
-        }
-
-        try {
-            await query(
-                `INSERT INTO clan_bosses (clan_id, hp, max_hp, status, started_at) 
-                 VALUES ($1, 10000, 10000, 'active', NOW())`, 
-                [player.clan_id]
-            );
-        } catch (e) {
-            throw { message: 'Босс уже активен', code: 'BOSS_ALREADY_ACTIVE' };
-        }
-        
-        await query(`UPDATE players SET coins = coins - 500 WHERE id = $1`, [playerId]);
-
-        // Логируем
-        await logPlayerAction(pool, playerId, 'clan_boss_spawn', {
-            clan_id: player.clan_id,
-            cost: 500
-        });
-
-        return { message: 'Клановый босс призван!' };
-    });
-    
-    if (result?.code) return fail(res, result.message, result.code);
-    ok(res, result);
-}));
-
-/**
- * Атака кланового босса
- * POST /clan-boss/attack
- */
-router.post('/clan-boss/attack', wrap(async (req, res) => {
-    const player = req.player;
-    const playerId = player?.id;
-    
-    if (!player.clan_id) {
-        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
-    }
-    
-    const now = Date.now();
-    if (now - new Date(player.last_attack || 0) < 1000) {
-        return fail(res, 'Слишком быстро, подожди 1 секунду', 'ATTACK_TOO_FAST', 429);
-    }
-    
-    // Получаем экипировку игрока
-    const equipment = safeJsonParse(player.equipment, {});
-    const weapon = equipment.weapon || {};
-    
-    // Расчёт урона (аналогично обычному боссу)
-    let damage = (player.strength * 2) + (player.agility * 0.5);
-    
-    // Бонус от оружия
-    if (weapon.damage) {
-        damage += weapon.damage;
-    }
-    
-    // Модификации оружия
-    if (weapon.modifications?.sharpening) {
-        damage += weapon.modifications.sharpening * 2;
-    }
-    
-    // Бонус уровня (+10% за уровень)
-    damage *= (1 + player.level * 0.1);
-    
-    damage = Math.max(1, Math.floor(damage));
-    
-    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
-        if (!lockedPlayer) {
-            throw new Error('Игрок не найден');
-        }
-
-        if (lockedPlayer.energy < 5) {
-            throw new Error('Недостаточно энергии');
-        }
-
-        const bossResult = await query(`
-            UPDATE clan_bosses
-            SET hp = GREATEST(0, hp - $1)
-            WHERE clan_id = $2 AND status = 'active' AND hp > 0
-            RETURNING id, hp, max_hp
-        `, [damage, player.clan_id]);
-        
-        if (!bossResult.rows.length) throw { message: 'Нет активного босса', code: 'NO_BOSS' };
-        
-        const playerResult = await query(
-            `UPDATE players SET energy = energy - 5, last_attack = NOW() 
-             WHERE id = $1 AND energy >= 5 
-             RETURNING energy`, 
-            [playerId]
-        );
-        
-        if (!playerResult.rows.length) throw { message: 'Недостаточно энергии', code: 'NOT_ENOUGH_ENERGY' };
-
-        // Логируем атаку
-        await logPlayerAction(pool, playerId, 'clan_boss_attack', {
-            clan_id: player.clan_id,
-            damage,
-            boss_hp: bossResult.rows[0].hp
-        });
-
-        return { 
-            damage, 
-            boss_hp: bossResult.rows[0].hp, 
-            boss_max_hp: bossResult.rows[0].max_hp, 
-            energy_spent: 5 
-        };
-    });
-    
-    if (result?.code) return fail(res, result.message, result.code);
-    ok(res, result);
 }));
 
 /**

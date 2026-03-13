@@ -2080,73 +2080,6 @@ async function claimDailyTaskReward(playerId, taskId) {
         return { success: true, reward };
     }
 }
-const CLAN_BOSS_TEMPLATES = [
-    { name: 'Древний мутант', description: 'Монстр из недр земли', icon: '👹', level: 25, health: 5000, damage: 40, exp: 1500, coins: 750, stars: 5 },
-    { name: 'Мажор-мутант', description: 'Богатый выживший, сошедший с ума', icon: '💼', level: 35, health: 10000, damage: 70, exp: 3000, coins: 1500, stars: 10 },
-    { name: 'Главарь орды', description: 'Лидер армии мародёров', icon: '💀', level: 50, health: 20000, damage: 120, exp: 6000, coins: 3000, stars: 20 },
-    { name: 'Мегазомби', description: 'Гигантский зомби', icon: '🧟', level: 65, health: 35000, damage: 180, exp: 10000, coins: 5000, stars: 35 },
-    { name: 'Кибер-медведь', description: 'Мутировавший медведь с имплантами', icon: '🐻‍❄️', level: 80, health: 50000, damage: 250, exp: 15000, coins: 7500, stars: 50 },
-    { name: 'Бог пустоши', description: 'Практически непобедим', icon: '🌌', level: 100, health: 100000, damage: 400, exp: 30000, coins: 15000, stars: 100 }
-];
-async function spawnClanBoss(clanId) {
-    await query('UPDATE clan_bosses SET is_active = false WHERE clan_id = $1', [clanId]);
-    const template = CLAN_BOSS_TEMPLATES[Math.floor(Math.random() * CLAN_BOSS_TEMPLATES.length)];
-    const clan = await queryOne('SELECT level FROM clans WHERE id = $1', [clanId]);
-    const clanLevel = clan?.level || 1;
-    const levelMultiplier = 1 + (clanLevel - 1) * 0.1;
-    const health = Math.floor(template.health * levelMultiplier);
-    const damage = Math.floor(template.damage * levelMultiplier);
-    const exp = Math.floor(template.exp * levelMultiplier);
-    const coins = Math.floor(template.coins * levelMultiplier);
-    const result = await query(
-        `INSERT INTO clan_bosses 
-         (clan_id, boss_name, boss_description, boss_icon, boss_level, max_health, current_health, damage, reward_experience, reward_coins, reward_stars, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)
-         RETURNING *`,
-        [clanId, template.name, template.description, template.icon, Math.floor(template.level * levelMultiplier), health, health, damage, exp, coins, template.stars]
-    );
-    return result.rows[0];
-}
-async function getClanBoss(clanId) {
-    return queryOne(
-        'SELECT * FROM clan_bosses WHERE clan_id = $1 AND is_active = true',
-        [clanId]
-    );
-}
-async function damageClanBoss(clanId, damage) {
-    const boss = await getClanBoss(clanId);
-    if (!boss) {
-        return { success: false, error: 'Нет активного босса' };
-    }
-    const newHealth = Math.max(0, boss.current_health - damage);
-    await query('UPDATE clan_bosses SET current_health = $1 WHERE id = $2', [newHealth, boss.id]);
-    if (newHealth <= 0) {
-        await query('UPDATE clan_bosses SET is_active = false, killed_at = NOW() WHERE id = $1', [boss.id]);
-        await query('UPDATE clans SET bosses_killed = bosses_killed + 1 WHERE id = $1', [clanId]);
-        const members = await queryAll('SELECT id FROM players WHERE clan_id = $1', [clanId]);
-        const rewardPerMember = {
-            exp: Math.floor(boss.reward_experience / Math.max(1, members.length)),
-            coins: Math.floor(boss.reward_coins / Math.max(1, members.length))
-        };
-        for (const member of members) {
-            await query('UPDATE players SET experience = experience + $1, coins = coins + $2 WHERE id = $3', 
-                [rewardPerMember.exp, rewardPerMember.coins, member.id]);
-        }
-        return { 
-            success: true, 
-            killed: true,
-            reward: boss.reward_stars > 0 ? { stars: boss.reward_stars, exp: boss.reward_experience, coins: boss.reward_coins } : { exp: boss.reward_experience, coins: boss.reward_coins },
-            members_count: members.length
-        };
-    }
-    return { success: true, killed: false, current_health: newHealth, max_health: boss.max_health };
-}
-async function getClanBossHistory(clanId, limit = 10) {
-    return queryAll(
-        'SELECT * FROM clan_bosses WHERE clan_id = $1 AND is_active = false ORDER BY killed_at DESC LIMIT $2',
-        [clanId, limit]
-    );
-}
 async function closePool() {
     if (pool) {
         await pool.end();
@@ -2209,10 +2142,6 @@ module.exports = {
     getDailyTasks,
     updateDailyTaskProgress,
     claimDailyTaskReward,
-    spawnClanBoss,
-    getClanBoss,
-    damageClanBoss,
-    getClanBossHistory,
     closePool
 };
 
