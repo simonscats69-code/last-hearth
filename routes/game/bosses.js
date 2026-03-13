@@ -483,7 +483,6 @@ router.get('/', async (req, res) => {
                 description: boss.description,
                 hp: currentHp,
                 max_hp: boss.max_health,
-                damage: boss.damage,
                 rewards: {
                     coins: boss.reward_coins,
                     exp: boss.reward_experience,
