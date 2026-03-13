@@ -465,6 +465,11 @@ async function renewListing(listingId) {
     }
 
     try {
+        // TODO: нужен бэкенд эндпоинт /api/game/market/renew
+        // Пока возвращаем заглушку
+        showModal('⏳ В разработке', 'Функция продления объявлений временно недоступна');
+        return { success: false, message: 'Функция в разработке' };
+        /*
         const result = await apiRequest('/api/game/market/renew', {
             method: 'POST',
             body: { listing_id: listingId, duration }
@@ -476,6 +481,7 @@ async function renewListing(listingId) {
         } else {
             showModal('❌ Ошибка', result.message);
         }
+        */
     } catch (error) {
         console.error('Ошибка продления:', error);
     }
@@ -511,8 +517,13 @@ async function cancelListing(listingId) {
  * Загрузка истории сделок
  */
 async function loadMarketHistory() {
+    // TODO: нужен бэкенд эндпоинт /api/game/market/history
     try {
+        // Пока возвращаем пустые данные
+        const data = { total_sales: 0, total_purchases: 0, history: [] };
+        /*
         const data = await apiRequest('/api/game/market/history');
+        */
         
         const statsDiv = document.getElementById('market-history-stats');
         if (statsDiv) {
@@ -1271,7 +1282,7 @@ async function loadSeasonRating() {
  */
 async function loadDailyTasks() {
     try {
-        const result = await apiRequest('/api/game/daily-tasks');
+        const result = await apiRequest('/api/game/seasons/daily-tasks');
         
         const tasksProgress = document.getElementById('daily-tasks-progress');
         const tasksList = document.getElementById('daily-tasks-list');
@@ -1401,7 +1412,7 @@ async function joinSeason() {
  */
 async function claimDailyTask(taskId) {
     try {
-        const result = await apiRequest('/api/game/daily-tasks/claim', {
+        const result = await apiRequest('/api/game/seasons/daily-tasks/claim', {
             method: 'POST',
             body: { task_id: taskId }
         });

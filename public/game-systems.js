@@ -173,7 +173,7 @@ async function updateProfileUI(player) {
     
     // Загружаем звание
     try {
-        const rankData = await apiRequest('/api/game/rank');
+        const rankData = await apiRequest('/api/game/profile'); // TODO: добавить /rank эндпоинт
         if (rankData && rankData.rank) {
             const rankEl = document.getElementById('player-rank');
             if (rankEl) {
@@ -296,7 +296,7 @@ async function searchLoot() {
     }
     
     try {
-        const result = await apiRequest('/api/game/search', {
+        const result = await apiRequest('/api/game/locations/search', {
             method: 'POST',
             body: {}
         });
@@ -345,7 +345,7 @@ async function searchLoot() {
  */
 async function moveToLocation(locationId) {
     try {
-        const result = await apiRequest('/api/game/move', {
+        const result = await apiRequest('/api/game/locations/move', {
             method: 'POST',
             body: { location_id: locationId }
         });
@@ -491,7 +491,7 @@ function renderRecipes(recipes) {
 async function craftItem(recipeId) {
     if (!lockAction('crafting')) return;
     try {
-        const data = await apiRequest('/api/game/craft', {
+        const data = await apiRequest('/api/game/crafting/', {
             method: 'POST',
             body: { recipe_id: recipeId }
         });
@@ -520,7 +520,7 @@ async function craftItem(recipeId) {
 async function useItem(itemId) {
     if (!lockAction('useItem')) return;
     try {
-        const result = await apiRequest('/api/game/use-item', {
+        const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
             body: { item_id: parseInt(itemId) }
         });
@@ -1634,7 +1634,7 @@ async function restoreEnergy() {
     }
     
     try {
-        const result = await apiRequest('/api/game/restore-energy', {
+        const result = await apiRequest('/api/game/energy/buy-energy', {
             method: 'POST',
             body: { amount: 10 }
         });
@@ -1895,12 +1895,14 @@ function renderLocations(locations) {
  * Загрузка списка заданий
  */
 async function loadQuests() {
+    // TODO: нужно создать эндпоинт /api/game/quests в бэкенде
+    // Пока используем daily-tasks как заглушка
     try {
-        const data = await apiRequest('/api/game/quests');
+        const data = await apiRequest('/api/game/seasons/daily-tasks');
         return data;
     } catch (e) {
         console.error('Ошибка загрузки квестов:', e);
-        return [];
+        return { tasks: [] };
     }
 }
 
@@ -1938,7 +1940,7 @@ window.attackBoss = attackBoss;
  */
 async function loadRaids() {
     try {
-        const data = await apiRequest('/api/game/raids');
+        const data = await apiRequest('/api/game/bosses/raids');
         gameState.raids = data.raids || [];
         gameState.raidsParticipating = data.participating_boss_ids || [];
         return data;
@@ -1994,7 +1996,7 @@ function renderRaids(raids) {
  */
 async function startRaid(bossId, isRaid = true) {
     try {
-        const result = await apiRequest('/api/game/raid/start', {
+        const result = await apiRequest('/api/game/bosses/raid/start', {
             method: 'POST',
             body: { boss_id: bossId, is_raid: isRaid }
         });
@@ -2029,7 +2031,7 @@ async function startRaid(bossId, isRaid = true) {
  */
 async function joinRaid(raidId) {
     try {
-        const result = await apiRequest(`/api/game/raid/${raidId}/join`, {
+        const result = await apiRequest(`/api/game/bosses/raid/${raidId}/join`, {
             method: 'POST'
         });
         
@@ -2058,7 +2060,7 @@ async function attackRaid(raidId) {
     try {
         lockAction('attack');
         
-        const result = await apiRequest(`/api/game/raid/${raidId}/attack`, {
+        const result = await apiRequest(`/api/game/bosses/raid/${raidId}/attack`, {
             method: 'POST'
         });
         
