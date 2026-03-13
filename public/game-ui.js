@@ -1758,13 +1758,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
     
-    // Инициализация
-    initGame();
-    initReferralHandlers();
+    // Инициализация - ждём загрузки всех модулей
+    function startGame() {
+        // Проверяем, что game-screens.js загружен
+        if (typeof showScreen !== 'function') {
+            console.warn('game-screens.js не загружен, ожидаем...');
+            setTimeout(startGame, 100);
+            return;
+        }
+        
+        initGame();
+        initReferralHandlers();
+        
+        // Инициализация навигации из game-screens.js
+        if (typeof initNavigationHandlers === 'function') {
+            initNavigationHandlers();
+        }
+    }
     
-    // Инициализация навигации из game-screens.js
-    if (typeof initNavigationHandlers === 'function') {
-        initNavigationHandlers();
+    // Запускаем игру после полной загрузки DOM
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startGame);
+    } else {
+        startGame();
     }
     
     // Обработчик меню "Ещё"
