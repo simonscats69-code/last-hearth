@@ -8,8 +8,10 @@ const { query, queryOne, queryAll, transaction } = require('../../db/database');
 
 /**
  * Получение реферального кода
+ * GET /referral/code → GET /api/game/referral/code
+ * Путь: /code (внутри роутера)
  */
-router.get('/referral/code', async (req, res) => {
+router.get('/code', async (req, res) => {
     try {
         const player = req.player;
         
@@ -26,6 +28,8 @@ router.get('/referral/code', async (req, res) => {
 
 /**
  * Установка реферального кода
+ * PUT /referral/code → PUT /api/game/referral/code
+ * Путь: /code (внутри роутера)
  */
 async function useReferralCode(player, code, res) {
     if (!code) {
@@ -84,7 +88,7 @@ async function useReferralCode(player, code, res) {
     });
 }
 
-router.put('/referral/code', async (req, res) => {
+router.put('/code', async (req, res) => {
     try {
         const { code } = req.body;
         const player = req.player;
@@ -97,8 +101,10 @@ router.put('/referral/code', async (req, res) => {
 
 /**
  * Статистика рефералов
+ * GET /referral/stats → GET /api/game/referral/stats
+ * Путь: /stats (внутри роутера)
  */
-router.get('/referral/stats', async (req, res) => {
+router.get('/stats', async (req, res) => {
     try {
         const player = req.player;
         
@@ -125,8 +131,10 @@ router.get('/referral/stats', async (req, res) => {
 
 /**
  * Использование реферального кода (POST)
+ * POST /referral/use → POST /api/game/referral/use
+ * Путь: /use (внутри роутера)
  */
-router.post('/referral/use', async (req, res) => {
+router.post('/use', async (req, res) => {
     try {
         const { code } = req.body;
         const player = req.player;
@@ -139,8 +147,10 @@ router.post('/referral/use', async (req, res) => {
 
 /**
  * Список рефералов
+ * GET /referral/list → GET /api/game/referral/list
+ * Путь: /list (внутри роутера)
  */
-router.get('/referral/list', async (req, res) => {
+router.get('/list', async (req, res) => {
     try {
         const player = req.player;
         
@@ -163,8 +173,10 @@ router.get('/referral/list', async (req, res) => {
 
 /**
  * Получение бонуса за реферала
+ * POST /referral/claim-bonus → POST /api/game/referral/claim-bonus
+ * Путь: /claim-bonus (внутри роутера)
  */
-router.post('/referral/claim-bonus', async (req, res) => {
+router.post('/claim-bonus', async (req, res) => {
     try {
         const player = req.player;
         

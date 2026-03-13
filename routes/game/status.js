@@ -113,9 +113,10 @@ function validateItemId(itemId) {
 
 /**
  * Получение текущего состояния
- * @deprecated Используйте StatusAPI.getStatus()
+ * GET /status → GET /api/game/status
+ * Путь: / (корень внутри роутера)
  */
-router.get('/status', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const player = req.player;
         
@@ -152,9 +153,10 @@ router.get('/status', async (req, res) => {
 
 /**
  * Проверка состояния (ежедневный эффект)
- * @deprecated Используйте StatusAPI.checkStatus()
+ * POST /status/check → POST /api/game/status/check
+ * Путь: /check (внутри роутера)
  */
-router.post('/status/check', async (req, res) => {
+router.post('/check', async (req, res) => {
     try {
         const player = req.player;
         const playerId = player.id;
@@ -240,9 +242,10 @@ router.post('/status/check', async (req, res) => {
 
 /**
  * Лечение/восстановление
- * @deprecated Используйте StatusAPI.heal()
+ * POST /status/heal → POST /api/game/status/heal
+ * Путь: /heal (внутри роутера)
  */
-router.post('/status/heal', async (req, res) => {
+router.post('/heal', async (req, res) => {
     try {
         const { type, item_id } = req.body;
         const player = req.player;

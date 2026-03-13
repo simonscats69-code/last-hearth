@@ -147,9 +147,10 @@ const logPlayerAction = async (playerId, action, metadata = {}) => {
 
 /**
  * Получение списка зданий
- * GET /base/buildings
+ * GET /base/buildings → GET /api/game/base/buildings
+ * Путь: /buildings (внутри роутера)
  */
-router.get('/base/buildings', async (req, res) => {
+router.get('/buildings', async (req, res) => {
     const playerId = req.player?.id;
     
     try {
@@ -176,9 +177,10 @@ router.get('/base/buildings', async (req, res) => {
 
 /**
  * Получение базы игрока
- * GET /base
+ * GET /base → GET /api/game/base
+ * Путь: / (корень внутри роутера)
  */
-router.get('/base', async (req, res) => {
+router.get('/', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
@@ -197,9 +199,10 @@ router.get('/base', async (req, res) => {
 
 /**
  * Постройка/улучшение здания (с транзакцией)
- * POST /base/build
+ * POST /base/build → POST /api/game/base/build
+ * Путь: /build (внутри роутера)
  */
-router.post('/base/build', async (req, res) => {
+router.post('/build', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
 

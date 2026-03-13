@@ -350,8 +350,9 @@ router.post('/modify-item', async (req, res) => {
 
 /**
  * Получение списка предметов (справочник)
+ * Путь: / (корень внутри роутера)
  */
-router.get('/items', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         // Валидация пагинации
         let limit = parseInt(req.query.limit) || 50;

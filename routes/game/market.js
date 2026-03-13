@@ -91,9 +91,10 @@ function parsePagination(queryParams, defaultLimit = 50, maxLimit = 100) {
 
 /**
  * Получение объявлений на рынке
- * @deprecated Используйте /market/listings-v2 с пагинацией
+ * GET /market/listings → GET /api/game/market/listings
+ * Путь: /listings (внутри роутера)
  */
-router.get('/market/listings', async (req, res) => {
+router.get('/listings', async (req, res) => {
     try {
         const { type, rarity, sort = 'price', order = 'asc' } = req.query;
         const { limit, offset } = parsePagination(req.query, 50, 100);
@@ -136,8 +137,10 @@ router.get('/market/listings', async (req, res) => {
 
 /**
  * Получение объявлений с пагинацией (v2)
+ * GET /market/listings-v2 → GET /api/game/market/listings-v2
+ * Путь: /listings-v2 (внутри роутера)
  */
-router.get('/market/listings-v2', async (req, res) => {
+router.get('/listings-v2', async (req, res) => {
     try {
         const { type, rarity, sort = 'price', order = 'asc' } = req.query;
         const { limit, offset } = parsePagination(req.query, 50, 100);
@@ -208,8 +211,10 @@ router.get('/market/listings-v2', async (req, res) => {
 
 /**
  * Мои объявления
+ * GET /market/my → GET /api/game/market/my
+ * Путь: /my (внутри роутера)
  */
-router.get('/market/my', async (req, res) => {
+router.get('/my', async (req, res) => {
     try {
         const player = req.player;
         
@@ -257,8 +262,10 @@ router.get('/market/my', async (req, res) => {
 
 /**
  * Создание объявления
+ * POST /market/create → POST /api/game/market/create
+ * Путь: /create (внутри роутера)
  */
-router.post('/market/create', async (req, res) => {
+router.post('/create', async (req, res) => {
     const client = await pool.connect();
     
     try {
@@ -345,8 +352,10 @@ router.post('/market/create', async (req, res) => {
 
 /**
  * Покупка предмета
+ * POST /market/buy → POST /api/game/market/buy
+ * Путь: /buy (внутри роутера)
  */
-router.post('/market/buy', async (req, res) => {
+router.post('/buy', async (req, res) => {
     const client = await pool.connect();
     
     try {
@@ -483,8 +492,10 @@ router.post('/market/buy', async (req, res) => {
 
 /**
  * Отмена объявления
+ * POST /market/cancel → POST /api/game/market/cancel
+ * Путь: /cancel (внутри роутера)
  */
-router.post('/market/cancel', async (req, res) => {
+router.post('/cancel', async (req, res) => {
     const client = await pool.connect();
     
     try {
@@ -561,8 +572,10 @@ router.post('/market/cancel', async (req, res) => {
 
 /**
  * Информация о рынке
+ * GET /market/info → GET /api/game/market/info
+ * Путь: /info (внутри роутера)
  */
-router.get('/market/info', async (req, res) => {
+router.get('/info', async (req, res) => {
     try {
         const stats = await queryOne(`
             SELECT 

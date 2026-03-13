@@ -404,9 +404,9 @@ router.get('/boss-bonuses', async (req, res) => {
 
 /**
  * Получение списка боссов с их статусами и мастерством игрока
- * GET /bosses
+ * GET /bosses (доступен как /api/game/bosses)
  */
-router.get('/bosses', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const player = req.player;
         

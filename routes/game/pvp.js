@@ -131,9 +131,10 @@ const logPlayerAction = async (playerId, action, metadata = {}) => {
 
 /**
  * Получение списка игроков для PvP с пагинацией
- * GET /pvp/players?limit=20&offset=0
+ * GET /pvp/players?limit=20&offset=0 → GET /api/game/pvp/players
+ * Путь: /players (внутри роутера)
  */
-router.get('/pvp/players', async (req, res) => {
+router.get('/players', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
@@ -198,9 +199,10 @@ router.get('/pvp/players', async (req, res) => {
 
 /**
  * Начало PvP атаки (с транзакцией)
- * POST /pvp/attack
+ * POST /pvp/attack → POST /api/game/pvp/attack
+ * Путь: /attack (внутри роутера)
  */
-router.post('/pvp/attack', async (req, res) => {
+router.post('/attack', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
 
@@ -288,9 +290,10 @@ router.post('/pvp/attack', async (req, res) => {
 
 /**
  * Удар в PvP (с транзакцией)
- * POST /pvp/attack-hit
+ * POST /pvp/attack-hit → POST /api/game/pvp/attack-hit
+ * Путь: /attack-hit (внутри роутера)
  */
-router.post('/pvp/attack-hit', async (req, res) => {
+router.post('/attack-hit', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
 
@@ -435,9 +438,10 @@ router.post('/pvp/attack-hit', async (req, res) => {
 
 /**
  * PvP статистика
- * GET /pvp/stats
+ * GET /pvp/stats → GET /api/game/pvp/stats
+ * Путь: /stats (внутри роутера)
  */
-router.get('/pvp/stats', async (req, res) => {
+router.get('/stats', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     

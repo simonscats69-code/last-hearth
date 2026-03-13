@@ -415,8 +415,9 @@ router.post('/move', async (req, res) => {
 
 /**
  * Получение списка локаций с пагинацией
+ * Путь: / (корень внутри роутера, который подключается с namespace /locations)
  */
-router.get('/locations', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const player = req.player;
         
@@ -472,9 +473,10 @@ router.get('/locations', async (req, res) => {
 
 /**
  * Получение списка локаций (устаревшая версия)
- * @deprecated Используйте GET /locations с единым форматом ответа
+ * @deprecated Используйте GET /locations
+ * Путь: /legacy (внутри роутера)
  */
-router.get('/locations-legacy', async (req, res) => {
+router.get('/legacy', async (req, res) => {
     try {
         const player = req.player;
         

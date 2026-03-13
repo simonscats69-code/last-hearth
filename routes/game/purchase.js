@@ -49,8 +49,10 @@ function isValidCurrency(value) {
 
 /**
  * Покупка предмета
+ * POST /purchase → POST /api/game/purchase
+ * Путь: / (корень внутри роутера)
  */
-router.post('/purchase', async (req, res) => {
+router.post('/', async (req, res) => {
     const client = await pool.connect();
     
     try {
@@ -189,9 +191,11 @@ router.post('/purchase', async (req, res) => {
 });
 
 /**
- * @deprecated Используйте /purchase (v2)
+ * Покупка предмета (устаревшая версия)
+ * @deprecated Используйте POST /purchase (корень)
+ * Путь: /old (внутри роутера)
  */
-router.post('/purchase-old', async (req, res) => {
+router.post('/old', async (req, res) => {
     try {
         const { item_id, currency = 'coins' } = req.body;
         const player = req.player;

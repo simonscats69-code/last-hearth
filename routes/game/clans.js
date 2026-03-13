@@ -283,8 +283,9 @@ router.post('/clan/leave', wrap(async (req, res) => {
 /**
  * Получение списка кланов с пагинацией
  * GET /clans?limit=20&offset=0
+ * Путь: / (корень внутри роутера)
  */
-router.get('/clans', wrap(async (req, res) => {
+router.get('/', wrap(async (req, res) => {
     const playerId = req.player?.id;
     
     // Пагинация

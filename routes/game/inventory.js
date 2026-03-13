@@ -318,8 +318,9 @@ router.post('/use-item', async (req, res) => {
 
 /**
  * Получение инвентаря
+ * Путь: / (корень внутри роутера)
  */
-router.get('/inventory', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const player = req.player;
         
@@ -361,9 +362,10 @@ router.get('/inventory', async (req, res) => {
 
 /**
  * Получение инвентаря (устаревшая версия)
- * @deprecated Используйте GET /inventory с единым форматом ответа
+ * @deprecated Используйте GET /inventory
+ * Путь: /legacy (внутри роутера)
  */
-router.get('/inventory-legacy', async (req, res) => {
+router.get('/legacy', async (req, res) => {
     try {
         const player = req.player;
         
