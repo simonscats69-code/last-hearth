@@ -227,9 +227,23 @@ async function loadMarketListings() {
         url += `sort=${encodeURIComponent(sort)}`;
 
         const data = await apiRequest(url);
-        renderMarketListings(data.listings);
+        
+        // Обрабатываем разные форматы ответа
+        const listings = data?.data?.listings || data?.listings || [];
+        renderMarketListings(listings);
     } catch (error) {
         console.error('Ошибка загрузки объявлений:', error);
+        
+        // При ошибке показываем пустой список
+        const container = getEl('market-listings-list');
+        if (container) {
+            container.innerHTML = '<div class="empty-message">Не удалось загрузить объявления</div>';
+        }
+        
+        // Показываем уведомление
+        if (typeof showNotification === 'function') {
+            showNotification('Ошибка загрузки рынка', 'error');
+        }
     }
 }
 

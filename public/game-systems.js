@@ -417,7 +417,10 @@ async function checkPlayerStatus() {
 async function loadRecipes() {
     try {
         const data = await apiRequest('/api/game/crafting/recipes');
-        gameState.recipes = data.recipes;
+        
+        // Обрабатываем разные форматы ответа
+        const recipes = data?.data?.recipes || data?.recipes || [];
+        gameState.recipes = recipes;
         
         // Обновляем энергию
         const craftEnergy = document.getElementById('craft-energy');
@@ -425,9 +428,19 @@ async function loadRecipes() {
             craftEnergy.textContent = gameState.player.status?.energy || 0;
         }
         
-        renderRecipes(data.recipes);
+        renderRecipes(recipes);
     } catch (error) {
         console.error('Recipes error:', error);
+        
+        // При ошибке показываем пустой список
+        gameState.recipes = [];
+        const list = document.getElementById('recipes-list');
+        if (list) {
+            list.innerHTML = '<div class="empty-message">Не удалось загрузить рецепты</div>';
+        }
+        
+        // Показываем уведомление об ошибке
+        showNotification('Ошибка загрузки рецептов', 'error');
     }
 }
 
@@ -653,19 +666,38 @@ async function loadBosses() {
     try {
         // Загружаем боссов через новый API
         const data = await apiRequest('/game/bosses');
-        gameState.bosses = data.bosses || data;
+        
+        // Обрабатываем разные форматы ответа API
+        // Сервер возвращает: { success: true, data: { bosses: [...] } }
+        if (data && data.data && data.data.bosses) {
+            gameState.bosses = data.data.bosses;
+        } else if (data && data.bosses) {
+            // Альтернативный формат: { bosses: [...] }
+            gameState.bosses = data.bosses;
+        } else if (Array.isArray(data)) {
+            // Формат напрямую: массив боссов
+            gameState.bosses = data;
+        } else {
+            // Неизвестный формат - используем пустой массив
+            console.warn('[loadBosses] Неизвестный формат ответа:', data);
+            gameState.bosses = [];
+        }
         
         // Обновляем информацию об энергии игрока
-        if (data.player_energy !== undefined) {
+        const playerEnergy = data?.data?.player_energy ?? data?.player_energy;
+        if (playerEnergy !== undefined) {
             if (!gameState.player) gameState.player = {};
             if (!gameState.player.status) gameState.player.status = {};
-            gameState.player.status.energy = data.player_energy;
-            gameState.player.status.max_energy = data.player_max_energy || 100;
+            gameState.player.status.energy = playerEnergy;
+            gameState.player.status.max_energy = data?.data?.player_max_energy ?? data?.player_max_energy ?? 100;
         }
         
         renderBosses(gameState.bosses);
     } catch (error) {
         console.error('Bosses error:', error);
+        // При ошибке показываем пустой список
+        gameState.bosses = [];
+        renderBosses([]);
     }
 }
 
@@ -1008,10 +1040,21 @@ async function loadClan() {
             clanState.clan = data.data.clan;
             renderClanScreen(data.data);
         } else {
+            // Игрок не в клане - показываем экран создания/вступления
             renderNoClanScreen();
         }
     } catch (error) {
         console.error('Clan load error:', error);
+        
+        // Обрабатываем ошибку 400 (игрок не в клане)
+        // Сервер возвращает: { success: false, error: 'Вы не состоите в клане', code: 'NOT_IN_CLAN' }
+        if (error.status === 400 || error.message?.includes('NOT_IN_CLAN')) {
+            renderNoClanScreen();
+            return;
+        }
+        
+        // При других ошибках показываем экран без клана
+        renderNoClanScreen();
     }
 }
 
@@ -1674,9 +1717,18 @@ async function restoreEnergy() {
 async function loadRating(type = 'players') {
     try {
         const data = await apiRequest(`/rating/${type}`);
-        renderRating(data.rating, type);
+        
+        // Обрабатываем разные форматы ответа
+        const rating = data?.data?.rating || data?.rating || [];
+        renderRating(rating, type);
     } catch (error) {
         console.error('Rating error:', error);
+        
+        // При ошибке показываем пустой список
+        const list = document.getElementById('rating-list');
+        if (list) {
+            list.innerHTML = '<div class="empty-message">Рейтинг временно недоступен</div>';
+        }
     }
 }
 
