@@ -142,7 +142,7 @@ function validateTelegramInitData(initData, botToken) {
             rawInitData: initData
         };
     } catch (err) {
-        logger.error('[telegramAuth] Ошибка валидации', { error: err.message, stack: err.stack });
+        console.error('[telegramAuth] Ошибка валидации', err.message, err.stack);
         return null;
     }
 }
