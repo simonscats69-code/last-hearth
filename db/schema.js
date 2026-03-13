@@ -119,11 +119,19 @@ async function createTables() {
             id SERIAL PRIMARY KEY,
             name VARCHAR(100) NOT NULL,
             description TEXT,
-            hp INTEGER DEFAULT 100,
-            max_hp INTEGER DEFAULT 100,
+            max_health INTEGER DEFAULT 100,
             reward_coins INTEGER DEFAULT 0,
-            reward_exp INTEGER DEFAULT 0,
-            reward_items JSONB DEFAULT '[]'
+            reward_experience INTEGER DEFAULT 0,
+            reward_items JSONB DEFAULT '[]',
+            required_key_id INTEGER,
+            icon VARCHAR(10),
+            boss_order INTEGER,
+            level INTEGER DEFAULT 1,
+            is_clan_boss BOOLEAN DEFAULT FALSE,
+            is_group_boss BOOLEAN DEFAULT FALSE,
+            key_drop_chance REAL DEFAULT 0.5,
+            keys_required INTEGER DEFAULT 1,
+            min_clan_level INTEGER DEFAULT 1
         )
     `);
 
