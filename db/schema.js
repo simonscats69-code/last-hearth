@@ -349,6 +349,22 @@ async function createTables() {
         )
     `);
 
+    // Логи действий игроков
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_logs (
+            id SERIAL PRIMARY KEY,
+            player_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
+            action VARCHAR(100) NOT NULL,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `);
+
+    await query(`
+        CREATE INDEX IF NOT EXISTS idx_player_logs_player ON player_logs(player_id);
+        CREATE INDEX IF NOT EXISTS idx_player_logs_created ON player_logs(created_at DESC);
+    `);
+
     console.log('✓ Таблицы БД созданы');
 }
 
