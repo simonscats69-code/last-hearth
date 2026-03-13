@@ -53,9 +53,6 @@ const gameState = {
     // Активные рейды
     activeRaids: [],
     
-    // Данные сезона
-    seasonData: null,
-    
     // Стрик входа (дней)
     loginStreak: 0,
     
@@ -102,7 +99,6 @@ function initGameState() {
     gameState.coins = 0;
     gameState.stars = 0;
     gameState.activeRaids = [];
-    gameState.seasonData = null;
 }
 
 /**

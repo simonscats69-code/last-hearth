@@ -1,6 +1,6 @@
 /**
  * game-systems.js - Игровые системы
- * Основная логика игры: профиль, инвентарь, крафт, боссы, кланы, PvP, рынок, сезоны, рефералы, база
+ * Основная логика игры: профиль, инвентарь, крафт, боссы, кланы, PvP, рынок, рефералы, база
  * 
  * Подключение: после game-core.js
  * Зависимости: gameState, apiRequest, showModal, showNotification, playSound, lockAction, unlockAction
@@ -1923,15 +1923,8 @@ function updateBalanceDisplay(newCoins) {
  * Загрузка списка заданий
  */
 async function loadQuests() {
-    // TODO: нужно создать эндпоинт /api/game/quests в бэкенде
-    // Пока используем daily-tasks как заглушка
-    try {
-        const data = await apiRequest('/api/game/seasons/daily-tasks');
-        return data;
-    } catch (e) {
-        console.error('Ошибка загрузки квестов:', e);
-        return { tasks: [] };
-    }
+    // Задания теперь отдельная система, возвращаем пустой список
+    return { tasks: [] };
 }
 
 // ============================================================================

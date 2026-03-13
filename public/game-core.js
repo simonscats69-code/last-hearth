@@ -301,7 +301,6 @@ const API = {
         clan: '/api/game/clans/clan',
         market: '/api/game/market/listings',
         pvp: '/api/game/pvp/players',
-        seasons: '/api/game/seasons/current',
         achievements: '/api/game/achievements/progress',
         status: '/api/game/status',
         energy: '/api/game/energy'

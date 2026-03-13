@@ -54,9 +54,6 @@ const endpoints = {
     // PvP
     pvpAttack: { endpoint: '/game/pvp/attack', method: 'POST' },
     
-    // Сезоны
-    seasonsCurrent: { endpoint: '/game/seasons/current', method: 'GET' },
-    
     // Рефералы
     referralCode: { endpoint: '/game/referral/code', method: 'GET' },
     referralUse: { endpoint: '/game/referral/use', method: 'POST' },

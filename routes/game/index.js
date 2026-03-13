@@ -131,7 +131,7 @@ const generalActionLimiter = rateLimit({
  * Защита: на уровне БД и кэширования.
  * 
  * Endpoints: status, profile, inventory, locations,
- *            achievements, seasons, market listings
+ *            achievements, market listings
  */
 // readLimiter УДАЛЁН - GET без ограничений
 
@@ -308,7 +308,6 @@ const statusRouter = safeRequire('./status', 'status');
 const marketRouter = safeRequire('./market', 'market');
 const energyRouter = safeRequire('./energy', 'energy');
 const referralRouter = safeRequire('./referral', 'referral');
-const seasonsRouter = safeRequire('./seasons', 'seasons');
 const purchaseRouter = safeRequire('./purchase', 'purchase');
 const itemsRouter = safeRequire('./items', 'items');
 const profileRouter = safeRequire('./profile', 'profile');
@@ -326,7 +325,6 @@ router.use('/status', statusRouter);
 router.use('/market', marketRouter);
 router.use('/energy', energyRouter);
 router.use('/referral', referralRouter);
-router.use('/seasons', seasonsRouter);
 router.use('/purchase', purchaseRouter);
 router.use('/items', itemsRouter);
 router.use('/profile', profileRouter);
