@@ -778,25 +778,25 @@ async function seedDatabase() {
         `, [set.name, set.description, set.icon, JSON.stringify(set.bonus_2), JSON.stringify(set.bonus_3), JSON.stringify(set.bonus_4)]);
     }
     const bosses = [
-        { name: 'Крысиный король', description: 'Огромная радиоактивная крыса', health: 500, damage: 10, reward_experience: 50, reward_coins: 25, icon: '🐀' },
-        { name: 'Бездомный псих', description: 'Сумасшедший выживший с монтировкой', health: 2000, damage: 25, reward_experience: 100, reward_coins: 50, icon: '🔪' },
-        { name: 'Медведь-мутант', description: 'Радиоактивный медведь', health: 5000, damage: 50, reward_experience: 200, reward_coins: 100, icon: '🐻' },
-        { name: 'Военный дрон', description: 'Боевой дрон с системой охраны', health: 10000, damage: 80, reward_experience: 400, reward_coins: 200, icon: '🤖' },
-        { name: 'Главарь мародёров', description: 'Лидер банды радиоактивных бандитов', health: 20000, damage: 120, reward_experience: 800, reward_coins: 400, icon: '💀' },
-        { name: 'Биологический ужас', description: 'Мутировавшее существо из лаборатории', health: 40000, damage: 180, reward_experience: 1500, reward_coins: 750, icon: '👾' },
-        { name: 'Офицер-нежить', description: 'Бывший военный офицер', health: 70000, damage: 250, reward_experience: 3000, reward_coins: 1500, icon: '💂' },
-        { name: 'Гигантский монстр', description: 'Колоссальное существо', health: 100000, damage: 350, reward_experience: 6000, reward_coins: 3000, icon: '🦖' },
-        { name: 'Профессор безумия', description: 'Учёный, сошедший с ума', health: 150000, damage: 450, reward_experience: 12000, reward_coins: 6000, icon: '🧑‍🔬' },
-        { name: 'Последний страж', description: 'Последний защитник бункера', health: 250000, damage: 600, reward_experience: 25000, reward_coins: 12500, icon: '🛡️' }
+        { name: 'Крысиный король', description: 'Огромная радиоактивная крыса', max_health: 500, reward_experience: 50, reward_coins: 25, icon: '🐀' },
+        { name: 'Бездомный псих', description: 'Сумасшедший выживший с монтировкой', max_health: 2000, reward_experience: 100, reward_coins: 50, icon: '🔪' },
+        { name: 'Медведь-мутант', description: 'Радиоактивный медведь', max_health: 5000, reward_experience: 200, reward_coins: 100, icon: '🐻' },
+        { name: 'Военный дрон', description: 'Боевой дрон с системой охраны', max_health: 10000, reward_experience: 400, reward_coins: 200, icon: '🤖' },
+        { name: 'Главарь мародёров', description: 'Лидер банды радиоактивных бандитов', max_health: 20000, reward_experience: 800, reward_coins: 400, icon: '💀' },
+        { name: 'Биологический ужас', description: 'Мутировавшее существо из лаборатории', max_health: 40000, reward_experience: 1500, reward_coins: 750, icon: '👾' },
+        { name: 'Офицер-нежить', description: 'Бывший военный офицер', max_health: 70000, reward_experience: 3000, reward_coins: 1500, icon: '💂' },
+        { name: 'Гигантский монстр', description: 'Колоссальное существо', max_health: 100000, reward_experience: 6000, reward_coins: 3000, icon: '🦖' },
+        { name: 'Профессор безумия', description: 'Учёный, сошедший с ума', max_health: 150000, reward_experience: 12000, reward_coins: 6000, icon: '🧑‍🔬' },
+        { name: 'Последний страж', description: 'Последний защитник бункера', max_health: 250000, reward_experience: 25000, reward_coins: 12500, icon: '🛡️' }
     ];
     for (let i = 0; i < bosses.length; i++) {
         const boss = bosses[i];
         const requiredKeyId = i > 0 ? i : null;
         await query(`
-            INSERT INTO bosses (name, description, health, max_health, damage, reward_experience, reward_coins, required_key_id, icon)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            INSERT INTO bosses (name, description, max_health, reward_experience, reward_coins, required_key_id, icon)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT DO NOTHING
-        `, [boss.name, boss.description, boss.health, boss.health, boss.damage, boss.reward_experience, boss.reward_coins, requiredKeyId, boss.icon]);
+        `, [boss.name, boss.description, boss.max_health, boss.reward_experience, boss.reward_coins, requiredKeyId, boss.icon]);
     }
     const items = [
         { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 10, icon: '🥫' },
