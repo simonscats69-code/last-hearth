@@ -53,7 +53,9 @@ async function authenticatePlayer(req, res, next) {
         logger.info('[game] authenticatePlayer вызван', {
             path: req.path,
             hasInitData: !!initData,
-            initDataLength: initData?.length || 0
+            initDataLength: initData?.length || 0,
+            // Показываем только структуру initData (первые ключи)
+            initDataKeys: initData ? initData.split('&').map(k => k.split('=')[0]) : []
         });
 
         // Проверяем наличие initData
@@ -79,6 +81,8 @@ async function authenticatePlayer(req, res, next) {
                 code: 'BOT_TOKEN_NOT_CONFIGURED'
             });
         }
+        
+        logger.info('[game] Токен бота настроен, начинаем валидацию');
 
         // Валидация подписи initData
         const validated = validateTelegramInitData(initData, botToken);

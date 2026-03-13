@@ -26,6 +26,15 @@ function validateTelegramInitData(initData, botToken) {
             data[key] = value;
         }
 
+        // Логируем информацию о запросе для отладки
+        logger.info('[telegramAuth] Валидация initData', {
+            hasDataHash: !!data.hash,
+            hasDataUser: !!data.user,
+            hasAuthDate: !!data.auth_date,
+            authDate: data.auth_date,
+            userPreview: data.user?.substring(0, 50)
+        });
+
         // Проверяем наличие обязательных полей
         if (!data.hash || !data.user || !data.auth_date) {
             logger.warn('[telegramAuth] Отсутствуют обязательные поля', { 
