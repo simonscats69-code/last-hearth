@@ -17,7 +17,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock } = require('../../utils/transactions');
 const { validateId, sanitizeName } = require('../../utils/apiHelpers');
 const { ok, fail, notFound, badRequest, wrap } = require('../../utils/apiHelpers');
-const { logPlayerAction } = require('../../utils/transactions');
+const { logPlayerAction, serializeJSONField } = require('../../utils/transactions');
 
 // =============================================================================
 // УТИЛИТЫ
