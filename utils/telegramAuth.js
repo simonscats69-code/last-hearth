@@ -19,47 +19,61 @@ function validateTelegramInitData(initData, botToken) {
     }
 
     try {
-        // Разбираем initData
-        const urlSearchParams = new URLSearchParams(initData);
-        const data = {};
-        for (const [key, value] of urlSearchParams) {
-            data[key] = value;
+        // Разбираем initData через URLSearchParams
+        const params = new URLSearchParams(initData);
+        
+        // Получаем hash и удаляем его из параметров
+        const hash = params.get('hash');
+        if (!hash) {
+            logger.warn('[telegramAuth] Отсутствует hash');
+            return null;
         }
+        params.delete('hash');
+
+        // Создаём dataCheckString из отсортированных параметров
+        // Используем entries() напрямую - это сохраняет правильные значения
+        const entries = [...params.entries()];
+        const dataCheckString = entries
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
 
         // Логируем информацию о запросе для отладки
-        console.log('[telegramAuth] Валидация initData', {
-            hasDataHash: !!data.hash,
-            hasDataUser: !!data.user,
-            hasAuthDate: !!data.auth_date,
-            authDate: data.auth_date,
-            userPreview: data.user?.substring(0, 50)
-        });
         logger.info('[telegramAuth] Валидация initData', {
-            hasDataHash: !!data.hash,
-            hasDataUser: !!data.user,
-            hasAuthDate: !!data.auth_date,
-            authDate: data.auth_date,
-            userPreview: data.user?.substring(0, 50)
+            hasDataHash: !!hash,
+            paramsCount: entries.length,
+            dataCheckStringLength: dataCheckString.length
         });
 
         // Проверяем наличие обязательных полей
-        if (!data.hash || !data.user || !data.auth_date) {
+        const authDateStr = params.get('auth_date');
+        const userStr = params.get('user');
+        if (!authDateStr || !userStr) {
             logger.warn('[telegramAuth] Отсутствуют обязательные поля', { 
-                hasHash: !!data.hash, 
-                hasUser: !!data.user, 
-                hasAuthDate: !!data.auth_date,
-                keys: Object.keys(data)
+                hasAuthDate: !!authDateStr, 
+                hasUser: !!userStr,
+                keys: [...params.keys()]
             });
             return null;
         }
 
-        // Проверяем время (не старше 15 минут - рекомендация Telegram)
-        const authDate = parseInt(data.auth_date, 10);
+        // Проверяем время (Telegram рекомендует 24 часа для Mini Apps)
+        // Защита от отрицательного age (когда время клиента вперёд)
+        const authDate = parseInt(authDateStr, 10);
         const now = Math.floor(Date.now() / 1000);
         const age = now - authDate;
-        if (age > 900) { // 15 минут = 900 секунд
-            logger.warn('[telegramAuth] initData истёк', { age, authDate, now, maxAge: 900 });
+        if (age < -300 || age > 86400) { // 5 минут допустимого drift + 24 часа
+            logger.warn('[telegramAuth] initData истёк или время не синхронизировано', { age, authDate, now });
             return null;
+        }
+
+        // Парсим данные пользователя для логирования
+        let userId = null;
+        try {
+            const userData = JSON.parse(userStr);
+            userId = userData.id;
+        } catch (e) {
+            logger.warn('[telegramAuth] Ошибка парсинга user', { error: e.message });
         }
 
         // Создаём секретный ключ по алгоритму Telegram
@@ -68,53 +82,28 @@ function validateTelegramInitData(initData, botToken) {
             .createHmac('sha256', 'WebAppData')
             .update(botToken)
             .digest();
-        
-        // Парсим данные пользователя для логирования
-        let userId = null;
-        try {
-            const userData = JSON.parse(data.user);
-            userId = userData.id;
-        } catch (e) {
-            logger.warn('[telegramAuth] Ошибка парсинга user', { error: e.message });
-        }
-        
-        // Сортируем данные (кроме hash) и создаём строку
-        const dataCheckString = Object.keys(data)
-            .filter(key => key !== 'hash')
-            .sort()
-            .map(key => `${key}=${data[key]}`)
-            .join('\n');
 
         logger.info('[telegramAuth] Проверка подписи', {
             userId,
-            dataKeys: Object.keys(data),
+            dataKeys: [...params.keys()].sort(),
             dataCheckStringLength: dataCheckString.length
         });
 
-        // Проверяем подпись: hash = HMAC_SHA256(secret_key, data_check_string)
-        const hash = crypto
+        // Вычисляем подпись: hash = HMAC_SHA256(secret_key, data_check_string)
+        const computedHash = crypto
             .createHmac('sha256', secretKey)
             .update(dataCheckString)
             .digest('hex');
 
-        console.log('[telegramAuth] Сравнение хешей', {
-            userId,
-            dataCheckStringPreview: dataCheckString.substring(0, 100),
-            computedHash: hash,
-            receivedHash: data.hash
-        });
-
         // Безопасное сравнение хешей
         let isValid = false;
         try {
-            const hashBuf = Buffer.from(hash, 'hex');
-            const dataHashBuf = Buffer.from(data.hash, 'hex');
+            const hashBuf = Buffer.from(computedHash, 'hex');
+            const dataHashBuf = Buffer.from(hash, 'hex');
             
             logger.info('[telegramAuth] Сравнение хешей', {
                 userId,
-                computedHash: hash,
-                receivedHash: data.hash,
-                hashMatch: hash === data.hash,
+                hashMatch: computedHash === hash,
                 computedLength: hashBuf.length,
                 receivedLength: dataHashBuf.length
             });
@@ -125,34 +114,35 @@ function validateTelegramInitData(initData, botToken) {
                 logger.warn('[telegramAuth] Разная длина хешей', { expectedLength: hashBuf.length, actualLength: dataHashBuf.length });
             }
         } catch (e) {
-            // Ошибка при сравнении - считаем невалидным
             logger.warn({ type: 'ws_auth_failed', reason: 'hash_compare_error', userId, error: e.message });
             return null;
         }
         
         if (!isValid) {
-            logger.warn({ type: 'ws_auth_failed', reason: 'hash_mismatch', userId, computedHash: hash, receivedHash: data.hash });
+            logger.warn({ type: 'ws_auth_failed', reason: 'hash_mismatch', userId });
             return null;
         }
 
         // Парсим данные пользователя
         let user;
         try {
-            user = JSON.parse(data.user);
+            user = JSON.parse(userStr);
         } catch(e) {
-            logger.error('[telegramAuth] Ошибка парсинга user', { error: e.message, data: data.user?.toString?.().substring(0, 100) });
-            throw e;
+            logger.error('[telegramAuth] Ошибка парсинга user', { error: e.message });
+            return null;
         }
         
         return {
             user: user,
             auth_date: authDate,
-            chat_instance: data.chat_instance,
-            chat_type: data.chat_type,
-            start_param: data.start_param,
-            raw: data
+            chat_instance: params.get('chat_instance'),
+            chat_type: params.get('chat_type'),
+            start_param: params.get('start_param'),
+            raw: Object.fromEntries(params),
+            rawInitData: initData
         };
     } catch (err) {
+        logger.error('[telegramAuth] Ошибка валидации', { error: err.message, stack: err.stack });
         return null;
     }
 }
