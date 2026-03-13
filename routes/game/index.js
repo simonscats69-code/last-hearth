@@ -4,20 +4,15 @@
  *
  * КОНФИГУРАЦИЯ RATE LIMITER:
  * ========================
- * Оптимизировано на основе анализа HTTP методов:
- * - GET: ~27 endpoints (чтение) - высокий лимит
- * - POST/PUT: ~35 endpoints (запись) - средний лимит
- *
- * Лимиты:
+ * 
+ * ВАЖНО: GET запросы полностью БЕЗ ОГРАНИЧЕНИЙ!
+ * 
+ * Лимиты ТОЛЬКО на действия (POST/PUT/DELETE):
  * - criticalActionLimiter: 15/мин (PvP атака)
  * - clanBossActionLimiter: 20/мин (клан-босс)
- * - bossClickLimiter: БЕЗ ОГРАНИЧЕНИЙ (атака босса - защита energy + cooldown)
- * - generalActionLimiter: 50/мин (крафтинг, перемещение, поиск)
- * - readLimiter: 200/мин (GET запросы - статус, профиль, локации)
- * - purchaseLimiter: 10/мин (покупки - с запасом для промо-акций)
- *
- * ВАЖНО: Атака босса НЕ ограничена rate limiter!
- * Защита: energy (1 за клик) + cooldown (500ms)
+ * - bossClickLimiter: ∞ (клики - защита energy + cooldown)
+ * - generalActionLimiter: 50/мин (крафтинг, перемещение)
+ * - purchaseLimiter: 10/мин (покупки)
  */
 
 const express = require('express');
@@ -127,25 +122,18 @@ const generalActionLimiter = rateLimit({
 
 /**
  * GET запросы - чтение данных
- * Высокий лимит: 200 запросов в минуту
+ * 
+ * ВАЖНО: ЛИМИТ ПОЛНОСТЬЮ УБРАН!
+ * 
+ * Причина: Фронт делает множество GET запросов (profile, bosses, status)
+ * при каждом обновлении UI. Ограничение ломает UX.
+ * 
+ * Защита: на уровне БД и кэширования.
  * 
  * Endpoints: status, profile, inventory, locations,
  *            achievements, seasons, market listings
  */
-const readLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 минута
-    max: 200, // 200 GET запросов в минуту
-    message: { 
-        error: 'Слишком много запросов на чтение.', 
-        code: 'READ_LIMIT',
-        retryAfter: 60 
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => {
-        return req.player?.id || req.ip;
-    }
-});
+// readLimiter УДАЛЁН - GET без ограничений
 
 /**
  * Покупки - особо строгий лимит
@@ -349,9 +337,8 @@ module.exports = Object.assign(router, {
     authenticatePlayer, 
     criticalActionLimiter,     // 15/мин - PvP атака
     clanBossActionLimiter,     // 20/мин - клан-босс
-    bossClickLimiter,          // безлимитный - клики (защита energy + cooldown)
+    bossClickLimiter,          // ∞ - клики (защита energy + cooldown)
     generalActionLimiter,      // 50/мин - крафтинг, перемещение
-    readLimiter,               // 200/мин - GET запросы
     purchaseLimiter,           // 10/мин - покупки
-    createInlineLimiter        // для особых случаев
+    createInlineLimiter
 });
