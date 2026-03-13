@@ -207,10 +207,22 @@ router.post('/search', async (req, res) => {
                 foundItem = rollLootDrop(lootTable, updatedPlayer.luck, itemRarity);
                 
                 if (foundItem) {
-                    // Добавляем в инвентарь (объект {itemId: quantity})
-                    const inventory = safeJsonParse(updatedPlayer.inventory, {});
-                    const itemKey = String(foundItem.id);
-                    inventory[itemKey] = (inventory[itemKey] || 0) + 1;
+                    // Добавляем в инвентарь (массив объектов [{id, name, type, ...}])
+                    const inventory = safeJsonParse(updatedPlayer.inventory, []);
+                    
+                    // Создаём объект предмета
+                    const newItem = {
+                        id: foundItem.id,
+                        name: foundItem.name,
+                        type: foundItem.type || 'misc',
+                        rarity: itemRarity,
+                        damage: foundItem.damage || 0,
+                        defense: foundItem.defense || 0,
+                        upgrade_level: 0,
+                        modifications: {}
+                    };
+                    
+                    inventory.push(newItem);
                     
                     await client.query(`
                         UPDATE players 

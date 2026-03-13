@@ -20,7 +20,8 @@ let isRunning = {
     achievements: false,
     cleanup: false,
     dailyTasks: false,
-    debuffs: false  // Новая задача для дебаффов
+    debuffs: false,
+    raids: false  // Новая задача для очистки истёкших рейдов
 };
 
 // Флаг для graceful shutdown
@@ -396,6 +397,79 @@ async function cleanupExpiredDebuffs() {
 }
 
 /**
+ * Очистка истёкших рейдов боссов
+ * Запускается каждые 5 минут
+ * 
+ * Если рейд истёк (expires_at < NOW()) и не был убит:
+ * - Помечается как неактивный
+ * - Участники НЕ получают награды (рейд проигран)
+ */
+async function cleanupExpiredRaids() {
+    if (isRunning.raids) {
+        logger.warn('raids: пропуск, предыдущая задача ещё выполняется');
+        return;
+    }
+    
+    const startTime = Date.now();
+    isRunning.raids = true;
+    
+    try {
+        // Находим истёкшие активные рейды
+        const expiredRaids = await query(`
+            SELECT id, boss_id, leader_id 
+            FROM raid_progress 
+            WHERE is_active = true 
+                AND expires_at < NOW()
+        `);
+        
+        if (expiredRaids.rows.length > 0) {
+            logger.info({
+                type: 'expired_raids',
+                count: expiredRaids.rows.length
+            });
+            
+            // Помечаем рейды как неактивные
+            for (const raid of expiredRaids.rows) {
+                await query(`
+                    UPDATE raid_progress 
+                    SET is_active = false, ended_at = NOW()
+                    WHERE id = $1
+                `, [raid.id]);
+                
+                // Логируем истёкший рейд
+                logger.info({
+                    type: 'raid_expired',
+                    raidId: raid.id,
+                    bossId: raid.boss_id,
+                    leaderId: raid.leader_id
+                });
+            }
+        }
+        
+        const duration = Date.now() - startTime;
+        
+        logger.info({
+            type: 'cleanup_expired_raids',
+            raids_processed: expiredRaids.rows.length,
+            duration_ms: duration
+        });
+        
+        // Запускаем следующую итерацию через 5 минут
+        if (schedulerEnabled) {
+            setTimeout(cleanupExpiredRaids, 5 * 60 * 1000);
+        }
+        return;
+    } finally {
+        isRunning.raids = false;
+        
+        // Запускаем следующую итерацию через 5 минут
+        if (schedulerEnabled) {
+            setTimeout(cleanupExpiredRaids, 5 * 60 * 1000);
+        }
+    }
+}
+
+/**
  * Сброс ежедневных заданий
  * Запускается каждые 6 часов
  */
@@ -474,6 +548,9 @@ function startScheduler() {
     // Очистка дебаффов - через 50 секунд
     setTimeout(cleanupExpiredDebuffs, 50 * 1000);
     
+    // Очистка истёкших рейдов - через 60 секунд
+    setTimeout(cleanupExpiredRaids, 60 * 1000);
+    
     logger.info('Планировщик задач запущен');
 }
 
@@ -488,7 +565,8 @@ function stopScheduler() {
         achievements: false,
         cleanup: false,
         dailyTasks: false,
-        debuffs: false
+        debuffs: false,
+        raids: false
     };
     
     schedulerEnabled = false;
@@ -503,5 +581,7 @@ module.exports = {
     checkAllAchievements,
     cleanupOldLogs,
     resetDailyTasks,
+    cleanupExpiredDebuffs,
+    cleanupExpiredRaids,  // Новая функция
     getSchedulerMetrics
 };

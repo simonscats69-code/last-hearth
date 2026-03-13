@@ -344,4 +344,90 @@ async function createTables() {
     console.log('✓ Таблицы БД созданы');
 }
 
-module.exports = { createTables };
+/**
+ * Миграция: добавить таблицы для прогресса игрока с боссами и индексы
+ * Выполнить: await runMigrations()
+ */
+async function runMigrations() {
+    // Таблица прогресса игрока с боссом (текущее HP)
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_boss_progress (
+            id SERIAL PRIMARY KEY,
+            player_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
+            boss_id INTEGER REFERENCES bosses(id) ON DELETE CASCADE,
+            current_hp INTEGER NOT NULL,
+            max_hp INTEGER NOT NULL,
+            last_attack TIMESTAMP DEFAULT NOW(),
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(player_id, boss_id)
+        )
+    `);
+
+    // Индекс для быстрого поиска прогресса
+    await query(`
+        CREATE INDEX IF NOT EXISTS idx_player_boss_progress_player 
+        ON player_boss_progress(player_id)
+    `);
+
+    // Уникальный индекс для предотвращения гонки транзакций в рейдах
+    await query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_raid_progress_one_active 
+        ON raid_progress(boss_id) 
+        WHERE is_active = true
+    `);
+
+    // Добавить недостающие колонки если их нет
+    try {
+        await query(`
+            ALTER TABLE bosses 
+            ADD COLUMN IF NOT EXISTS damage INTEGER DEFAULT 10,
+            ADD COLUMN IF NOT EXISTS reward_experience INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS icon VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS reward_items JSONB DEFAULT '[]'
+        `);
+    } catch (e) {
+        // Колонки могут уже существовать
+    }
+
+    // Обновить boss_sessions если нужно
+    try {
+        await query(`
+            ALTER TABLE boss_sessions 
+            ADD COLUMN IF NOT EXISTS raid_id INTEGER,
+            ADD COLUMN IF NOT EXISTS player_id INTEGER REFERENCES players(id),
+            ADD COLUMN IF NOT EXISTS damage_dealt INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS joined_at TIMESTAMP DEFAULT NOW(),
+            ADD COLUMN IF NOT EXISTS last_hit_at TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS rewards_earned BOOLEAN DEFAULT false
+        `);
+    } catch (e) {
+        // Колонки могут уже существовать
+    }
+
+    // Обновить raid_progress если нужно
+    try {
+        await query(`
+            ALTER TABLE raid_progress 
+            ADD COLUMN IF NOT EXISTS session_id INTEGER,
+            ADD COLUMN IF NOT EXISTS player_id INTEGER REFERENCES players(id),
+            ADD COLUMN IF NOT EXISTS boss_id INTEGER REFERENCES bosses(id),
+            ADD COLUMN IF NOT EXISTS current_health INTEGER,
+            ADD COLUMN IF NOT EXISTS max_health INTEGER,
+            ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT NOW(),
+            ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true,
+            ADD COLUMN IF NOT EXISTS is_raid BOOLEAN DEFAULT false,
+            ADD COLUMN IF NOT EXISTS leader_id INTEGER REFERENCES players(id),
+            ADD COLUMN IF NOT EXISTS leader_name VARCHAR(255),
+            ADD COLUMN IF NOT EXISTS is_clan_raid BOOLEAN DEFAULT false,
+            ADD COLUMN IF NOT EXISTS clan_id INTEGER,
+            ADD COLUMN IF NOT EXISTS ended_at TIMESTAMP
+        `);
+    } catch (e) {
+        // Колонки могут уже существовать
+    }
+
+    console.log('✓ Миграции выполнены');
+}
+
+module.exports = { createTables, runMigrations };

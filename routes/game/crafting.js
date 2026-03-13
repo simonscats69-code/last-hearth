@@ -462,8 +462,7 @@ router.get('/craft/recipes/old', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /craft/recipes/old:', error);
-        res.status(500).json({ error: 'Ошибка получения рецептов' });
+        return handleError(res, error, 'view_recipes_old', playerId);
     }
 });
 
@@ -484,5 +483,5 @@ const GameCrafting = {
     }
 };
 
-module.exports = router;
-module.exports.GameCrafting = GameCrafting;
+// Единый экспорт - избегаем перезаписи module.exports
+module.exports = Object.assign(router, { GameCrafting });

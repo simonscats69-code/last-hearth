@@ -159,13 +159,28 @@ function rollItemRarity(locationId) {
 
 /**
  * Определить, выпал ли предмет
+ * @param {Array} lootTable - Таблица лута для локации
  * @param {number} luck - Удача игрока
- * @returns {boolean} true если предмет найден
+ * @param {string} itemRarity - Редкость предмета
+ * @returns {Object|null} Найденный предмет или null
  */
-function rollLootDrop(luck) {
+function rollLootDrop(lootTable, luck, itemRarity) {
     const dropChance = calculateDropChance(luck);
     const roll = Math.random() * 100;
-    return roll <= dropChance;
+    
+    if (roll > dropChance) {
+        return null;
+    }
+    
+    // Фильтруем таблицу лута по редкости
+    const filteredItems = lootTable.filter(item => item.rarity === itemRarity);
+    
+    if (filteredItems.length === 0) {
+        return null;
+    }
+    
+    // Случайный предмет из отфильтрованных
+    return filteredItems[Math.floor(Math.random() * filteredItems.length)];
 }
 
 // Категории предметов

@@ -58,6 +58,23 @@ function isValidIndex(value, maxLength) {
 }
 
 /**
+ * Безопасный парсинг JSON поля из БД
+ * @param {any} field 
+ * @returns {object}
+ */
+function safeParse(field) {
+    if (!field) return null;
+    try {
+        if (typeof field === 'object') {
+            return field;
+        }
+        return JSON.parse(field);
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Пагинация
  */
 function parsePagination(queryParams, defaultLimit = 50, maxLimit = 100) {
@@ -79,6 +96,7 @@ function parsePagination(queryParams, defaultLimit = 50, maxLimit = 100) {
 router.get('/market/listings', async (req, res) => {
     try {
         const { type, rarity, sort = 'price', order = 'asc' } = req.query;
+        const { limit, offset } = parsePagination(req.query, 50, 100);
         
         let sql = 'SELECT * FROM market_listings WHERE status = $1';
         const params = ['active'];
@@ -94,7 +112,8 @@ router.get('/market/listings', async (req, res) => {
         }
         
         sql += ' ORDER BY price ' + (order === 'desc' ? 'DESC' : 'ASC');
-        sql += ' LIMIT 50';
+        sql += ' LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
+        params.push(limit, offset);
         
         const listings = await queryAll(sql, params);
         
@@ -103,7 +122,7 @@ router.get('/market/listings', async (req, res) => {
             listings: listings.map(l => ({
                 id: l.id,
                 seller_id: l.seller_id,
-                item: serializeJSONField(l.item_data) || null,
+                item: safeParse(l.item_data) || null,
                 price: l.price,
                 created_at: l.created_at
             }))
@@ -155,8 +174,9 @@ router.get('/market/listings-v2', async (req, res) => {
             countSql += ' AND item_type = $2';
             countParams.push(type);
         }
+        // ИСПРАВЛЕНО: было item_type вместо item_rarity
         if (rarity && typeof rarity === 'string') {
-            countSql += ' AND item_type = $' + (countParams.length + 1);
+            countSql += ' AND item_rarity = $' + (countParams.length + 1);
             countParams.push(rarity);
         }
         
@@ -168,7 +188,7 @@ router.get('/market/listings-v2', async (req, res) => {
                 id: l.id,
                 seller_id: l.seller_id,
                 seller_username: l.seller_username,
-                item: serializeJSONField(l.item_data) || null,
+                item: safeParse(l.item_data) || null,
                 price: l.price,
                 created_at: l.created_at
             })),
@@ -216,7 +236,7 @@ router.get('/market/my', async (req, res) => {
         successResponse(res, {
             listings: listings.map(l => ({
                 id: l.id,
-                item: serializeJSONField(l.item_data) || null,
+                item: safeParse(l.item_data) || null,
                 price: l.price,
                 status: l.status,
                 created_at: l.created_at
@@ -269,7 +289,7 @@ router.post('/market/create', async (req, res) => {
         }
         
         const playerData = playerResult.rows[0];
-        const inventory = serializeJSONField(playerData.inventory) || [];
+        const inventory = safeParse(playerData.inventory) || [];
         
         if (item_index < 0 || item_index >= inventory.length) {
             await client.query('ROLLBACK');
@@ -291,7 +311,7 @@ router.post('/market/create', async (req, res) => {
         
         await client.query(`
             UPDATE players SET inventory = $1 WHERE id = $2
-        `, [newInventory, player.id]);
+        `, [serializeJSONField(newInventory), player.id]);
         
         await client.query('COMMIT');
         
@@ -358,12 +378,31 @@ router.post('/market/buy', async (req, res) => {
             return errorResponse(res, 'Нельзя купить свой товар', 'CANNOT_BUY_OWN');
         }
         
-        // Блокируем покупателя
-        const buyerResult = await client.query(`
-            SELECT id, coins, inventory FROM players WHERE id = $1 FOR UPDATE
-        `, [player.id]);
+        // ИСПРАВЛЕНО: блокируем в предсказуемом порядке (меньший id первым) для избежания deadlock
+        const buyerId = player.id;
+        const sellerId = listing.seller_id;
+        const firstId = Math.min(buyerId, sellerId);
+        const secondId = Math.max(buyerId, sellerId);
         
-        const buyerData = buyerResult.rows[0];
+        // Блокируем первого игрока
+        const firstResult = await client.query(`
+            SELECT id, coins, inventory FROM players WHERE id = $1 FOR UPDATE
+        `, [firstId]);
+        
+        const firstData = firstResult.rows[0];
+        
+        // Блокируем второго игрока
+        const secondResult = await client.query(`
+            SELECT id, coins, inventory FROM players WHERE id = $1 FOR UPDATE
+        `, [secondId]);
+        
+        const secondData = secondResult.rows[0];
+        
+        // Определяем谁是 покупатель, кто продавец по заблокированным данным
+        const isBuyerFirst = (firstId === buyerId);
+        const buyerData = isBuyerFirst ? firstData : secondData;
+        const sellerData = isBuyerFirst ? secondData : firstData;
+        
         const buyerCoins = parseInt(buyerData.coins) || 0;
         
         // Проверяем монеты
@@ -375,16 +414,6 @@ router.post('/market/buy', async (req, res) => {
             });
         }
         
-        // Блокируем продавца
-        const sellerResult = await client.query(`
-            SELECT id FROM players WHERE id = $1 FOR UPDATE
-        `, [listing.seller_id]);
-        
-        if (sellerResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return errorResponse(res, 'Продавец не найден', 'SELLER_NOT_FOUND', 404);
-        }
-        
         // Комиссия 5%
         const commission = Math.floor(listing.price * 0.05);
         const sellerGets = listing.price - commission;
@@ -392,41 +421,41 @@ router.post('/market/buy', async (req, res) => {
         // Переводим монеты продавцу
         await client.query(`
             UPDATE players SET coins = coins + $1 WHERE id = $2
-        `, [sellerGets, listing.seller_id]);
+        `, [sellerGets, sellerData.id]);
         
         // Забираем монеты у покупателя
         await client.query(`
             UPDATE players SET coins = coins - $1 WHERE id = $2
-        `, [listing.price, player.id]);
+        `, [listing.price, buyerData.id]);
         
         // Даём предмет покупателю
-        const item = serializeJSONField(listing.item_data);
-        const buyerInventory = serializeJSONField(buyerData.inventory) || [];
+        const item = safeParse(listing.item_data);
+        const buyerInventory = safeParse(buyerData.inventory) || [];
         buyerInventory.push(item);
         
         await client.query(`
             UPDATE players SET inventory = $1 WHERE id = $2
-        `, [buyerInventory, player.id]);
+        `, [serializeJSONField(buyerInventory), buyerData.id]);
         
         // Помечаем объявление как проданное
         await client.query(`
             UPDATE market_listings SET status = 'sold', buyer_id = $1, sold_at = NOW()
             WHERE id = $2
-        `, [player.id, listing_id]);
+        `, [buyerData.id, listing_id]);
         
         await client.query('COMMIT');
         
         // Логируем действие (вне транзакции)
         try {
-            await logPlayerAction(player.id, 'market_purchase', {
+            await logPlayerAction(buyerData.id, 'market_purchase', {
                 listing_id: listing_id,
                 item_type: item?.type,
                 price: listing.price,
                 commission: commission,
-                seller_id: listing.seller_id
+                seller_id: sellerData.id
             });
             
-            await logPlayerAction(listing.seller_id, 'market_sale', {
+            await logPlayerAction(sellerData.id, 'market_sale', {
                 listing_id: listing_id,
                 item_type: item?.type,
                 price: listing.price,
@@ -470,14 +499,14 @@ router.post('/market/cancel', async (req, res) => {
             return errorResponse(res, 'Укажите ID объявления', 'INVALID_LISTING_ID');
         }
         
-        // Проверяем ownership с блокировкой
+        // ИСПРАВЛЕНО: добавлена проверка status = 'active'
         const listingResult = await client.query(`
-            SELECT * FROM market_listings WHERE id = $1 AND seller_id = $2 FOR UPDATE
+            SELECT * FROM market_listings WHERE id = $1 AND seller_id = $2 AND status = 'active' FOR UPDATE
         `, [listing_id, player.id]);
         
         if (listingResult.rows.length === 0) {
             await client.query('ROLLBACK');
-            return errorResponse(res, 'Объявление не найдено', 'LISTING_NOT_FOUND', 404);
+            return errorResponse(res, 'Объявление не найдено или уже продано', 'LISTING_NOT_FOUND', 404);
         }
         
         const listing = listingResult.rows[0];
@@ -490,13 +519,13 @@ router.post('/market/cancel', async (req, res) => {
         const playerData = playerResult.rows[0];
         
         // Возвращаем предмет
-        const item = serializeJSONField(listing.item_data);
-        const inventory = serializeJSONField(playerData.inventory) || [];
+        const item = safeParse(listing.item_data);
+        const inventory = safeParse(playerData.inventory) || [];
         inventory.push(item);
         
         await client.query(`
             UPDATE players SET inventory = $1 WHERE id = $2
-        `, [inventory, player.id]);
+        `, [serializeJSONField(inventory), player.id]);
         
         // Удаляем объявление
         await client.query(`

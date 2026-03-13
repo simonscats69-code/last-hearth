@@ -18,7 +18,6 @@ const criticalActionLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
-        // Используем telegramId или IP
         return req.player?.id || req.ip;
     }
 });
@@ -36,65 +35,60 @@ const generalLimiter = rateLimit({
 });
 
 /**
- * Унифицированный middleware авторизации
- * Поддерживает:
- * 1. x-telegram-id (простой режим для backend запросов)
- * 2. x-init-data (безопасный режим для Telegram Mini App)
+ * Middleware авторизации для Telegram Mini App
+ * Использует x-init-data с валидацией подписи через Bot API
+ * 
+ * Поток:
+ * 1. Mini App отправляет x-init-data с каждым запросом
+ * 2. Сервер валидирует подпись через TELEGRAM_BOT_TOKEN
+ * 3. Из данных получаем telegram_id пользователя
+ * 4. Ищем/создаём игрока в БД
  */
 async function authenticatePlayer(req, res, next) {
     try {
         const initData = req.headers['x-init-data'];
-        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
         const botToken = process.env.TELEGRAM_BOT_TOKEN;
-        
-        const isDevelopment = !botToken;  // Нет токена = режим разработки
-        
-        let player;
-        
-        // Режим 1: Проверка через initData (безопасный, обязательный в production)
-        if (initData && botToken) {
-            const validated = validateTelegramInitData(initData, botToken);
-            if (!validated) {
-                logger.warn('[game] Неверная подпись initData', { path: req.path });
-                return res.status(401).json({ error: 'Неверная подпись initData' });
-            }
-            
-            // Получаем игрока по telegram id из валидированных данных
-            const telegramUserId = String(validated.user.id);
-            player = await queryOne(
-                'SELECT * FROM players WHERE telegram_id = $1',
-                [telegramUserId]
-            );
-            
-            logger.info('[game] Авторизация через initData', { 
-                telegramId: telegramUserId, 
-                path: req.path 
-            });
-        } 
-        // Режим 2: x-telegram-id только в разработке!
-        else if (telegramId && isDevelopment) {
-            player = await queryOne(
-                'SELECT * FROM players WHERE telegram_id = $1',
-                [telegramId]
-            );
-            
-            logger.info('[game] Авторизация через telegram_id (DEV MODE)', { 
-                telegramId, 
-                path: req.path 
-            });
-        }
-        else {
-            // В production требуем initData
+
+        // Проверяем наличие initData
+        if (!initData) {
             return res.status(401).json({ 
-                error: isDevelopment 
-                    ? 'Требуется x-telegram-id (DEV)' 
-                    : 'Требуется x-init-data (авторизуйтесь через Telegram)'
+                error: 'Требуется авторизация. Откройте игру через Telegram.' 
             });
         }
 
-        if (!player) {
-            return res.status(404).json({ error: 'Игрок не найден. Начните игру через /start' });
+        // Проверяем наличие токена бота
+        if (!botToken) {
+            logger.error('[game] TELEGRAM_BOT_TOKEN не настроен');
+            return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
         }
+
+        // Валидация подписи initData
+        const validated = validateTelegramInitData(initData, botToken);
+        if (!validated) {
+            logger.warn('[game] Неверная подпись initData', { path: req.path });
+            return res.status(401).json({ error: 'Неверная подпись авторизации' });
+        }
+
+        // Получаем ID пользователя из данных Telegram
+        const telegramUserId = String(validated.user.id);
+
+        // Ищем игрока в БД
+        const player = await queryOne(
+            'SELECT * FROM players WHERE telegram_id = $1',
+            [telegramUserId]
+        );
+
+        if (!player) {
+            return res.status(404).json({ 
+                error: 'Игрок не найден. Начните игру через /start в боте.' 
+            });
+        }
+
+        logger.info('[game] Авторизация игрока', { 
+            telegramId: telegramUserId, 
+            playerId: player.id,
+            path: req.path 
+        });
 
         req.player = player;
         next();
@@ -138,9 +132,9 @@ const seasonsRouter = safeRequire('./seasons', 'seasons');
 const purchaseRouter = safeRequire('./purchase', 'purchase');
 const itemsRouter = safeRequire('./items', 'items');
 const profileRouter = safeRequire('./profile', 'profile');
-const debuffsRouter = safeRequire('./debuffs', 'debuffs');
+const { router: debuffsRouter } = safeRequire('./debuffs', 'debuffs'); // debuffs.js экспортирует { router, DebuffAPI } - нужна деструктуризация
 
-// Используем модули с namespace
+// Используем модули с namespace (роутеры подключаются как /game/:routerName)
 router.use('/locations', locationsRouter);
 router.use('/inventory', inventoryRouter);
 router.use('/bosses', bossesRouter);

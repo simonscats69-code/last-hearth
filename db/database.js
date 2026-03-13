@@ -5,6 +5,20 @@
 
 const { Pool } = require('pg');
 const { logger } = require('../utils/logger');
+
+// Инициализация БД - вызывать при старте приложения
+async function initDatabase() {
+    const schema = require('./schema');
+    try {
+        await schema.createTables();
+        await schema.runMigrations();
+        logger.info('✓ База данных инициализирована');
+    } catch (error) {
+        logger.error('Ошибка инициализации БД:', { error: error.message });
+        throw error;
+    }
+}
+
 const poolConfig = {};
 if (process.env.DATABASE_URL) {
     poolConfig.connectionString = process.env.DATABASE_URL;
@@ -355,12 +369,23 @@ async function initDatabase() {
             obtained_at TIMESTAMP DEFAULT NOW(),
             UNIQUE(player_id, boss_id)
         );
+        -- Таблица мастерства боссов (сколько раз игрок убил конкретного босса)
+        CREATE TABLE IF NOT EXISTS boss_mastery (
+            id SERIAL PRIMARY KEY,
+            player_id INTEGER REFERENCES players(id),
+            boss_id INTEGER REFERENCES bosses(id),
+            kills INTEGER DEFAULT 0,
+            last_killed_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(player_id, boss_id)
+        );
         -- Таблица сессий рейдовых боссов (отслеживает урон игроков)
         CREATE TABLE IF NOT EXISTS boss_sessions (
             id SERIAL PRIMARY KEY,
             boss_id INTEGER REFERENCES bosses(id),
             player_id INTEGER REFERENCES players(id),
+            raid_id INTEGER REFERENCES raid_progress(id),  -- Связь с рейдом
             damage_dealt INTEGER DEFAULT 0,
+            rewards_earned BOOLEAN DEFAULT false,  -- Получил ли награду
             joined_at TIMESTAMP DEFAULT NOW(),
             last_hit_at TIMESTAMP DEFAULT NOW(),
             UNIQUE(boss_id, player_id)
@@ -373,7 +398,13 @@ async function initDatabase() {
             max_health INTEGER NOT NULL,
             started_at TIMESTAMP DEFAULT NOW(),
             ended_at TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,  -- Таймер окончания рейда (8 часов)
             is_active BOOLEAN DEFAULT true,
+            is_raid BOOLEAN DEFAULT false,  -- true = мультиплеерный рейд, false = одиночный
+            leader_id INTEGER REFERENCES players(id),  -- Игрок, начавший рейд (получит ключ)
+            leader_name VARCHAR(255),  -- Имя лидера для отображения
+            is_clan_raid BOOLEAN DEFAULT false,  -- true = клановый рейд
+            clan_id INTEGER REFERENCES clans(id),  -- ID клана для клановых рейдов
             UNIQUE(boss_id, is_active)
         );
         -- Таблица достижений
@@ -747,25 +778,25 @@ async function seedDatabase() {
         `, [set.name, set.description, set.icon, JSON.stringify(set.bonus_2), JSON.stringify(set.bonus_3), JSON.stringify(set.bonus_4)]);
     }
     const bosses = [
-        { name: 'Крысиный король', description: 'Огромная радиоактивная крыса', level: 1, health: 500, damage: 10, reward_experience: 50, reward_coins: 25, key_drop_chance: 1.0, icon: '🐀' },
-        { name: 'Бездомный псих', description: 'Сумасшедший выживший с монтировкой', level: 5, health: 2000, damage: 25, reward_experience: 100, reward_coins: 50, key_drop_chance: 0.8, icon: '🔪' },
-        { name: 'Медведь-мутант', description: 'Радиоактивный медведь', level: 10, health: 5000, damage: 50, reward_experience: 200, reward_coins: 100, key_drop_chance: 0.6, icon: '🐻' },
-        { name: 'Военный дрон', description: 'Боевой дрон с системой охраны', level: 20, health: 10000, damage: 80, reward_experience: 400, reward_coins: 200, key_drop_chance: 0.5, icon: '🤖' },
-        { name: 'Главарь мародёров', description: 'Лидер банды радиоактивных бандитов', level: 30, health: 20000, damage: 120, reward_experience: 800, reward_coins: 400, key_drop_chance: 0.4, icon: '💀' },
-        { name: 'Биологический ужас', description: 'Мутировавшее существо из лаборатории', level: 45, health: 40000, damage: 180, reward_experience: 1500, reward_coins: 750, key_drop_chance: 0.3, icon: '👾' },
-        { name: 'Офицер-нежить', description: 'Бывший военный офицер', level: 60, health: 70000, damage: 250, reward_experience: 3000, reward_coins: 1500, key_drop_chance: 0.25, icon: '💂' },
-        { name: 'Гигантский монстр', description: 'Колоссальное существо', level: 75, health: 100000, damage: 350, reward_experience: 6000, reward_coins: 3000, key_drop_chance: 0.2, icon: '🦖' },
-        { name: 'Профессор безумия', description: 'Учёный, сошедший с ума', level: 85, health: 150000, damage: 450, reward_experience: 12000, reward_coins: 6000, key_drop_chance: 0.15, icon: '🧑‍🔬' },
-        { name: 'Последний страж', description: 'Последний защитник бункера', level: 100, health: 250000, damage: 600, reward_experience: 25000, reward_coins: 12500, key_drop_chance: 0.1, icon: '🛡️' }
+        { name: 'Крысиный король', description: 'Огромная радиоактивная крыса', health: 500, damage: 10, reward_experience: 50, reward_coins: 25, icon: '🐀' },
+        { name: 'Бездомный псих', description: 'Сумасшедший выживший с монтировкой', health: 2000, damage: 25, reward_experience: 100, reward_coins: 50, icon: '🔪' },
+        { name: 'Медведь-мутант', description: 'Радиоактивный медведь', health: 5000, damage: 50, reward_experience: 200, reward_coins: 100, icon: '🐻' },
+        { name: 'Военный дрон', description: 'Боевой дрон с системой охраны', health: 10000, damage: 80, reward_experience: 400, reward_coins: 200, icon: '🤖' },
+        { name: 'Главарь мародёров', description: 'Лидер банды радиоактивных бандитов', health: 20000, damage: 120, reward_experience: 800, reward_coins: 400, icon: '💀' },
+        { name: 'Биологический ужас', description: 'Мутировавшее существо из лаборатории', health: 40000, damage: 180, reward_experience: 1500, reward_coins: 750, icon: '👾' },
+        { name: 'Офицер-нежить', description: 'Бывший военный офицер', health: 70000, damage: 250, reward_experience: 3000, reward_coins: 1500, icon: '💂' },
+        { name: 'Гигантский монстр', description: 'Колоссальное существо', health: 100000, damage: 350, reward_experience: 6000, reward_coins: 3000, icon: '🦖' },
+        { name: 'Профессор безумия', description: 'Учёный, сошедший с ума', health: 150000, damage: 450, reward_experience: 12000, reward_coins: 6000, icon: '🧑‍🔬' },
+        { name: 'Последний страж', description: 'Последний защитник бункера', health: 250000, damage: 600, reward_experience: 25000, reward_coins: 12500, icon: '🛡️' }
     ];
     for (let i = 0; i < bosses.length; i++) {
         const boss = bosses[i];
         const requiredKeyId = i > 0 ? i : null;
         await query(`
-            INSERT INTO bosses (name, description, level, health, max_health, damage, reward_experience, reward_coins, key_drop_chance, required_key_id, icon)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            INSERT INTO bosses (name, description, health, max_health, damage, reward_experience, reward_coins, required_key_id, icon)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT DO NOTHING
-        `, [boss.name, boss.description, boss.level, boss.health, boss.health, boss.damage, boss.reward_experience, boss.reward_coins, boss.key_drop_chance, requiredKeyId, boss.icon]);
+        `, [boss.name, boss.description, boss.health, boss.health, boss.damage, boss.reward_experience, boss.reward_coins, requiredKeyId, boss.icon]);
     }
     const items = [
         { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 10, icon: '🥫' },
@@ -2185,3 +2216,18 @@ module.exports = {
     getClanBossHistory,
     closePool
 };
+
+// Запуск миграции при прямом выполнении: node db/database.js
+if (require.main === module) {
+    (async () => {
+        try {
+            console.log('🚀 Запуск миграции базы данных...');
+            await initDatabase();
+            console.log('✅ Миграция завершена');
+            process.exit(0);
+        } catch (error) {
+            console.error('❌ Ошибка миграции:', error);
+            process.exit(1);
+        }
+    })();
+}
