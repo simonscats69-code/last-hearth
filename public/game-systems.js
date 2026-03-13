@@ -162,14 +162,6 @@ async function updateProfileUI(player) {
     const levelEl = document.getElementById('player-level');
     if (levelEl) levelEl.textContent = player.level || 1;
     
-    // Звание игрока (из данных профиля)
-    if (player.rank) {
-        const rankEl = document.getElementById('player-rank');
-        if (rankEl) {
-            rankEl.textContent = `${player.rank.icon} ${player.rank.name}`;
-        }
-    }
-    
     // Статы - с защитой от null
     const status = player.status || {};
     

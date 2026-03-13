@@ -492,35 +492,6 @@ function getCategoryName(category) {
 }
 
 /**
- * Получение звания игрока
- */
-router.get('/rank', async (req, res) => {
-    try {
-        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
-        
-        if (!telegramId) {
-            return res.status(401).json({ error: 'Требуется авторизация' });
-        }
-
-        const player = await queryOne(
-            'SELECT level FROM players WHERE telegram_id = $1',
-            [telegramId]
-        );
-
-        if (!player) {
-            return res.status(404).json({ error: 'Игрок не найден' });
-        }
-
-        const rank = getRankByLevel(player.level);
-
-        res.json({ rank });
-    } catch (error) {
-        console.error('Ошибка /rank:', error);
-        res.status(500).json({ error: 'Ошибка получения звания' });
-    }
-});
-
-/**
  * Информация об игре (для главного экрана)
  */
 router.get('/game-info', async (req, res) => {

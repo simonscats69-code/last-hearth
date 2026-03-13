@@ -150,13 +150,6 @@ function renderMain() {
         levelEl.textContent = player.level || 1;
     }
     
-    // Обновляем звание/ранг
-    const rankEl = document.getElementById('player-rank');
-    if (rankEl) {
-        const rank = getPlayerRank(player.level || 1);
-        rankEl.textContent = rank;
-    }
-    
     // Обновляем здоровье
     const healthBar = document.getElementById('health-bar');
     const healthText = document.getElementById('health-text');
@@ -275,20 +268,6 @@ function renderMain() {
 }
 
 /**
- * Получить звание игрока по уровню
- * @param {number} level - уровень игрока
- * @returns {string} звание
- */
-function getPlayerRank(level) {
-    if (level >= 50) return 'Легенда';
-    if (level >= 40) return 'Мастер выживания';
-    if (level >= 30) return 'Охотник';
-    if (level >= 20) return 'Выживший';
-    if (level >= 10) return 'Искатель';
-    return 'Новичок';
-}
-
-/**
  * Инициализация обработчиков кнопок навигации
  */
 function initNavigationHandlers() {
@@ -396,7 +375,6 @@ function backToBosses() {
 window.showScreen = showScreen;
 window.onScreenOpen = onScreenOpen;
 window.renderMain = renderMain;
-window.getPlayerRank = getPlayerRank;
 window.goToMain = goToMain;
 window.showProfile = showProfile;
 window.showBossFight = showBossFight;
