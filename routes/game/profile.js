@@ -78,8 +78,9 @@ function validateTelegramId(telegramId) {
 
 /**
  * Получение профиля игрока
+ * Путь: / (корень внутри роутера, который подключается с namespace /profile)
  */
-router.get('/profile', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const telegramId = req.player.telegram_id;
         
@@ -210,8 +211,9 @@ router.get('/profile', async (req, res) => {
 /**
  * Получение профиля игрока (устаревшая версия)
  * @deprecated Используйте GET /profile с единым форматом ответа
+ * Путь: /legacy (внутри роутера)
  */
-router.get('/profile-legacy', async (req, res) => {
+router.get('/legacy', async (req, res) => {
     try {
         const player = await queryOne(`
             SELECT p.*, l.name as location_name, l.radiation as location_radiation
