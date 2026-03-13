@@ -664,7 +664,7 @@ async function initDatabase() {
         CREATE INDEX IF NOT EXISTS idx_player_buildings_player ON player_buildings(player_id);
     `);
     await query(`
-        CREATE TABLE IF NOT EXISTS craft_recipes (
+        CREATE TABLE IF NOT EXISTS crafting_recipes (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
             description TEXT,
@@ -682,7 +682,7 @@ async function initDatabase() {
             rarity VARCHAR(20) DEFAULT 'common'
         );
         -- Заполнение рецептов крафта
-        INSERT INTO craft_recipes (name, description, result_item_id, result_quantity, ingredients, required_level, craft_time, rarity) VALUES
+        INSERT INTO crafting_recipes (name, description, result_item_id, result_quantity, ingredients, required_level, craft_time, rarity) VALUES
         -- Простые рецепты (в инвентаре)
         ('Нож', 'Простой нож из металлолома', 44171, 1, '[{"item_id": 44181, "quantity": 3}]', 1, 5, 'common'),
         ('Бита', 'Бейсбольная бита', 44172, 1, '[{"item_id": 44182, "quantity": 2}]', 1, 5, 'common'),
