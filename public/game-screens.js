@@ -264,10 +264,11 @@ function renderMain() {
     }
     
     // Обновляем кнопку поиска (доступность)
+    const playerEnergy = gameState?.player?.energy ?? 0;
     const searchBtn = document.getElementById('search-btn');
     if (searchBtn) {
-        searchBtn.disabled = energy < 1;
-        searchBtn.style.opacity = energy < 1 ? '0.5' : '1';
+        searchBtn.disabled = playerEnergy < 1;
+        searchBtn.style.opacity = playerEnergy < 1 ? '0.5' : '1';
     }
     
     console.log('[renderMain] Главный экран обновлён');
