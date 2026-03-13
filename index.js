@@ -99,6 +99,22 @@ function isOriginAllowed(origin) {
 }
 const jsonParser = express.json({ limit: '1mb' });
 
+// Таймаут для всех запросов - защита от зависаний
+app.use((req, res, next) => {
+    // Устанавливаем таймаут на ответ (15 секунд)
+    res.setTimeout(15000, () => {
+        console.error(`[TIMEOUT] Запрос превысил время ожидания: ${req.method} ${req.path}`);
+        if (!res.headersSent) {
+            res.status(503).json({
+                success: false,
+                error: 'Сервер временно занят. Попробуйте позже.',
+                code: 'SERVER_TIMEOUT'
+            });
+        }
+    });
+    next();
+});
+
 // Middleware для логирования JSON ошибок
 app.use((req, res, next) => {
     const originalJson = res.json.bind(res);

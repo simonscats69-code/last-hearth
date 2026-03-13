@@ -91,6 +91,21 @@ function handleError(res, error, action = 'unknown') {
 }
 
 /**
+ * Выполнить запрос с таймаутом
+ * @param {Promise} promise - промис запроса
+ * @param {number} ms - таймаут в миллисекундах
+ * @param {string} timeoutMessage - сообщение при таймауте
+ */
+function withTimeout(promise, ms, timeoutMessage = 'Запрос занял слишком много времени') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(timeoutMessage)), ms)
+        )
+    ]);
+}
+
+/**
  * Safe JSON parsing с fallback
  * @param {any} value - значение для парсинга
  * @param {object} fallback - значение по умолчанию
@@ -415,18 +430,23 @@ router.get('/', async (req, res) => {
         const offset = Math.max(parseInt(req.query.offset) || 0, 0);
         
         // ОПТИМИЗАЦИЯ: получаем ключи, мастерство и прогресс в одном запросе
-        const playerDataResult = await queryAll(`
-            SELECT 
-                bk.boss_id as key_boss_id, bk.quantity as key_quantity,
-                bm.boss_id as mastery_boss_id, bm.kills as mastery_kills,
-                pbp.boss_id as progress_boss_id, pbp.current_hp, pbp.max_hp as progress_max_hp
-            FROM bosses b
-            LEFT JOIN boss_keys bk ON bk.boss_id = b.id AND bk.player_id = $1
-            LEFT JOIN boss_mastery bm ON bm.boss_id = b.id AND bm.player_id = $1
-            LEFT JOIN player_boss_progress pbp ON pbp.boss_id = b.id AND pbp.player_id = $1
-            WHERE b.id > 0
-            ORDER BY b.id
-        `, [player.id]);
+        // Добавляем таймаут для защиты от зависаний
+        const playerDataResult = await withTimeout(
+            queryAll(`
+                SELECT 
+                    bk.boss_id as key_boss_id, bk.quantity as key_quantity,
+                    bm.boss_id as mastery_boss_id, bm.kills as mastery_kills,
+                    pbp.boss_id as progress_boss_id, pbp.current_hp, pbp.max_hp as progress_max_hp
+                FROM bosses b
+                LEFT JOIN boss_keys bk ON bk.boss_id = b.id AND bk.player_id = $1
+                LEFT JOIN boss_mastery bm ON bm.boss_id = b.id AND bm.player_id = $1
+                LEFT JOIN player_boss_progress pbp ON pbp.boss_id = b.id AND pbp.player_id = $1
+                WHERE b.id > 0
+                ORDER BY b.id
+            `, [player.id]),
+            5000,
+            'Таймаут при загрузке данных игрока'
+        );
         
         // Создаём карты для быстрого доступа
         const keyMap = {};
@@ -448,16 +468,24 @@ router.get('/', async (req, res) => {
             }
         });
         
-        // Получаем общее количество боссов
-        const countResult = await query(`
-            SELECT COUNT(*) as total FROM bosses
-        `);
+        // Получаем общее количество боссов с таймаутом
+        const countResult = await withTimeout(
+            query(`
+                SELECT COUNT(*) as total FROM bosses
+            `),
+            3000,
+            'Таймаут при подсчёте боссов'
+        );
         const totalBosses = parseInt(countResult.rows[0].total);
         
-        // Получаем боссов с пагинацией
-        const bosses = await queryAll(`
-            SELECT * FROM bosses ORDER BY id ASC LIMIT $1 OFFSET $2
-        `, [limit, offset]);
+        // Получаем боссов с пагинацией и таймаутом
+        const bosses = await withTimeout(
+            queryAll(`
+                SELECT * FROM bosses ORDER BY id ASC LIMIT $1 OFFSET $2
+            `, [limit, offset]),
+            5000,
+            'Таймаут при загрузке боссов'
+        );
         
         // Определяем доступность боссов и формируем ответ
         const bossList = bosses.map(boss => {
