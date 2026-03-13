@@ -6,9 +6,15 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne } = require('../../db/database');
-const { logger } = require('../../utils/logger');
 const { validateTelegramInitData } = require('../../utils/telegramAuth');
 const rateLimit = require('express-rate-limit');
+
+// Используем console для логирования - простой и надёжный способ
+const log = {
+    info: (...args) => console.log('[game]', ...args),
+    warn: (...args) => console.warn('[game]', ...args),
+    error: (...args) => console.error('[game]', ...args)
+};
 
 // Rate limiter для критических endpoints (атака босса, PvP)
 const criticalActionLimiter = rateLimit({
@@ -50,7 +56,7 @@ async function authenticatePlayer(req, res, next) {
         const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
         // Логируем информацию о запросе для отладки
-        logger.info('[game] authenticatePlayer вызван', {
+        log.info('authenticatePlayer вызван', {
             path: req.path,
             hasInitData: !!initData,
             initDataLength: initData?.length || 0,
@@ -60,7 +66,7 @@ async function authenticatePlayer(req, res, next) {
 
         // Проверяем наличие initData
         if (!initData) {
-            logger.warn('[game] Отсутствует initData', { path: req.path, headers: Object.keys(req.headers) });
+            log.warn('Отсутствует initData', { path: req.path, headers: Object.keys(req.headers) });
             return res.status(401).json({ 
                 error: 'Требуется авторизация. Откройте игру через Telegram.',
                 code: 'NO_INIT_DATA'
@@ -69,25 +75,25 @@ async function authenticatePlayer(req, res, next) {
 
         // Проверяем наличие токена бота
         if (!botToken) {
-            logger.error('[game] TELEGRAM_BOT_TOKEN не настроен');
+            log.error('TELEGRAM_BOT_TOKEN не настроен');
             return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
         }
         
         // Проверяем что токен не placeholder
         if (botToken === 'YOUR_BOT_TOKEN_HERE' || botToken.includes('your_')) {
-            logger.error('[game] TELEGRAM_BOT_TOKEN установлен как placeholder! нужно заменить на реальный токен');
+            log.error('TELEGRAM_BOT_TOKEN установлен как placeholder! нужно заменить на реальный токен');
             return res.status(500).json({ 
                 error: 'Ошибка конфигурации сервера. Токен бота не настроен.',
                 code: 'BOT_TOKEN_NOT_CONFIGURED'
             });
         }
         
-        logger.info('[game] Токен бота настроен, начинаем валидацию');
+        log.info('Токен бота настроен, начинаем валидацию');
 
         // Валидация подписи initData
         const validated = validateTelegramInitData(initData, botToken);
         if (!validated) {
-            logger.warn('[game] Неверная подпись initData', { 
+            log.warn('Неверная подпись initData', { 
                 path: req.path, 
                 initDataLength: initData.length,
                 initDataPrefix: initData.substring(0, 100)
@@ -108,7 +114,7 @@ async function authenticatePlayer(req, res, next) {
         );
 
         if (!player) {
-            logger.warn('[game] Игрок не найден в БД', { 
+            log.warn('Игрок не найден в БД', { 
                 telegramId: telegramUserId, 
                 path: req.path 
             });
@@ -118,7 +124,7 @@ async function authenticatePlayer(req, res, next) {
             });
         }
 
-        logger.info('[game] Авторизация игрока', { 
+        log.info('Авторизация игрока', { 
             telegramId: telegramUserId, 
             playerId: player.id,
             path: req.path 
@@ -127,7 +133,7 @@ async function authenticatePlayer(req, res, next) {
         req.player = player;
         next();
     } catch (error) {
-        logger.error('[game] Ошибка авторизации', { error: error.message, stack: error.stack });
+        log.error('Ошибка авторизации', { error: error.message, stack: error.stack });
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 }
@@ -142,10 +148,10 @@ router.use(authenticatePlayer);
 function safeRequire(path, name) {
     try {
         const mod = require(path);
-        logger.info(`[game] Загружен роутер: ${name}`);
+        log.info(`Загружен роутер: ${name}`);
         return mod;
     } catch(e) {
-        logger.error(`[FATAL] Не удалось загрузить роутер: ${name}`, { path, error: e.message });
+        log.error(`FATAL: Не удалось загрузить роутер: ${name}`, { path, error: e.message });
         throw new Error(`Не удалось загрузить роутер ${name}: ${e.message}`);
     }
 }

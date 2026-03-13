@@ -4,7 +4,13 @@
  */
 
 const crypto = require('crypto');
-const logger = require('./logger');
+
+// Используем console для логирования - простой и надёжный способ
+const log = {
+    info: (...args) => console.log('[telegramAuth]', ...args),
+    warn: (...args) => console.warn('[telegramAuth]', ...args),
+    error: (...args) => console.error('[telegramAuth]', ...args)
+};
 
 /**
  * Проверяет подпись initData от Telegram
@@ -14,7 +20,7 @@ const logger = require('./logger');
  */
 function validateTelegramInitData(initData, botToken) {
     if (!initData || !botToken) {
-        logger.warn('[telegramAuth] Отсутствуют параметры', { hasInitData: !!initData, hasBotToken: !!botToken });
+        log.warn('Отсутствуют параметры', { hasInitData: !!initData, hasBotToken: !!botToken });
         return null;
     }
 
@@ -25,7 +31,7 @@ function validateTelegramInitData(initData, botToken) {
         // Получаем hash и удаляем его из параметров
         const hash = params.get('hash');
         if (!hash) {
-            logger.warn('[telegramAuth] Отсутствует hash');
+            log.warn('Отсутствует hash');
             return null;
         }
         params.delete('hash');
@@ -39,7 +45,7 @@ function validateTelegramInitData(initData, botToken) {
             .join('\n');
 
         // Логируем информацию о запросе для отладки
-        logger.info('[telegramAuth] Валидация initData', {
+        log.info('Валидация initData', {
             hasDataHash: !!hash,
             paramsCount: entries.length,
             dataCheckStringLength: dataCheckString.length
@@ -49,7 +55,7 @@ function validateTelegramInitData(initData, botToken) {
         const authDateStr = params.get('auth_date');
         const userStr = params.get('user');
         if (!authDateStr || !userStr) {
-            logger.warn('[telegramAuth] Отсутствуют обязательные поля', { 
+            log.warn('Отсутствуют обязательные поля', { 
                 hasAuthDate: !!authDateStr, 
                 hasUser: !!userStr,
                 keys: [...params.keys()]
@@ -63,7 +69,7 @@ function validateTelegramInitData(initData, botToken) {
         const now = Math.floor(Date.now() / 1000);
         const age = now - authDate;
         if (age < -300 || age > 86400) { // 5 минут допустимого drift + 24 часа
-            logger.warn('[telegramAuth] initData истёк или время не синхронизировано', { age, authDate, now });
+            log.warn('initData истёк или время не синхронизировано', { age, authDate, now });
             return null;
         }
 
@@ -73,7 +79,7 @@ function validateTelegramInitData(initData, botToken) {
             const userData = JSON.parse(userStr);
             userId = userData.id;
         } catch (e) {
-            logger.warn('[telegramAuth] Ошибка парсинга user', { error: e.message });
+            log.warn('Ошибка парсинга user', { error: e.message });
         }
 
         // Создаём секретный ключ по алгоритму Telegram
@@ -83,7 +89,7 @@ function validateTelegramInitData(initData, botToken) {
             .update(botToken)
             .digest();
 
-        logger.info('[telegramAuth] Проверка подписи', {
+        log.info('Проверка подписи', {
             userId,
             dataKeys: [...params.keys()].sort(),
             dataCheckStringLength: dataCheckString.length
@@ -101,7 +107,7 @@ function validateTelegramInitData(initData, botToken) {
             const hashBuf = Buffer.from(computedHash, 'hex');
             const dataHashBuf = Buffer.from(hash, 'hex');
             
-            logger.info('[telegramAuth] Сравнение хешей', {
+            log.info('Сравнение хешей', {
                 userId,
                 hashMatch: computedHash === hash,
                 computedLength: hashBuf.length,
@@ -111,15 +117,15 @@ function validateTelegramInitData(initData, botToken) {
             if (hashBuf.length === dataHashBuf.length) {
                 isValid = crypto.timingSafeEqual(hashBuf, dataHashBuf);
             } else {
-                logger.warn('[telegramAuth] Разная длина хешей', { expectedLength: hashBuf.length, actualLength: dataHashBuf.length });
+                log.warn('Разная длина хешей', { expectedLength: hashBuf.length, actualLength: dataHashBuf.length });
             }
         } catch (e) {
-            logger.warn({ type: 'ws_auth_failed', reason: 'hash_compare_error', userId, error: e.message });
+            log.warn({ type: 'ws_auth_failed', reason: 'hash_compare_error', userId, error: e.message });
             return null;
         }
         
         if (!isValid) {
-            logger.warn({ type: 'ws_auth_failed', reason: 'hash_mismatch', userId });
+            log.warn({ type: 'ws_auth_failed', reason: 'hash_mismatch', userId });
             return null;
         }
 
@@ -128,7 +134,7 @@ function validateTelegramInitData(initData, botToken) {
         try {
             user = JSON.parse(userStr);
         } catch(e) {
-            logger.error('[telegramAuth] Ошибка парсинга user', { error: e.message });
+            log.error('Ошибка парсинга user', { error: e.message });
             return null;
         }
         
