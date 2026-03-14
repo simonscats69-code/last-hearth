@@ -67,10 +67,11 @@ const SHOP_ITEMS = {
 };
 
 /**
- * Открытие магазина
+ * Открытие магазина (рендерит категорию)
+ * Примечание: showScreen уже вызывается до этой функции,
+ * поэтому здесь НЕ вызываем showScreen('shop') во избежание бесконечного цикла
  */
 function openShop() {
-    showScreen('shop');
     renderShopCategory('buffs');
 }
 

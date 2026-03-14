@@ -38,6 +38,12 @@ const SCREENS = [
  * @param {string} screenName - имя экрана
  */
 function showScreen(screenName) {
+    // Защита от undefined/null
+    if (!screenName || typeof screenName !== 'string') {
+        console.warn('Invalid screen name:', screenName);
+        return;
+    }
+    
     // Валидация
     if (!SCREENS.includes(screenName)) {
         console.warn('Unknown screen:', screenName);
@@ -87,7 +93,7 @@ function onScreenOpen(screenName) {
             break;
             
         case 'shop':
-            // Открываем магазин
+            // Открываем магазин (рендерим категорию)
             openShop();
             break;
             
@@ -99,6 +105,11 @@ function onScreenOpen(screenName) {
         case 'clan':
             // Загружаем клан
             loadClan();
+            break;
+            
+        case 'clans-list':
+            // Загружаем список кланов
+            loadClansList();
             break;
             
         case 'base':
@@ -121,6 +132,21 @@ function onScreenOpen(screenName) {
             if (gameState.player) {
                 updateProfileUI(gameState.player);
             }
+            break;
+            
+        case 'market':
+            // Загружаем объявления рынка
+            loadMarketListings();
+            break;
+            
+        case 'pvp-players':
+            // Загружаем список игроков PvP
+            loadPVPGamePlayers();
+            break;
+            
+        case 'pvp-stats':
+            // Загружаем статистику PvP
+            loadPVPStats();
             break;
     }
 }

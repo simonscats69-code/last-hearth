@@ -1774,7 +1774,7 @@ function renderRating(items, type) {
  */
 async function watchAd() {
     if (!Adsgram) {
-        showModal('⚠️ Реклама', 'Реклама недоступна');
+        showModal('⚠️ Реклама', 'Реклама временно недоступна. Попробуй позже!');
         return;
     }
     

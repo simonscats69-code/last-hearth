@@ -217,6 +217,8 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 // Проверяем код ошибки для более понятного сообщения
                 if (error.message.includes('401') || error.message.includes('Unauthorized')) {
                     showNotification('Ошибка авторизации. Обновите игру через Telegram.', 'error');
+                } else if (error.message.includes('502')) {
+                    showNotification('Сервер перегружен. Попробуй через несколько минут.', 'error');
                 } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
                     showNotification('Пропал интернет. Проверь соединение.', 'error');
                 } else {

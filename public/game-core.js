@@ -662,16 +662,19 @@ if ('serviceWorker' in navigator) {
 
 const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || '';
 
-// AdsGram инициализация
+// AdsGram инициализация (с проверкой доступности)
 let Adsgram = null;
-if (typeof AdsgramInit === 'function' && ADSGRAM_APP_ID) {
+if (window.AdsgramAvailable && typeof AdsgramInit === 'function' && ADSGRAM_APP_ID) {
     try {
         Adsgram = AdsgramInit({
             appId: ADSGRAM_APP_ID
         });
+        console.log('AdsGram инициализирован');
     } catch (e) {
         console.warn('AdsGram инициализация не удалась:', e);
     }
+} else if (!window.AdsgramAvailable) {
+    console.log('AdsGram SDK недоступен');
 }
 
 // ============================================================================
