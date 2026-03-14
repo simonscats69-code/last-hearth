@@ -270,6 +270,17 @@ async function createTables() {
         );
     `);
 
+    // Миграция: добавить leader_id если не существует
+    await query(`
+        DO $
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'raid_progress' AND column_name = 'leader_id') THEN
+                ALTER TABLE raid_progress ADD COLUMN leader_id INTEGER REFERENCES players(id);
+            END IF;
+        END $;
+    `);
+
     // Таблица достижений
     await query(`
         CREATE TABLE IF NOT EXISTS achievements (
