@@ -150,6 +150,7 @@ app.use(helmet({
             objectSrc: ["'none'"],
             mediaSrc: ["'self'"],
             frameSrc: ["'self'", 'https://last-hearth.bothost.ru', 'https://*.bothost.ru'],
+            frameAncestors: ["'self'", 'https://last-hearth.bothost.ru', 'https://*.bothost.ru'],
         },
     },
     crossOriginEmbedderPolicy: false,
