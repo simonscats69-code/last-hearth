@@ -18,7 +18,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { calculateCraftSuccess } = require('../../utils/gameConstants');
 const { logger, logGameAction, logPlayerError } = require('../../utils/logger');
-const { safeParse, safeJsonParse } = require('../../utils/jsonHelper');
+const { safeParse, safeJsonParse, safeStringify } = require('../../utils/jsonHelper');
 const { withPlayerLock } = require('../../utils/transactions');
 
 // ============================================================================

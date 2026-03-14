@@ -382,7 +382,7 @@ async function startServer() {
             }
         });
     } catch (err) {
-        logger.error({ type: 'startup_error', message: err.message, stack: err.stack });
+        console.error('Ошибка инициализации БД:', err.message);
         process.exit(1);
     }
 }

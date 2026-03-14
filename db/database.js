@@ -868,36 +868,26 @@ async function getReferralStats(telegramId) {
 // ============================================
 
 const DAILY_TASK_TEMPLATES = [
-    { type: 'kill_enemies', target: 10, reward: { coins: 100, exp: 50 }, event_bonus: { [SEASON_EVENT_TYPES.TREASURE_HUNT]: 1.5 } },
-    { type: 'kill_enemies', target: 25, reward: { coins: 250, exp: 100 }, event_bonus: { [SEASON_EVENT_TYPES.TREASURE_HUNT]: 1.5 } },
-    { type: 'collect_resources', target: 15, reward: { coins: 150, exp: 75 }, event_bonus: { [SEASON_EVENT_TYPES.CRAFT_MARATHON]: 1.5 } },
-    { type: 'craft_items', target: 5, reward: { coins: 200, exp: 100 }, event_bonus: { [SEASON_EVENT_TYPES.CRAFT_MARATHON]: 1.5 } },
-    { type: 'pvp_battles', target: 3, reward: { coins: 300, exp: 150 }, event_bonus: { [SEASON_EVENT_TYPES.PVP_TOURNAMENT]: 1.5 } },
+    { type: 'kill_enemies', target: 10, reward: { coins: 100, exp: 50 }, event_bonus: {} },
+    { type: 'kill_enemies', target: 25, reward: { coins: 250, exp: 100 }, event_bonus: {} },
+    { type: 'collect_resources', target: 15, reward: { coins: 150, exp: 75 }, event_bonus: {} },
+    { type: 'craft_items', target: 5, reward: { coins: 200, exp: 100 }, event_bonus: {} },
+    { type: 'pvp_battles', target: 3, reward: { coins: 300, exp: 150 }, event_bonus: {} },
     { type: 'explore_locations', target: 5, reward: { coins: 100, exp: 50 }, event_bonus: {} },
-    { type: 'trade_items', target: 10, reward: { coins: 150, exp: 50 }, event_bonus: { [SEASON_EVENT_TYPES.TRADE_FESTIVAL]: 1.5 } },
-    { type: 'boss_kills', target: 1, reward: { coins: 500, exp: 250 }, event_bonus: { [SEASON_EVENT_TYPES.BOSS_INVASION]: 2.0 } }
+    { type: 'trade_items', target: 10, reward: { coins: 150, exp: 50 }, event_bonus: {} },
+    { type: 'boss_kills', target: 1, reward: { coins: 500, exp: 250 }, event_bonus: {} }
 ];
 
 async function createDailyTasks(playerId) {
-    const season = await getCurrentSeason();
     const now = new Date();
     const expiresAt = new Date(now);
     expiresAt.setDate(expiresAt.getDate() + 1);
-    
-    const activeEvents = await getActiveSeasonEvents();
-    const activeEventTypes = activeEvents.map(e => e.event_type);
     
     const shuffled = [...DAILY_TASK_TEMPLATES].sort(() => Math.random() - 0.5);
     const selectedTasks = shuffled.slice(0, 3);
     const createdTasks = [];
     
     for (const template of selectedTasks) {
-        let rewardMultiplier = 1.0;
-        for (const eventType of activeEventTypes) {
-            if (template.event_bonus[eventType]) {
-                rewardMultiplier = Math.max(rewardMultiplier, template.event_bonus[eventType]);
-            }
-        }
         
         const reward = {
             coins: Math.floor(template.reward.coins * rewardMultiplier),
