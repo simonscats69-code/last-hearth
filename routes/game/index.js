@@ -10,7 +10,7 @@
  * Лимиты ТОЛЬКО на действия (POST/PUT/DELETE):
  * - criticalActionLimiter: 15/мин (PvP атака)
  * - clanBossActionLimiter: 20/мин (клан-босс)
- * - bossClickLimiter: ∞ (клики - защита energy + cooldown)
+ * - bossClickLimiter: УДАЛЁН (защита energy + cooldown на уровне логики)
  * - generalActionLimiter: 50/мин (крафтинг, перемещение)
  * - purchaseLimiter: 10/мин (покупки)
  */
@@ -81,16 +81,8 @@ const clanBossActionLimiter = rateLimit({
  * 
  * Endpoints: bosses/attack-boss, bosses/raid/:id/attack
  */
-const bossClickLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 1000, // Высокий лимит только для формальности
-    message: { error: 'Подождите...' },
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => req.player?.id || req.ip,
-    // Пропускаем все запросы - реальная защита через energy + cooldown
-    skip: () => true
-});
+// bossClickLimiter УДАЛЁН - бесполезный (skip: () => true пропускает всё)
+// Защита обеспечивается через energy + cooldown на уровне логики
 
 /**
  * Обычные действия - крафтинг, перемещение, поиск
@@ -149,30 +141,10 @@ const purchaseLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => {
-        return req.player?.id || req.ip;
-    },
-    // Важно: не пропускаем запросы
-    skip: () => false
+    keyGenerator: (req) => req.player?.id || req.ip
 });
 
-/**
- * Inline rate limit для особо критических случаев
- * Используется непосредственно в роутерах
- */
-const createInlineLimiter = (maxRequests, windowMs = 60000) => {
-    return rateLimit({
-        windowMs,
-        max: maxRequests,
-        message: { 
-            error: 'Слишком много запросов. Попробуйте позже.',
-            code: 'INLINE_LIMIT'
-        },
-        standardHeaders: true,
-        legacyHeaders: false,
-        keyGenerator: (req) => req.player?.id || req.ip
-    });
-};
+// createInlineLimiter УДАЛЁН - не используется в дочерних роутерах
 
 /**
  * Middleware авторизации для Telegram Mini App
@@ -190,8 +162,7 @@ async function authenticatePlayer(req, res, next) {
         const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
         // Логируем информацию о запросе для отладки
-        logger.info({ custom: '[game]', path: req.path,
-            path: req.path,
+        logger.info({ custom: '[game]',
             hasInitData: !!initData,
             initDataLength: initData?.length || 0,
             // Показываем только структуру initData (первые ключи)
@@ -248,9 +219,8 @@ async function authenticatePlayer(req, res, next) {
         );
 
         if (!player) {
-            logger.warn({ custom: '[game]', telegramId: telegramUserId, 
-                telegramId: telegramUserId, 
-                path: req.path 
+            logger.warn({ custom: '[game]', telegramId: telegramUserId,
+                path: req.path
             });
             return res.status(404).json({ 
                 error: 'Игрок не найден. Начните игру через /start в боте.',
@@ -258,10 +228,9 @@ async function authenticatePlayer(req, res, next) {
             });
         }
 
-        logger.info({ custom: '[game]', telegramId: telegramUserId, 
-            telegramId: telegramUserId, 
+        logger.info({ custom: '[game]', telegramId: telegramUserId,
             playerId: player.id,
-            path: req.path 
+            path: req.path
         });
 
         req.player = player;
@@ -329,8 +298,6 @@ module.exports = Object.assign(router, {
     authenticatePlayer, 
     criticalActionLimiter,     // 15/мин - PvP атака
     clanBossActionLimiter,     // 20/мин - клан-босс
-    bossClickLimiter,          // ∞ - клики (защита energy + cooldown)
     generalActionLimiter,      // 50/мин - крафтинг, перемещение
-    purchaseLimiter,           // 10/мин - покупки
-    createInlineLimiter
+    purchaseLimiter            // 10/мин - покупки
 });
