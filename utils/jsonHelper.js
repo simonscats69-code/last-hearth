@@ -3,6 +3,8 @@
  * Вынесено для устранения дублирования кода (DRY)
  */
 
+const logger = require('./logger');
+
 /**
  * Безопасный парсинг JSON
  * @param {string} str - JSON строка для парсинга
@@ -43,5 +45,6 @@ function safeStringify(obj) {
 
 module.exports = {
     safeJsonParse,
+    safeParse: safeJsonParse, // Алиас
     safeStringify
 };

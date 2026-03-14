@@ -81,8 +81,8 @@ const clanBossActionLimiter = rateLimit({
  * 
  * Endpoints: bosses/attack-boss, bosses/raid/:id/attack
  */
-// bossClickLimiter УДАЛЁН - бесполезный (skip: () => true пропускает всё)
-// Защита обеспечивается через energy + cooldown на уровне логики
+// bossClickLimiter — пропускает всё, заменяем на pass-through
+const bossClickLimiter = (req, res, next) => next();
 
 /**
  * Обычные действия - крафтинг, перемещение, поиск

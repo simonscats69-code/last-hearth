@@ -11,6 +11,42 @@ const { DEBUFF_CONFIG } = require('../../utils/gameConstants');
 const { handleError } = require('../../utils/errorHandler');
 
 // =============================================================================
+// Утилиты
+// =============================================================================
+
+/**
+ * Универсальная функция получения статуса игрока
+ * @param {object} player - Объект игрока из БД
+ * @returns {object} Статус игрока
+ */
+function getPlayerStatus(player) {
+    const infections = safeJsonParse(player.infections, []);
+    // Парсим radiation (может быть old INTEGER или new JSONB)
+    let radiationLevel = 0;
+    if (player.radiation) {
+        if (typeof player.radiation === 'object') {
+            radiationLevel = player.radiation.level || 0;
+        } else if (typeof player.radiation === 'number') {
+            radiationLevel = player.radiation;
+        }
+    }
+    // Вычисляем общий уровень инфекций
+    const infectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
+    
+    return {
+        success: true,
+        health: player.health,
+        max_health: player.max_health,
+        radiation: radiationLevel,
+        fatigue: player.fatigue,
+        energy: player.energy,
+        max_energy: player.max_energy,
+        infections: infectionLevel,
+        infections_list: infections
+    };
+}
+
+// =============================================================================
 // Валидация
 // =============================================================================
 
@@ -45,33 +81,7 @@ function validateItemId(itemId) {
 router.get('/', async (req, res) => {
     try {
         const player = req.player;
-        
-        // Парсим infections безопасно
-        const infections = safeJsonParse(player.infections, []);
-        // Парсим radiation (может быть old INTEGER или new JSONB)
-        let radiationLevel = 0;
-        if (player.radiation) {
-            if (typeof player.radiation === 'object') {
-                radiationLevel = player.radiation.level || 0;
-            } else if (typeof player.radiation === 'number') {
-                radiationLevel = player.radiation;
-            }
-        }
-        // Вычисляем общий уровень инфекций
-        const infectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
-        
-        res.json({
-            success: true,
-            health: player.health,
-            max_health: player.max_health,
-            radiation: radiationLevel,
-            fatigue: player.fatigue,
-            energy: player.energy,
-            max_energy: player.max_energy,
-            infections: infectionLevel,
-            infections_list: infections
-        });
-        
+        res.json(getPlayerStatus(player));
     } catch (error) {
         handleError(res, error, 'GET_STATUS');
     }
@@ -296,30 +306,7 @@ const StatusAPI = {
      * @returns {object} Статус игрока
      */
     getStatus(player) {
-        const infections = safeJsonParse(player.infections, []);
-        // Парсим radiation (может быть old INTEGER или new JSONB)
-        let radiationLevel = 0;
-        if (player.radiation) {
-            if (typeof player.radiation === 'object') {
-                radiationLevel = player.radiation.level || 0;
-            } else if (typeof player.radiation === 'number') {
-                radiationLevel = player.radiation;
-            }
-        }
-        // Вычисляем общий уровень инфекций
-        const infectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
-        
-        return {
-            success: true,
-            health: player.health,
-            max_health: player.max_health,
-            radiation: radiationLevel,
-            fatigue: player.fatigue,
-            energy: player.energy,
-            max_energy: player.max_energy,
-            infections: infectionLevel,
-            infections_list: infections
-        };
+        return getPlayerStatus(player);
     },
     
     /**
