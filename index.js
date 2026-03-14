@@ -91,15 +91,6 @@ app.use((req, res, next) => {
 // Конфигурация парсеров
 const jsonParser = express.json({ limit: '1mb' });
 
-// Явный заголовок CSP для frame-ancestors
-app.use((req, res, next) => {
-    res.setHeader(
-        'Content-Security-Policy',
-        "frame-ancestors 'self' https://last-hearth.bothost.ru https://*.bothost.ru https://telegram.org https://t.me;"
-    );
-    next();
-});
-
 // Разрешённые источники для CORS
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
 const ALLOWED_ORIGINS = [
@@ -158,12 +149,17 @@ app.use(helmet({
             fontSrc: ["'self'", 'https:'],
             objectSrc: ["'none'"],
             mediaSrc: ["'self'"],
-            frameSrc: ["'self'", 'https://last-hearth.bothost.ru', 'https://*.bothost.ru'],
-            frameAncestors: ["'self'", 'https://last-hearth.bothost.ru', 'https://*.bothost.ru'],
+            frameSrc: ["'none'"],
+            frameAncestors: [
+                "'self'",
+                'https://web.telegram.org',
+                'https://*.telegram.org',
+                'https://*.t.me'
+            ],
         },
     },
     crossOriginEmbedderPolicy: false,
-    frameguard: { action: 'sameorigin' }
+    frameguard: false  // X-Frame-Options отключён — frameAncestors его заменяет
 }));
 
 const limiter = rateLimit({
@@ -392,7 +388,7 @@ async function startServer() {
             }
         });
     } catch (err) {
-        console.error('Ошибка инициализации БД:', err.message);
+        logger.error({ type: 'startup_error', message: err.message, stack: err.stack });
         process.exit(1);
     }
 }
