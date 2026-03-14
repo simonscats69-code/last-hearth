@@ -4,7 +4,18 @@
  * Точка входа сервера
  */
 
-// Сначала подключаем logger
+// Сначала загружаем dotenv - ДО любых других require
+try {
+    require('dotenv').config();
+} catch (e) {
+    if (e.code !== 'MODULE_NOT_FOUND') {
+        throw e; // Перебрасываем неизвестные ошибки
+    }
+}
+
+// ADMIN_IDS парсится один раз при старте
+const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+
 const logger = require('./utils/logger');
 
 // Глобальные обработчики ошибок для отладки
@@ -25,20 +36,12 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
-// Пробуем загрузить dotenv, но не критично если его нет (на продакшене может не быть)
-try {
-    require('dotenv').config();
-} catch (e) {
-    // dotenv не доступен - используем переменные окружения напрямую
-    logger.info('ℹ️ dotenv не загружен, используем переменные окружения системы');
-}
-
-const { logger, requestMiddleware } = require('./utils/logger');
+const { requestMiddleware } = require('./utils/logger');
 const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/achievements');
-const { initWebSocket, getMetrics, updateWebSocketMetrics } = require('./utils/realtime');
+const { initWebSocket, getMetrics, stopHeartbeat } = require('./utils/realtime');
 const { telegramAuthMiddleware } = require('./utils/telegramAuth');
-const { initDatabase, query } = require('./db/database');
+const { initDatabase, query, closePool } = require('./db/database');
 const { setupWebhook } = require('./bot/webhook');
 const gameRouter = require('./routes/game');
 const apiRouter = require('./routes/api');
@@ -48,32 +51,51 @@ const leaderboardRouter = require('./routes/leaderboard');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware для логирования ошибок
+// Базовая конфигурация приложения
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+// Проверка длины URL - самая первая (до любых тяжёлых middleware)
+app.use((req, res, next) => {
+    if (req.url.length > 2048) {
+        return res.status(414).end();
+    }
+    next();
+});
+
+// requestMiddleware - первый в цепочке для точного времени начала запроса
+app.use(requestMiddleware);
+
+// Middleware для логирования ответов и ошибок
 app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
         const duration = Date.now() - start;
-        // Логируем только ошибки
+        logger.debug(`[RES] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${duration}ms)`);
+        // Логируем ошибки и медленные запросы
         if (res.statusCode >= 400) {
             logger.error(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
+        } else if (duration > 1000) {
+            logger.warn({
+                type: 'slow_request',
+                url: req.originalUrl,
+                duration,
+                method: req.method,
+                ip: req.ip
+            });
         }
     });
     next();
 });
 
-// Middleware для обработки ошибок
-app.use((err, req, res, next) => {
-    logger.error(`[ERROR] ${req.method} ${req.path}:`, err.message, err.stack);
-    res.status(500).json({ success: false, error: err.message });
-});
+// Конфигурация парсеров
+const jsonParser = express.json({ limit: '1mb' });
 
 // Разрешённые источники для CORS
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
     'https://t.me',
-    FRONTEND_URL,
-    'https://last-hearth.bothost.ru',
     'null'
 ];
 
@@ -84,14 +106,13 @@ function isOriginAllowed(origin) {
     // Точное совпадение
     if (ALLOWED_ORIGINS.includes(origin)) return true;
     
-    // Проверяем FRONTEND_URL
-    if (origin === FRONTEND_URL) return true;
+    // FRONTEND_URL и его поддомены (точно или subdomain)
+    const base = FRONTEND_URL.replace(/\/$/, '');
+    if (origin === base || origin.startsWith(base + '.') || origin.startsWith(base + '/')) return true;
     
     // GitHub Pages поддомены
-    if (origin.startsWith('https://simonscats69-code.github.io')) return true;
-    
-    // BotHost поддомены
-    if (origin.startsWith('https://last-hearth.bothost.ru')) return true;
+    const githubBase = 'https://simonscats69-code.github.io';
+    if (origin === githubBase || origin.startsWith(githubBase + '.')) return true;
     
     // Telegram поддомены (web.telegram.org, web.telegram.me и т.д.)
     if (/^https:\/\/[\w-]+\.telegram\.org$/.test(origin)) return true;
@@ -99,7 +120,6 @@ function isOriginAllowed(origin) {
     
     return false;
 }
-const jsonParser = express.json({ limit: '1mb' });
 
 // Таймаут для всех запросов - защита от зависаний
 app.use((req, res, next) => {
@@ -116,19 +136,6 @@ app.use((req, res, next) => {
     });
     next();
 });
-
-// Middleware для логирования JSON ошибок
-app.use((req, res, next) => {
-    const originalJson = res.json.bind(res);
-    res.json = function(data) {
-        logger.debug('[RES.JSON]', req.method, req.originalUrl, typeof data);
-        return originalJson(data);
-    };
-    next();
-});
-
-app.disable('x-powered-by');
-app.set('trust proxy', 1);
 
 app.use(helmet({
     // CSP для Telegram Mini App - разрешаем unsafe-inline для совместимости
@@ -165,6 +172,12 @@ const apiLimiter = rateLimit({
     keyGenerator: (req) => req.headers['x-telegram-id'] || req.ip
 });
 
+const healthLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    message: { error: 'Слишком много запросов' }
+});
+
 app.use(limiter);
 app.use('/api', apiLimiter);
 app.use(compression({ threshold: 1024 }));
@@ -186,13 +199,6 @@ app.use((req, res, next) => {
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 app.use((req, res, next) => {
-    if (req.url.length > 2048) {
-        return res.status(414).end();
-    }
-    next();
-});
-
-app.use((req, res, next) => {
     const origin = req.headers.origin;
     // Разрешаем только конкретный frontend для Mini App
     if (!origin) {
@@ -202,10 +208,7 @@ app.use((req, res, next) => {
     const isAllowed = isOriginAllowed(origin);
     if (!isAllowed) {
         logger.warn({ type: 'cors_rejected', origin, ip: req.ip, method: req.method });
-        // Добавляем заголовки CORS даже для запрещённых origin чтобы браузер получил ответ
-        res.header('Access-Control-Allow-Origin', origin);
-        res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-ID, X-Init-Data');
+        // Для запрещённых origin не отправляем CORS заголовки - браузер сам заблокирует
         return res.status(403).json({ error: 'Origin не разрешён', origin });
     }
     res.header('Access-Control-Allow-Origin', origin);
@@ -222,27 +225,6 @@ app.use((req, res, next) => {
     res.setHeader('X-Request-ID', req.requestId);
     next();
 });
-
-app.use((req, res, next) => {
-    const start = Date.now();
-    res.on('finish', () => {
-        const duration = Date.now() - start;
-        if (duration > 1000) {
-            logger.warn({
-                type: 'slow_request',
-                requestId: req.requestId,
-                url: req.originalUrl,
-                duration,
-                method: req.method,
-                ip: req.ip,
-                telegramId: req.headers['x-telegram-id']
-            });
-        }
-    });
-    next();
-});
-
-app.use(requestMiddleware);
 
 // Роутеры
 app.use('/api/game', gameRouter);
@@ -263,12 +245,6 @@ app.get('/', (req, res) => {
 });
 
 // Health checks
-const healthLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 30,
-    message: { error: 'Слишком много запросов' }
-});
-
 app.get('/health', healthLimiter, (req, res) => {
     res.json({
         status: 'ok',
@@ -289,16 +265,11 @@ app.get('/ready', healthLimiter, async (req, res) => {
 // Метрики сервера (только для админов)
 // Требуется валидная авторизация Telegram через x-init-data
 app.get('/metrics', telegramAuthMiddleware, (req, res) => {
-    // Проверяем что пользователь прошёл валидацию Telegram
-    if (!req.telegramUser) {
-        return res.status(401).json({ error: 'Требуется авторизация Telegram' });
-    }
-    
-    const adminIds = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+    // telegramAuthMiddleware гарантирует наличие req.telegramUser
     const telegramId = String(req.telegramUser.id);
     
     // Разрешаем только админам по их Telegram ID
-    if (!adminIds.includes(telegramId)) {
+    if (!ADMIN_IDS.includes(telegramId)) {
         logger.warn({ type: 'metrics_access_denied', telegramId, ip: req.ip });
         return res.status(403).json({ error: 'Доступ запрещён' });
     }
@@ -343,7 +314,6 @@ function shutdown(signal) {
     
     // Останавливаем heartbeat
     try {
-        const { stopHeartbeat } = require('./utils/realtime');
         stopHeartbeat();
         logger.info('WebSocket heartbeat остановлен');
     } catch (err) {
@@ -355,7 +325,6 @@ function shutdown(signal) {
             logger.info('HTTP сервер остановлен');
             // Закрываем подключение к БД
             try {
-                const { closePool } = require('./db/database');
                 await closePool();
                 logger.info('Подключение к БД закрыто');
             } catch (err) {
@@ -368,34 +337,14 @@ function shutdown(signal) {
             process.exit(1);
         }, 10000);
     } else {
-        // Сервер ещё не запущен, ждём завершения инициализации
-        const checkServerInterval = setInterval(() => {
-            if (server) {
-                clearInterval(checkServerInterval);
-                shutdown(signal);
-            }
-        }, 100);
-        // Таймаут если сервер так и не запустится
-        setTimeout(() => {
-            clearInterval(checkServerInterval);
-            logger.error('Сервер не был инициализирован, принудительный exit');
-            process.exit(1);
-        }, 30000);
+        // Сервер ещё не запущен - штатная ситуация
+        logger.warn('SIGTERM получен до старта сервера');
+        process.exit(0);
     }
 }
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
-
-process.on('uncaughtException', (err) => {
-    logger.error({ type: 'uncaughtException', message: err.message, stack: err.stack });
-    process.exit(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-    logger.error({ type: 'unhandledRejection', reason: String(reason) });
-    process.exit(1);
-});
 
 async function startServer() {
     try {
@@ -424,6 +373,9 @@ async function startServer() {
                 server = app.listen(PORT + 1, '0.0.0.0', () => {
                     logger.info(`Сервер запущен на порту ${PORT + 1}`);
                     initWebSocket(server);
+                }).on('error', (fallbackErr) => {
+                    logger.error({ type: 'server_fallback_error', message: fallbackErr.message });
+                    process.exit(1);
                 });
             } else {
                 logger.error({ type: 'server_error', message: err.message });
