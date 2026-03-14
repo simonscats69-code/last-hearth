@@ -216,7 +216,7 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
         
         // Логирование для отладки (только в dev режиме)
         if (process.env.NODE_ENV !== 'production') {
-            console.log(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
+            logger.debug(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
         }
         
         const winner = await client.query(

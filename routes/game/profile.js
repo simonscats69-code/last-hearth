@@ -56,7 +56,6 @@ function safeJsonParse(value, fallback = {}) {
         try {
             return JSON.parse(value);
         } catch (e) {
-            console.error('JSON.parse failed:', typeof value, value.substring(0, 100));
             logger.warn('[profile] Ошибка парсинга JSON', { value: value.substring(0, 100) });
             return fallback;
         }
@@ -263,7 +262,7 @@ router.get('/legacy', async (req, res) => {
         let infectionsList = [];
         if (player.infections) {
             if (typeof player.infections === 'string') {
-                try { infectionsList = JSON.parse(player.infections); } catch(e) { console.error('JSON.parse infections failed:', typeof player.infections, player.infections?.toString?.().substring(0, 100)); infectionsList = []; }
+                try { infectionsList = JSON.parse(player.infections); } catch(e) { logger.error('[profile] Ошибка парсинга infections', { value: String(player.infections).substring(0, 100) }); infectionsList = []; }
             } else {
                 infectionsList = player.infections;
             }

@@ -64,7 +64,7 @@ const safeParse = (value, fallback = {}) => {
     try {
         return typeof value === 'string' ? JSON.parse(value) : value;
     } catch {
-        console.error('JSON.parse failed:', typeof value, String(value).substring(0, 100));
+        logger.error({ type: 'base_json_parse_error', value: typeof value, value_preview: String(value).substring(0, 100) });
         return fallback;
     }
 };

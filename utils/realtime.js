@@ -285,8 +285,12 @@ function safeSend(ws, data) {
 /**
  * Heartbeat - проверка соединений
  */
+let heartbeatInterval = null;
+
 function startHeartbeat() {
-    setInterval(() => {
+    if (heartbeatInterval) return; // Уже запущен
+    
+    heartbeatInterval = setInterval(() => {
         const now = Date.now();
         
         for (const [playerId, ws] of clients) {
@@ -313,6 +317,13 @@ function startHeartbeat() {
         
         metrics.websocket.connectionsActive = clients.size;
     }, CONFIG.HEARTBEAT_INTERVAL);
+}
+
+function stopHeartbeat() {
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+    }
 }
 
 /**
@@ -367,8 +378,7 @@ function initWebSocket(server) {
                 const data = JSON.parse(message);
                 handleMessage(parseInt(playerId), data, ws);
             } catch (err) {
-                console.error('JSON.parse ws message failed:', typeof message, message?.toString?.().substring(0, 100));
-                logger.error({ type: 'ws_message_error', playerId, message: err.message });
+                logger.error({ type: 'ws_message_parse_error', playerId, message: typeof message, raw: message?.toString?.().substring(0, 100) });
             }
         });
         
@@ -644,5 +654,8 @@ module.exports = {
     notifyClanEvent,
     notifyAchievement,
     notifyClanMembers,
-    getWebSocketMetrics
+    getWebSocketMetrics,
+    
+    // Управление
+    stopHeartbeat
 };

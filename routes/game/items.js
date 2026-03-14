@@ -10,6 +10,7 @@ const { withPlayerLock } = require('../../utils/transactions');
 const { validateId, validateIndex, validateBoolean, validatePositiveInt } = require('../../utils/apiHelpers');
 const { ok, fail, error, badRequest, guard, wrap } = require('../../utils/apiHelpers');
 const { logPlayerAction, serializeJSONField } = require('../../utils/transactions');
+const { logger } = require('../../utils/logger');
 
 /**
  * Улучшение предмета
@@ -147,7 +148,7 @@ router.post('/upgrade-item', async (req, res) => {
                 use_protection: result.use_protection
             });
         } catch (logErr) {
-            console.error('Ошибка логирования upgrade-item:', logErr);
+            logger.error({ type: 'items_upgrade_log_error', message: logErr.message });
         }
         
         // Отправляем ответ
@@ -180,7 +181,7 @@ router.post('/upgrade-item', async (req, res) => {
         if (err.code && err.statusCode) {
             return fail(res, err.message, err.code, err.statusCode);
         }
-        console.error('Ошибка улучшения:', err);
+        logger.error('[items] Ошибка улучшения:', err);
         error(res, 'Ошибка улучшения', 'UPGRADE_ERROR', 500);
     }
 });
@@ -316,7 +317,7 @@ router.post('/modify-item', async (req, res) => {
                 rolled: result.rolled
             });
         } catch (logErr) {
-            console.error('Ошибка логирования modify-item:', logErr);
+            logger.error({ type: 'items_modify_log_error', message: logErr.message });
         }
         
         // Отправляем ответ
@@ -343,7 +344,7 @@ router.post('/modify-item', async (req, res) => {
         if (err.code && err.statusCode) {
             return fail(res, err.message, err.code, err.statusCode);
         }
-        console.error('Ошибка модификации:', err);
+        logger.error('[items] Ошибка модификации:', err);
         error(res, 'Ошибка модификации', 'MODIFICATION_ERROR', 500);
     }
 });
@@ -385,7 +386,7 @@ router.get('/', async (req, res) => {
         });
         
     } catch (err) {
-        console.error('Ошибка получения предметов:', err);
+        logger.error({ type: 'items_get_error', message: err.message });
         error(res, 'Ошибка получения предметов', 'ITEMS_ERROR', 500);
     }
 });

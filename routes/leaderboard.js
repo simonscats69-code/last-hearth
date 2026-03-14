@@ -11,10 +11,11 @@ const { telegramAuthMiddleware, isAdmin } = require('../utils/telegramAuth');
 const { logger } = require('../utils/logger');
 
 // Middleware для проверки авторизации игрока
+// ВАЖНО: требуем telegramUser от telegramAuthMiddleware
 function requireAuth(req, res, next) {
     // Проверяем наличие telegramUser от telegramAuthMiddleware
-    if (!req.telegramUser && !req.headers['x-telegram-id']) {
-        return res.status(401).json({ error: 'Требуется авторизация' });
+    if (!req.telegramUser) {
+        return res.status(401).json({ error: 'Требуется валидная авторизация Telegram' });
     }
     next();
 }

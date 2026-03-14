@@ -18,6 +18,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { calculateCraftSuccess } = require('../../utils/gameConstants');
 const { logger, logGameAction, logPlayerError } = require('../../utils/logger');
+const { safeParse, safeJsonParse } = require('../../utils/jsonHelper');
 const { withPlayerLock } = require('../../utils/transactions');
 
 // ============================================================================
@@ -30,36 +31,6 @@ const { withPlayerLock } = require('../../utils/transactions');
  * @returns {boolean}
  */
 const isValidId = (id) => Number.isInteger(id) && id > 0;
-
-/**
- * Безопасная сериализация JSON с fallback
- * @param {any} value - Значение для сериализации
- * @returns {string}
- */
-const safeStringify = (value) => {
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return JSON.stringify({});
-    }
-};
-
-/**
- * Парсинг JSON с fallback
- * @param {string|null} value - JSON строка
- * @param {object} fallback - Значение по умолчанию
- * @returns {object}
- */
-const safeParse = (value, fallback = {}) => {
-    if (value === null || value === undefined) return fallback;
-    if (typeof value === 'object') return value;
-    try {
-        return typeof value === 'string' ? JSON.parse(value) : value;
-    } catch {
-        console.error('JSON.parse failed:', typeof value, String(value).substring(0, 100));
-        return fallback;
-    }
-};
 
 /**
  * Централизованный обработчик ошибок

@@ -17,6 +17,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError } = require('../../utils/logger');
+const { safeParse, safeJsonParse, safeStringify } = require('../../utils/jsonHelper');
 const { withPlayerLock } = require('../../utils/transactions');
 
 // ============================================================================
@@ -30,28 +31,13 @@ const isValidId = (id) => Number.isInteger(id) && id > 0;
 
 /**
  * Безопасная сериализация JSON с fallback
+ * Теперь импортируется из utils/jsonHelper.js
  */
-const safeStringify = (value) => {
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return JSON.stringify({});
-    }
-};
 
 /**
  * Парсинг JSON с fallback
+ * Теперь импортируется из utils/jsonHelper.js
  */
-const safeParse = (value, fallback = {}) => {
-    if (value === null || value === undefined) return fallback;
-    if (typeof value === 'object') return value;
-    try {
-        return typeof value === 'string' ? JSON.parse(value) : value;
-    } catch {
-        console.error('JSON.parse failed:', typeof value, String(value).substring(0, 100));
-        return fallback;
-    }
-};
 
 /**
  * Централизованный обработчик ошибок

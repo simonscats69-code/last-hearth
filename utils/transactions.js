@@ -451,7 +451,7 @@ function parseJSONField(str, defaultValue = {}) {
     try {
         return JSON.parse(str);
     } catch (error) {
-        console.error('JSON.parse failed in transactions.js:', typeof str, str?.toString?.().substring(0, 100));
+        logger.error('[transactions] JSON.parse failed:', { type: typeof str, preview: str?.toString?.().substring(0, 100) });
         return defaultValue;
     }
 }
@@ -466,7 +466,7 @@ const PLAYER_ACTIONS_TABLE = 'player_logs';
  * Централизованный обработчик ошибок логирования
  */
 function handleLogError(error, context) {
-    console.error(`[${context}] Ошибка логирования:`, error.message);
+    logger.error(`[${context}] Ошибка логирования:`, error.message);
 }
 
 /**
@@ -474,7 +474,7 @@ function handleLogError(error, context) {
  */
 async function logPlayerAction(poolConnection, playerId, action, meta = {}) {
     if (!poolConnection || !playerId || !action) {
-        console.error('[logPlayerAction] Некорректные параметры');
+        logger.error('[logPlayerAction] Некорректные параметры');
         return;
     }
 
@@ -495,7 +495,7 @@ async function logPlayerAction(poolConnection, playerId, action, meta = {}) {
  */
 async function logPlayerActionWithTx(tx, playerId, action, meta = {}) {
     if (!tx || !playerId || !action) {
-        console.error('[logPlayerActionWithTx] Некорректные параметры');
+        logger.error('[logPlayerActionWithTx] Некорректные параметры');
         return;
     }
 

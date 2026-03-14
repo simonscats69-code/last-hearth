@@ -315,7 +315,7 @@ function calculateDebuffModifiers(player) {
             try {
                 radiation = JSON.parse(player.radiation);
             } catch {
-                console.error('JSON.parse radiation failed:', typeof player.radiation, player.radiation?.toString?.().substring(0, 100));
+                logger.error('JSON.parse radiation failed:', { type: typeof player.radiation, preview: player.radiation?.toString?.().substring(0, 100) });
                 radiation = { level: 0 };
             }
         } else {
@@ -328,7 +328,7 @@ function calculateDebuffModifiers(player) {
             try {
                 infections = JSON.parse(player.infections);
             } catch {
-                console.error('JSON.parse infections failed:', typeof player.infections, player.infections?.toString?.().substring(0, 100));
+                logger.error('JSON.parse infections failed:', { type: typeof player.infections, preview: player.infections?.toString?.().substring(0, 100) });
                 infections = [];
             }
         } else {

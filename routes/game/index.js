@@ -20,12 +20,13 @@ const router = express.Router();
 const { query, queryOne } = require('../../db/database');
 const { validateTelegramInitData } = require('../../utils/telegramAuth');
 const rateLimit = require('express-rate-limit');
+const { logger } = require('../../utils/logger');
 
-// Используем console для логирования - простой и надёжный способ
+// Используем централизованный logger
 const log = {
-    info: (...args) => console.log('[game]', ...args),
-    warn: (...args) => console.warn('[game]', ...args),
-    error: (...args) => console.error('[game]', ...args)
+    info: (...args) => logger.info({ custom: '[game]', message: args.join(' ') }),
+    warn: (...args) => logger.warn({ custom: '[game]', message: args.join(' ') }),
+    error: (...args) => logger.error({ custom: '[game]', message: args.join(' ') })
 };
 
 // ============================================================================

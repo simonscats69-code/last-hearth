@@ -8,6 +8,7 @@ const router = express.Router();
 const { pool, query, queryOne } = require('../../db/database');
 const { utils } = require('../../db/queries/players');
 const { logPlayerAction, serializeJSONField, handleError } = utils;
+const { logger } = require('../../utils/logger');
 
 /**
  * Универсальный формат успешного ответа
@@ -291,7 +292,7 @@ router.post('/old', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /purchase:', error);
+        logger.error({ type: 'purchase_error', message: error.message });
         res.status(500).json({ error: 'Ошибка покупки' });
     }
 });

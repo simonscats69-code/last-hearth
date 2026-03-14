@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
+const { logger } = require('../../utils/logger');
 
 /**
  * Получение реферального кода
@@ -21,7 +22,7 @@ router.get('/code', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /referral/code:', error);
+        logger.error('[referral] Ошибка /referral/code:', error);
         res.status(500).json({ error: 'Ошибка' });
     }
 });
@@ -94,7 +95,7 @@ router.put('/code', async (req, res) => {
         const player = req.player;
         await useReferralCode(player, code, res);
     } catch (error) {
-        console.error('Ошибка /referral/code:', error);
+        logger.error('[referral] Ошибка PUT /referral/code:', error);
         res.status(500).json({ error: 'Ошибка' });
     }
 });
@@ -124,7 +125,7 @@ router.get('/stats', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /referral/stats:', error);
+        logger.error({ type: 'referral_stats_error', message: error.message });
         res.status(500).json({ error: 'Ошибка' });
     }
 });
@@ -140,7 +141,7 @@ router.post('/use', async (req, res) => {
         const player = req.player;
         await useReferralCode(player, code, res);
     } catch (error) {
-        console.error('Ошибка /referral/use:', error);
+        logger.error({ type: 'referral_use_error', message: error.message });
         res.status(500).json({ error: 'Ошибка' });
     }
 });
@@ -166,7 +167,7 @@ router.get('/list', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /referral/list:', error);
+        logger.error({ type: 'referral_list_error', message: error.message });
         res.status(500).json({ error: 'Ошибка' });
     }
 });
@@ -207,7 +208,7 @@ router.post('/claim-bonus', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /referral/claim-bonus:', error);
+        logger.error({ type: 'referral_claim_error', message: error.message });
         res.status(500).json({ error: 'Ошибка' });
     }
 });

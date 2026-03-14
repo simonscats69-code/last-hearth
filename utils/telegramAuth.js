@@ -6,11 +6,7 @@
 const crypto = require('crypto');
 
 // Используем console для логирования - простой и надёжный способ
-const log = {
-    info: (...args) => console.log('[telegramAuth]', ...args),
-    warn: (...args) => console.warn('[telegramAuth]', ...args),
-    error: (...args) => console.error('[telegramAuth]', ...args)
-};
+const { logger } = require('./logger');
 
 /**
  * Проверяет подпись initData от Telegram
@@ -148,7 +144,7 @@ function validateTelegramInitData(initData, botToken) {
             rawInitData: initData
         };
     } catch (err) {
-        console.error('[telegramAuth] Ошибка валидации', err.message, err.stack);
+        logger.error('[telegramAuth] Ошибка валидации', err.message, err.stack);
         return null;
     }
 }

@@ -512,6 +512,23 @@ async function updateAchievementProgress(playerId, achievementType, value = 1) {
             SELECT * FROM achievements WHERE condition->>'type' = $1
         `, [achievementType]);
         
+        if (achievements.length === 0) return;
+        
+        // ОПТИМИЗАЦИЯ: Получаем ВСЕ player_achievements одним запросом вместо N
+        const achievementIds = achievements.map(a => a.id);
+        const playerAchievements = await queryAll(`
+            SELECT * FROM player_achievements 
+            WHERE player_id = $1 AND achievement_id = ANY($2)
+        `, [playerId, achievementIds]);
+        
+        // Создаём Map для быстрого поиска
+        const playerAchievementsMap = new Map(
+            playerAchievements.map(pa => [pa.achievement_id, pa])
+        );
+        
+        const toInsert = [];
+        const toUpdate = [];
+        
         for (const achievement of achievements) {
             let condition;
             try {
@@ -519,7 +536,7 @@ async function updateAchievementProgress(playerId, achievementType, value = 1) {
                     ? JSON.parse(achievement.condition) 
                     : achievement.condition;
             } catch(e) {
-                console.error('JSON.parse condition failed:', achievement.condition);
+                logger.error('[database] JSON.parse condition failed:', achievement.condition);
                 continue;
             }
             
@@ -556,28 +573,47 @@ async function updateAchievementProgress(playerId, achievementType, value = 1) {
                     break;
             }
             
-            let playerAchievement = await queryOne(`
-                SELECT * FROM player_achievements 
-                WHERE player_id = $1 AND achievement_id = $2
-            `, [playerId, achievement.id]);
+            const existingAchievement = playerAchievementsMap.get(achievement.id);
             
-            if (!playerAchievement) {
-                await query(`
-                    INSERT INTO player_achievements (player_id, achievement_id, progress_value, completed)
-                    VALUES ($1, $2, $3, $4)
-                `, [playerId, achievement.id, currentValue, currentValue >= targetValue]);
-            } else if (!playerAchievement.completed && currentValue >= targetValue) {
-                await query(`
-                    UPDATE player_achievements 
-                    SET progress_value = $3, completed = true, completed_at = NOW()
-                    WHERE player_id = $1 AND achievement_id = $2
-                `, [playerId, achievement.id, currentValue]);
-            } else if (!playerAchievement.completed) {
-                await query(`
-                    UPDATE player_achievements 
-                    SET progress_value = $3
-                    WHERE player_id = $1 AND achievement_id = $2
-                `, [playerId, achievement.id, currentValue]);
+            if (!existingAchievement) {
+                toInsert.push({ achievementId: achievement.id, currentValue, completed: currentValue >= targetValue });
+            } else if (!existingAchievement.completed && currentValue >= targetValue) {
+                toUpdate.push({ achievementId: achievement.id, currentValue, completed: true });
+            } else if (!existingAchievement.completed) {
+                toUpdate.push({ achievementId: achievement.id, currentValue, completed: false });
+            }
+        }
+        
+        // Batch INSERT
+        if (toInsert.length > 0) {
+            const insertValues = toInsert.map((item, idx) => 
+                `($1, ${idx * 3 + 2}, ${idx * 3 + 3}, ${idx * 3 + 4})`
+            ).join(', ');
+            const insertParams = toInsert.flatMap(item => 
+                [playerId, item.achievementId, item.currentValue, item.completed]
+            );
+            await query(`
+                INSERT INTO player_achievements (player_id, achievement_id, progress_value, completed)
+                VALUES ${insertValues}
+            `, insertParams);
+        }
+        
+        // Batch UPDATE
+        if (toUpdate.length > 0) {
+            for (const item of toUpdate) {
+                if (item.completed) {
+                    await query(`
+                        UPDATE player_achievements 
+                        SET progress_value = $3, completed = true, completed_at = NOW()
+                        WHERE player_id = $1 AND achievement_id = $2
+                    `, [playerId, item.achievementId, item.currentValue]);
+                } else {
+                    await query(`
+                        UPDATE player_achievements 
+                        SET progress_value = $3
+                        WHERE player_id = $1 AND achievement_id = $2
+                    `, [playerId, item.achievementId, item.currentValue]);
+                }
             }
         }
     } catch (error) {
@@ -1075,12 +1111,12 @@ module.exports = {
 if (require.main === module) {
     (async () => {
         try {
-            console.log('🚀 Запуск миграции базы данных...');
+            logger.info('🚀 Запуск миграции базы данных...');
             await initDatabase();
-            console.log('✅ Миграция завершена');
+            logger.info('✅ Миграция завершена');
             process.exit(0);
         } catch (error) {
-            console.error('❌ Ошибка миграции:', error);
+            logger.error('❌ Ошибка миграции:', error);
             process.exit(1);
         }
     })();

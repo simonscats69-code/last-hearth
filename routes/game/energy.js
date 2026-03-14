@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const { query, tx } = require('../../db/database');
 const { logger } = require('../../utils/logger');
+const { safeJsonParse } = require('../../utils/jsonHelper');
 
 // =============================================================================
 // Утилиты
@@ -40,17 +41,9 @@ function handleError(error, context, res, player = null) {
 
 /**
  * Safe JSON parse с fallback
+ * Теперь импортируется из utils/jsonHelper.js
  */
-function safeJsonParse(value, fallback = {}) {
-    if (value === null || value === undefined) return fallback;
-    if (typeof value === 'object') return value;
-    try {
-        return JSON.parse(value);
-    } catch {
-        console.error('JSON.parse failed:', typeof value, String(value).substring(0, 100));
-        return fallback;
-    }
-}
+// safeJsonParse теперь импортируется
 
 /**
  * Логирование действия игрока в player_logs

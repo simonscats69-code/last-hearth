@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, safeJsonParse } = require('../db/database');
+const { logger } = require('../utils/logger');
 
 /**
  * Безопасный парсинг JSON условия достижения
@@ -24,7 +25,7 @@ router.get('/shop/items', async (req, res) => {
 
         res.json({ items });
     } catch (error) {
-        console.error('Ошибка /shop/items:', error);
+        logger.error({ type: 'shop_items_error', message: error.message, stack: error.stack });
         res.status(500).json({ error: 'Ошибка получения товаров' });
     }
 });
@@ -47,7 +48,7 @@ router.get('/rating/players', async (req, res) => {
 
         res.json({ rating: players });
     } catch (error) {
-        console.error('Ошибка /rating/players:', error);
+        logger.error({ type: 'rating_players_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения рейтинга' });
     }
 });
@@ -69,7 +70,7 @@ router.get('/rating/clans', async (req, res) => {
 
         res.json({ rating: clans });
     } catch (error) {
-        console.error('Ошибка /rating/clans:', error);
+        logger.error({ type: 'rating_clans_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения рейтинга' });
     }
 });
@@ -130,7 +131,7 @@ router.get('/daily-tasks', async (req, res) => {
 
         res.json({ tasks });
     } catch (error) {
-        console.error('Ошибка /daily-tasks:', error);
+        logger.error({ type: 'daily_tasks_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения заданий' });
     }
 });
@@ -189,7 +190,7 @@ router.get('/achievements', async (req, res) => {
 
         res.json({ achievements });
     } catch (error) {
-        console.error('Ошибка /achievements:', error);
+        logger.error({ type: 'achievements_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения достижений' });
     }
 });
@@ -314,7 +315,7 @@ router.get('/achievements/progress', async (req, res) => {
 
         res.json({ progress, categories, stats });
     } catch (error) {
-        console.error('Ошибка /achievements/progress:', error);
+        logger.error({ type: 'achievements_progress_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения прогресса' });
     }
 });
@@ -368,7 +369,7 @@ router.post('/achievements/claim', async (req, res) => {
                     ? JSON.parse(achievement.condition) 
                     : achievement.condition;
             } catch(e) {
-                console.error('JSON.parse condition failed:', achievement.condition);
+                logger.error('[api] JSON.parse condition failed:', achievement.condition);
                 throw e;
             }
             
@@ -387,7 +388,7 @@ router.post('/achievements/claim', async (req, res) => {
                 ? JSON.parse(achievement.condition) 
                 : achievement.condition;
         } catch(e) {
-            console.error('JSON.parse condition failed:', achievement.condition);
+            logger.error('[api] JSON.parse condition failed:', achievement.condition);
             throw e;
         }
         
@@ -419,7 +420,7 @@ router.post('/achievements/claim', async (req, res) => {
                 ? JSON.parse(achievement.reward) 
                 : achievement.reward;
         } catch(e) {
-            console.error('JSON.parse reward failed:', achievement.reward);
+            logger.error('[api] JSON.parse reward failed:', achievement.reward);
             throw e;
         }
 
@@ -472,7 +473,7 @@ router.post('/achievements/claim', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Ошибка /achievements/claim:', error);
+        logger.error({ type: 'achievements_claim_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения награды' });
     }
 });
@@ -508,7 +509,7 @@ router.get('/game-info', async (req, res) => {
             players_count: parseInt(playersCount?.count || 0)
         });
     } catch (error) {
-        console.error('Ошибка /game-info:', error);
+        logger.error({ type: 'game_info_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения информации' });
     }
 });
@@ -525,7 +526,7 @@ router.options('/verify-telegram', (req, res) => {
 
 router.post('/verify-telegram', async (req, res) => {
     try {
-        console.log('[verify-telegram] req.body:', JSON.stringify(req.body).substring(0, 200));
+        logger.debug('[verify-telegram] req.body:', JSON.stringify(req.body).substring(0, 200));
         const { telegram_id, hash } = req.body;
 
         if (!telegram_id) {
@@ -559,8 +560,7 @@ router.post('/verify-telegram', async (req, res) => {
             telegram_id: telegram_id
         });
     } catch (error) {
-        console.error('Ошибка /verify-telegram:', error.message);
-        console.error('Стек:', error.stack);
+        logger.error({ type: 'verify_telegram_error', message: error.message, stack: error.stack });
         res.status(500).json({ error: 'Ошибка верификации' });
     }
 });

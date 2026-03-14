@@ -17,6 +17,7 @@ const router = express.Router();
 const { pool, query, queryOne, tx } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
+const { safeJsonParse } = require('../../utils/jsonHelper');
 const { DEBUFF_CURES } = require('../../utils/gameConstants');
 
 /**
@@ -40,31 +41,9 @@ function handleError(res, error, action = 'unknown') {
 
 /**
  * Safe JSON parsing с fallback
- * @param {any} value - значение для парсинга
- * @param {object} fallback - значение по умолчанию
- * @returns {object} распарсенный объект
+ * Теперь импортируется из utils/jsonHelper.js
  */
-function safeJsonParse(value, fallback = {}) {
-    if (value === null || value === undefined) {
-        return fallback;
-    }
-    
-    if (typeof value === 'object') {
-        return value;
-    }
-    
-    if (typeof value === 'string') {
-        try {
-            return JSON.parse(value);
-        } catch (e) {
-            console.error('JSON.parse failed:', typeof value, value.substring(0, 100));
-            logger.warn('[inventory] Ошибка парсинга JSON', { value: value.substring(0, 100) });
-            return fallback;
-        }
-    }
-    
-    return fallback;
-}
+// safeJsonParse теперь импортируется
 
 /**
  * Валидация индекса предмета
@@ -396,7 +375,7 @@ router.get('/legacy', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Ошибка /inventory:', error);
+        logger.error({ type: 'inventory_get_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения инвентаря' });
     }
 });

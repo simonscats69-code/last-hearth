@@ -6,13 +6,13 @@
 
 // Глобальные обработчики ошибок для отладки
 process.on('uncaughtException', (err) => {
-    console.error('UNCAUGHT EXCEPTION:', err.message);
-    console.error('STACK:', err.stack);
+    logger.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
+    process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {
-    console.error('UNHANDLED REJECTION:', reason);
-    if (reason?.stack) console.error('STACK:', reason.stack);
+    logger.error('UNHANDLED REJECTION:', reason, reason?.stack);
+    process.exit(1);
 });
 
 const express = require('express');
@@ -27,7 +27,7 @@ try {
     require('dotenv').config();
 } catch (e) {
     // dotenv не доступен - используем переменные окружения напрямую
-    console.log('ℹ️ dotenv не загружен, используем переменные окружения системы');
+    logger.info('ℹ️ dotenv не загружен, используем переменные окружения системы');
 }
 
 const { logger, requestMiddleware } = require('./utils/logger');
@@ -52,7 +52,7 @@ app.use((req, res, next) => {
         const duration = Date.now() - start;
         // Логируем только ошибки
         if (res.statusCode >= 400) {
-            console.error(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
+            logger.error(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
         }
     });
     next();
@@ -60,8 +60,7 @@ app.use((req, res, next) => {
 
 // Middleware для обработки ошибок
 app.use((err, req, res, next) => {
-    console.error(`[ERROR] ${req.method} ${req.path}:`, err.message);
-    console.error('[ERROR STACK]:', err.stack);
+    logger.error(`[ERROR] ${req.method} ${req.path}:`, err.message, err.stack);
     res.status(500).json({ success: false, error: err.message });
 });
 
@@ -103,7 +102,7 @@ const jsonParser = express.json({ limit: '1mb' });
 app.use((req, res, next) => {
     // Устанавливаем таймаут на ответ (15 секунд)
     res.setTimeout(15000, () => {
-        console.error(`[TIMEOUT] Запрос превысил время ожидания: ${req.method} ${req.path}`);
+        logger.error(`[TIMEOUT] Запрос превысил время ожидания: ${req.method} ${req.path}`);
         if (!res.headersSent) {
             res.status(503).json({
                 success: false,
@@ -119,7 +118,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
     const originalJson = res.json.bind(res);
     res.json = function(data) {
-        console.log('[RES.JSON]', req.method, req.originalUrl, typeof data);
+        logger.debug('[RES.JSON]', req.method, req.originalUrl, typeof data);
         return originalJson(data);
     };
     next();
@@ -129,9 +128,22 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
 app.use(helmet({
-    contentSecurityPolicy: false,
+    // CSP для Telegram Mini App - разрешаем unsafe-inline для совместимости
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
+            connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
+            fontSrc: ["'self'", 'https:'],
+            objectSrc: ["'none'"],
+            mediaSrc: ["'self'"],
+            frameSrc: ["'none'"],
+        },
+    },
     crossOriginEmbedderPolicy: false,
-    frameguard: false
+    frameguard: { action: 'sameorigin' }
 }));
 
 const limiter = rateLimit({
@@ -159,7 +171,7 @@ app.use((req, res, next) => {
         // Парсим JSON
         return jsonParser(req, res, (err) => {
             if (err) {
-                console.error('[JSON PARSER ERROR]', err.message);
+                logger.error('[JSON PARSER ERROR]', err.message);
                 return res.status(400).json({ error: 'Неверный JSON' });
             }
             next();
@@ -272,13 +284,18 @@ app.get('/ready', healthLimiter, async (req, res) => {
 });
 
 // Метрики сервера (только для админов)
-// Требуется заголовок x-telegram-id с ID пользователя Telegram
-app.get('/metrics', (req, res) => {
+// Требуется валидная авторизация Telegram через x-init-data
+app.get('/metrics', telegramAuthMiddleware, (req, res) => {
+    // Проверяем что пользователь прошёл валидацию Telegram
+    if (!req.telegramUser) {
+        return res.status(401).json({ error: 'Требуется авторизация Telegram' });
+    }
+    
     const adminIds = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
-    const telegramId = req.headers['x-telegram-id'];
+    const telegramId = String(req.telegramUser.id);
     
     // Разрешаем только админам по их Telegram ID
-    if (!telegramId || !adminIds.includes(String(telegramId))) {
+    if (!adminIds.includes(telegramId)) {
         logger.warn({ type: 'metrics_access_denied', telegramId, ip: req.ip });
         return res.status(403).json({ error: 'Доступ запрещён' });
     }
@@ -320,6 +337,15 @@ function shutdown(signal) {
         return;
     }
     isShuttingDown = true;
+    
+    // Останавливаем heartbeat
+    try {
+        const { stopHeartbeat } = require('./utils/realtime');
+        stopHeartbeat();
+        logger.info('WebSocket heartbeat остановлен');
+    } catch (err) {
+        logger.warn('Ошибка остановки heartbeat:', err.message);
+    }
     
     if (server) {
         server.close(async () => {

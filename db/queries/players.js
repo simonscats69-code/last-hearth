@@ -24,7 +24,7 @@ const tx = async (fn) => {
  * @param {string} context 
  */
 function handleError(error, context) {
-    console.error(`[${context}] error:`, error.message);
+    logger.error(`[${context}] error:`, error.message);
     // Можно добавить отправку в Sentry или другой сервис
     // if (process.env.SENTRY_DSN) captureException(error);
 }

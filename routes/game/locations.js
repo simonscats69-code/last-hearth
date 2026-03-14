@@ -19,6 +19,7 @@ const { pool, query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { calculateDropChance, rollItemRarity, rollLootDrop, getLootTable, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
 const { logger } = require('../../utils/logger');
+const { safeJsonParse } = require('../../utils/jsonHelper');
 const { DebuffAPI } = require('./debuffs');
 
 /**
@@ -42,31 +43,9 @@ function handleError(res, error, action = 'unknown') {
 
 /**
  * Safe JSON parsing с fallback
- * @param {any} value - значение для парсинга
- * @param {object} fallback - значение по умолчанию
- * @returns {object} распарсенный объект
+ * Теперь импортируется из utils/jsonHelper.js
  */
-function safeJsonParse(value, fallback = {}) {
-    if (value === null || value === undefined) {
-        return fallback;
-    }
-    
-    if (typeof value === 'object') {
-        return value;
-    }
-    
-    if (typeof value === 'string') {
-        try {
-            return JSON.parse(value);
-        } catch (e) {
-            console.error('JSON.parse failed:', typeof value, value.substring(0, 100));
-            logger.warn('[locations] Ошибка парсинга JSON', { value: value.substring(0, 100) });
-            return fallback;
-        }
-    }
-    
-    return fallback;
-}
+// safeJsonParse теперь импортируется
 
 /**
  * Валидация ID локации

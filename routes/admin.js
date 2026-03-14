@@ -6,19 +6,25 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db/database');
-const { isAdmin } = require('../utils/telegramAuth');
+const { isAdmin, telegramAuthMiddleware } = require('../utils/telegramAuth');
 const { logger } = require('../utils/logger');
 
+// Применяем telegramAuthMiddleware ко всем admin роутам
+// Это устанавливает req.telegramUser после валидации подписи Telegram
+router.use(telegramAuthMiddleware);
+
 // Middleware для проверки админа
+// ВАЖНО: используем req.telegramUser установленный telegramAuthMiddleware
 function requireAdmin(req, res, next) {
-    const adminIds = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
-    const telegramId = req.headers['x-telegram-id'];
-    
-    if (!telegramId) {
-        return res.status(401).json({ error: 'Требуется Telegram ID' });
+    // Сначала проверяем что пользователь прошёл валидацию Telegram
+    if (!req.telegramUser) {
+        return res.status(401).json({ error: 'Требуется валидная авторизация Telegram' });
     }
     
-    if (!isAdmin(telegramId, adminIds)) {
+    const adminIds = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+    const telegramId = String(req.telegramUser.id);
+    
+    if (!adminIds.includes(telegramId)) {
         logger.warn({ type: 'admin_access_denied', telegramId });
         return res.status(403).json({ error: 'Доступ запрещён' });
     }

@@ -4,6 +4,7 @@
 
 const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('../db/database');
+const { logger } = require('../utils/logger');
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
     telegram: { agent: null, webhookReply: true }
@@ -16,7 +17,7 @@ async function setupWebhook(app) {
     // Удаляем webhook и используем polling
     await bot.telegram.deleteWebhook();
     bot.launch();
-    console.log('Бот запущен в режиме polling');
+    logger.info('Бот запущен в режиме polling');
 
     // Команда /start - начало игры
     bot.command('start', async (ctx) => {
@@ -81,7 +82,7 @@ async function setupWebhook(app) {
                 }
             });
         } catch (error) {
-            console.error('Ошибка при обработке /start:', error);
+            logger.error('[bot] Ошибка при обработке /start:', error);
             await ctx.reply('Произошла ошибка. Попробуй позже.');
         }
     });
@@ -220,7 +221,7 @@ async function setupWebhook(app) {
         }
     });
 
-    console.log('✓ Обработчики Telegram bot зарегистрированы');
+    logger.info('✓ Обработчики Telegram bot зарегистрированы');
 }
 
 /**
@@ -234,7 +235,7 @@ async function sendNotification(telegramId, message, keyboard = null) {
         });
         return true;
     } catch (error) {
-        console.error('Ошибка отправки уведомления:', error);
+        logger.error('[bot] Ошибка отправки уведомления:', error);
         return false;
     }
 }
