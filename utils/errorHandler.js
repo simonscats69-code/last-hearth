@@ -104,10 +104,34 @@ function handleDbError(err, context = 'DB_OPERATION') {
     return createErrorResponse('DATABASE_ERROR');
 }
 
+/**
+ * Универсальный обработчик ошибок для роутов
+ * @param {object} res - объект ответа Express
+ * @param {Error} error - объект ошибки
+ * @param {string} action - действие/контекст ошибки
+ */
+function handleError(res, error, action = 'unknown') {
+    const code = error.code || 'UNKNOWN_ERROR';
+    const message = error.message || 'Внутренняя ошибка сервера';
+    const statusCode = error.statusCode || 500;
+
+    logger.error(`[${action}] Ошибка: ${message}`, {
+        code,
+        stack: error.stack
+    });
+
+    return res.status(statusCode).json({
+        success: false,
+        error: message,
+        code
+    });
+}
+
 module.exports = {
     ERROR_CODES,
     createErrorResponse,
     errorMiddleware,
     asyncHandler,
     handleDbError,
+    handleError,
 };

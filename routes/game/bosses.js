@@ -21,6 +21,7 @@ const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
+const { safeJsonParse } = require('../../utils/jsonHelper');
 
 // Константы
 const KEYS_REQUIRED_FOR_NEXT_BOSS = 3; // Ключей нужно для следующего босса
@@ -103,33 +104,6 @@ function withTimeout(promise, ms, timeoutMessage = 'Запрос занял сл
             setTimeout(() => reject(new Error(timeoutMessage)), ms)
         )
     ]);
-}
-
-/**
- * Safe JSON parsing с fallback
- * @param {any} value - значение для парсинга
- * @param {object} fallback - значение по умолчанию
- * @returns {object} распарсенный объект
- */
-function safeJsonParse(value, fallback = {}) {
-    if (value === null || value === undefined) {
-        return fallback;
-    }
-    
-    if (typeof value === 'object') {
-        return value;
-    }
-    
-    if (typeof value === 'string') {
-        try {
-            return JSON.parse(value);
-        } catch (e) {
-            logger.warn('[bosses] Ошибка парсинга JSON', { value: value.substring(0, 100) });
-            return fallback;
-        }
-    }
-    
-    return fallback;
 }
 
 /**

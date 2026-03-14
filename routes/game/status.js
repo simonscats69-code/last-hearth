@@ -1,81 +1,14 @@
 /**
  * Состояние игрока (здоровье, голод, радиация и т.д.)
- * @deprecated Используйте новые методы из namespace StatusAPI
  */
 
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, tx } = require('../../db/database');
-const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
 const { safeJsonParse } = require('../../utils/jsonHelper');
 const { DEBUFF_CONFIG } = require('../../utils/gameConstants');
-
-// =============================================================================
-// Утилиты
-// =============================================================================
-
-/**
- * Централизованный обработчик ошибок
- * @param {Error} error - Объект ошибки
- * @param {string} context - Контекст ошибки
- * @param {object} res - Объект ответа Express
- * @param {object} player - Данные игрока
- */
-function handleError(error, context, res, player = null) {
-    const code = error.code || 'UNKNOWN_ERROR';
-    const message = error.message || 'Внутренняя ошибка сервера';
-    
-    // Логируем ошибку
-    if (player) {
-        logger.error(`[STATUS:${context}] Ошибка игрока ${player.id}: ${message}`, {
-            code,
-            stack: error.stack
-        });
-    } else {
-        logger.error(`[STATUS:${context}] Ошибка: ${message}`, {
-            code,
-            stack: error.stack
-        });
-    }
-    
-    return res.status(error.statusCode || 500).json({
-        success: false,
-        error: message,
-        code
-    });
-}
-
-/**
- * Safe JSON parse с fallback
- * Теперь импортируется из utils/jsonHelper.js
- */
-// safeJsonParse теперь импортируется
-
-/**
- * Логирование действия игрока в player_logs
- * Защищено от ошибок - не прерывает основной поток
- * @param {number} playerId - ID игрока
- * @param {string} action - Действие
- * @param {object} metadata - JSON метаданные
- */
-async function logPlayerAction(playerId, action, metadata = {}) {
-    // Временно отключено - таблица будет создана позже
-    // try {
-    //     await query(
-    //         `INSERT INTO player_logs (player_id, action, metadata, created_at) 
-    //          VALUES ($1, $2, $3, NOW())`,
-    //         [playerId, action, JSON.stringify(metadata)]
-    //     );
-    // } catch (err) {
-    //     logger.warn(`Не удалось залогировать действие ${action} для игрока ${playerId}: ${err.message}`);
-    // }
-}
-
-/**
- * Транзакция с автocommit/rollback
- * Теперь импортируется из db/database
- */
+const { handleError } = require('../../utils/errorHandler');
 
 // =============================================================================
 // Валидация
@@ -140,7 +73,7 @@ router.get('/', async (req, res) => {
         });
         
     } catch (error) {
-        handleError(error, 'GET_STATUS', res, req.player);
+        handleError(res, error, 'GET_STATUS');
     }
 });
 
@@ -229,7 +162,7 @@ router.post('/check', async (req, res) => {
         });
         
     } catch (error) {
-        handleError(error, 'STATUS_CHECK', res, req.player);
+        handleError(res, error, 'STATUS_CHECK');
     }
 });
 
@@ -348,7 +281,7 @@ router.post('/heal', async (req, res) => {
         res.json(result);
         
     } catch (error) {
-        handleError(error, 'STATUS_HEAL', res, req.player);
+        handleError(res, error, 'STATUS_HEAL');
     }
 });
 

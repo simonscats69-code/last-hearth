@@ -348,58 +348,6 @@ async function paginate(countSql, countParams, dataSql, dataParams, options = {}
     };
 }
 
-/**
- * Простая пагинация с limit/offset
- */
-function simplePaginate(queryObject, limit, offset) {
-    const total = queryObject.rowCount || queryObject.rows?.length || 0;
-    const page = Math.floor(offset / limit) + 1;
-    const hasMore = offset + queryObject.rows.length < total;
-    
-    return {
-        data: queryObject.rows,
-        total,
-        page,
-        limit,
-        hasMore,
-        rows: queryObject.rows,
-        count: total
-    };
-}
-
-// =============================================================================
-// Универсальные валидаторы
-// =============================================================================
-
-/**
- * Валидация ID
- */
-function validateId(id, fieldName = 'id') {
-    if (id === undefined || id === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (!Number.isInteger(id) || id <= 0) {
-        return { valid: false, error: `Некорректный ${fieldName}`, code: 'INVALID_ID' };
-    }
-    return { valid: true };
-}
-
-/**
- * Валидация диапазона
- */
-function validateRange(value, min, max, fieldName = 'значение') {
-    if (value === undefined || value === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (!Number.isInteger(value)) {
-        return { valid: false, error: `${fieldName} должно быть целым числом`, code: 'INVALID_TYPE' };
-    }
-    if (value < min || value > max) {
-        return { valid: false, error: `${fieldName} должно быть от ${min} до ${max}`, code: 'OUT_OF_RANGE' };
-    }
-    return { valid: true };
-}
-
 // =============================================================================
 // Утилиты для работы с JSON
 // =============================================================================
@@ -531,11 +479,6 @@ module.exports = {
     
     // Пагинация
     paginate,
-    simplePaginate,
-    
-    // Универсальные валидаторы
-    validateId,
-    validateRange,
     
     // JSON утилиты
     serializeJSONField,

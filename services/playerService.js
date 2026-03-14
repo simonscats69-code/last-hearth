@@ -6,6 +6,7 @@
 const db = require('../db/playerQueries');
 const { getExpForLevel } = require('../utils/gameConstants');
 const { logger } = require('../utils/logger');
+const { tx } = require('../db/database');
 
 /**
  * Получить игрока по ID
@@ -128,8 +129,6 @@ async function regenerateEnergy(playerId) {
         throw { message: 'Некорректный ID игрока', code: 'INVALID_PLAYER_ID', statusCode: 400 };
     }
     
-    const { tx } = require('../db/database');
-    
     return await tx(async () => {
         // Блокируем строку игрока
         const lockedPlayer = await db.lockPlayer(playerId);
@@ -182,8 +181,6 @@ async function addExperience(playerId, exp, client = null) {
     }
     
     // Иначе создаём свою транзакцию (обратная совместимость)
-    const { tx } = require('../db/database');
-    
     const result = await tx(async (txClient) => {
         return await db.addExperienceWithLevelUp(txClient, playerId, exp, getExpForLevel);
     });

@@ -169,26 +169,6 @@ const CONFIG = {
 const pingTimers = new Map();
 
 /**
- * Генерация токена для игрока
- */
-function generateToken(playerId, secret) {
-    if (!secret) {
-        throw new Error('WS_TOKEN_SECRET обязателен для генерации токена');
-    }
-    const payload = `${playerId}:${Date.now()}`;
-    return crypto.createHmac('sha256', secret)
-        .update(payload)
-        .digest('hex');
-}
-
-function generateTokenWithSecret(playerId, secret) {
-    const payload = `${playerId}:${Date.now()}`;
-    return crypto.createHmac('sha256', secret)
-        .update(payload)
-        .digest('hex');
-}
-
-/**
  * Проверка токена
  */
 function verifyToken(playerId, token) {
@@ -209,7 +189,11 @@ function verifyToken(playerId, token) {
         return true;
     }
     
-    const expectedToken = generateTokenWithSecret(playerId, tokenSecret);
+    // Встроенная генерация токена для проверки
+    const payload = `${playerId}:${Date.now()}`;
+    const expectedToken = crypto.createHmac('sha256', tokenSecret)
+        .update(payload)
+        .digest('hex');
     
     let isValid = false;
     try {
@@ -398,10 +382,15 @@ function initWebSocket(server) {
         
         const tokenSecret = process.env.WS_TOKEN_SECRET;
         if (tokenSecret) {
+            // Генерация токена без использования внешней функции
+            const payload = `${playerId}:${Date.now()}`;
+            const token = crypto.createHmac('sha256', tokenSecret)
+                .update(payload)
+                .digest('hex');
             ws.send(JSON.stringify({ 
                 type: 'connected', 
                 playerId: parseInt(playerId),
-                token: generateToken(parseInt(playerId), tokenSecret)
+                token: token
             }));
         } else {
             ws.send(JSON.stringify({ 
@@ -643,7 +632,6 @@ module.exports = {
     
     // WebSocket
     initWebSocket,
-    generateToken,
     verifyToken,
     sendToPlayer,
     broadcast,
