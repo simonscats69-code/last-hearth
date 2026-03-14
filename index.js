@@ -4,14 +4,17 @@
  * Точка входа сервера
  */
 
+// Сначала подключаем logger
+const logger = require('./utils/logger');
+
 // Глобальные обработчики ошибок для отладки
 process.on('uncaughtException', (err) => {
-    logger.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
+    console.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
     process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {
-    logger.error('UNHANDLED REJECTION:', reason, reason?.stack);
+    console.error('UNHANDLED REJECTION:', reason, reason?.stack);
     process.exit(1);
 });
 
