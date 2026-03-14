@@ -16,7 +16,7 @@ try {
 // ADMIN_IDS парсится один раз при старте
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
 
-const logger = require('./utils/logger');
+const { logger } = require('./utils/logger');
 
 // Глобальные обработчики ошибок для отладки
 process.on('uncaughtException', (err) => {
