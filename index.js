@@ -149,7 +149,7 @@ app.use(helmet({
             fontSrc: ["'self'", 'https:'],
             objectSrc: ["'none'"],
             mediaSrc: ["'self'"],
-            frameSrc: ["'none'"],
+            frameSrc: ["'self'", 'https://last-hearth.bothost.ru', 'https://*.bothost.ru'],
         },
     },
     crossOriginEmbedderPolicy: false,
