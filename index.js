@@ -91,6 +91,15 @@ app.use((req, res, next) => {
 // Конфигурация парсеров
 const jsonParser = express.json({ limit: '1mb' });
 
+// Явный заголовок CSP для frame-ancestors
+app.use((req, res, next) => {
+    res.setHeader(
+        'Content-Security-Policy',
+        "frame-ancestors 'self' https://last-hearth.bothost.ru https://*.bothost.ru https://telegram.org https://t.me;"
+    );
+    next();
+});
+
 // Разрешённые источники для CORS
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
 const ALLOWED_ORIGINS = [
