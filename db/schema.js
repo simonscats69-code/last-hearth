@@ -70,9 +70,8 @@ async function createTables() {
             referral_code VARCHAR(20),
             referral_code_changed BOOLEAN DEFAULT false,
             referred_by BIGINT,
-            referral_bonus_claimed BOOLEAN DEFAULT false,
-            active_boss_id INTEGER REFERENCES bosses(id),
-            active_boss_started_at TIMESTAMP
+            referral_bonus_claimed BOOLEAN DEFAULT false
+            // active_boss_id и active_boss_started_at добавляются через миграцию ниже
         );
     `);
 
@@ -92,7 +91,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS locations (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL UNIQUE,
             description TEXT,
             radiation INTEGER DEFAULT 0,
             min_luck INTEGER DEFAULT 0,
@@ -108,7 +107,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS item_sets (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL UNIQUE,
             description TEXT,
             icon VARCHAR(50),
             bonus_2 JSONB DEFAULT '{"health": 10, "damage": 2}',
@@ -143,7 +142,8 @@ async function createTables() {
             price INTEGER DEFAULT 0,
             stars_price INTEGER DEFAULT 0,
             icon VARCHAR(50),
-            image_url VARCHAR(500)
+            image_url VARCHAR(500),
+            UNIQUE(name, type)
         );
     `);
 
@@ -162,11 +162,11 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS bosses (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL UNIQUE,
             description TEXT,
-            level INTEGER DEFAULT 1,
-            max_health INTEGER DEFAULT 1000,
-            damage INTEGER DEFAULT 10,
+            level INTEGER NOT NULL DEFAULT 1,
+            max_health INTEGER NOT NULL DEFAULT 100,
+            damage INTEGER NOT NULL DEFAULT 10,
             reward_experience INTEGER DEFAULT 100,
             reward_coins INTEGER DEFAULT 50,
             reward_items JSONB DEFAULT '[]',
@@ -191,7 +191,7 @@ async function createTables() {
             experience INTEGER DEFAULT 0,
             coins INTEGER DEFAULT 0,
             is_public BOOLEAN DEFAULT true,
-            invite_code VARCHAR(20),
+            invite_code VARCHAR(20) UNIQUE,
             total_members INTEGER DEFAULT 1,
             bosses_killed INTEGER DEFAULT 0,
             loot_bonus INTEGER DEFAULT 0,
@@ -332,7 +332,8 @@ async function createTables() {
             condition JSONB NOT NULL,
             reward JSONB DEFAULT '{"coins": 0, "stars": 0}',
             icon VARCHAR(50),
-            rarity VARCHAR(20) DEFAULT 'common'
+            rarity VARCHAR(20) DEFAULT 'common',
+            UNIQUE(name, category)
         );
     `);
 
@@ -579,7 +580,8 @@ async function createTables() {
             required_level INTEGER DEFAULT 1,
             required_base_building VARCHAR(50),
             craft_time INTEGER DEFAULT 5,
-            rarity VARCHAR(20) DEFAULT 'common'
+            rarity VARCHAR(20) DEFAULT 'common',
+            UNIQUE(name, result_item_id)
         );
     `);
 
@@ -592,26 +594,75 @@ async function createTables() {
         CREATE INDEX IF NOT EXISTS idx_players_last_action ON players(last_action_time);
         CREATE INDEX IF NOT EXISTS idx_players_daily_bonus ON players(last_daily_bonus);
         CREATE INDEX IF NOT EXISTS idx_players_referral_code ON players(referral_code);
+        CREATE INDEX IF NOT EXISTS idx_players_referred_by ON players(referred_by);
+        
+        -- Индексы для boss_keys
         CREATE INDEX IF NOT EXISTS idx_boss_keys_player ON boss_keys(player_id);
+        CREATE INDEX IF NOT EXISTS idx_boss_keys_boss ON boss_keys(boss_id);
+        
+        -- Индексы для daily_tasks
         CREATE INDEX IF NOT EXISTS idx_daily_tasks_player ON daily_tasks(player_id);
+        CREATE INDEX IF NOT EXISTS idx_daily_tasks_expires ON daily_tasks(expires_at);
+        
+        -- Индексы для clan_chat
         CREATE INDEX IF NOT EXISTS idx_clan_chat_clan ON clan_chat(clan_id);
         CREATE INDEX IF NOT EXISTS idx_clan_chat_created ON clan_chat(created_at DESC);
+        
+        -- Индексы для clan_applications
         CREATE INDEX IF NOT EXISTS idx_clan_applications_clan ON clan_applications(clan_id);
         CREATE INDEX IF NOT EXISTS idx_clan_applications_player ON clan_applications(player_id);
+        
+        -- Индексы для market_listings
         CREATE INDEX IF NOT EXISTS idx_market_listings_seller ON market_listings(seller_id);
         CREATE INDEX IF NOT EXISTS idx_market_listings_status ON market_listings(status);
         CREATE INDEX IF NOT EXISTS idx_market_listings_expires ON market_listings(expires_at);
         CREATE INDEX IF NOT EXISTS idx_market_listings_item_type ON market_listings((item_data->>'type'));
+        
+        -- Индексы для market_history
         CREATE INDEX IF NOT EXISTS idx_market_history_buyer ON market_history(buyer_id);
         CREATE INDEX IF NOT EXISTS idx_market_history_seller ON market_history(seller_id);
         CREATE INDEX IF NOT EXISTS idx_market_history_created ON market_history(created_at DESC);
+        
+        -- Индексы для pvp_matches
         CREATE INDEX IF NOT EXISTS idx_pvp_matches_attacker ON pvp_matches(attacker_id);
         CREATE INDEX IF NOT EXISTS idx_pvp_matches_defender ON pvp_matches(defender_id);
         CREATE INDEX IF NOT EXISTS idx_pvp_matches_winner ON pvp_matches(winner_id);
         CREATE INDEX IF NOT EXISTS idx_pvp_matches_location ON pvp_matches(location_id);
+        
+        -- Индексы для pvp_cooldowns
         CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_player ON pvp_cooldowns(player_id);
         CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_expires ON pvp_cooldowns(expires_at);
+        
+        -- Индексы для player_buildings
         CREATE INDEX IF NOT EXISTS idx_player_buildings_player ON player_buildings(player_id);
+        
+        -- Индексы для player_boss_progress
+        CREATE INDEX IF NOT EXISTS idx_player_boss_progress_player ON player_boss_progress(player_id);
+        CREATE INDEX IF NOT EXISTS idx_player_boss_progress_boss ON player_boss_progress(boss_id);
+        
+        -- Индексы для boss_mastery
+        CREATE INDEX IF NOT EXISTS idx_boss_mastery_player ON boss_mastery(player_id);
+        CREATE INDEX IF NOT EXISTS idx_boss_mastery_boss ON boss_mastery(boss_id);
+        
+        -- Индексы для player_achievements
+        CREATE INDEX IF NOT EXISTS idx_player_achievements_player ON player_achievements(player_id);
+        CREATE INDEX IF NOT EXISTS idx_player_achievements_achievement ON player_achievements(achievement_id);
+        
+        -- Индексы для referrals
+        CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
+        CREATE INDEX IF NOT EXISTS idx_referrals_referred ON referrals(referred_id);
+        
+        -- Индексы для raid_progress
+        CREATE INDEX IF NOT EXISTS idx_raid_progress_boss ON raid_progress(boss_id);
+        CREATE INDEX IF NOT EXISTS idx_raid_progress_active ON raid_progress(is_active) WHERE is_active = true;
+        
+        -- Индексы для boss_sessions
+        CREATE INDEX IF NOT EXISTS idx_boss_sessions_boss ON boss_sessions(boss_id);
+        CREATE INDEX IF NOT EXISTS idx_boss_sessions_player ON boss_sessions(player_id);
+        
+        -- Индексы для clan_bosses
+        CREATE INDEX IF NOT EXISTS idx_clan_bosses_clan ON clan_bosses(clan_id);
+        CREATE INDEX IF NOT EXISTS idx_clan_bosses_active ON clan_bosses(is_active) WHERE is_active = true;
     `);
 
     // Заполнение базовых данных
@@ -668,6 +719,21 @@ async function runMigrations() {
         ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_bonus_claimed BOOLEAN DEFAULT false;
     `);
 
+    // Добавить FK для referred_by (ссылка на id того же игрока)
+    // Примечание: используем players(id) вместо players(telegram_id) для избежания проблем с типами
+    await query(`
+        DO $do$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'fk_players_referred_by'
+            ) THEN
+                ALTER TABLE players ADD CONSTRAINT fk_players_referred_by 
+                FOREIGN KEY (referred_by) REFERENCES players(telegram_id) ON DELETE SET NULL;
+            END IF;
+        END $do$
+    `);
+
     // Миграции для таблицы рефералов
     await query(`
         ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_5_bonus BOOLEAN DEFAULT false;
@@ -690,6 +756,67 @@ async function runMigrations() {
         ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS reward_claimed BOOLEAN DEFAULT false;
         ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP;
     `);
+
+    // CHECK constraints для бизнес-правил
+    // Защита от некорректных данных на уровне БД
+    await query(`
+        -- Players: базовые проверки
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_level CHECK (level >= 1);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_coins CHECK (coins >= 0);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_stars CHECK (stars >= 0);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_health CHECK (health >= 0);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_max_health CHECK (max_health > 0);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_energy CHECK (energy >= 0);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_max_energy CHECK (max_energy > 0);
+        
+        -- Players: статы должны быть положительными
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_strength CHECK (strength >= 1);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_endurance CHECK (endurance >= 1);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_agility CHECK (agility >= 1);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_intelligence CHECK (intelligence >= 1);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_luck CHECK (luck >= 1);
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_crafting CHECK (crafting >= 1);
+        
+        -- Players: PvP рейтинг
+        ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_pvp_rating CHECK (pvp_rating >= 0);
+        
+        -- Locations: проверка danger_level
+        ALTER TABLE locations ADD CONSTRAINT IF NOT EXISTS chk_locations_danger_level CHECK (danger_level >= 1 AND danger_level <= 10);
+        ALTER TABLE locations ADD CONSTRAINT IF NOT EXISTS chk_locations_radiation CHECK (radiation >= 0);
+        
+        -- Items: проверка цены и rarity
+        ALTER TABLE items ADD CONSTRAINT IF NOT EXISTS chk_items_price CHECK (price >= 0);
+        ALTER TABLE items ADD CONSTRAINT IF NOT EXISTS chk_items_rarity CHECK (rarity IN ('common', 'uncommon', 'rare', 'epic', 'legendary'));
+        
+        -- Bosses: проверка параметров боссов
+        ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_level CHECK (level >= 1);
+        ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_max_health CHECK (max_health > 0);
+        ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_damage CHECK (damage >= 0);
+        ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_key_drop CHECK (key_drop_chance >= 0 AND key_drop_chance <= 1);
+        
+        -- Clans: проверка параметров кланов
+        ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_level CHECK (level >= 1);
+        ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_experience CHECK (experience >= 0);
+        ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_coins CHECK (coins >= 0);
+        ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_total_members CHECK (total_members >= 1);
+        
+        -- Buildings: проверка параметров зданий
+        ALTER TABLE buildings ADD CONSTRAINT IF NOT EXISTS chk_buildings_max_level CHECK (max_level >= 1);
+        ALTER TABLE buildings ADD CONSTRAINT IF NOT EXISTS chk_buildings_base_cost CHECK (base_cost_coins >= 0);
+        
+        -- Crafting recipes: проверка параметров крафта
+        ALTER TABLE crafting_recipes ADD CONSTRAINT IF NOT EXISTS chk_crafting_result_quantity CHECK (result_quantity >= 1);
+        ALTER TABLE crafting_recipes ADD CONSTRAINT IF NOT EXISTS chk_crafting_required_level CHECK (required_level >= 1);
+        ALTER TABLE crafting_recipes ADD CONSTRAINT IF NOT EXISTS chk_crafting_craft_time CHECK (craft_time >= 1);
+        
+        -- Daily tasks: проверка значений
+        ALTER TABLE daily_tasks ADD CONSTRAINT IF NOT EXISTS chk_daily_tasks_target CHECK (target_value >= 1);
+        ALTER TABLE daily_tasks ADD CONSTRAINT IF NOT EXISTS chk_daily_tasks_current CHECK (current_value >= 0);
+        
+        -- Market listings: проверка цен
+        ALTER TABLE market_listings ADD CONSTRAINT IF NOT EXISTS chk_market_price CHECK (price >= 0);
+        ALTER TABLE market_listings ADD CONSTRAINT IF NOT EXISTS chk_market_quantity CHECK (quantity >= 1);
+    `);
 }
 
 /**
@@ -711,7 +838,7 @@ async function seedDatabase() {
         await query(`
             INSERT INTO locations (name, description, radiation, min_luck, danger_level, icon, color)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (name) DO NOTHING
         `, [loc.name, loc.description, loc.radiation, loc.min_luck, loc.danger_level, loc.icon, loc.color]);
     }
 
@@ -726,7 +853,7 @@ async function seedDatabase() {
         await query(`
             INSERT INTO item_sets (name, description, icon, bonus_2, bonus_3, bonus_4)
             VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (name) DO NOTHING
         `, [set.name, set.description, set.icon, JSON.stringify(set.bonus_2), JSON.stringify(set.bonus_3), JSON.stringify(set.bonus_4)]);
     }
 
@@ -749,7 +876,7 @@ async function seedDatabase() {
         await query(`
             INSERT INTO bosses (name, description, max_health, reward_experience, reward_coins, required_key_id, icon)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (name) DO NOTHING
         `, [boss.name, boss.description, boss.max_health, boss.reward_experience, boss.reward_coins, requiredKeyId, boss.icon]);
     }
 
@@ -803,7 +930,7 @@ async function seedDatabase() {
         await query(`
             INSERT INTO items (name, description, type, category, rarity, stackable, slot, stats, durability, max_durability, price, icon)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (name, type) DO NOTHING
         `, [
             item.name, item.description, item.type, item.category, item.rarity || 'common',
             item.stackable !== false, item.slot || null, JSON.stringify(item.stats || {}),
@@ -852,7 +979,7 @@ async function seedDatabase() {
         await query(`
             INSERT INTO crafting_recipes (name, description, result_item_id, result_quantity, ingredients, required_level, craft_time, rarity)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (name, result_item_id) DO NOTHING
         `, [r.name, r.description, r.result_item_id, r.result_quantity, JSON.stringify(r.ingredients), r.required_level, r.craft_time, r.rarity]);
     }
 }
@@ -909,7 +1036,7 @@ async function seedAchievements() {
         await query(`
             INSERT INTO achievements (name, description, category, condition, reward, icon, rarity)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (name, category) DO NOTHING
         `, [a.name, a.description, a.category, JSON.stringify(a.condition), JSON.stringify(a.reward), a.icon, a.rarity]);
     }
 }
