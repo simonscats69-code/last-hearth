@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, tx } = require('../../db/database');
+const { query, transaction: tx } = require('../../db/database');
 const { logger } = require('../../utils/logger');
 const { safeJsonParse } = require('../../utils/jsonHelper');
 

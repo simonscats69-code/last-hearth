@@ -25,6 +25,7 @@ const { safeJsonParse } = require('../../utils/jsonHelper');
 
 // Константы
 const KEYS_REQUIRED_FOR_NEXT_BOSS = 3; // Ключей нужно для следующего босса
+const BOSS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000; // 8 часов на бой с боссом
 
 // Константы для расчёта бонуса урона
 const DAMAGE_PER_KILL = 0.1;       // +0.1 урона за 1 убийство (10 убийств = +1 урон)
@@ -224,6 +225,48 @@ router.post('/start', async (req, res) => {
         await client.query('BEGIN');
         
         try {
+            // ПРОВЕРКА: есть ли уже активный бой с другим боссом?
+            const playerCheck = await client.query(`
+                SELECT active_boss_id, active_boss_started_at FROM players WHERE id = $1
+            `, [playerId]);
+            
+            const player = playerCheck.rows[0];
+            
+            // Если есть активный бой и он не истёк
+            if (player.active_boss_id) {
+                // Проверяем не истёк ли бой (8 часов)
+                if (player.active_boss_started_at) {
+                    const startedAt = new Date(player.active_boss_started_at).getTime();
+                    const timePassed = Date.now() - startedAt;
+                    
+                    if (timePassed < BOSS_FIGHT_DURATION_MS) {
+                        // Бой ещё идёт
+                        // Если это тот же босс - разрешаем продолжить
+                        if (player.active_boss_id === boss_id) {
+                            // Продолжаем бой
+                        } else {
+                            // Другой босс - запрещаем
+                            await client.query('ROLLBACK');
+                            return res.json({
+                                success: false,
+                                error: 'У вас уже есть активный бой с другим боссом!',
+                                code: 'ALREADY_IN_FIGHT',
+                                active_boss_id: player.active_boss_id,
+                                time_remaining_ms: BOSS_FIGHT_DURATION_MS - timePassed
+                            });
+                        }
+                    } else {
+                        // Бой истёк - очищаем
+                        await client.query(`
+                            UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
+                        `, [playerId]);
+                        await client.query(`
+                            DELETE FROM player_boss_progress WHERE player_id = $1
+                        `, [playerId]);
+                    }
+                }
+            }
+            
             // Получаем босса
             const bossResult = await client.query(`
                 SELECT * FROM bosses WHERE id = $1
@@ -292,6 +335,12 @@ router.post('/start', async (req, res) => {
                     ON CONFLICT (player_id, boss_id) 
                     DO UPDATE SET current_hp = $3, max_hp = $4, last_attack = NOW()
                 `, [playerId, boss_id, currentHp, maxHp]);
+                
+                // Устанавливаем активный бой
+                await client.query(`
+                    UPDATE players SET active_boss_id = $1, active_boss_started_at = NOW()
+                    WHERE id = $2
+                `, [boss_id, playerId]);
             }
             
             await client.query('COMMIT');
@@ -479,6 +528,14 @@ router.get('/', async (req, res) => {
             // Босс в бою?
             const inProgress = !!progress;
             
+            // Вычисляем оставшееся время боя
+            let timeRemainingMs = null;
+            if (inProgress && progress.last_attack) {
+                const lastAttackTime = new Date(progress.last_attack).getTime();
+                const elapsedMs = Date.now() - lastAttackTime;
+                timeRemainingMs = Math.max(0, BOSS_FIGHT_DURATION_MS - elapsedMs);
+            }
+            
             return {
                 id: boss.id,
                 name: boss.name,
@@ -492,6 +549,7 @@ router.get('/', async (req, res) => {
                 },
                 is_unlocked: isUnlocked,
                 in_progress: inProgress,
+                time_remaining_ms: timeRemainingMs,
                 keys_required: boss.id > 1 ? KEYS_REQUIRED_FOR_NEXT_BOSS : 0,
                 player_keys: keyMap[boss.id] || 0,
                 mastery: mastery,
@@ -519,7 +577,8 @@ router.get('/', async (req, res) => {
                     limit: limit,
                     offset: offset,
                     has_more: offset + bosses.length < totalBosses
-                }
+                },
+                fight_duration_ms: BOSS_FIGHT_DURATION_MS
             }
         });
         
@@ -564,6 +623,37 @@ router.post('/attack-boss', async (req, res) => {
             });
         }
         
+        // Проверка: атаковать можно только активный бой
+        const playerCheck = await pool.query(`
+            SELECT active_boss_id, active_boss_started_at FROM players WHERE id = $1
+        `, [playerId]);
+        
+        const player = playerCheck.rows[0];
+        
+        if (player.active_boss_id && player.active_boss_id !== boss_id) {
+            // Проверяем не истёк ли бой
+            if (player.active_boss_started_at) {
+                const startedAt = new Date(player.active_boss_started_at).getTime();
+                const timePassed = Date.now() - startedAt;
+                
+                if (timePassed >= BOSS_FIGHT_DURATION_MS) {
+                    // Бой истёк - очищаем
+                    await pool.query(`
+                        UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
+                    `, [playerId]);
+                } else {
+                    // Бой идёт с другим боссом
+                    return res.json({
+                        success: false,
+                        error: 'Вы уже сражаетесь с другим боссом!',
+                        code: 'ALREADY_IN_FIGHT',
+                        active_boss_id: player.active_boss_id,
+                        time_remaining_ms: BOSS_FIGHT_DURATION_MS - timePassed
+                    });
+                }
+            }
+        }
+        
         // Используем транзакцию для атомарности
         await client.query('BEGIN');
         
@@ -598,6 +688,35 @@ router.post('/attack-boss', async (req, res) => {
                     code: 'BOSS_NOT_STARTED',
                     hint: 'Вызовите POST /boss/start перед атакой'
                 });
+            }
+            
+            // Проверка таймера боя - если с момента последней атаки прошло больше 5 минут, бой проигран
+            if (bossData.last_attack) {
+                const lastAttackTime = new Date(bossData.last_attack).getTime();
+                const timeSinceLastAttack = Date.now() - lastAttackTime;
+                
+                if (timeSinceLastAttack > BOSS_FIGHT_DURATION_MS) {
+                    // Бой проигран - сбрасываем прогресс
+                    await client.query(`
+                        DELETE FROM player_boss_progress 
+                        WHERE player_id = $1 AND boss_id = $2
+                    `, [playerId, boss_id]);
+                    
+                    // Очищаем активный бой
+                    await client.query(`
+                        UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
+                    `, [playerId]);
+                    
+                    await client.query('COMMIT');
+                    
+                    return res.json({
+                        success: false,
+                        error: 'Время боя истекло! Босс снова полон здоровья.',
+                        code: 'BOSS_FIGHT_TIMEOUT',
+                        time_expired_ms: timeSinceLastAttack,
+                        hint: 'Начните новый бой с боссом'
+                    });
+                }
             }
             
             const boss = {
@@ -678,10 +797,12 @@ router.post('/attack-boss', async (req, res) => {
             const damage = calculateDamage(boss_id, player.level, player, allMasteries);
             
             // Списываем энергию (1 энергия за клик)
-            await client.query(`
-                UPDATE players SET energy = energy - 1, last_energy_update = NOW()
+            const energyResult = await client.query(`
+                UPDATE players SET energy = GREATEST(0, energy - 1), last_energy_update = NOW()
                 WHERE id = $1
+                RETURNING energy
             `, [playerId]);
+            const newEnergy = energyResult.rows[0].energy;
             
             // Вычисляем новое HP босса (используем сохранённый прогресс)
             const newHp = Math.max(0, currentHp - damage);
@@ -747,6 +868,11 @@ router.post('/attack-boss', async (req, res) => {
                 await client.query(`
                     DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2
                 `, [playerId, boss_id]);
+                
+                // Очищаем активный бой
+                await client.query(`
+                    UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
+                `, [playerId]);
             }
             
             await client.query('COMMIT');
@@ -760,7 +886,7 @@ router.post('/attack-boss', async (req, res) => {
                 mastery: currentMastery,
                 newMastery,
                 killed,
-                energyLeft: player.energy - 1
+                energyLeft: newEnergy
             });
             
             // Единый формат ответа
@@ -779,7 +905,7 @@ router.post('/attack-boss', async (req, res) => {
                     killed,
                     rewards,
                     energy_spent: 1,
-                    energy_left: player.energy - 1
+                    energy_left: newEnergy
                 }
             });
             
@@ -1660,6 +1786,121 @@ router.post('/clan-raids/start', async (req, res) => {
         handleError(res, error, 'clan_raid_start');
     } finally {
         client.release();
+    }
+});
+
+/**
+ * Получить активный бой игрока
+ * GET /boss/active
+ * 
+ * Возвращает информацию о текущем активном бое (если есть)
+ */
+router.get('/active', async (req, res) => {
+    try {
+        const playerId = req.player.id;
+        
+        // Получаем игрока с информацией об активном бое
+        const playerResult = await query(`
+            SELECT 
+                p.active_boss_id, 
+                p.active_boss_started_at,
+                p.energy,
+                p.max_energy,
+                p.level
+            FROM players p 
+            WHERE p.id = $1
+        `, [playerId]);
+        
+        const player = playerResult.rows[0];
+        
+        // Если нет активного боя
+        if (!player.active_boss_id) {
+            return res.json({
+                success: true,
+                data: {
+                    has_active_boss: false,
+                    active_boss: null
+                }
+            });
+        }
+        
+        // Проверяем не истёк ли бой
+        let isExpired = false;
+        let timeRemainingMs = null;
+        
+        if (player.active_boss_started_at) {
+            const startedAt = new Date(player.active_boss_started_at).getTime();
+            const timePassed = Date.now() - startedAt;
+            
+            if (timePassed >= BOSS_FIGHT_DURATION_MS) {
+                isExpired = true;
+            } else {
+                timeRemainingMs = BOSS_FIGHT_DURATION_MS - timePassed;
+            }
+        }
+        
+        // Если бой истёк - возвращаем что активного боя нет
+        if (isExpired) {
+            return res.json({
+                success: true,
+                data: {
+                    has_active_boss: false,
+                    active_boss: null,
+                    was_expired: true
+                }
+            });
+        }
+        
+        // Получаем информацию о боссе
+        const bossResult = await query(`
+            SELECT 
+                b.id, b.name, b.icon, b.max_health, 
+                b.reward_coins, b.reward_experience,
+                pbp.current_hp, pbp.max_hp as progress_max_hp
+            FROM bosses b
+            LEFT JOIN player_boss_progress pbp ON pbp.boss_id = b.id AND pbp.player_id = $1
+            WHERE b.id = $2
+        `, [playerId, player.active_boss_id]);
+        
+        if (bossResult.rows.length === 0) {
+            return res.json({
+                success: true,
+                data: {
+                    has_active_boss: false,
+                    active_boss: null
+                }
+            });
+        }
+        
+        const boss = bossResult.rows[0];
+        
+        res.json({
+            success: true,
+            data: {
+                has_active_boss: true,
+                active_boss: {
+                    id: boss.id,
+                    name: boss.name,
+                    icon: boss.icon,
+                    hp: boss.current_hp || boss.max_health,
+                    max_hp: boss.max_health,
+                    hp_percent: Math.round(((boss.current_hp || boss.max_health) / boss.max_health) * 100),
+                    rewards: {
+                        coins: boss.reward_coins,
+                        exp: boss.reward_experience
+                    }
+                },
+                time_remaining_ms: timeRemainingMs,
+                player: {
+                    energy: player.energy,
+                    max_energy: player.max_energy,
+                    level: player.level
+                }
+            }
+        });
+        
+    } catch (error) {
+        handleError(res, error, 'get_active_boss');
     }
 });
 

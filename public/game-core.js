@@ -700,3 +700,155 @@ window.API = API;
 window.DataLoader = DataLoader;
 window.RenderCache = RenderCache;
 window.Adsgram = Adsgram;
+
+// ============================================================================
+// СИСТЕМА ПРЕДПРОСМОТРА УРОНА И ЭНЕРГИИ
+// ============================================================================
+
+/**
+ * Рассчитать время до следующей единицы энергии
+ * @param {string|Date} lastUpdate - время последнего обновления энергии
+ * @returns {object|null} объект с секундами и форматированным временем или null если энергия полная
+ */
+function getTimeToNextEnergy(lastUpdate) {
+    // Восстановление: 1 энергия в минуту (60000 мс)
+    const ENERGY_REGEN_MS = 60000;
+    
+    if (!lastUpdate) return null;
+    
+    const lastUpdateTime = new Date(lastUpdate).getTime();
+    const now = Date.now();
+    const timePassed = now - lastUpdateTime;
+    
+    // Если прошло больше минуты - энергия уже восстановилась
+    if (timePassed >= ENERGY_REGEN_MS) {
+        return null;
+    }
+    
+    const msUntilNext = ENERGY_REGEN_MS - timePassed;
+    const seconds = Math.ceil(msUntilNext / 1000);
+    
+    return {
+        seconds,
+        ms: msUntilNext,
+        formatted: formatTime(msUntilNext)
+    };
+}
+
+/**
+ * Форматировать время в чч:мм:сс
+ * @param {number} ms - время в миллисекундах
+ * @returns {string} форматированное время
+ */
+function formatTime(ms) {
+    const totalSeconds = Math.ceil(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Обновить таймер энергии в UI
+ * Вызывается каждую секунду
+ */
+function updateEnergyTimer() {
+    const player = gameState?.player;
+    if (!player?.status) return;
+    
+    const { energy, max_energy, last_energy_update } = player.status;
+    
+    // Если энергия полная - скрываем таймер
+    if (energy >= max_energy) {
+        const timerEl = document.getElementById('energy-timer');
+        if (timerEl) timerEl.style.display = 'none';
+        return;
+    }
+    
+    const timeToEnergy = getTimeToNextEnergy(last_energy_update);
+    
+    const timerEl = document.getElementById('energy-timer');
+    if (timerEl && timeToEnergy) {
+        timerEl.style.display = 'block';
+        timerEl.textContent = `Энергия через ${timeToEnergy.formatted}`;
+    }
+}
+
+/**
+ * Предпросмотр урона по боссу
+ * @param {number} bossId - ID босса
+ * @returns {Promise<object>} данные о уроне
+ */
+async function getDamagePreview(bossId) {
+    try {
+        const data = await apiRequest('/game/boss-bonuses');
+        
+        if (data?.success && data?.data?.bonuses) {
+            const bonus = data.data.bonuses.find(b => b.boss_id === bossId);
+            if (bonus && gameState?.player) {
+                const playerLevel = gameState.player.level || 1;
+                const baseDamage = 1;
+                const masteryBonus = bonus.kill_bonus || 0;
+                const levelBonus = playerLevel;
+                const totalDamage = baseDamage + masteryBonus + levelBonus;
+                
+                return {
+                    baseDamage,
+                    masteryBonus,
+                    levelBonus,
+                    totalDamage,
+                    kills: bonus.kills || 0
+                };
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error('Ошибка получения предпросмотра урона:', e);
+        return null;
+    }
+}
+
+/**
+ * Обновить UI предпросмотра урона
+ * @param {number} bossId - ID босса
+ */
+async function updateDamagePreviewUI(bossId) {
+    const previewEl = document.getElementById('damage-preview');
+    if (!previewEl) return;
+    
+    const damageData = await getDamagePreview(bossId);
+    
+    if (damageData) {
+        previewEl.innerHTML = `
+            <div class="damage-preview-line">
+                <span>Базовый урон:</span>
+                <span class="damage-base">${damageData.baseDamage}</span>
+            </div>
+            <div class="damage-preview-line">
+                <span>Бонус мастерства:</span>
+                <span class="damage-mastery">+${damageData.masteryBonus}</span>
+            </div>
+            <div class="damage-preview-line">
+                <span>Бонус уровня:</span>
+                <span class="damage-level">+${damageData.levelBonus}</span>
+            </div>
+            <div class="damage-preview-total">
+                <span>Итого:</span>
+                <span class="damage-total">${damageData.totalDamage}</span>
+            </div>
+        `;
+    } else {
+        previewEl.innerHTML = '<div class="damage-preview-loading">Загрузка...</div>';
+    }
+}
+
+// Экспорт новых функций
+window.getTimeToNextEnergy = getTimeToNextEnergy;
+window.formatTime = formatTime;
+window.updateEnergyTimer = updateEnergyTimer;
+window.getDamagePreview = getDamagePreview;
+window.updateDamagePreviewUI = updateDamagePreviewUI;

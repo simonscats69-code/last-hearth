@@ -88,9 +88,7 @@ router.post('/search', async (req, res) => {
         await client.query('BEGIN');
         
         try {
-            // Обновляем энергию и получаем игрока с блокировкой
-            await playerHelper.updateEnergy(playerId, 0);
-            
+            // Получаем игрока с блокировкой
             const playerResult = await client.query(`
                 SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
@@ -213,12 +211,16 @@ router.post('/search', async (req, res) => {
             }
             
             // Тратим энергию
-            await client.query(`
+            const energyResult = await client.query(`
                 UPDATE players 
                 SET energy = energy - $1,
                     last_energy_update = NOW()
                 WHERE id = $2
+                RETURNING energy, max_energy
             `, [energyCost, playerId]);
+            
+            const newEnergy = energyResult.rows[0].energy;
+            const newMaxEnergy = energyResult.rows[0].max_energy;
             
             // Проверяем последствия радиации
             let radiationEffect = null;
@@ -254,8 +256,8 @@ router.post('/search', async (req, res) => {
                     }
                 } : null,
                 energy: {
-                    current: updatedPlayer.energy - energyCost,
-                    max: updatedPlayer.max_energy,
+                    current: newEnergy,
+                    max: newMaxEnergy,
                     restored: 0
                 },
                 radiation: {

@@ -228,3 +228,170 @@ function fadeOutElement(element, onComplete = null) {
         if (onComplete) onComplete();
     }, 300);
 }
+
+// =============================================================================
+// АНИМАЦИИ БОССОВ
+// =============================================================================
+
+/**
+ * Анимация частиц при убийстве босса
+ * @param {string} bossName - имя босса (для позиционирования)
+ */
+function showBossDeathParticles(bossName = null) {
+    // Получаем элемент босса или центра экрана
+    const bossIcon = document.getElementById('boss-icon');
+    let centerX = window.innerWidth / 2;
+    let centerY = window.innerHeight / 2;
+    
+    if (bossIcon) {
+        const rect = bossIcon.getBoundingClientRect();
+        centerX = rect.left + rect.width / 2;
+        centerY = rect.top + rect.height / 2;
+    }
+    
+    // Цвета для частиц (золото, огонь, розовый)
+    const colors = ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FF8C00', '#FF69B4'];
+    const particleCount = 30;
+    
+    for (let i = 0; i < particleCount; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'boss-particle';
+        
+        const size = Math.random() * 12 + 4;
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        
+        particle.style.cssText = `
+            position: fixed;
+            left: ${centerX}px;
+            top: ${centerY}px;
+            width: ${size}px;
+            height: ${size}px;
+            background: ${color};
+            border-radius: ${Math.random() > 0.5 ? '50%' : '2px'};
+            pointer-events: none;
+            z-index: 1000;
+            box-shadow: 0 0 ${size}px ${color};
+        `;
+        
+        document.body.appendChild(particle);
+        
+        // Расчёт направления и скорости
+        const angle = Math.random() * Math.PI * 2;
+        const velocity = Math.random() * 250 + 100;
+        const dx = Math.cos(angle) * velocity;
+        const dy = Math.sin(angle) * velocity - 100; // небольшой подъём
+        
+        // Анимация
+        const animation = particle.animate([
+            { 
+                transform: 'translate(-50%, -50%) scale(1)', 
+                opacity: 1 
+            },
+            { 
+                transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(0)`, 
+                opacity: 0 
+            }
+        ], {
+            duration: 1000 + Math.random() * 500,
+            easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+        });
+        
+        animation.onfinish = () => particle.remove();
+    }
+}
+
+/**
+ * Анимация прогресс-бара мастерства
+ * @param {HTMLElement} container - контейнер для бара
+ * @param {number} percent - процент заполнения
+ */
+function animateMasteryBar(container, percent) {
+    if (!container) return;
+    
+    const fill = container.querySelector('.mastery-progress-fill');
+    if (fill) {
+        fill.style.transition = 'width 0.5s ease-out';
+        fill.style.width = `${percent}%`;
+    }
+}
+
+/**
+ * Анимация вспышки экрана при победе
+ */
+function showVictoryFlash() {
+    const flash = document.createElement('div');
+    flash.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: radial-gradient(circle, rgba(255,215,0,0.3) 0%, transparent 70%);
+        pointer-events: none;
+        z-index: 999;
+        animation: victoryFlash 1s ease-out forwards;
+    `;
+    
+    document.body.appendChild(flash);
+    
+    // Добавляем CSS анимацию если нет
+    if (!document.getElementById('victory-flash-style')) {
+        const style = document.createElement('style');
+        style.id = 'victory-flash-style';
+        style.textContent = `
+            @keyframes victoryFlash {
+                0% { opacity: 1; transform: scale(0.5); }
+                50% { opacity: 1; transform: scale(1.5); }
+                100% { opacity: 0; transform: scale(2); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    setTimeout(() => flash.remove(), 1000);
+}
+
+/**
+ * Анимация получения ключа
+ * @param {number} bossId - ID следующего босса
+ */
+function showKeyAnimation(bossId) {
+    const key = document.createElement('div');
+    key.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        font-size: 48px;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        z-index: 1001;
+        animation: keyPop 1.5s ease-out forwards;
+    `;
+    key.textContent = '🔑';
+    
+    document.body.appendChild(key);
+    
+    // Добавляем CSS анимацию если нет
+    if (!document.getElementById('key-anim-style')) {
+        const style = document.createElement('style');
+        style.id = 'key-anim-style';
+        style.textContent = `
+            @keyframes keyPop {
+                0% { transform: translate(-50%, -50%) scale(0) rotate(-180deg); opacity: 0; }
+                30% { transform: translate(-50%, -50%) scale(1.2) rotate(0deg); opacity: 1; }
+                50% { transform: translate(-50%, -50%) scale(1) rotate(10deg); }
+                70% { transform: translate(-50%, -50%) scale(1) rotate(-10deg); }
+                100% { transform: translate(-50%, -100%) scale(0.5) rotate(0deg); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    setTimeout(() => key.remove(), 1500);
+}
+
+// Экспорт функций для глобального доступа
+window.showBossDeathParticles = showBossDeathParticles;
+window.animateMasteryBar = animateMasteryBar;
+window.showVictoryFlash = showVictoryFlash;
+window.showKeyAnimation = showKeyAnimation;

@@ -9,7 +9,7 @@
  * - Batch-обработка для больших объёмов
  */
 
-const { query, tx } = require('../db/database');
+const { query, transaction: tx } = require('../db/database');
 const { logger } = require('./logger');
 const { checkAchievements } = require('./achievements');
 

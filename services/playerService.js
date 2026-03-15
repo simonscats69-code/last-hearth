@@ -6,7 +6,7 @@
 const db = require('../db/playerQueries');
 const { getExpForLevel } = require('../utils/gameConstants');
 const { logger } = require('../utils/logger');
-const { tx } = require('../db/database');
+const { transaction: tx } = require('../db/database');
 
 /**
  * Получить игрока по ID

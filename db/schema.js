@@ -70,8 +70,22 @@ async function createTables() {
             referral_code VARCHAR(20),
             referral_code_changed BOOLEAN DEFAULT false,
             referred_by BIGINT,
-            referral_bonus_claimed BOOLEAN DEFAULT false
+            referral_bonus_claimed BOOLEAN DEFAULT false,
+            active_boss_id INTEGER REFERENCES bosses(id),
+            active_boss_started_at TIMESTAMP
         );
+    `);
+
+    // Миграция: добавить active_boss_id если не существует
+    await query(`
+        DO $do$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'players' AND column_name = 'active_boss_id') THEN
+                ALTER TABLE players ADD COLUMN active_boss_id INTEGER REFERENCES bosses(id);
+                ALTER TABLE players ADD COLUMN active_boss_started_at TIMESTAMP;
+            END IF;
+        END $do$
     `);
 
     // Таблица локаций
@@ -234,6 +248,33 @@ async function createTables() {
             UNIQUE(player_id, boss_id)
         );
     `);
+    
+    // Таблица прогресса боя с боссом (для одиночной игры)
+    // Оптимизация: добавлено поле mastery_cache для кэширования мастерства
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_boss_progress (
+            id SERIAL PRIMARY KEY,
+            player_id INTEGER REFERENCES players(id),
+            boss_id INTEGER REFERENCES bosses(id),
+            current_hp INTEGER NOT NULL,
+            max_hp INTEGER NOT NULL,
+            last_attack TIMESTAMP DEFAULT NOW(),
+            started_at TIMESTAMP DEFAULT NOW(),
+            mastery_cache JSONB DEFAULT '{}',
+            UNIQUE(player_id, boss_id)
+        );
+    `);
+
+    // Миграция: добавить mastery_cache если не существует
+    await query(`
+        DO $do$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'player_boss_progress' AND column_name = 'mastery_cache') THEN
+                ALTER TABLE player_boss_progress ADD COLUMN mastery_cache JSONB DEFAULT '{}';
+            END IF;
+        END $do$
+    `);
 
     // Таблица сессий рейдовых боссов
     await query(`
@@ -309,6 +350,60 @@ async function createTables() {
             claimed_at TIMESTAMP,
             UNIQUE(player_id, achievement_id)
         );
+    `);
+
+    // Достижения боссов - начальные достижения
+    // Оптимизация: добавляем только если таблица пуста
+    await query(`
+        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
+        SELECT 
+            'Первое убийство', 
+            'Убить босса впервые', 
+            'bosses', 
+            '{"type": "first_boss_kill"}', 
+            '{"coins": 100, "stars": 0}', 
+            '🎯', 
+            'common'
+        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Первое убийство');
+    `);
+
+    await query(`
+        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
+        SELECT 
+            'Охотник на боссов', 
+            'Убить 10 боссов', 
+            'bosses', 
+            '{"type": "bosses_killed", "count": 10}', 
+            '{"coins": 500, "stars": 2}', 
+            '🏅', 
+            'uncommon'
+        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Охотник на боссов');
+    `);
+
+    await query(`
+        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
+        SELECT 
+            'Мастер боссов', 
+            'Убить босса 50 раз', 
+            'bosses', 
+            '{"type": "single_boss_kills", "count": 50}', 
+            '{"coins": 2000, "stars": 10}', 
+            '👑', 
+            'epic'
+        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Мастер боссов');
+    `);
+
+    await query(`
+        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
+        SELECT 
+            'Доминатор', 
+            'Убить всех боссов', 
+            'bosses', 
+            '{"type": "all_bosses_killed"}', 
+            '{"coins": 10000, "stars": 50}', 
+            '💀', 
+            'legendary'
+        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Доминатор');
     `);
 
     // Таблица ежедневных заданий

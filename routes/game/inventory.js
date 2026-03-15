@@ -14,7 +14,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query, queryOne, tx } = require('../../db/database');
+const { pool, query, queryOne, transaction: tx } = require('../../db/database');
 const playerHelper = require('../../utils/playerHelper');
 const { logger } = require('../../utils/logger');
 const { safeJsonParse } = require('../../utils/jsonHelper');

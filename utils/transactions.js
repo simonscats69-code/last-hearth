@@ -3,7 +3,7 @@
  * Объединяет транзакции с блокировкой и логирование действий игроков
  */
 
-const { query, queryOne, tx } = require('../db/database');
+const { query, queryOne, transaction: tx } = require('../db/database');
 const { logger } = require('./logger');
 
 // =============================================================================

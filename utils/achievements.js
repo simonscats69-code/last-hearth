@@ -3,7 +3,7 @@
  * Достижения и прогрессия игроков
  */
 
-const { query, tx } = require('../db/database');
+const { query, transaction: tx } = require('../db/database');
 const { logger } = require('../utils/logger');
 
 // Список достижений
