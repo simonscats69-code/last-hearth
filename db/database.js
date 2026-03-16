@@ -4,7 +4,14 @@
  */
 
 const { Pool } = require('pg');
-const { logger } = require('../utils/serverApi');
+
+// Локальная переменная для логгера - инициализируется позже
+let logger;
+
+// Функция для установки логгера после инициализации
+function setLogger(log) {
+    logger = log;
+}
 
 // Инициализация БД - вызывать при старте приложения
 async function initDatabase() {
@@ -12,9 +19,11 @@ async function initDatabase() {
     try {
         await schema.createTables();
         await schema.runMigrations();
-        logger.info('✓ База данных инициализирована');
+        if (logger) logger.info('✓ База данных инициализирована');
+        else console.log('✓ База данных инициализирована');
     } catch (error) {
-        logger.error('Ошибка инициализации БД:', { error: error.message });
+        if (logger) logger.error('Ошибка инициализации БД:', { error: error.message });
+        else console.error('Ошибка инициализации БД:', error.message);
         throw error;
     }
 }
@@ -1068,6 +1077,7 @@ module.exports = {
     transaction,
     queryForUpdate,
     initDatabase,
+    setLogger,  // Добавлено для решения циклической зависимости
     getRankByLevel,
     updateAchievementProgress,
     getActiveListingsCount,

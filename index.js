@@ -39,7 +39,7 @@ const { randomUUID } = require('crypto');
 const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/achievements');
 const { initWebSocket, getMetrics, stopHeartbeat } = require('./utils/realtime');
-const { initDatabase, query, closePool } = require('./db/database');
+const { initDatabase, query, closePool, setLogger } = require('./db/database');
 const { setupWebhook } = require('./bot/webhook');
 const gameRouter = require('./routes/game');
 const apiRouter = require('./routes/api');
@@ -352,6 +352,9 @@ process.on('SIGTERM', shutdown);
 
 async function startServer() {
     try {
+        // Устанавливаем логгер для базы данных (решение циклической зависимости)
+        setLogger(logger);
+        
         await initDatabase();
         logger.info('База данных инициализирована');
         
