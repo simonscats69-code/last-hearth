@@ -10,7 +10,7 @@
  */
 
 const { query, transaction: tx } = require('../db/database');
-const { logger } = require('./logger');
+const { logger } = require('./serverApi');
 const { checkAchievements } = require('./achievements');
 
 // Состояние планировщика
