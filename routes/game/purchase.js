@@ -6,8 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne } = require('../../db/database');
-const { utils } = require('../../db/queries/players');
-const { logPlayerAction, serializeJSONField, handleError } = utils;
+const { logPlayerAction, serializeJSONField, handleError } = require('../../utils/serverApi');
 const { logger } = require('../../utils/serverApi');
 
 /**
