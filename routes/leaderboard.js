@@ -7,8 +7,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db/database');
-const { telegramAuthMiddleware, isAdmin } = require('../utils/telegramAuth');
-const { logger } = require('../utils/logger');
+const { telegramAuthMiddleware, isAdmin, logger } = require('../utils/serverApi');
 
 // Middleware для проверки авторизации игрока
 // ВАЖНО: требуем telegramUser от telegramAuthMiddleware

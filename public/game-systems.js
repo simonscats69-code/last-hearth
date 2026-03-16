@@ -135,12 +135,20 @@ async function initGame() {
  * Загрузка профиля игрока
  */
 async function loadProfile() {
-    const data = await apiRequest('/api/game/profile');
+    const response = await apiRequest('/api/game/profile');
+    
+    // API возвращает { success: true, data: { ... } }
+    // Нужно распаковать данные для удобного доступа
+    const data = response.data || response;
     
     // Гарантируем наличие объекта статуса
     if (!data.status) {
         data.status = {};
     }
+    
+    // Также дублируем energy на верхний уровень для совместимости
+    data.energy = data.status.energy;
+    data.max_energy = data.status.max_energy;
     
     gameState.player = data;
     
@@ -261,8 +269,9 @@ async function loadLocations() {
 
 /**
  * Поиск лута (с защитой от двойного нажатия)
+ * @param {boolean} useLuckySearch - использовать удвоенный шанс за 2 энергии
  */
-async function searchLoot() {
+async function searchLoot(useLuckySearch = false) {
     // Блокировка двойного нажатия
     if (actionLocks.searchLoot) return;
     actionLocks.searchLoot = true;
@@ -276,39 +285,59 @@ async function searchLoot() {
     try {
         const result = await apiRequest('/api/game/locations/search', {
             method: 'POST',
-            body: {}
+            body: { useLuckySearch }
         });
         
         if (result.success) {
             // Анимация лута если предмет найден
             if (result.found_item) {
                 showLootAnimation(result.found_item);
+                showModal(
+                    '🎉 Предмет найден!',
+                    `Вы нашли: ${result.found_item.name} (${result.found_item.rarity})`
+                );
+            } else {
+                showModal(
+                    '🔍 Поиск',
+                    'Ничего не найдено. Попробуйте ещё раз!'
+                );
             }
             
-            // Показываем результат
-            showModal(
-                result.died ? '☠️ Гибель' : '🔍 Поиск',
-                result.message
-            );
+            // Обновляем энергию в UI
+            if (result.energy) {
+                if (!gameState.player.status) gameState.player.status = {};
+                gameState.player.status.energy = result.energy.current;
+                gameState.player.status.max_energy = result.energy.max;
+                gameState.player.status.last_energy_update = new Date().toISOString();
+                updateEnergyDisplay();
+                updateEnergyTimer();
+            }
             
-            // Обновляем UI
-            if (result.new_status) {
-                gameState.player.status = { ...gameState.player.status, ...result.new_status };
-                updateProfileUI(gameState.player);
+            // Обновляем радиацию после поиска (всегда, не только при увеличении)
+            if (result.radiation) {
+                if (!gameState.player.status) gameState.player.status = {};
+                gameState.player.status.radiation = result.radiation.level || 0;
+                updateConditionsUI(gameState.player.status);
             }
             
             // Анимация
-            if (!result.died) {
-                playSound('loot');
-            } else {
-                showDamageEffect();
-            }
+            playSound('loot');
+            
         } else {
-            showModal('⚠️ Внимание', result.message);
+            // Обработка ошибок
+            let errorMsg = result.message || result.error || 'Неизвестная ошибка';
+            
+            // Особая обработка для недостатка энергии
+            if (result.code === 'INSUFFICIENT_ENERGY') {
+                errorMsg = `Недостаточно энергии! Требуется: ${useLuckySearch ? 2 : 1}, у вас: ${result.energy || 0}`;
+            }
+            
+            showModal('⚠️ Внимание', errorMsg);
         }
         
     } catch (error) {
         console.error('Search error:', error);
+        showModal('❌ Ошибка', 'Не удалось выполнить поиск');
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -344,13 +373,30 @@ async function moveToLocation(locationId) {
 
 /**
  * Обновление отображения энергии (локальное обновление без запроса к API)
+ * Теперь также рассчитывает восстановление энергии на клиенте
  */
 function updateEnergyDisplay() {
     if (!gameState.player || !gameState.player.status) return;
     
     const status = gameState.player.status;
-    const maxEnergy = status.max_energy || 100;
-    const currentEnergy = status.energy || 0;
+    const maxEnergy = status.max_energy || 50;
+    const lastUpdate = status.last_energy_update;
+    
+    // Рассчитываем восстановление энергии на клиенте
+    let currentEnergy = status.energy || 0;
+    
+    if (lastUpdate && currentEnergy < maxEnergy) {
+        const lastUpdateTime = new Date(lastUpdate).getTime();
+        const now = Date.now();
+        const timePassedMs = now - lastUpdateTime;
+        const timePassedMinutes = Math.floor(timePassedMs / 60000);
+        
+        // 1 энергия в минуту
+        if (timePassedMinutes > 0) {
+            currentEnergy = Math.min(maxEnergy, currentEnergy + timePassedMinutes);
+            status.energy = currentEnergy;
+        }
+    }
     
     // Обновляем текст энергии
     const energyText = document.getElementById('energy-text');

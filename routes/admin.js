@@ -6,8 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db/database');
-const { isAdmin, telegramAuthMiddleware } = require('../utils/telegramAuth');
-const { logger } = require('../utils/logger');
+const { isAdmin, telegramAuthMiddleware, logger } = require('../utils/serverApi');
 
 // Применяем telegramAuthMiddleware ко всем admin роутам
 // Это устанавливает req.telegramUser после валидации подписи Telegram

@@ -18,9 +18,8 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne } = require('../../db/database');
-const { validateTelegramInitData } = require('../../utils/telegramAuth');
 const rateLimit = require('express-rate-limit');
-const { logger } = require('../../utils/logger');
+const { validateTelegramInitData, logger } = require('../../utils/serverApi');
 
 // ============================================================================
 // КОНФИГУРАЦИЯ RATE LIMITER

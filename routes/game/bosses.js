@@ -19,9 +19,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const playerHelper = require('../../utils/playerHelper');
-const { logger } = require('../../utils/logger');
-const { safeJsonParse } = require('../../utils/jsonHelper');
+const { logger, safeJsonParse, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 
 // Константы
 const KEYS_REQUIRED_FOR_NEXT_BOSS = 3; // Ключей нужно для следующего босса

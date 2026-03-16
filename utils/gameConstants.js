@@ -68,15 +68,20 @@ function getRarityPenalty(rarity) {
 /**
  * Рассчитать шанс дропа (монотонно растущий)
  * @param {number} luck - Удача игрока
+ * @param {boolean} useLuckySearch - использовать удвоенный бонус удачи
  * @returns {number} Шанс дропа в процентах
  */
-function calculateDropChance(luck) {
+function calculateDropChance(luck, useLuckySearch = false) {
     // Защита от отрицательной или нулевой удачи
     if (luck <= 0) return 4;
     
+    // При lucky search удваиваем бонус удачи
+    const luckMultiplier = useLuckySearch ? 2 : 1;
+    
     // Простая формула без диапазонов — монотонный рост
     // luck 1 → 8.35%, 30 → 18.5%, 60 → 29%, 100 → 43%, 143+ → 60%
-    const chance = 8 + luck * 0.35;
+    // При useLuckySearch: luck 1 → 12.7%, 30 → 33%, 60 → 52%, 100 → 80%, 115+ → 100%
+    const chance = 8 + (luck * 0.35 * luckMultiplier);
     return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
 }
 
@@ -401,10 +406,7 @@ function calculateRadiationDefense(equipment) {
     if (equipment.head?.stats?.radiationDefense) {
         defense += equipment.head.stats.radiationDefense;
     }
-    // Альтернативные слоты (helmet)
-    if (equipment.helmet?.stats?.radiationDefense) {
-        defense += equipment.helmet.stats.radiationDefense;
-    }
+    // Примечание: equipment.helmet не дублируется здесь, т.к. он уже учтён выше в старом формате
     
     return defense;
 }

@@ -4,7 +4,7 @@
 
 const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('../db/database');
-const { logger } = require('../utils/logger');
+const { logger } = require('../utils/serverApi');
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
     telegram: { agent: null, webhookReply: true }

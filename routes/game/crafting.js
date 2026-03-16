@@ -15,11 +15,8 @@ const express = require('express');
 const { randomInt } = require('crypto');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
-const playerHelper = require('../../utils/playerHelper');
 const { calculateCraftSuccess } = require('../../utils/gameConstants');
-const { logger, logGameAction, logPlayerError } = require('../../utils/logger');
-const { safeParse, safeJsonParse, safeStringify } = require('../../utils/jsonHelper');
-const { withPlayerLock } = require('../../utils/transactions');
+const { logger, logGameAction, logPlayerError, safeParse, safeJsonParse, safeStringify, withPlayerLock, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 
 // ============================================================================
 // Утилиты

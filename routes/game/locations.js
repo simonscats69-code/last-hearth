@@ -16,10 +16,8 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const playerHelper = require('../../utils/playerHelper');
 const { calculateDropChance, rollItemRarity, rollLootDrop, getLootTable, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
-const { logger } = require('../../utils/logger');
-const { safeJsonParse } = require('../../utils/jsonHelper');
+const { logger, safeJsonParse, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 const { DebuffAPI } = require('./debuffs');
 
 /**
@@ -246,14 +244,12 @@ router.post('/search', async (req, res) => {
             
             res.json({
                 success: foundItem !== null,
-                data: foundItem ? {
-                    found_item: {
-                        name: foundItem.name,
-                        rarity: itemRarity,
-                        type: foundItem.type,
-                        stats: foundItem.damage ? { damage: foundItem.damage } : 
-                               foundItem.defense ? { defense: foundItem.defense } : null
-                    }
+                found_item: foundItem ? {
+                    name: foundItem.name,
+                    rarity: itemRarity,
+                    type: foundItem.type,
+                    stats: foundItem.damage ? { damage: foundItem.damage } : 
+                           foundItem.defense ? { defense: foundItem.defense } : null
                 } : null,
                 energy: {
                     current: newEnergy,
@@ -342,13 +338,14 @@ router.post('/move', async (req, res) => {
             const locationData = targetLocation.rows[0];
             
             // Проверяем требования удачи
-            if (player.luck < locationData.required_luck) {
+            const requiredLuck = locationData.min_luck || locationData.required_luck || 0;
+            if (player.luck < requiredLuck) {
                 await client.query('ROLLBACK');
                 return res.json({
                     success: false,
-                    error: `Нужно больше удачи (${locationData.required_luck}+)`,
+                    error: `Нужно больше удачи (${requiredLuck}+)`,
                     code: 'INSUFFICIENT_LUCK',
-                    required_luck: locationData.required_luck,
+                    required_luck: requiredLuck,
                     current_luck: player.luck
                 });
             }
@@ -414,7 +411,7 @@ router.get('/', async (req, res) => {
         
         // Получаем локации с пагинацией
         const locations = await queryAll(`
-            SELECT id, name, radiation, required_luck, description, is_red_zone
+            SELECT id, name, radiation, min_luck as required_luck, description, is_red_zone
             FROM locations
             ORDER BY required_luck ASC
             LIMIT $1 OFFSET $2
@@ -462,7 +459,7 @@ router.get('/legacy', async (req, res) => {
         const player = req.player;
         
         const locations = await queryAll(`
-            SELECT id, name, radiation, required_luck, description, is_red_zone
+            SELECT id, name, radiation, min_luck as required_luck, description, is_red_zone
             FROM locations
             ORDER BY required_luck ASC
         `);

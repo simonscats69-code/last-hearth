@@ -4,7 +4,7 @@
  */
 
 const { query, transaction: tx } = require('../db/database');
-const { logger } = require('../utils/logger');
+const { logger } = require('../utils/serverApi');
 
 // Список достижений
 const ACHIEVEMENTS = {

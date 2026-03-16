@@ -6,8 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, transaction: tx } = require('../../db/database');
-const { logger } = require('../../utils/logger');
-const { safeJsonParse } = require('../../utils/jsonHelper');
+const { logger, safeJsonParse } = require('../../utils/serverApi');
 
 // =============================================================================
 // Утилиты

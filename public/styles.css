@@ -619,6 +619,20 @@ html, body {
     flex: 2;
 }
 
+.lucky-search-btn {
+    background: linear-gradient(135deg, #FFD700, #FFA000);
+    flex: 2;
+    color: #000;
+}
+
+.lucky-search-btn .btn-cost {
+    color: rgba(0,0,0,0.7);
+}
+
+.lucky-search-btn:active {
+    background: linear-gradient(135deg, #FFA000, #FF8F00);
+}
+
 .btn-icon {
     font-size: 28px;
 }

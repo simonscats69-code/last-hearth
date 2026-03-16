@@ -1308,7 +1308,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // Основные кнопки
-    document.getElementById('search-btn')?.addEventListener('click', searchLoot);
+    document.getElementById('search-btn')?.addEventListener('click', () => searchLoot(false));
+    document.getElementById('lucky-search-btn')?.addEventListener('click', () => searchLoot(true));
     document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
     document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
     document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));

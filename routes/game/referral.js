@@ -5,7 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
-const { logger } = require('../../utils/logger');
+const { logger } = require('../../utils/serverApi');
 
 /**
  * Получение реферального кода

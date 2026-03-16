@@ -16,7 +16,7 @@ try {
 // ADMIN_IDS парсится один раз при старте
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
 
-const { logger } = require('./utils/logger');
+const { logger, requestMiddleware, telegramAuthMiddleware } = require('./utils/serverApi');
 
 // Глобальные обработчики ошибок для отладки
 process.on('uncaughtException', (err) => {
@@ -36,11 +36,9 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
-const { requestMiddleware } = require('./utils/logger');
 const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/achievements');
 const { initWebSocket, getMetrics, stopHeartbeat } = require('./utils/realtime');
-const { telegramAuthMiddleware } = require('./utils/telegramAuth');
 const { initDatabase, query, closePool } = require('./db/database');
 const { setupWebhook } = require('./bot/webhook');
 const gameRouter = require('./routes/game');

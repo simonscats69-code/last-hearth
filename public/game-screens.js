@@ -290,6 +290,13 @@ function renderMain() {
         searchBtn.style.opacity = playerEnergy < 1 ? '0.5' : '1';
     }
     
+    // Обновляем кнопку удачного поиска (доступность)
+    const luckySearchBtn = document.getElementById('lucky-search-btn');
+    if (luckySearchBtn) {
+        luckySearchBtn.disabled = playerEnergy < 2;
+        luckySearchBtn.style.opacity = playerEnergy < 2 ? '0.5' : '1';
+    }
+    
     console.log('[renderMain] Главный экран обновлён');
 }
 

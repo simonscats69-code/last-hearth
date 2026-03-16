@@ -15,10 +15,8 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
-const { logger } = require('../../utils/logger');
 const { getExpForLevel, getTotalExpForLevel } = require('../../utils/gameConstants');
-const { safeJsonParse } = require('../../utils/jsonHelper');
-const { handleError } = require('../../utils/errorHandler');
+const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 
 /**
  * Валидация Telegram ID
@@ -50,7 +48,8 @@ router.get('/', async (req, res) => {
         
         // Получаем профиль игрока
         const player = await queryOne(`
-            SELECT p.*, l.name as location_name, l.radiation as location_radiation
+            SELECT p.*, l.name as location_name, l.radiation as location_radiation,
+                   p.last_energy_update as last_energy_update
             FROM players p
             LEFT JOIN locations l ON p.current_location_id = l.id
             WHERE p.telegram_id = $1
@@ -137,7 +136,8 @@ router.get('/', async (req, res) => {
                     energy: player.energy,
                     max_energy: player.max_energy,
                     infections: infectionLevel,
-                    infections_list: infectionsList
+                    infections_list: infectionsList,
+                    last_energy_update: player.last_energy_update
                 },
                 location: {
                     id: player.current_location_id,

@@ -5,10 +5,8 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, transaction: tx } = require('../../db/database');
-const { logger } = require('../../utils/logger');
-const { safeJsonParse } = require('../../utils/jsonHelper');
 const { DEBUFF_CONFIG } = require('../../utils/gameConstants');
-const { handleError } = require('../../utils/errorHandler');
+const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 
 // =============================================================================
 // Утилиты

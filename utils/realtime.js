@@ -6,7 +6,7 @@
 const os = require('os');
 const WebSocket = require('ws');
 const crypto = require('crypto');
-const { logger } = require('./logger');
+const { logger } = require('./serverApi');
 
 // =============================================================================
 // Метрики сервера

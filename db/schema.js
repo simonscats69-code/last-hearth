@@ -70,8 +70,8 @@ async function createTables() {
             referral_code VARCHAR(20),
             referral_code_changed BOOLEAN DEFAULT false,
             referred_by BIGINT,
-            referral_bonus_claimed BOOLEAN DEFAULT false
-            // active_boss_id и active_boss_started_at добавляются через миграцию ниже
+            referral_bonus_claimed BOOLEAN DEFAULT false,
+            -- active_boss_id и active_boss_started_at добавляются через миграцию ниже
         );
     `);
 

@@ -15,10 +15,8 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, transaction: tx } = require('../../db/database');
-const playerHelper = require('../../utils/playerHelper');
-const { logger } = require('../../utils/logger');
-const { safeJsonParse } = require('../../utils/jsonHelper');
 const { DEBUFF_CURES } = require('../../utils/gameConstants');
+const { logger, safeJsonParse, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 
 /**
  * Универсальный обработчик ошибок

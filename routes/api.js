@@ -5,7 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, safeJsonParse } = require('../db/database');
-const { logger } = require('../utils/logger');
+const { logger } = require('../utils/serverApi');
 
 /**
  * Безопасный парсинг JSON условия достижения

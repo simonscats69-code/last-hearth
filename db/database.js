@@ -4,7 +4,7 @@
  */
 
 const { Pool } = require('pg');
-const { logger } = require('../utils/logger');
+const { logger } = require('../utils/serverApi');
 
 // Инициализация БД - вызывать при старте приложения
 async function initDatabase() {
