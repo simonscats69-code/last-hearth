@@ -19,6 +19,9 @@ async function initDatabase() {
     try {
         await schema.createTables();
         await schema.runMigrations();
+        // Заполнение базовых данных после миграций
+        await schema.seedDatabase();
+        await schema.seedAchievements();
         if (logger) logger.info('✓ База данных инициализирована');
         else console.log('✓ База данных инициализирована');
     } catch (error) {

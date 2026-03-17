@@ -653,10 +653,6 @@ async function createTables() {
     // Индексы для clan_bosses
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_bosses_clan ON clan_bosses(clan_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_bosses_active ON clan_bosses(is_active) WHERE is_active = true`);
-
-    // Заполнение базовых данных
-    await seedDatabase();
-    await seedAchievements();
 }
 
 /**
