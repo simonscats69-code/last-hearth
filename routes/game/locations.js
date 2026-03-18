@@ -16,7 +16,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { DEBUFF_CONFIG, calculateDropChance, rollItemRarity, rollLootDrop, getLootTable, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
+const { DEBUFF_CONFIG, calculateDropChance, rollItemRarity, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 const { normalizeInventory, normalizeRadiation } = require('../../utils/playerState');
 
@@ -70,17 +70,7 @@ router.post('/search', async (req, res) => {
     const client = await pool.connect();
     
     try {
-        const { useLuckySearch = false } = req.body;
         const playerId = req.player.id;
-        
-        // Валидация входных данных
-        if (!validateBoolean(useLuckySearch)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Параметр useLuckySearch должен быть boolean',
-                code: 'INVALID_LUCKY_SEARCH_TYPE'
-            });
-        }
         
         // Используем транзакцию для атомарности
         await client.query('BEGIN');
@@ -103,7 +93,7 @@ router.post('/search', async (req, res) => {
             }
             
             // Проверяем энергию
-            const energyCost = useLuckySearch ? 2 : 1;
+            const energyCost = 1;
             if (updatedPlayer.energy < energyCost) {
                 await client.query('ROLLBACK');
                 return res.json({
@@ -175,9 +165,10 @@ router.post('/search', async (req, res) => {
             
             // Расчёт модификаторов от дебаффов
             const modifiers = calculateDebuffModifiers(updatedPlayer);
+            const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck) * 10) / 10);
             
             // Вычисляем шанс дропа с учётом дебаффов
-            const baseDropChance = calculateDropChance(updatedPlayer.luck, useLuckySearch);
+            const baseDropChance = calculateDropChance(effectiveLuck);
             const dropChance = Math.max(0.01, baseDropChance * modifiers.dropChance);
             const rolled = Math.random() * 100;
             
@@ -186,13 +177,25 @@ router.post('/search', async (req, res) => {
             
             if (rolled <= dropChance) {
                 // Определяем редкость
-                itemRarity = rollItemRarity(updatedPlayer.luck);
-                
-                // Получаем таблицу лута для локации
-                const lootTable = getLootTable(locationData.id);
-                
-                // Бросаем предмет
-                foundItem = rollLootDrop(lootTable, updatedPlayer.luck, itemRarity);
+                itemRarity = rollItemRarity(locationData.id);
+
+                const itemResult = await client.query(`
+                    SELECT
+                        id,
+                        name,
+                        type,
+                        rarity,
+                        icon,
+                        COALESCE((stats->>'damage')::integer, 0) AS damage,
+                        COALESCE((stats->>'defense')::integer, 0) AS defense
+                    FROM items
+                    WHERE rarity = $1
+                      AND type != 'key'
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                `, [itemRarity]);
+
+                foundItem = itemResult.rows[0] || null;
                 
                 if (foundItem) {
                     // Добавляем в инвентарь. Старые данные могут лежать как объект,
@@ -257,7 +260,8 @@ router.post('/search', async (req, res) => {
             logger.info(`[locations] Поиск лута`, {
                 playerId,
                 foundItem: foundItem?.name || null,
-                useLuckySearch,
+                effectiveLuck,
+                dropChance,
                 locationId: locationData.id
             });
             
@@ -268,6 +272,7 @@ router.post('/search', async (req, res) => {
                     name: foundItem.name,
                     rarity: itemRarity,
                     type: foundItem.type,
+                    icon: foundItem.icon,
                     stats: foundItem.damage ? { damage: foundItem.damage } : 
                            foundItem.defense ? { defense: foundItem.defense } : null
                 } : null,
@@ -287,6 +292,7 @@ router.post('/search', async (req, res) => {
                     name: locationData.name,
                     radiation: locationData.radiation
                 },
+                effective_luck: effectiveLuck,
                 drop_chance: dropChance,
                 rolled: rolled.toFixed(2)
             });
@@ -493,7 +499,7 @@ router.get('/legacy', async (req, res) => {
         const locations = await queryAll(`
             SELECT id, name, radiation, min_luck as required_luck, description, is_red_zone
             FROM locations
-            ORDER BY required_luck ASC
+            ORDER BY min_luck ASC
         `);
         
         // Фильтруем по доступности

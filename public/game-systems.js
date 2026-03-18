@@ -155,6 +155,7 @@ async function loadProfile() {
     // Обновляем UI
     updateProfileUI(data);
     refreshPlayerEnergyUI();
+    updateLuckDisplay();
 }
 
 const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
@@ -221,19 +222,12 @@ function syncPlayerEnergyState(energy, maxEnergy, lastEnergyUpdate = null) {
 
 function updateSearchButtonsState() {
     const status = getEffectivePlayerStatus();
-    const canNormalSearch = status.energy >= 1 && !actionLocks.searchLoot;
-    const canLuckySearch = status.energy >= 2 && !actionLocks.searchLoot;
+    const canSearch = status.energy >= 1 && !actionLocks.searchLoot;
 
     const searchBtn = document.getElementById('search-btn');
     if (searchBtn) {
-        searchBtn.disabled = !canNormalSearch;
-        searchBtn.style.opacity = canNormalSearch ? '1' : '0.5';
-    }
-
-    const luckySearchBtn = document.getElementById('lucky-search-btn');
-    if (luckySearchBtn) {
-        luckySearchBtn.disabled = !canLuckySearch;
-        luckySearchBtn.style.opacity = canLuckySearch ? '1' : '0.5';
+        searchBtn.disabled = !canSearch;
+        searchBtn.style.opacity = canSearch ? '1' : '0.5';
     }
 }
 
@@ -265,6 +259,19 @@ function refreshPlayerEnergyUI() {
 
     if (typeof updateEnergyTimer === 'function') {
         updateEnergyTimer();
+    }
+}
+
+function updateLuckDisplay() {
+    const luck = gameState.player?.stats?.luck || 1;
+    const luckEl = document.getElementById('player-luck');
+    if (luckEl) {
+        luckEl.textContent = luck;
+    }
+
+    const dropChanceEl = document.getElementById('player-drop-chance');
+    if (dropChanceEl && typeof calculateDropChance === 'function') {
+        dropChanceEl.textContent = `${calculateDropChance(luck)}%`;
     }
 }
 
@@ -319,6 +326,7 @@ async function updateProfileUI(player) {
     
     // Обновляем отображение переломов и инфекций
     updateConditionsUI(status);
+    updateLuckDisplay();
 }
 
 /**
@@ -375,27 +383,23 @@ async function loadLocations() {
 
 /**
  * Поиск лута (с защитой от двойного нажатия)
- * @param {boolean} useLuckySearch - использовать удвоенный шанс за 2 энергии
  */
-async function searchLoot(useLuckySearch = false) {
+async function searchLoot() {
     // Блокировка двойного нажатия
     if (actionLocks.searchLoot) return;
     actionLocks.searchLoot = true;
     
     const searchBtn = document.getElementById('search-btn');
-    const luckySearchBtn = document.getElementById('lucky-search-btn');
 
-    [searchBtn, luckySearchBtn].forEach((button) => {
-        if (button) {
-            button.disabled = true;
-            button.classList.add('shake');
-        }
-    });
+    if (searchBtn) {
+        searchBtn.disabled = true;
+        searchBtn.classList.add('shake');
+    }
     
     try {
         const result = await apiRequest('/api/game/locations/search', {
             method: 'POST',
-            body: { useLuckySearch }
+            body: {}
         });
         
         if (result.success) {
@@ -439,7 +443,7 @@ async function searchLoot(useLuckySearch = false) {
             
             // Особая обработка для недостатка энергии
             if (result.code === 'INSUFFICIENT_ENERGY') {
-                errorMsg = `Недостаточно энергии! Требуется: ${useLuckySearch ? 2 : 1}, у вас: ${result.energy || 0}`;
+                errorMsg = `Недостаточно энергии! Требуется: 1, у вас: ${result.energy || 0}`;
             }
             
             showModal('⚠️ Внимание', errorMsg);
@@ -449,11 +453,9 @@ async function searchLoot(useLuckySearch = false) {
         console.error('Search error:', error);
         showModal('❌ Ошибка', 'Не удалось выполнить поиск');
     } finally {
-        [searchBtn, luckySearchBtn].forEach((button) => {
-            if (button) {
-                button.classList.remove('shake');
-            }
-        });
+        if (searchBtn) {
+            searchBtn.classList.remove('shake');
+        }
         actionLocks.searchLoot = false;
         refreshPlayerEnergyUI();
     }
@@ -931,8 +933,12 @@ function startBossFight(boss) {
         bossIcon.textContent = boss.icon;
         bossIcon.classList.remove('damage-shake');
     }
-    if (bossHealthText) bossHealthText.textContent = `${boss.health || boss.max_health}/${boss.max_health}`;
-    if (bossHealthBar) bossHealthBar.style.width = '100%';
+    const currentBossHp = boss.hp ?? boss.health ?? boss.max_health;
+    const maxBossHp = boss.max_hp ?? boss.max_health;
+    if (bossHealthText) bossHealthText.textContent = `${currentBossHp}/${maxBossHp}`;
+    if (bossHealthBar) {
+        bossHealthBar.style.width = `${Math.max(0, Math.min(100, (currentBossHp / maxBossHp) * 100))}%`;
+    }
     if (fightLog) {
         fightLog.innerHTML = `
             <p class="fight-start">🎯 Бой с <strong>${boss.name}</strong> начался!</p>
@@ -1009,7 +1015,7 @@ async function attackBoss() {
             }
             
             // Обновляем HP босса
-            const hpPercent = (result.boss_hp / result.boss_max_hp) * 100;
+            const hpPercent = Math.max(0, Math.min(100, (result.boss_hp / result.boss_max_hp) * 100));
             const bossHealthBar = document.getElementById('boss-health-bar');
             const bossHealthText = document.getElementById('boss-health-text');
             if (bossHealthBar) bossHealthBar.style.width = `${hpPercent}%`;

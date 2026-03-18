@@ -353,6 +353,12 @@ router.post('/start', async (req, res) => {
             
             res.json({
                 success: true,
+                boss_hp: newHp,
+                boss_max_hp: boss.max_health,
+                damage_dealt: damage,
+                boss_defeated: killed,
+                player_energy: newEnergy,
+                rewards,
                 data: {
                     boss: {
                         id: boss.id,
