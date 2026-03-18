@@ -177,25 +177,16 @@ function renderMain() {
     }
     
     // Обновляем здоровье
+    const status = player.status || {};
+
     const healthBar = document.getElementById('health-bar');
     const healthText = document.getElementById('health-text');
     if (healthBar || healthText) {
-        const hp = player.hp || player.health || 100;
-        const maxHp = player.max_hp || player.maxHealth || 100;
+        const hp = status.health ?? player.hp ?? player.health ?? 100;
+        const maxHp = status.max_health ?? player.max_hp ?? player.maxHealth ?? 100;
         const percent = Math.max(0, Math.min(100, (hp / maxHp) * 100));
         if (healthBar) healthBar.style.width = percent + '%';
         if (healthText) healthText.textContent = `${Math.floor(hp)}/${maxHp}`;
-    }
-    
-    // Обновляем энергию
-    const energyBar = document.getElementById('energy-bar');
-    const energyText = document.getElementById('energy-text');
-    if (energyBar || energyText) {
-        const energy = player.energy || 100;
-        const maxEnergy = player.max_energy || player.maxEnergy || 100;
-        const percent = Math.max(0, Math.min(100, (energy / maxEnergy) * 100));
-        if (energyBar) energyBar.style.width = percent + '%';
-        if (energyText) energyText.textContent = `${Math.floor(energy)}/${maxEnergy}`;
     }
     
     // Обновляем монеты
@@ -219,8 +210,6 @@ function renderMain() {
     if (locationDanger) locationDanger.textContent = location.danger_level || 1;
     
     // Обновляем дебаффы
-    const status = player.status || {};
-    
     // Радиация
     const radiationValue = document.getElementById('radiation-value');
     const radiationBar = document.getElementById('debuff-radiation-bar');
@@ -282,19 +271,8 @@ function renderMain() {
         debuffsPanel.style.display = hasDebuffs ? 'block' : 'none';
     }
     
-    // Обновляем кнопку поиска (доступность)
-    const playerEnergy = gameState?.player?.energy ?? 0;
-    const searchBtn = document.getElementById('search-btn');
-    if (searchBtn) {
-        searchBtn.disabled = playerEnergy < 1;
-        searchBtn.style.opacity = playerEnergy < 1 ? '0.5' : '1';
-    }
-    
-    // Обновляем кнопку удачного поиска (доступность)
-    const luckySearchBtn = document.getElementById('lucky-search-btn');
-    if (luckySearchBtn) {
-        luckySearchBtn.disabled = playerEnergy < 2;
-        luckySearchBtn.style.opacity = playerEnergy < 2 ? '0.5' : '1';
+    if (typeof refreshPlayerEnergyUI === 'function') {
+        refreshPlayerEnergyUI();
     }
     
     console.log('[renderMain] Главный экран обновлён');

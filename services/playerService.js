@@ -5,8 +5,13 @@
 
 const db = require('../db/players');
 const { getExpForLevel } = require('../utils/gameConstants');
-const { logger } = require('../utils/serverApi');
 const { transaction: tx } = require('../db/database');
+
+// Используем локальный логгер, чтобы не создавать циклическую зависимость
+// между сервисом игроков и серверными утилитами.
+const logger = {
+    info: (...args) => console.info(...args)
+};
 
 /**
  * Получить игрока по ID
@@ -120,7 +125,7 @@ async function incrementActions(playerId) {
 
 /**
  * Регенерировать энергию
- * Восстанавливает энергию по времени (1 единица каждые 3 минуты)
+ * Восстанавливает энергию по времени (1 единица каждую минуту)
  * @param {number} playerId - ID игрока
  * @returns {Promise<object>} Результат с количеством восстановленной энергии
  */
@@ -129,25 +134,25 @@ async function regenerateEnergy(playerId) {
         throw { message: 'Некорректный ID игрока', code: 'INVALID_PLAYER_ID', statusCode: 400 };
     }
     
-    return await tx(async () => {
+    return await tx(async (client) => {
         // Блокируем строку игрока
-        const lockedPlayer = await db.lockPlayer(playerId);
+        const lockedPlayer = await db.lockPlayer(playerId, client);
         
         if (!lockedPlayer) {
             throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
         }
         
         const now = new Date();
-        const lastUpdate = new Date(lockedPlayer.last_energy_regen || lockedPlayer.updated_at);
+        const lastUpdate = new Date(lockedPlayer.last_energy_update || lockedPlayer.updated_at);
         const minutesPassed = Math.floor((now - lastUpdate) / 60000);
         
-        // 1 энергия каждые 3 минуты
-        const energyRestored = Math.floor(minutesPassed / 3);
+        // 1 энергия каждую минуту
+        const energyRestored = minutesPassed;
         
         if (energyRestored > 0 && lockedPlayer.energy < lockedPlayer.max_energy) {
             const actualRestored = Math.min(energyRestored, lockedPlayer.max_energy - lockedPlayer.energy);
             
-            await db.updatePlayerEnergyNoLevelUp(playerId, actualRestored);
+            await db.updatePlayerEnergy(playerId, actualRestored, { client, updateTimestamp: true });
             
             await db.logPlayerAction(playerId, 'regenerate_energy', { restored: actualRestored });
             

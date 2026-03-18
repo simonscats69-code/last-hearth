@@ -757,10 +757,13 @@ function formatTime(ms) {
  * Вызывается каждую секунду
  */
 function updateEnergyTimer() {
-    const player = gameState?.player;
-    if (!player?.status) return;
+    const status = typeof getEffectivePlayerStatus === 'function'
+        ? getEffectivePlayerStatus()
+        : gameState?.player?.status;
+
+    if (!status) return;
     
-    const { energy, max_energy, last_energy_update } = player.status;
+    const { energy, max_energy, last_energy_update } = status;
     
     // Если энергия полная - скрываем таймер
     if (energy >= max_energy) {

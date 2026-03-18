@@ -120,10 +120,14 @@ router.get('/clans', async (req, res) => {
         const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
         
         const result = await query(
-            `SELECT c.id, c.name, c.leader_id, c.level, c.members_count,
-                    COALESCE(SUM(p.level), 0) as total_levels,
-                    COUNT(*) OVER() as total_clans
-             FROM clans c
+            `SELECT c.id,
+                    c.name,
+                    c.leader_id,
+                    c.level,
+                    (SELECT COUNT(*) FROM players p2 WHERE p2.clan_id = c.id) AS members_count,
+                     COALESCE(SUM(p.level), 0) as total_levels,
+                     COUNT(*) OVER() as total_clans
+              FROM clans c
              LEFT JOIN players p ON p.clan_id = c.id
              GROUP BY c.id
              ORDER BY c.level DESC, total_levels DESC

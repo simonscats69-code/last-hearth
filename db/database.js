@@ -5,12 +5,18 @@
 
 const { Pool } = require('pg');
 
-// Локальная переменная для логгера - инициализируется позже
-let logger;
+// Локальная переменная для логгера - инициализируется позже.
+// До инициализации используем безопасный fallback, чтобы модуль не падал
+// при ранних ошибках и прямом запуске.
+let logger = {
+    info: (...args) => console.log(...args),
+    warn: (...args) => console.warn(...args),
+    error: (...args) => console.error(...args)
+};
 
 // Функция для установки логгера после инициализации
 function setLogger(log) {
-    logger = log;
+    logger = log || logger;
 }
 
 // Инициализация БД - вызывать при старте приложения
@@ -696,18 +702,20 @@ async function changeReferralCode(playerId, newCode) {
         return { success: false, error: 'Вы уже меняли реферальный код' };
     }
     
+    const normalizedCode = String(newCode || '').trim().toUpperCase();
+    const codeWithPrefix = normalizedCode.startsWith('LH-') ? normalizedCode : `LH-${normalizedCode}`;
     const codePattern = /^LH-[A-Z0-9]{8}$/;
-    if (!codePattern.test(newCode)) {
+    if (!codePattern.test(codeWithPrefix)) {
         return { success: false, error: 'Неверный формат кода. Пример: LH-ABCD1234' };
     }
     
-    const exists = await queryOne('SELECT id FROM players WHERE referral_code = $1 AND id != $2', [newCode, playerId]);
+    const exists = await queryOne('SELECT id FROM players WHERE referral_code = $1 AND id != $2', [codeWithPrefix, playerId]);
     if (exists) {
         return { success: false, error: 'Этот код уже используется' };
     }
     
-    await query('UPDATE players SET referral_code = $1, referral_code_changed = true WHERE id = $2', [newCode, playerId]);
-    return { success: true, code: newCode };
+    await query('UPDATE players SET referral_code = $1, referral_code_changed = true WHERE id = $2', [codeWithPrefix, playerId]);
+    return { success: true, code: codeWithPrefix };
 }
 
 async function applyReferralCode(playerId, referralCode) {
@@ -780,71 +788,100 @@ async function checkReferralLevelBonuses(referredPlayerId, newLevel) {
     const referred = await queryOne('SELECT referred_by FROM players WHERE id = $1', [referredPlayerId]);
     if (!referred || !referred.referred_by) return bonuses;
     
-    // referred_by теперь хранит id реферера, а не telegram_id
     const referrerId = referred.referred_by;
     const levels = [
         { lvl: 5, bonus: { coins: 100 }, col: 'level_5_bonus' },
         { lvl: 10, bonus: { coins: 200, stars: 5 }, col: 'level_10_bonus' },
         { lvl: 20, bonus: { coins: 500, stars: 10 }, col: 'level_20_bonus' }
     ];
+    const allowedColumns = ['level_5_bonus', 'level_10_bonus', 'level_20_bonus'];
     
     for (const { lvl, bonus, col } of levels) {
-        if (newLevel >= lvl) {
-            const allowedColumns = ['level_5_bonus', 'level_10_bonus', 'level_20_bonus'];
-            if (!allowedColumns.includes(col)) {
-                continue;
-            }
-            
-            const referral = await queryOne(`SELECT ${col} FROM referrals WHERE referrer_id = $1 AND referred_id = $2`, [referrerId, referredPlayerId]);
-            if (referral && !referral[col]) {
-                let updateQuery;
-                let params;
-                
-                if (bonus.coins && bonus.stars) {
-                    updateQuery = 'UPDATE players SET coins = coins + $1, stars = stars + $2 WHERE telegram_id = $3';
-                    params = [bonus.coins, bonus.stars, referrerTelegramId];
-                } else if (bonus.coins) {
-                    updateQuery = 'UPDATE players SET coins = coins + $1 WHERE telegram_id = $2';
-                    params = [bonus.coins, referrerTelegramId];
-                } else {
-                    updateQuery = 'UPDATE players SET stars = stars + $1 WHERE telegram_id = $2';
-                    params = [bonus.stars, referrerTelegramId];
-                }
-                
-                await query(updateQuery, params);
-                await query(`UPDATE referrals SET ${col} = true, ${col}_claimed_at = NOW() WHERE referrer_id = $1 AND referred_id = $2`, [referrerTelegramId, referredPlayerId]);
-                bonuses.push({ level: lvl, bonus });
-            }
+        if (newLevel < lvl || !allowedColumns.includes(col)) {
+            continue;
         }
+
+        const referral = await queryOne(
+            `SELECT ${col} FROM referrals WHERE referrer_id = $1 AND referred_id = $2`,
+            [referrerId, referredPlayerId]
+        );
+
+        if (!referral || referral[col]) {
+            continue;
+        }
+
+        if (bonus.coins && bonus.stars) {
+            await query(
+                'UPDATE players SET coins = coins + $1, stars = stars + $2 WHERE id = $3',
+                [bonus.coins, bonus.stars, referrerId]
+            );
+        } else if (bonus.coins) {
+            await query(
+                'UPDATE players SET coins = coins + $1 WHERE id = $2',
+                [bonus.coins, referrerId]
+            );
+        } else if (bonus.stars) {
+            await query(
+                'UPDATE players SET stars = stars + $1 WHERE id = $2',
+                [bonus.stars, referrerId]
+            );
+        }
+
+        await query(
+            `UPDATE referrals SET ${col} = true, ${col}_claimed_at = NOW() WHERE referrer_id = $1 AND referred_id = $2`,
+            [referrerId, referredPlayerId]
+        );
+
+        bonuses.push({ level: lvl, bonus });
     }
+
     return bonuses;
 }
 
-async function getReferralsList(telegramId) {
+async function getReferralsList(playerId) {
     const referrals = await queryAll(`
-        SELECT r.id, r.referred_id, r.created_at, r.level_5_bonus, r.level_10_bonus, r.level_20_bonus,
+        SELECT r.id,
+               r.referred_id,
+               r.created_at AS joined_at,
+               r.level_5_bonus,
+               r.level_10_bonus,
+               r.level_20_bonus,
                p.first_name, p.username, p.level, p.experience
         FROM referrals r
-        JOIN players p ON r.referred_id = p.telegram_id
+        JOIN players p ON r.referred_id = p.id
         WHERE r.referrer_id = $1
         ORDER BY r.created_at DESC
-    `, [telegramId]);
-    return referrals;
+    `, [playerId]);
+
+    return referrals.map((referral) => ({
+        id: referral.id,
+        referred_id: referral.referred_id,
+        joined_at: referral.joined_at,
+        first_name: referral.first_name,
+        username: referral.username,
+        level: referral.level,
+        experience: referral.experience,
+        bonuses: {
+            level_5: referral.level_5_bonus,
+            level_10: referral.level_10_bonus,
+            level_20: referral.level_20_bonus
+        }
+    }));
 }
 
-async function getReferralStats(telegramId) {
+async function getReferralStats(playerId) {
     const totalReferrals = await queryOne(
         'SELECT COUNT(*) as count FROM referrals WHERE referrer_id = $1',
-        [telegramId]
+        [playerId]
     );
     
     const referrals = await queryAll(`
         SELECT p.level, 
                r.level_5_bonus, r.level_10_bonus, r.level_20_bonus
         FROM referrals r
-        JOIN players p ON r.referred_id = p.telegram_id
+        JOIN players p ON r.referred_id = p.id
         WHERE r.referrer_id = $1
-    `, [telegramId]);
+    `, [playerId]);
     
     let totalCoins = 0;
     let totalStars = 0;

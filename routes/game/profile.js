@@ -17,6 +17,7 @@ const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
 const { getExpForLevel, getTotalExpForLevel } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { buildPlayerStatus, normalizeInventory } = require('../../utils/playerState');
 
 /**
  * Валидация Telegram ID
@@ -48,8 +49,9 @@ router.get('/', async (req, res) => {
         
         // Получаем профиль игрока
         const player = await queryOne(`
-            SELECT p.*, l.name as location_name, l.radiation as location_radiation,
-                   p.last_energy_update as last_energy_update
+            SELECT p.*, l.name as location_name, l.description as location_description,
+                   l.radiation as location_radiation, l.danger_level as location_danger_level,
+                   l.icon as location_icon, p.last_energy_update as last_energy_update
             FROM players p
             LEFT JOIN locations l ON p.current_location_id = l.id
             WHERE p.telegram_id = $1
@@ -76,24 +78,11 @@ router.get('/', async (req, res) => {
         const expPercent = Math.min(100, Math.floor((player.experience / expNeeded) * 100));
         const totalExpForNext = getTotalExpForLevel(player.level) + expNeeded;
 
-        // Safe JSON parsing для infections
-        const infectionsList = safeJsonParse(player.infections, []);
-        // Парсим radiation (может быть old INTEGER или new JSONB)
-        let radiationLevel = 0;
-        if (player.radiation) {
-            if (typeof player.radiation === 'object') {
-                radiationLevel = player.radiation.level || 0;
-            } else if (typeof player.radiation === 'number') {
-                radiationLevel = player.radiation;
-            }
-        }
-        // Вычисляем общий уровень инфекций
-        const infectionLevel = infectionsList.reduce((sum, i) => sum + (i.level || 0), 0);
-        
         // Safe JSON parsing для inventory и equipment
-        const inventory = safeJsonParse(player.inventory, []);
+        const inventory = normalizeInventory(player.inventory);
         const equipment = safeJsonParse(player.equipment, {});
         const base = safeJsonParse(player.base, {});
+        const status = buildPlayerStatus(player);
 
         // Логируем действие
         logger.info(`[profile] Просмотр профиля`, {
@@ -128,21 +117,14 @@ router.get('/', async (req, res) => {
                     luck: player.luck,
                     crafting: player.crafting || 1
                 },
-                status: {
-                    health: player.health,
-                    max_health: player.max_health,
-                    radiation: radiationLevel,
-                    fatigue: player.fatigue,
-                    energy: player.energy,
-                    max_energy: player.max_energy,
-                    infections: infectionLevel,
-                    infections_list: infectionsList,
-                    last_energy_update: player.last_energy_update
-                },
+                status,
                 location: {
                     id: player.current_location_id,
                     name: player.location_name,
-                    radiation: player.location_radiation
+                    description: player.location_description,
+                    radiation: player.location_radiation,
+                    danger_level: player.location_danger_level,
+                    icon: player.location_icon || '🏠'
                 },
                 inventory: inventory,
                 equipment: equipment,

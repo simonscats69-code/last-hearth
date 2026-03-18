@@ -154,6 +154,118 @@ async function loadProfile() {
     
     // Обновляем UI
     updateProfileUI(data);
+    refreshPlayerEnergyUI();
+}
+
+const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
+
+function ensurePlayerStatus() {
+    if (!gameState.player) {
+        gameState.player = {};
+    }
+
+    if (!gameState.player.status) {
+        gameState.player.status = {};
+    }
+
+    return gameState.player.status;
+}
+
+function getEffectivePlayerStatus() {
+    const status = ensurePlayerStatus();
+    const maxEnergy = Number(status.max_energy ?? gameState.player.max_energy ?? 0);
+    const currentEnergy = Number(status.energy ?? gameState.player.energy ?? 0);
+
+    status.max_energy = maxEnergy;
+    status.energy = currentEnergy;
+
+    if (status.last_energy_update && currentEnergy < maxEnergy) {
+        const lastUpdateTime = new Date(status.last_energy_update).getTime();
+
+        if (Number.isFinite(lastUpdateTime)) {
+            const elapsedTicks = Math.floor((Date.now() - lastUpdateTime) / ENERGY_REGEN_INTERVAL_MS);
+
+            if (elapsedTicks > 0) {
+                const restored = Math.min(elapsedTicks, maxEnergy - currentEnergy);
+                status.energy = currentEnergy + restored;
+                status.last_energy_update = new Date(lastUpdateTime + (elapsedTicks * ENERGY_REGEN_INTERVAL_MS)).toISOString();
+            }
+        }
+    }
+
+    gameState.player.energy = status.energy;
+    gameState.player.max_energy = status.max_energy;
+
+    return status;
+}
+
+function syncPlayerEnergyState(energy, maxEnergy, lastEnergyUpdate = null) {
+    const status = ensurePlayerStatus();
+
+    if (energy !== undefined && energy !== null) {
+        status.energy = Number(energy);
+        gameState.player.energy = status.energy;
+    }
+
+    if (maxEnergy !== undefined && maxEnergy !== null) {
+        status.max_energy = Number(maxEnergy);
+        gameState.player.max_energy = status.max_energy;
+    }
+
+    if (lastEnergyUpdate) {
+        status.last_energy_update = lastEnergyUpdate;
+    }
+
+    return status;
+}
+
+function updateSearchButtonsState() {
+    const status = getEffectivePlayerStatus();
+    const canNormalSearch = status.energy >= 1 && !actionLocks.searchLoot;
+    const canLuckySearch = status.energy >= 2 && !actionLocks.searchLoot;
+
+    const searchBtn = document.getElementById('search-btn');
+    if (searchBtn) {
+        searchBtn.disabled = !canNormalSearch;
+        searchBtn.style.opacity = canNormalSearch ? '1' : '0.5';
+    }
+
+    const luckySearchBtn = document.getElementById('lucky-search-btn');
+    if (luckySearchBtn) {
+        luckySearchBtn.disabled = !canLuckySearch;
+        luckySearchBtn.style.opacity = canLuckySearch ? '1' : '0.5';
+    }
+}
+
+function renderEnergyIndicators() {
+    const status = getEffectivePlayerStatus();
+    const maxEnergy = status.max_energy || 1;
+    const currentEnergy = status.energy || 0;
+    const percent = Math.max(0, Math.min(100, (currentEnergy / maxEnergy) * 100));
+
+    const mainEnergyText = document.getElementById('energy-text');
+    if (mainEnergyText) {
+        mainEnergyText.textContent = `${Math.floor(currentEnergy)}/${maxEnergy}`;
+    }
+
+    const mainEnergyBar = document.getElementById('energy-bar');
+    if (mainEnergyBar) {
+        mainEnergyBar.style.width = `${percent}%`;
+    }
+
+    const bossEnergyText = document.getElementById('boss-energy-text');
+    if (bossEnergyText) {
+        bossEnergyText.textContent = `${Math.floor(currentEnergy)}/${maxEnergy}`;
+    }
+}
+
+function refreshPlayerEnergyUI() {
+    renderEnergyIndicators();
+    updateSearchButtonsState();
+
+    if (typeof updateEnergyTimer === 'function') {
+        updateEnergyTimer();
+    }
 }
 
 /**
@@ -182,14 +294,7 @@ async function updateProfileUI(player) {
         healthBar.style.width = `${((status.health || 0) / (status.max_health || 100)) * 100}%`;
     }
     
-    const energyText = document.getElementById('energy-text');
-    const energyBar = document.getElementById('energy-bar');
-    if (energyText) {
-        energyText.textContent = `${status.energy || 0}/${status.max_energy || 100}`;
-    }
-    if (energyBar) {
-        energyBar.style.width = `${((status.energy || 0) / (status.max_energy || 100)) * 100}%`;
-    }
+    refreshPlayerEnergyUI();
     
     // Статусы
     const radiationValue = document.getElementById('radiation-value');
@@ -263,8 +368,9 @@ function updateConditionsUI(status) {
  * Загрузка списка локаций
  */
 async function loadLocations() {
-    const data = await apiRequest('/api/game/locations');
-    gameState.locations = data.locations;
+    const response = await apiRequest('/api/game/locations');
+    const data = response.data || response;
+    gameState.locations = data.locations || [];
 }
 
 /**
@@ -276,11 +382,15 @@ async function searchLoot(useLuckySearch = false) {
     if (actionLocks.searchLoot) return;
     actionLocks.searchLoot = true;
     
-    const btn = document.getElementById('search-btn');
-    if (btn) {
-        btn.disabled = true;
-        btn.classList.add('shake');
-    }
+    const searchBtn = document.getElementById('search-btn');
+    const luckySearchBtn = document.getElementById('lucky-search-btn');
+
+    [searchBtn, luckySearchBtn].forEach((button) => {
+        if (button) {
+            button.disabled = true;
+            button.classList.add('shake');
+        }
+    });
     
     try {
         const result = await apiRequest('/api/game/locations/search', {
@@ -305,12 +415,12 @@ async function searchLoot(useLuckySearch = false) {
             
             // Обновляем энергию в UI
             if (result.energy) {
-                if (!gameState.player.status) gameState.player.status = {};
-                gameState.player.status.energy = result.energy.current;
-                gameState.player.status.max_energy = result.energy.max;
-                gameState.player.status.last_energy_update = new Date().toISOString();
-                updateEnergyDisplay();
-                updateEnergyTimer();
+                syncPlayerEnergyState(
+                    result.energy.current,
+                    result.energy.max,
+                    result.energy.last_update || null
+                );
+                refreshPlayerEnergyUI();
             }
             
             // Обновляем радиацию после поиска (всегда, не только при увеличении)
@@ -339,11 +449,13 @@ async function searchLoot(useLuckySearch = false) {
         console.error('Search error:', error);
         showModal('❌ Ошибка', 'Не удалось выполнить поиск');
     } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.classList.remove('shake');
-        }
+        [searchBtn, luckySearchBtn].forEach((button) => {
+            if (button) {
+                button.classList.remove('shake');
+            }
+        });
         actionLocks.searchLoot = false;
+        refreshPlayerEnergyUI();
     }
 }
 
@@ -352,13 +464,14 @@ async function searchLoot(useLuckySearch = false) {
  */
 async function moveToLocation(locationId) {
     try {
-        const result = await apiRequest('/api/game/locations/move', {
+        const response = await apiRequest('/api/game/locations/move', {
             method: 'POST',
             body: { location_id: locationId }
         });
+        const result = response.data || response;
         
         if (result.success) {
-            gameState.player.current_location_id = locationId;
+            gameState.player.current_location_id = result.location?.id || locationId;
             gameState.player.location = result.location;
             updateProfileUI(gameState.player);
             showScreen('main');
@@ -376,39 +489,7 @@ async function moveToLocation(locationId) {
  * Теперь также рассчитывает восстановление энергии на клиенте
  */
 function updateEnergyDisplay() {
-    if (!gameState.player || !gameState.player.status) return;
-    
-    const status = gameState.player.status;
-    const maxEnergy = status.max_energy || 50;
-    const lastUpdate = status.last_energy_update;
-    
-    // Рассчитываем восстановление энергии на клиенте
-    let currentEnergy = status.energy || 0;
-    
-    if (lastUpdate && currentEnergy < maxEnergy) {
-        const lastUpdateTime = new Date(lastUpdate).getTime();
-        const now = Date.now();
-        const timePassedMs = now - lastUpdateTime;
-        const timePassedMinutes = Math.floor(timePassedMs / 60000);
-        
-        // 1 энергия в минуту
-        if (timePassedMinutes > 0) {
-            currentEnergy = Math.min(maxEnergy, currentEnergy + timePassedMinutes);
-            status.energy = currentEnergy;
-        }
-    }
-    
-    // Обновляем текст энергии
-    const energyText = document.getElementById('energy-text');
-    if (energyText) {
-        energyText.textContent = `${currentEnergy}/${maxEnergy}`;
-    }
-    
-    // Обновляем прогресс-бар энергии
-    const energyBar = document.getElementById('energy-bar');
-    if (energyBar) {
-        energyBar.style.width = `${(currentEnergy / maxEnergy) * 100}%`;
-    }
+    refreshPlayerEnergyUI();
 }
 
 /**
@@ -724,10 +805,11 @@ async function loadBosses() {
         // Обновляем информацию об энергии игрока
         const playerEnergy = data?.data?.player_energy ?? data?.player_energy;
         if (playerEnergy !== undefined) {
-            if (!gameState.player) gameState.player = {};
-            if (!gameState.player.status) gameState.player.status = {};
-            gameState.player.status.energy = playerEnergy;
-            gameState.player.status.max_energy = data?.data?.player_max_energy ?? data?.player_max_energy ?? 100;
+            syncPlayerEnergyState(
+                playerEnergy,
+                data?.data?.player_max_energy ?? data?.player_max_energy ?? 100
+            );
+            refreshPlayerEnergyUI();
         }
         
         renderBosses(gameState.bosses);
@@ -906,7 +988,7 @@ async function attackBoss() {
     }
     
     try {
-        const result = await apiRequest('/game/attack-boss', {
+        const result = await apiRequest('/api/game/bosses/attack-boss', {
             method: 'POST',
             body: { boss_id: gameState.currentBoss.id }
         });
@@ -934,16 +1016,11 @@ async function attackBoss() {
             if (bossHealthText) bossHealthText.textContent = `${result.boss_hp}/${result.boss_max_hp}`;
             
             // Обновляем энергию игрока
-            const energyText = document.getElementById('energy-text');
-            const energyBar = document.getElementById('energy-bar');
-            const energyUsed = document.getElementById('energy-used');
-            
-            if (energyText && gameState.player?.status) {
-                energyText.textContent = `${result.player_energy}/${gameState.player.status.max_energy}`;
-            }
-            if (energyBar && gameState.player?.status) {
-                energyBar.style.width = `${(result.player_energy / gameState.player.status.max_energy) * 100}%`;
-            }
+            const energyUsed = document.getElementById('boss-energy-used');
+
+            syncPlayerEnergyState(result.player_energy, gameState.player?.status?.max_energy);
+            refreshPlayerEnergyUI();
+
             if (energyUsed) {
                 energyUsed.textContent = '-1';
                 energyUsed.classList.add('show');
@@ -1737,6 +1814,8 @@ async function restoreEnergy() {
         });
         
         if (result.success) {
+            syncPlayerEnergyState(result.energy, result.max_energy, result.last_energy_update || null);
+            refreshPlayerEnergyUI();
             await loadProfile();
             showModal('✅ Успех', `Энергия восстановлена! (-${result.stars_spent} ⭐)`);
         }
@@ -1838,8 +1917,9 @@ async function watchAd() {
                 const status = gameState.player.status;
                 const maxEnergy = status.max_energy || 100;
                 const currentEnergy = status.energy || 0;
-                status.energy = Math.min(maxEnergy, currentEnergy + 20);
+                syncPlayerEnergyState(Math.min(maxEnergy, currentEnergy + 20), maxEnergy, new Date().toISOString());
                 updateProfileUI(gameState.player);
+                refreshPlayerEnergyUI();
                 showModal('✅ Награда', '+20 энергии за просмотр рекламы!');
             },
             onError: (error) => {
@@ -1872,7 +1952,7 @@ async function healInfections() {
     try {
         const result = await apiRequest('/api/game/status/heal', {
             method: 'POST',
-            body: { type: 'infection', use_stars: false }
+            body: { type: 'debuff', use_stars: false }
         });
         
         if (result.success) {

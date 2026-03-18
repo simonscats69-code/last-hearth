@@ -22,6 +22,17 @@ const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, badRequest
 
 const { pool } = require('../../db/database');
 
+function generateClanInviteCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = 'CL-';
+
+    for (let i = 0; i < 6; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+
+    return code;
+}
+
 // ============================================================================
 // Маршруты
 // ============================================================================
@@ -75,11 +86,19 @@ router.get('/clan', wrap(async (req, res) => {
     
     ok(res, {
         in_clan: true,
+        is_leader: player.clan_role === 'leader',
         clan: { 
             id: data.id, 
             name: data.name, 
             description: data.description, 
             leader_id: data.leader_id, 
+            level: Number(data.level || 1),
+            coins: Number(data.coins || 0),
+            loot_bonus: Number(data.loot_bonus || 0),
+            invite_code: data.invite_code || '—',
+            is_open: data.is_open !== false,
+            is_public: data.is_public !== false,
+            total_members: Number(data.members_count || data.total_members || 0),
             members_count: Number(data.members_count || 0), 
             total_donated: data.total_donated, 
             created_at: data.created_at 
@@ -96,7 +115,8 @@ router.get('/clan', wrap(async (req, res) => {
 router.post('/clan/create', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
-    const { name, description = '' } = req.body;
+    const { name, description = '', is_public = true } = req.body;
+    const inviteCode = generateClanInviteCode();
     
     // Валидация имени клана
     const nameValidation = sanitizeName(name, 30);
@@ -123,9 +143,9 @@ router.post('/clan/create', wrap(async (req, res) => {
         }
 
         const insertResult = await query(
-            `INSERT INTO clans (name, description, leader_id, created_at) 
-             VALUES ($1, $2, $3, NOW()) RETURNING id`,
-            [nameValidation.value, String(description).slice(0, 200), lockedPlayer.telegram_id]
+            `INSERT INTO clans (name, description, leader_id, created_at, is_open, is_public, invite_code) 
+             VALUES ($1, $2, $3, NOW(), $4, $4, $5) RETURNING id`,
+            [nameValidation.value, String(description).slice(0, 200), lockedPlayer.telegram_id, Boolean(is_public), inviteCode]
         );
         const clanId = insertResult.rows[0].id;
         
@@ -177,7 +197,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         return notFound(res, 'Клан не найден', 'CLAN_NOT_FOUND');
     }
     
-    if (!clan.is_open) {
+    if (clan.is_open === false) {
         return fail(res, 'Клан закрытый', 'CLAN_CLOSED');
     }
     
@@ -271,6 +291,7 @@ router.post('/clan/leave', wrap(async (req, res) => {
  */
 router.get('/', wrap(async (req, res) => {
     const playerId = req.player?.id;
+    const search = String(req.query.search || '').trim();
     
     // Пагинация
     let limit = parseInt(req.query.limit) || 20;
@@ -280,16 +301,28 @@ router.get('/', wrap(async (req, res) => {
     offset = Math.max(0, offset);
 
     // Получаем общее количество
-    const countResult = await queryOne(`SELECT COUNT(*) as total FROM clans`);
+    const searchPattern = `%${search}%`;
+
+    const countResult = await queryOne(
+        `SELECT COUNT(*) as total
+         FROM clans c
+         WHERE $1 = '%%'
+            OR c.name ILIKE $1
+            OR c.description ILIKE $1`,
+        [searchPattern]
+    );
     const total = parseInt(countResult?.total || 0);
 
     // Получаем кланы с пагинацией
     const clans = await queryAll(`
         SELECT c.*, (SELECT COUNT(*) FROM players WHERE clan_id = c.id) AS members_count 
         FROM clans c 
+        WHERE $3 = '%%'
+           OR c.name ILIKE $3
+           OR c.description ILIKE $3
         ORDER BY c.total_donated DESC 
         LIMIT $1 OFFSET $2
-    `, [limit, offset]);
+    `, [limit, offset, searchPattern]);
 
     // Логируем
     await logPlayerAction(pool, playerId, 'view_clans', {
@@ -303,6 +336,8 @@ router.get('/', wrap(async (req, res) => {
             id: c.id, 
             name: c.name, 
             description: c.description, 
+            level: Number(c.level || 1),
+            member_count: Number(c.members_count),
             members_count: Number(c.members_count), 
             total_donated: c.total_donated, 
             is_open: c.is_open 
@@ -313,6 +348,35 @@ router.get('/', wrap(async (req, res) => {
             total
         }
     });
+}));
+
+/**
+ * Получение участников клана
+ * GET /clan/members
+ */
+router.get('/clan/members', wrap(async (req, res) => {
+    const player = req.player;
+
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
+
+    const members = await queryAll(`
+        SELECT id, telegram_id, username, first_name, level, clan_role, clan_donated,
+               CASE
+                   WHEN last_action_time IS NOT NULL AND last_action_time > NOW() - INTERVAL '10 minutes' THEN true
+                   ELSE false
+               END AS is_online
+        FROM players
+        WHERE clan_id = $1
+        ORDER BY
+            CASE clan_role WHEN 'leader' THEN 0 WHEN 'officer' THEN 1 ELSE 2 END,
+            level DESC,
+            first_name ASC NULLS LAST,
+            username ASC NULLS LAST
+    `, [player.clan_id]);
+
+    ok(res, { members });
 }));
 
 /**
@@ -329,12 +393,12 @@ router.get('/clan/chat', wrap(async (req, res) => {
     
     try {
         const messages = await queryAll(`
-            SELECT cm.id, cm.message, cm.created_at, 
-                   p.username, p.first_name, p.level, p.avatar_url
-            FROM clan_messages cm
-            JOIN players p ON cm.player_id = p.id
-            WHERE cm.clan_id = $1
-            ORDER BY cm.created_at DESC
+            SELECT cc.id, cc.message, cc.created_at, 
+                   p.username, p.first_name, p.level
+            FROM clan_chat cc
+            JOIN players p ON cc.player_id = p.id
+            WHERE cc.clan_id = $1
+            ORDER BY cc.created_at DESC
             LIMIT 50
         `, [player.clan_id]);
         
@@ -381,7 +445,7 @@ router.post('/clan/chat', wrap(async (req, res) => {
     
     try {
         const result = await query(
-            `INSERT INTO clan_messages (clan_id, player_id, message, created_at)
+            `INSERT INTO clan_chat (clan_id, player_id, message, created_at)
              VALUES ($1, $2, $3, NOW())
              RETURNING id, created_at`,
             [player.clan_id, playerId, trimmedMessage]

@@ -70,7 +70,8 @@ async function createTables() {
             referral_code VARCHAR(20),
             referral_code_changed BOOLEAN DEFAULT false,
             referred_by INTEGER,
-            referral_bonus_claimed BOOLEAN DEFAULT false
+            referral_bonus_claimed BOOLEAN DEFAULT false,
+            clan_donated INTEGER DEFAULT 0
         );
     `);
 
@@ -182,10 +183,12 @@ async function createTables() {
             experience INTEGER DEFAULT 0,
             coins INTEGER DEFAULT 0,
             is_public BOOLEAN DEFAULT true,
+            is_open BOOLEAN DEFAULT true,
             invite_code VARCHAR(20) UNIQUE,
             total_members INTEGER DEFAULT 1,
             bosses_killed INTEGER DEFAULT 0,
             loot_bonus INTEGER DEFAULT 0,
+            total_donated INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
         );
@@ -273,7 +276,7 @@ async function createTables() {
             id SERIAL PRIMARY KEY,
             boss_id INTEGER REFERENCES bosses(id),
             player_id INTEGER REFERENCES players(id),
-            raid_id INTEGER REFERENCES raid_progress(id),
+            raid_id INTEGER,
             damage_dealt INTEGER DEFAULT 0,
             rewards_earned BOOLEAN DEFAULT false,
             joined_at TIMESTAMP DEFAULT NOW(),
@@ -440,7 +443,7 @@ async function createTables() {
         CREATE TABLE IF NOT EXISTS referrals (
             id SERIAL PRIMARY KEY,
             referrer_id INTEGER NOT NULL,
-            referred_id BIGINT NOT NULL,
+            referred_id INTEGER NOT NULL,
             bonus_claimed BOOLEAN DEFAULT false,
             created_at TIMESTAMP DEFAULT NOW(),
             level_5_bonus BOOLEAN DEFAULT false,
@@ -646,7 +649,10 @@ async function createTables() {
     await query(`
         DO $do$
         BEGIN
-            IF NOT EXISTS (
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'referrals' AND column_name = 'referrer_id' AND data_type = 'integer'
+            ) AND NOT EXISTS (
                 SELECT 1 FROM information_schema.table_constraints 
                 WHERE constraint_name = 'fk_referrals_referrer'
             ) THEN
@@ -660,7 +666,10 @@ async function createTables() {
     await query(`
         DO $do$
         BEGIN
-            IF NOT EXISTS (
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'referrals' AND column_name = 'referred_id' AND data_type = 'integer'
+            ) AND NOT EXISTS (
                 SELECT 1 FROM information_schema.table_constraints 
                 WHERE constraint_name = 'fk_referrals_referred'
             ) THEN
@@ -702,11 +711,55 @@ async function runMigrations() {
         END $do$
     `);
 
-    // Миграция: добавить колонки в таблицу bosses
+    // Миграции для players - клановые поля
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS clan_donated INTEGER DEFAULT 0`);
+
+    // Миграции для bosses - доводим старые инсталляции до актуальной схемы
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS max_health INTEGER DEFAULT 100`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS damage INTEGER DEFAULT 10`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS reward_experience INTEGER DEFAULT 100`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS reward_coins INTEGER DEFAULT 50`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS reward_items JSONB DEFAULT '[]'`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS key_drop_chance REAL DEFAULT 0.5`);
     await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS required_key_id INTEGER`);
     await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS keys_required INTEGER DEFAULT 1`);
     await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS is_group_boss BOOLEAN DEFAULT false`);
     await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS min_clan_level INTEGER DEFAULT 1`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS icon VARCHAR(50)`);
+    await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)`);
+
+    // Миграции для clans - поля уже используются API и фронтендом
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS experience INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS coins INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT true`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS is_open BOOLEAN DEFAULT true`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS invite_code VARCHAR(20)`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS total_members INTEGER DEFAULT 1`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS bosses_killed INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS loot_bonus INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS total_donated INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`);
+    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+
+    // Миграция: добавить FK для boss_sessions.raid_id после создания raid_progress
+    await query(`
+        DO $do$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'boss_sessions' AND column_name = 'raid_id'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE constraint_name = 'fk_boss_sessions_raid'
+            ) THEN
+                ALTER TABLE boss_sessions
+                ADD CONSTRAINT fk_boss_sessions_raid
+                FOREIGN KEY (raid_id) REFERENCES raid_progress(id) ON DELETE SET NULL;
+            END IF;
+        END $do$
+    `);
 
     // Миграции для players - метки времени
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`);
@@ -756,6 +809,19 @@ async function runMigrations() {
         END $do$
     `);
 
+    // Миграция: преобразование referred_id в referrals из BIGINT в INTEGER
+    await query(`
+        DO $do$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'referrals' AND column_name = 'referred_id' AND data_type = 'bigint'
+            ) THEN
+                ALTER TABLE referrals ALTER COLUMN referred_id TYPE INTEGER USING referred_id::integer;
+            END IF;
+        END $do$
+    `);
+
     // Миграция: преобразование referrer_id в referrals из BIGINT в INTEGER
     await query(`
         DO $do$
@@ -783,6 +849,40 @@ async function runMigrations() {
         END $do$
     `);
 
+    // Добавить FK для referrer_id после нормализации типов
+    await query(`
+        DO $do$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'referrals' AND column_name = 'referrer_id' AND data_type = 'integer'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE constraint_name = 'fk_referrals_referrer'
+            ) THEN
+                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referrer
+                FOREIGN KEY (referrer_id) REFERENCES players(id) ON DELETE CASCADE;
+            END IF;
+        END $do$
+    `);
+
+    // Добавить FK для referred_id после нормализации типов
+    await query(`
+        DO $do$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'referrals' AND column_name = 'referred_id' AND data_type = 'integer'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE constraint_name = 'fk_referrals_referred'
+            ) THEN
+                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referred
+                FOREIGN KEY (referred_id) REFERENCES players(id) ON DELETE CASCADE;
+            END IF;
+        END $do$
+    `);
+
     // Миграции для таблицы рефералов
     await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_5_bonus BOOLEAN DEFAULT false`);
     await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_10_bonus BOOLEAN DEFAULT false`);
@@ -804,48 +904,57 @@ async function runMigrations() {
     // PostgreSQL не поддерживает синтаксис ADD CONSTRAINT IF NOT EXISTS,
     // поэтому добавляем ограничения через явную проверку в information_schema.
     const checkConstraints = [
-        ['players', 'chk_players_level', 'CHECK (level >= 1)'],
-        ['players', 'chk_players_coins', 'CHECK (coins >= 0)'],
-        ['players', 'chk_players_stars', 'CHECK (stars >= 0)'],
-        ['players', 'chk_players_health', 'CHECK (health >= 0)'],
-        ['players', 'chk_players_max_health', 'CHECK (max_health > 0)'],
-        ['players', 'chk_players_energy', 'CHECK (energy >= 0)'],
-        ['players', 'chk_players_max_energy', 'CHECK (max_energy > 0)'],
-        ['players', 'chk_players_strength', 'CHECK (strength >= 1)'],
-        ['players', 'chk_players_endurance', 'CHECK (endurance >= 1)'],
-        ['players', 'chk_players_agility', 'CHECK (agility >= 1)'],
-        ['players', 'chk_players_intelligence', 'CHECK (intelligence >= 1)'],
-        ['players', 'chk_players_luck', 'CHECK (luck >= 1)'],
-        ['players', 'chk_players_crafting', 'CHECK (crafting >= 1)'],
-        ['players', 'chk_players_pvp_rating', 'CHECK (pvp_rating >= 0)'],
-        ['locations', 'chk_locations_danger_level', 'CHECK (danger_level >= 1 AND danger_level <= 10)'],
-        ['locations', 'chk_locations_radiation', 'CHECK (radiation >= 0)'],
-        ['items', 'chk_items_price', 'CHECK (price >= 0)'],
-        ['items', 'chk_items_rarity', "CHECK (rarity IN ('common', 'uncommon', 'rare', 'epic', 'legendary'))"],
-        ['bosses', 'chk_bosses_level', 'CHECK (level >= 1)'],
-        ['bosses', 'chk_bosses_max_health', 'CHECK (max_health > 0)'],
-        ['bosses', 'chk_bosses_damage', 'CHECK (damage >= 0)'],
-        ['bosses', 'chk_bosses_key_drop', 'CHECK (key_drop_chance >= 0 AND key_drop_chance <= 1)'],
-        ['clans', 'chk_clans_level', 'CHECK (level >= 1)'],
-        ['clans', 'chk_clans_experience', 'CHECK (experience >= 0)'],
-        ['clans', 'chk_clans_coins', 'CHECK (coins >= 0)'],
-        ['clans', 'chk_clans_total_members', 'CHECK (total_members >= 1)'],
-        ['buildings', 'chk_buildings_max_level', 'CHECK (max_level >= 1)'],
-        ['buildings', 'chk_buildings_base_cost', 'CHECK (base_cost_coins >= 0)'],
-        ['crafting_recipes', 'chk_crafting_result_quantity', 'CHECK (result_quantity >= 1)'],
-        ['crafting_recipes', 'chk_crafting_required_level', 'CHECK (required_level >= 1)'],
-        ['crafting_recipes', 'chk_crafting_craft_time', 'CHECK (craft_time >= 1)'],
-        ['daily_tasks', 'chk_daily_tasks_target', 'CHECK (target_value >= 1)'],
-        ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)'],
-        ['market_listings', 'chk_market_price', 'CHECK (price >= 0)'],
-        ['market_listings', 'chk_market_quantity', 'CHECK (quantity >= 1)']
+        ['players', 'chk_players_level', 'CHECK (level >= 1)', ['level']],
+        ['players', 'chk_players_coins', 'CHECK (coins >= 0)', ['coins']],
+        ['players', 'chk_players_stars', 'CHECK (stars >= 0)', ['stars']],
+        ['players', 'chk_players_health', 'CHECK (health >= 0)', ['health']],
+        ['players', 'chk_players_max_health', 'CHECK (max_health > 0)', ['max_health']],
+        ['players', 'chk_players_energy', 'CHECK (energy >= 0)', ['energy']],
+        ['players', 'chk_players_max_energy', 'CHECK (max_energy > 0)', ['max_energy']],
+        ['players', 'chk_players_strength', 'CHECK (strength >= 1)', ['strength']],
+        ['players', 'chk_players_endurance', 'CHECK (endurance >= 1)', ['endurance']],
+        ['players', 'chk_players_agility', 'CHECK (agility >= 1)', ['agility']],
+        ['players', 'chk_players_intelligence', 'CHECK (intelligence >= 1)', ['intelligence']],
+        ['players', 'chk_players_luck', 'CHECK (luck >= 1)', ['luck']],
+        ['players', 'chk_players_crafting', 'CHECK (crafting >= 1)', ['crafting']],
+        ['players', 'chk_players_pvp_rating', 'CHECK (pvp_rating >= 0)', ['pvp_rating']],
+        ['locations', 'chk_locations_danger_level', 'CHECK (danger_level >= 1 AND danger_level <= 10)', ['danger_level']],
+        ['locations', 'chk_locations_radiation', 'CHECK (radiation >= 0)', ['radiation']],
+        ['items', 'chk_items_price', 'CHECK (price >= 0)', ['price']],
+        ['items', 'chk_items_rarity', "CHECK (rarity IN ('common', 'uncommon', 'rare', 'epic', 'legendary'))", ['rarity']],
+        ['bosses', 'chk_bosses_level', 'CHECK (level >= 1)', ['level']],
+        ['bosses', 'chk_bosses_max_health', 'CHECK (max_health > 0)', ['max_health']],
+        ['bosses', 'chk_bosses_damage', 'CHECK (damage >= 0)', ['damage']],
+        ['bosses', 'chk_bosses_key_drop', 'CHECK (key_drop_chance >= 0 AND key_drop_chance <= 1)', ['key_drop_chance']],
+        ['clans', 'chk_clans_level', 'CHECK (level >= 1)', ['level']],
+        ['clans', 'chk_clans_experience', 'CHECK (experience >= 0)', ['experience']],
+        ['clans', 'chk_clans_coins', 'CHECK (coins >= 0)', ['coins']],
+        ['clans', 'chk_clans_total_members', 'CHECK (total_members >= 1)', ['total_members']],
+        ['buildings', 'chk_buildings_max_level', 'CHECK (max_level >= 1)', ['max_level']],
+        ['buildings', 'chk_buildings_base_cost', 'CHECK (base_cost_coins >= 0)', ['base_cost_coins']],
+        ['crafting_recipes', 'chk_crafting_result_quantity', 'CHECK (result_quantity >= 1)', ['result_quantity']],
+        ['crafting_recipes', 'chk_crafting_required_level', 'CHECK (required_level >= 1)', ['required_level']],
+        ['crafting_recipes', 'chk_crafting_craft_time', 'CHECK (craft_time >= 1)', ['craft_time']],
+        ['daily_tasks', 'chk_daily_tasks_target', 'CHECK (target_value >= 1)', ['target_value']],
+        ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)', ['current_value']],
+        ['market_listings', 'chk_market_price', 'CHECK (price >= 0)', ['price']],
+        ['market_listings', 'chk_market_quantity', 'CHECK (quantity >= 1)', ['quantity']]
     ];
 
-    for (const [tableName, constraintName, definition] of checkConstraints) {
+    for (const [tableName, constraintName, definition, requiredColumns] of checkConstraints) {
+        const requiredColumnsList = requiredColumns.map((columnName) => `'${columnName}'`).join(', ');
+
         await query(`
             DO $do$
             BEGIN
-                IF NOT EXISTS (
+                IF (
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = '${tableName}'
+                      AND column_name IN (${requiredColumnsList})
+                ) = ${requiredColumns.length}
+                AND NOT EXISTS (
                     SELECT 1
                     FROM information_schema.table_constraints
                     WHERE table_schema = current_schema()
@@ -1083,5 +1192,7 @@ async function seedAchievements() {
 
 module.exports = {
     createTables,
-    runMigrations
+    runMigrations,
+    seedDatabase,
+    seedAchievements
 };

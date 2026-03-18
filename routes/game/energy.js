@@ -50,9 +50,10 @@ function handleError(error, context, res, player = null) {
  * @param {string} action - Действие
  * @param {object} metadata - JSON метаданные
  */
-async function logPlayerAction(playerId, action, metadata = {}) {
+async function logPlayerAction(playerId, action, metadata = {}, client = null) {
     try {
-        await query(
+        const exec = client ? client.query.bind(client) : query;
+        await exec(
             `INSERT INTO player_logs (player_id, action, metadata, created_at) 
              VALUES ($1, $2, $3, NOW())`,
             [playerId, action, JSON.stringify(metadata)]
@@ -60,6 +61,59 @@ async function logPlayerAction(playerId, action, metadata = {}) {
     } catch (err) {
         logger.warn(`Не удалось залогировать действие ${action} для игрока ${playerId}: ${err.message}`);
     }
+}
+
+async function performBuyEnergy(client, playerId, amount) {
+    const lockResult = await client.query(
+        `SELECT energy, stars, max_energy
+         FROM players
+         WHERE id = $1
+         FOR UPDATE`,
+        [playerId]
+    );
+
+    if (!lockResult.rows.length) {
+        throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+    }
+
+    const current = lockResult.rows[0];
+
+    if (current.energy >= current.max_energy) {
+        throw { message: 'Энергия уже полная', code: 'ENERGY_FULL', statusCode: 400 };
+    }
+
+    const actualAmount = Math.min(amount, current.max_energy - current.energy);
+    const actualCost = Math.ceil(actualAmount / 10);
+
+    if (current.stars < actualCost) {
+        throw { message: 'Недостаточно Stars', code: 'NOT_ENOUGH_STARS', statusCode: 400 };
+    }
+
+    const updateResult = await client.query(
+        `UPDATE players
+         SET energy = LEAST(max_energy, energy + $1),
+             stars = GREATEST(0, stars - $2),
+             last_energy_update = NOW()
+         WHERE id = $3
+         RETURNING energy, stars, max_energy, last_energy_update`,
+        [actualAmount, actualCost, playerId]
+    );
+
+    await logPlayerAction(playerId, 'buy_energy', {
+        amount: actualAmount,
+        stars_spent: actualCost,
+        cost_per_unit: 0.1
+    }, client);
+
+    return {
+        success: true,
+        energy: updateResult.rows[0].energy,
+        max_energy: updateResult.rows[0].max_energy,
+        energy_restored: actualAmount,
+        stars_spent: actualCost,
+        stars_remaining: updateResult.rows[0].stars,
+        last_energy_update: updateResult.rows[0].last_energy_update
+    };
 }
 
 /**
@@ -87,8 +141,6 @@ router.post('/buy-energy', async (req, res) => {
         const playerId = player.id;
         
         // Стоимость: 1 Stars за 10 энергии
-        const cost = Math.ceil(amount / 10);
-        
         // Проверяем максимум энергии
         if (player.energy >= player.max_energy) {
             return res.status(400).json({
@@ -98,67 +150,11 @@ router.post('/buy-energy', async (req, res) => {
             });
         }
         
-        // Рассчитываем сколько энергии реально восстановится
-        const actualAmount = Math.min(amount, player.max_energy - player.energy);
-        const actualCost = Math.ceil(actualAmount / 10);
-        
-        // Используем tx helper с FOR UPDATE для блокировки
-        const result = await tx(async () => {
-            // Блокируем строку игрока
-            const lockResult = await query(`
-                SELECT energy, stars, max_energy 
-                FROM players 
-                WHERE id = $1 
-                FOR UPDATE
-            `, [playerId]);
-            
-            if (!lockResult.rows.length) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-            }
-            
-            const current = lockResult.rows[0];
-            
-            // Проверяем хватает ли Stars
-            if (current.stars < actualCost) {
-                throw { message: 'Недостаточно Stars', code: 'NOT_ENOUGH_STARS', statusCode: 400 };
-            }
-            
-            // Провяем не полная ли энергия
-            if (current.energy >= current.max_energy) {
-                throw { message: 'Энергия уже полная', code: 'ENERGY_FULL', statusCode: 400 };
-            }
-            
-            // Обновляем
-            const updateResult = await query(`
-                UPDATE players 
-                SET energy = LEAST(max_energy, energy + $1),
-                    stars = GREATEST(0, stars - $2)
-                WHERE id = $3
-                RETURNING energy, stars, max_energy
-            `, [actualAmount, actualCost, playerId]);
-            
-            // Логирование покупки энергии
-            await logPlayerAction(playerId, 'buy_energy', {
-                amount: actualAmount,
-                stars_spent: actualCost,
-                cost_per_unit: 0.1
-            });
-            
-            return {
-                energy: updateResult.rows[0].energy,
-                max_energy: updateResult.rows[0].max_energy,
-                stars_remaining: updateResult.rows[0].stars
-            };
-        });
+        const result = await tx(async (client) => performBuyEnergy(client, playerId, amount));
         
         res.json({
-            success: true,
             message: 'Энергия куплена!',
-            energy: result.energy,
-            max_energy: result.max_energy,
-            energy_restored: actualAmount,
-            stars_spent: actualCost,
-            stars_remaining: result.stars_remaining
+            ...result
         });
         
     } catch (error) {
@@ -167,7 +163,7 @@ router.post('/buy-energy', async (req, res) => {
                 success: false,
                 message: 'Недостаточно Stars',
                 code: 'NOT_ENOUGH_STARS',
-                required: Math.ceil((req.body.amount || 50) / 10),
+                required: Math.ceil((Number(req.body.amount || 50)) / 10),
                 have: req.player.stars
             });
         }
@@ -202,54 +198,13 @@ const EnergyAPI = {
             throw { message: 'amount должен быть от 1 до 100', code: 'INVALID_AMOUNT', statusCode: 400 };
         }
         
-        const cost = Math.ceil(amount / 10);
-        
-        return await tx(async () => {
-            const lockResult = await query(`
-                SELECT energy, stars, max_energy 
-                FROM players 
-                WHERE id = $1 
-                FOR UPDATE
-            `, [playerId]);
-            
-            if (!lockResult.rows.length) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-            }
-            
-            const current = lockResult.rows[0];
-            
-            if (current.stars < cost) {
-                throw { message: 'Недостаточно Stars', code: 'NOT_ENOUGH_STARS', statusCode: 400 };
-            }
-            
-            if (current.energy >= current.max_energy) {
-                throw { message: 'Энергия уже полная', code: 'ENERGY_FULL', statusCode: 400 };
-            }
-            
-            const actualAmount = Math.min(amount, current.max_energy - current.energy);
-            const actualCost = Math.ceil(actualAmount / 10);
-            
-            const updateResult = await query(`
-                UPDATE players 
-                SET energy = LEAST(max_energy, energy + $1),
-                    stars = GREATEST(0, stars - $2)
-                WHERE id = $3
-                RETURNING energy, stars, max_energy
-            `, [actualAmount, actualCost, playerId]);
-            
+        return await tx(async (client) => {
+            const result = await performBuyEnergy(client, playerId, amount);
             await logPlayerAction(playerId, 'buy_energy_api', {
-                amount: actualAmount,
-                stars_spent: actualCost
-            });
-            
-            return {
-                success: true,
-                energy: updateResult.rows[0].energy,
-                max_energy: updateResult.rows[0].max_energy,
-                energy_restored: actualAmount,
-                stars_spent: actualCost,
-                stars_remaining: updateResult.rows[0].stars
-            };
+                amount: result.energy_restored,
+                stars_spent: result.stars_spent
+            }, client);
+            return result;
         });
     }
 };

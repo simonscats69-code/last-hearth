@@ -16,9 +16,9 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { calculateDropChance, rollItemRarity, rollLootDrop, getLootTable, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
+const { DEBUFF_CONFIG, calculateDropChance, rollItemRarity, rollLootDrop, getLootTable, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, PlayerHelper: playerHelper } = require('../../utils/serverApi');
-const { DebuffAPI } = require('./debuffs');
+const { normalizeInventory, normalizeRadiation } = require('../../utils/playerState');
 
 /**
  * Универсальный обработчик ошибок
@@ -134,7 +134,7 @@ router.post('/search', async (req, res) => {
             // === СИСТЕМА ДЕБАФФОВ: Радиация от локации ===
             let radiationGain = 0;
             let radiationDefense = 0;
-            let appliedRadiation = null;
+            let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             
             if (locationData.radiation > 0) {
                 // Базовая радиация от локации
@@ -148,15 +148,28 @@ router.post('/search', async (req, res) => {
                 const randomFactor = 0.7 + Math.random() * 0.6;
                 radiationGain = Math.max(0, Math.ceil((baseRadiation - radiationDefense) * randomFactor));
                 
-                // Применяем дебафф если есть радиация
+                // Применяем радиацию в рамках той же транзакции поиска,
+                // чтобы состояние игрока оставалось атомарным.
                 if (radiationGain > 0) {
-                    try {
-                        appliedRadiation = await DebuffAPI.apply(playerId, 'radiation', radiationGain, {
-                            source: `location_${locationData.id}`
-                        });
-                    } catch (err) {
-                        logger.warn(`[locations] Ошибка применения радиации: ${err.message}`);
-                    }
+                    const currentRadiation = normalizeRadiation(updatedPlayer.radiation);
+                    const radiationConfig = DEBUFF_CONFIG.radiation;
+                    const now = new Date();
+                    const expiresAt = new Date(
+                        now.getTime() + radiationConfig.baseDurationMs + (radiationGain - 1) * radiationConfig.durationPerLevelMs
+                    );
+
+                    resultingRadiationLevel = Math.min(radiationConfig.maxLevel, currentRadiation.level + radiationGain);
+
+                    await client.query(
+                        `UPDATE players
+                         SET radiation = $1::jsonb
+                         WHERE id = $2`,
+                        [JSON.stringify({
+                            level: resultingRadiationLevel,
+                            expires_at: expiresAt.toISOString(),
+                            applied_at: now.toISOString()
+                        }), playerId]
+                    );
                 }
             }
             
@@ -182,8 +195,9 @@ router.post('/search', async (req, res) => {
                 foundItem = rollLootDrop(lootTable, updatedPlayer.luck, itemRarity);
                 
                 if (foundItem) {
-                    // Добавляем в инвентарь (массив объектов [{id, name, type, ...}])
-                    const inventory = safeJsonParse(updatedPlayer.inventory, []);
+                    // Добавляем в инвентарь. Старые данные могут лежать как объект,
+                    // поэтому приводим всё к единому массивному формату.
+                    const inventory = normalizeInventory(updatedPlayer.inventory);
                     
                     // Создаём объект предмета
                     const newItem = {
@@ -201,28 +215,29 @@ router.post('/search', async (req, res) => {
                     
                     await client.query(`
                         UPDATE players 
-                        SET inventory = $1, 
-                            total_actions = total_actions + 1
+                        SET inventory = $1
                         WHERE id = $2
                     `, [JSON.stringify(inventory), playerId]);
                 }
             }
             
-            // Тратим энергию
+            // Тратим энергию и фиксируем действие вне зависимости от результата поиска.
             const energyResult = await client.query(`
                 UPDATE players 
                 SET energy = energy - $1,
-                    last_energy_update = NOW()
+                    last_energy_update = NOW(),
+                    total_actions = total_actions + 1
                 WHERE id = $2
-                RETURNING energy, max_energy
+                RETURNING energy, max_energy, last_energy_update
             `, [energyCost, playerId]);
             
             const newEnergy = energyResult.rows[0].energy;
             const newMaxEnergy = energyResult.rows[0].max_energy;
+            const lastEnergyUpdate = energyResult.rows[0].last_energy_update;
             
             // Проверяем последствия радиации
             let radiationEffect = null;
-            if (radiationGain >= 100) {
+            if (resultingRadiationLevel >= DEBUFF_CONFIG.radiation.maxLevel) {
                 radiationEffect = 'critical';
                 // Наносим урон от радиации
                 await client.query(`
@@ -230,6 +245,10 @@ router.post('/search', async (req, res) => {
                     SET health = GREATEST(0, health - 10)
                     WHERE id = $1
                 `, [playerId]);
+            } else if (resultingRadiationLevel >= 5) {
+                radiationEffect = 'danger';
+            } else if (radiationGain > 0) {
+                radiationEffect = 'applied';
             }
             
             await client.query('COMMIT');
@@ -243,7 +262,8 @@ router.post('/search', async (req, res) => {
             });
             
             res.json({
-                success: foundItem !== null,
+                success: true,
+                search_performed: true,
                 found_item: foundItem ? {
                     name: foundItem.name,
                     rarity: itemRarity,
@@ -254,11 +274,11 @@ router.post('/search', async (req, res) => {
                 energy: {
                     current: newEnergy,
                     max: newMaxEnergy,
-                    restored: 0
+                    restored: 0,
+                    last_update: lastEnergyUpdate
                 },
                 radiation: {
-                    // Новый формат: уровень из JSONB или старое значение
-                    level: appliedRadiation?.newLevel || 0,
+                    level: resultingRadiationLevel,
                     gained: radiationGain,
                     defense: radiationDefense,
                     effect: radiationEffect
@@ -411,9 +431,10 @@ router.get('/', async (req, res) => {
         
         // Получаем локации с пагинацией
         const locations = await queryAll(`
-            SELECT id, name, radiation, min_luck as required_luck, description, is_red_zone
+            SELECT id, name, icon, color, radiation, danger_level,
+                   min_luck as required_luck, description
             FROM locations
-            ORDER BY required_luck ASC
+            ORDER BY min_luck ASC
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
         
@@ -421,10 +442,13 @@ router.get('/', async (req, res) => {
         const availableLocations = locations.map(loc => ({
             id: loc.id,
             name: loc.name,
+            icon: loc.icon,
+            color: loc.color,
             radiation: loc.radiation,
+            danger_level: loc.danger_level,
             required_luck: loc.required_luck,
+            min_luck: loc.required_luck,
             description: loc.description,
-            is_red_zone: loc.is_red_zone,
             unlocked: player.luck >= loc.required_luck,
             current: loc.id === player.current_location_id
         }));
@@ -432,6 +456,14 @@ router.get('/', async (req, res) => {
         // Единый формат ответа
         res.json({
             success: true,
+            locations: availableLocations,
+            current_location_id: player.current_location_id,
+            pagination: {
+                total: totalLocations,
+                limit: limit,
+                offset: offset,
+                has_more: offset + locations.length < totalLocations
+            },
             data: {
                 locations: availableLocations,
                 current_location_id: player.current_location_id,

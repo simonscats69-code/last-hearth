@@ -7,6 +7,8 @@ const router = express.Router();
 const { query, queryOne, transaction: tx } = require('../../db/database');
 const { DEBUFF_CONFIG } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { DebuffAPI } = require('./debuffs');
+const { buildPlayerStatus, normalizeInventory } = require('../../utils/playerState');
 
 // =============================================================================
 // Утилиты
@@ -18,29 +20,75 @@ const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
  * @returns {object} Статус игрока
  */
 function getPlayerStatus(player) {
-    const infections = safeJsonParse(player.infections, []);
-    // Парсим radiation (может быть old INTEGER или new JSONB)
-    let radiationLevel = 0;
-    if (player.radiation) {
-        if (typeof player.radiation === 'object') {
-            radiationLevel = player.radiation.level || 0;
-        } else if (typeof player.radiation === 'number') {
-            radiationLevel = player.radiation;
-        }
-    }
-    // Вычисляем общий уровень инфекций
-    const infectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
-    
     return {
         success: true,
-        health: player.health,
-        max_health: player.max_health,
-        radiation: radiationLevel,
-        fatigue: player.fatigue,
-        energy: player.energy,
-        max_energy: player.max_energy,
-        infections: infectionLevel,
-        infections_list: infections
+        ...buildPlayerStatus(player)
+    };
+}
+
+async function logPlayerAction(playerId, action, metadata = {}) {
+    try {
+        await query(
+            `INSERT INTO player_logs (player_id, action, metadata, created_at)
+             VALUES ($1, $2, $3, NOW())`,
+            [playerId, action, JSON.stringify(metadata)]
+        );
+    } catch (error) {
+        logger.warn(`[status] Не удалось залогировать действие ${action}: ${error.message}`);
+    }
+}
+
+async function runStatusCheck(client, playerId) {
+    const lockResult = await client.query(
+        `SELECT health, fatigue, radiation, infections
+         FROM players WHERE id = $1 FOR UPDATE`,
+        [playerId]
+    );
+
+    if (!lockResult.rows.length) {
+        throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+    }
+
+    const p = lockResult.rows[0];
+
+    let fatigueDamage = 0;
+    if (p.fatigue >= 100) {
+        fatigueDamage = 3;
+    }
+
+    let radDamage = 0;
+    const radiation = safeJsonParse(p.radiation, { level: 0 });
+    const radConfig = DEBUFF_CONFIG.radiation;
+    if ((radiation.level || 0) >= 5) {
+        radDamage = (radiation.level - 4) * radConfig.damagePerLevel;
+    }
+
+    const infections = safeJsonParse(p.infections, []);
+    const totalInfectionLevel = infections.reduce((sum, infection) => sum + (infection.level || 0), 0);
+    const infConfig = DEBUFF_CONFIG.infection;
+    const infectionDamage = totalInfectionLevel > 0 && Math.random() < 0.1
+        ? totalInfectionLevel * infConfig.damagePerLevel
+        : 0;
+
+    const totalDamage = fatigueDamage + radDamage + infectionDamage;
+
+    if (totalDamage > 0) {
+        await client.query(
+            `UPDATE players
+             SET health = GREATEST(0, health - $1),
+                 fatigue = GREATEST(0, fatigue - 20)
+             WHERE id = $2`,
+            [totalDamage, playerId]
+        );
+    }
+
+    return {
+        totalDamage,
+        effects: {
+            fatigue: fatigueDamage,
+            radiation: radDamage,
+            infections: infectionDamage
+        }
     };
 }
 
@@ -96,64 +144,7 @@ router.post('/check', async (req, res) => {
         const playerId = player.id;
         
         // Используем транзакцию с блокировкой строки
-        const result = await tx(async () => {
-            // Блокируем строку игрока для избежания race condition
-            const lockResult = await query(
-                `SELECT health, fatigue, radiation, infections 
-                 FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            
-            if (!lockResult.rows.length) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-            }
-            
-            const p = lockResult.rows[0];
-            
-            // Проверяем усталость
-            let fatigueDamage = 0;
-            if (p.fatigue >= 100) {
-                fatigueDamage = 3;
-            }
-            
-            // Радиация (теперь JSONB: {level, expires_at, applied_at})
-            // Урон от радиации: level >= 5, урон = (level - 4) * damagePerLevel
-            let radDamage = 0;
-            const radiation = safeJsonParse(p.radiation, { level: 0 });
-            const radConfig = DEBUFF_CONFIG.radiation;
-            if (radiation.level >= 5) {
-                radDamage = (radiation.level - 4) * radConfig.damagePerLevel;
-            }
-            
-            // Инфекции (теперь массив JSONB)
-            const infections = safeJsonParse(p.infections, []);
-            const totalInfectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
-            const infConfig = DEBUFF_CONFIG.infection;
-            if (totalInfectionLevel > 0 && Math.random() < 0.1) {
-                radDamage += totalInfectionLevel * infConfig.damagePerLevel;
-            }
-            
-            // Урон только от усталости и дебаффов (голода и жажды больше нет)
-            const totalDamage = fatigueDamage + radDamage;
-            
-            if (totalDamage > 0) {
-                await query(`
-                    UPDATE players 
-                    SET health = GREATEST(0, health - $1),
-                        fatigue = GREATEST(0, fatigue - 20)
-                    WHERE id = $2
-                `, [totalDamage, playerId]);
-            }
-            
-            return {
-                totalDamage,
-                effects: {
-                    fatigue: fatigueDamage,
-                    radiation: radDamage,
-                    infections: totalInfectionLevel > 0 ? totalInfectionLevel * DEBUFF_CONFIG.infection.damagePerLevel : 0
-                }
-            };
-        });
+        const result = await tx(async (client) => runStatusCheck(client, playerId));
         
         // Логируем действие
         await logPlayerAction(playerId, 'status_check', {
@@ -207,11 +198,20 @@ router.post('/heal', async (req, res) => {
         if (item_id !== undefined) {
             validateItemId(item_id);
         }
+
+        if (type === 'debuff') {
+            const result = await DebuffAPI.cure(playerId, 'antidote', item_id);
+            return res.json({
+                success: true,
+                ...result,
+                message: `Использован ${result.itemUsed}!`
+            });
+        }
         
         // Используем транзакцию с блокировкой строки
-        const result = await tx(async () => {
+        const result = await tx(async (client) => {
             // Блокируем строку игрока
-            const lockResult = await query(
+            const lockResult = await client.query(
                 `SELECT inventory, health, max_health, radiation, infections
                  FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
@@ -222,7 +222,7 @@ router.post('/heal', async (req, res) => {
             }
             
             const p = lockResult.rows[0];
-            const inventory = safeJsonParse(p.inventory, []);
+            const inventory = normalizeInventory(p.inventory);
             
             // Для типов, требующих item_id
             if (['health', 'radiation', 'debuff'].includes(type)) {
@@ -241,7 +241,7 @@ router.post('/heal', async (req, res) => {
                 
                 if (type === 'health') {
                     healAmount = item.heal || 20;
-                    await query(`
+                    await client.query(`
                         UPDATE players SET health = LEAST(max_health, health + $1) WHERE id = $2
                     `, [healAmount, playerId]);
                     message = 'Здоровье +' + healAmount;
@@ -249,7 +249,7 @@ router.post('/heal', async (req, res) => {
                     
                 } else if (type === 'radiation') {
                     healAmount = item.rad_removal || 30;
-                    await query(`
+                    await client.query(`
                         UPDATE players SET radiation = GREATEST(0, radiation - $1) WHERE id = $2
                     `, [healAmount, playerId]);
                     message = 'Радиация -' + healAmount;
@@ -259,7 +259,7 @@ router.post('/heal', async (req, res) => {
                 if (healed) {
                     // Удаляем использованный предмет
                     const newInventory = inventory.filter(i => i.id !== item_id);
-                    await query(`
+                    await client.query(`
                         UPDATE players SET inventory = $1 WHERE id = $2
                     `, [JSON.stringify(newInventory), playerId]);
                     
@@ -315,67 +315,19 @@ const StatusAPI = {
     async checkStatus(playerId) {
         validateId(playerId, 'playerId');
         
-        return await tx(async () => {
-            const lockResult = await query(
-                `SELECT health, fatigue, radiation, infections 
-                 FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            
-            if (!lockResult.rows.length) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-            }
-            
-            const p = lockResult.rows[0];
-            
-            // Усталость
-            let fatigueDamage = p.fatigue >= 100 ? 3 : 0;
-            
-            // Радиация (JSONB)
-            // Урон от радиации: level >= 5, урон = (level - 4) * damagePerLevel
-            let radDamage = 0;
-            const radiation = safeJsonParse(p.radiation, { level: 0 });
-            const radConfig = DEBUFF_CONFIG.radiation;
-            if (radiation.level >= 5) {
-                radDamage = (radiation.level - 4) * radConfig.damagePerLevel;
-            }
-            
-            // Инфекции (массив JSONB)
-            const infections = safeJsonParse(p.infections, []);
-            const totalInfectionLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
-            const infConfig = DEBUFF_CONFIG.infection;
-            if (totalInfectionLevel > 0 && Math.random() < 0.1) {
-                radDamage += totalInfectionLevel * infConfig.damagePerLevel;
-            }
-            
-            // Урон только от усталости и дебаффов
-            const totalDamage = fatigueDamage + radDamage;
-            
-            if (totalDamage > 0) {
-                await query(`
-                    UPDATE players 
-                    SET health = GREATEST(0, health - $1),
-                        fatigue = GREATEST(0, fatigue - 20)
-                    WHERE id = $2
-                `, [totalDamage, playerId]);
-            }
-            
-            await logPlayerAction(playerId, 'status_check_api', {
-                damage: totalDamage,
-                effects: { fatigue: fatigueDamage, radiation: radDamage, infections: totalInfectionLevel > 0 ? totalInfectionLevel * infConfig.damagePerLevel : 0 }
-            });
-            
-            return {
-                success: true,
-                checked: true,
-                damage: totalDamage,
-                effects: {
-                    fatigue: fatigueDamage,
-                    radiation: radDamage,
-                    infections: totalInfectionLevel > 0 ? totalInfectionLevel * infConfig.damagePerLevel : 0
-                }
-            };
+        const result = await tx(async (client) => runStatusCheck(client, playerId));
+
+        await logPlayerAction(playerId, 'status_check_api', {
+            damage: result.totalDamage,
+            effects: result.effects
         });
+
+        return {
+            success: true,
+            checked: true,
+            damage: result.totalDamage,
+            effects: result.effects
+        };
     },
     
     /**
@@ -398,9 +350,13 @@ const StatusAPI = {
         }
         
         if (itemId) validateId(itemId, 'itemId');
+
+        if (type === 'debuff') {
+            return await DebuffAPI.cure(playerId, 'antidote', itemId);
+        }
         
-        return await tx(async () => {
-            const lockResult = await query(
+        return await tx(async (client) => {
+            const lockResult = await client.query(
                 `SELECT inventory, health, max_health, radiation, infections
                  FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
@@ -411,7 +367,7 @@ const StatusAPI = {
             }
             
             const p = lockResult.rows[0];
-            const inventory = safeJsonParse(p.inventory, []);
+            const inventory = normalizeInventory(p.inventory);
             
             // Убраны типы hunger, thirst, broken, добавлен debuff
             const validTypes = ['health', 'radiation', 'debuff'];
@@ -419,10 +375,46 @@ const StatusAPI = {
                 throw { message: 'Неверный тип', code: 'INVALID_TYPE', statusCode: 400 };
             }
             
-            // Логика лечения...
-            // (аналогично роуту)
-            
-            return { success: true, message: 'OK' };
+            const item = inventory.find((candidate) => candidate.id === itemId);
+            if (!item) {
+                throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_FOUND', statusCode: 404 };
+            }
+
+            if (type === 'health') {
+                const healAmount = item.heal || 20;
+
+                await client.query(
+                    `UPDATE players SET health = LEAST(max_health, health + $1) WHERE id = $2`,
+                    [healAmount, playerId]
+                );
+
+                const newInventory = inventory.filter((candidate) => candidate.id !== itemId);
+                await client.query(
+                    `UPDATE players SET inventory = $1 WHERE id = $2`,
+                    [JSON.stringify(newInventory), playerId]
+                );
+
+                return { success: true, message: 'Здоровье +' + healAmount, item_used: item };
+            }
+
+            if (type === 'radiation') {
+                const healAmount = item.rad_removal || 30;
+
+                await client.query(
+                    `UPDATE players SET radiation = GREATEST(0, radiation - $1) WHERE id = $2`,
+                    [healAmount, playerId]
+                );
+
+                const newInventory = inventory.filter((candidate) => candidate.id !== itemId);
+                await client.query(
+                    `UPDATE players SET inventory = $1 WHERE id = $2`,
+                    [JSON.stringify(newInventory), playerId]
+                );
+
+                return { success: true, message: 'Радиация -' + healAmount, item_used: item };
+            }
+
+            throw { message: 'Неверный тип', code: 'INVALID_TYPE', statusCode: 400 };
         });
     }
 };
