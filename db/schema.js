@@ -801,42 +801,62 @@ async function runMigrations() {
     await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP`);
 
     // CHECK constraints для бизнес-правил
-    // Защита от некорректных данных на уровне БД
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_level CHECK (level >= 1)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_coins CHECK (coins >= 0)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_stars CHECK (stars >= 0)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_health CHECK (health >= 0)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_max_health CHECK (max_health > 0)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_energy CHECK (energy >= 0)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_max_energy CHECK (max_energy > 0)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_strength CHECK (strength >= 1)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_endurance CHECK (endurance >= 1)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_agility CHECK (agility >= 1)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_intelligence CHECK (intelligence >= 1)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_luck CHECK (luck >= 1)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_crafting CHECK (crafting >= 1)`);
-    await query(`ALTER TABLE players ADD CONSTRAINT IF NOT EXISTS chk_players_pvp_rating CHECK (pvp_rating >= 0)`);
-    await query(`ALTER TABLE locations ADD CONSTRAINT IF NOT EXISTS chk_locations_danger_level CHECK (danger_level >= 1 AND danger_level <= 10)`);
-    await query(`ALTER TABLE locations ADD CONSTRAINT IF NOT EXISTS chk_locations_radiation CHECK (radiation >= 0)`);
-    await query(`ALTER TABLE items ADD CONSTRAINT IF NOT EXISTS chk_items_price CHECK (price >= 0)`);
-    await query(`ALTER TABLE items ADD CONSTRAINT IF NOT EXISTS chk_items_rarity CHECK (rarity IN ('common', 'uncommon', 'rare', 'epic', 'legendary'))`);
-    await query(`ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_level CHECK (level >= 1)`);
-    await query(`ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_max_health CHECK (max_health > 0)`);
-    await query(`ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_damage CHECK (damage >= 0)`);
-    await query(`ALTER TABLE bosses ADD CONSTRAINT IF NOT EXISTS chk_bosses_key_drop CHECK (key_drop_chance >= 0 AND key_drop_chance <= 1)`);
-    await query(`ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_level CHECK (level >= 1)`);
-    await query(`ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_experience CHECK (experience >= 0)`);
-    await query(`ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_coins CHECK (coins >= 0)`);
-    await query(`ALTER TABLE clans ADD CONSTRAINT IF NOT EXISTS chk_clans_total_members CHECK (total_members >= 1)`);
-    await query(`ALTER TABLE buildings ADD CONSTRAINT IF NOT EXISTS chk_buildings_max_level CHECK (max_level >= 1)`);
-    await query(`ALTER TABLE buildings ADD CONSTRAINT IF NOT EXISTS chk_buildings_base_cost CHECK (base_cost_coins >= 0)`);
-    await query(`ALTER TABLE crafting_recipes ADD CONSTRAINT IF NOT EXISTS chk_crafting_result_quantity CHECK (result_quantity >= 1)`);
-    await query(`ALTER TABLE crafting_recipes ADD CONSTRAINT IF NOT EXISTS chk_crafting_required_level CHECK (required_level >= 1)`);
-    await query(`ALTER TABLE crafting_recipes ADD CONSTRAINT IF NOT EXISTS chk_crafting_craft_time CHECK (craft_time >= 1)`);
-    await query(`ALTER TABLE daily_tasks ADD CONSTRAINT IF NOT EXISTS chk_daily_tasks_target CHECK (target_value >= 1)`);
-    await query(`ALTER TABLE daily_tasks ADD CONSTRAINT IF NOT EXISTS chk_daily_tasks_current CHECK (current_value >= 0)`);
-    await query(`ALTER TABLE market_listings ADD CONSTRAINT IF NOT EXISTS chk_market_price CHECK (price >= 0)`);
-    await query(`ALTER TABLE market_listings ADD CONSTRAINT IF NOT EXISTS chk_market_quantity CHECK (quantity >= 1)`);
+    // PostgreSQL не поддерживает синтаксис ADD CONSTRAINT IF NOT EXISTS,
+    // поэтому добавляем ограничения через явную проверку в information_schema.
+    const checkConstraints = [
+        ['players', 'chk_players_level', 'CHECK (level >= 1)'],
+        ['players', 'chk_players_coins', 'CHECK (coins >= 0)'],
+        ['players', 'chk_players_stars', 'CHECK (stars >= 0)'],
+        ['players', 'chk_players_health', 'CHECK (health >= 0)'],
+        ['players', 'chk_players_max_health', 'CHECK (max_health > 0)'],
+        ['players', 'chk_players_energy', 'CHECK (energy >= 0)'],
+        ['players', 'chk_players_max_energy', 'CHECK (max_energy > 0)'],
+        ['players', 'chk_players_strength', 'CHECK (strength >= 1)'],
+        ['players', 'chk_players_endurance', 'CHECK (endurance >= 1)'],
+        ['players', 'chk_players_agility', 'CHECK (agility >= 1)'],
+        ['players', 'chk_players_intelligence', 'CHECK (intelligence >= 1)'],
+        ['players', 'chk_players_luck', 'CHECK (luck >= 1)'],
+        ['players', 'chk_players_crafting', 'CHECK (crafting >= 1)'],
+        ['players', 'chk_players_pvp_rating', 'CHECK (pvp_rating >= 0)'],
+        ['locations', 'chk_locations_danger_level', 'CHECK (danger_level >= 1 AND danger_level <= 10)'],
+        ['locations', 'chk_locations_radiation', 'CHECK (radiation >= 0)'],
+        ['items', 'chk_items_price', 'CHECK (price >= 0)'],
+        ['items', 'chk_items_rarity', "CHECK (rarity IN ('common', 'uncommon', 'rare', 'epic', 'legendary'))"],
+        ['bosses', 'chk_bosses_level', 'CHECK (level >= 1)'],
+        ['bosses', 'chk_bosses_max_health', 'CHECK (max_health > 0)'],
+        ['bosses', 'chk_bosses_damage', 'CHECK (damage >= 0)'],
+        ['bosses', 'chk_bosses_key_drop', 'CHECK (key_drop_chance >= 0 AND key_drop_chance <= 1)'],
+        ['clans', 'chk_clans_level', 'CHECK (level >= 1)'],
+        ['clans', 'chk_clans_experience', 'CHECK (experience >= 0)'],
+        ['clans', 'chk_clans_coins', 'CHECK (coins >= 0)'],
+        ['clans', 'chk_clans_total_members', 'CHECK (total_members >= 1)'],
+        ['buildings', 'chk_buildings_max_level', 'CHECK (max_level >= 1)'],
+        ['buildings', 'chk_buildings_base_cost', 'CHECK (base_cost_coins >= 0)'],
+        ['crafting_recipes', 'chk_crafting_result_quantity', 'CHECK (result_quantity >= 1)'],
+        ['crafting_recipes', 'chk_crafting_required_level', 'CHECK (required_level >= 1)'],
+        ['crafting_recipes', 'chk_crafting_craft_time', 'CHECK (craft_time >= 1)'],
+        ['daily_tasks', 'chk_daily_tasks_target', 'CHECK (target_value >= 1)'],
+        ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)'],
+        ['market_listings', 'chk_market_price', 'CHECK (price >= 0)'],
+        ['market_listings', 'chk_market_quantity', 'CHECK (quantity >= 1)']
+    ];
+
+    for (const [tableName, constraintName, definition] of checkConstraints) {
+        await query(`
+            DO $do$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_schema = current_schema()
+                      AND table_name = '${tableName}'
+                      AND constraint_name = '${constraintName}'
+                ) THEN
+                    ALTER TABLE ${tableName} ADD CONSTRAINT ${constraintName} ${definition};
+                END IF;
+            END $do$
+        `);
+    }
 }
 
 /**
