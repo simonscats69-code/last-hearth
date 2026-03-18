@@ -731,7 +731,7 @@ async function applyReferralCode(playerId, referralCode) {
     
     const referralCount = await queryOne(
         'SELECT COUNT(*) as count FROM referrals WHERE referrer_id = $1',
-        [referrer.telegram_id]
+        [referrer.id]
     );
     if (referralCount && referralCount.count >= 50) {
         return { success: false, error: 'У пригласившего игрока уже максимум рефералов (50)' };
@@ -747,11 +747,11 @@ async function applyReferralCode(playerId, referralCode) {
     
     await query(
         'INSERT INTO referrals (referrer_id, referred_id) VALUES ($1, $2)',
-        [referrer.telegram_id, playerId]
+        [referrer.id, playerId]
     );
     await query(
         'UPDATE players SET referred_by = $1, referral_bonus_claimed = false WHERE id = $2',
-        [referrer.telegram_id, playerId]
+        [referrer.id, playerId]
     );
     
     return { 
@@ -780,7 +780,8 @@ async function checkReferralLevelBonuses(referredPlayerId, newLevel) {
     const referred = await queryOne('SELECT referred_by FROM players WHERE id = $1', [referredPlayerId]);
     if (!referred || !referred.referred_by) return bonuses;
     
-    const referrerTelegramId = referred.referred_by;
+    // referred_by теперь хранит id реферера, а не telegram_id
+    const referrerId = referred.referred_by;
     const levels = [
         { lvl: 5, bonus: { coins: 100 }, col: 'level_5_bonus' },
         { lvl: 10, bonus: { coins: 200, stars: 5 }, col: 'level_10_bonus' },
@@ -794,7 +795,7 @@ async function checkReferralLevelBonuses(referredPlayerId, newLevel) {
                 continue;
             }
             
-            const referral = await queryOne(`SELECT ${col} FROM referrals WHERE referrer_id = $1 AND referred_id = $2`, [referrerTelegramId, referredPlayerId]);
+            const referral = await queryOne(`SELECT ${col} FROM referrals WHERE referrer_id = $1 AND referred_id = $2`, [referrerId, referredPlayerId]);
             if (referral && !referral[col]) {
                 let updateQuery;
                 let params;

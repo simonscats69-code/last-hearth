@@ -69,7 +69,7 @@ async function createTables() {
             clans_joined INTEGER DEFAULT 0,
             referral_code VARCHAR(20),
             referral_code_changed BOOLEAN DEFAULT false,
-            referred_by BIGINT,
+            referred_by INTEGER,
             referral_bonus_claimed BOOLEAN DEFAULT false
         );
     `);
@@ -439,7 +439,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS referrals (
             id SERIAL PRIMARY KEY,
-            referrer_id BIGINT NOT NULL,
+            referrer_id INTEGER NOT NULL,
             referred_id BIGINT NOT NULL,
             bonus_claimed BOOLEAN DEFAULT false,
             created_at TIMESTAMP DEFAULT NOW(),
@@ -642,6 +642,34 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred ON referrals(referred_id)`);
 
+    // Foreign key для referrer_id
+    await query(`
+        DO $do$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'fk_referrals_referrer'
+            ) THEN
+                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referrer
+                FOREIGN KEY (referrer_id) REFERENCES players(id) ON DELETE CASCADE;
+            END IF;
+        END $do$
+    `);
+
+    // Foreign key для referred_id
+    await query(`
+        DO $do$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'fk_referrals_referred'
+            ) THEN
+                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referred
+                FOREIGN KEY (referred_id) REFERENCES players(id) ON DELETE CASCADE;
+            END IF;
+        END $do$
+    `);
+
     // Индексы для raid_progress
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_progress_boss ON raid_progress(boss_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_progress_active ON raid_progress(is_active) WHERE is_active = true`);
@@ -712,11 +740,36 @@ async function runMigrations() {
     // Миграции для рефералов
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_code VARCHAR(20)`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_code_changed BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referred_by BIGINT`);
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referred_by INTEGER`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_bonus_claimed BOOLEAN DEFAULT false`);
 
+    // Миграция: преобразование referred_by из BIGINT в INTEGER (для существующих данных)
+    await query(`
+        DO $do$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'players' AND column_name = 'referred_by' AND data_type = 'bigint'
+            ) THEN
+                ALTER TABLE players ALTER COLUMN referred_by TYPE INTEGER USING referred_by::integer;
+            END IF;
+        END $do$
+    `);
+
+    // Миграция: преобразование referrer_id в referrals из BIGINT в INTEGER
+    await query(`
+        DO $do$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'referrals' AND column_name = 'referrer_id' AND data_type = 'bigint'
+            ) THEN
+                ALTER TABLE referrals ALTER COLUMN referrer_id TYPE INTEGER USING referrer_id::integer;
+            END IF;
+        END $do$
+    `);
+
     // Добавить FK для referred_by (ссылка на id того же игрока)
-    // Примечание: используем players(id) вместо players(telegram_id) для избежания проблем с типами
     await query(`
         DO $do$
         BEGIN
@@ -725,7 +778,7 @@ async function runMigrations() {
                 WHERE constraint_name = 'fk_players_referred_by'
             ) THEN
                 ALTER TABLE players ADD CONSTRAINT fk_players_referred_by 
-                FOREIGN KEY (referred_by) REFERENCES players(telegram_id) ON DELETE SET NULL;
+                FOREIGN KEY (referred_by) REFERENCES players(id) ON DELETE SET NULL;
             END IF;
         END $do$
     `);
