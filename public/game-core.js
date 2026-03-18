@@ -7,6 +7,92 @@
  */
 
 // ============================================================================
+// СОСТОЯНИЕ ИГРЫ (перенесено из game-state.js)
+// ============================================================================
+
+const gameState = {
+    // Данные игрока
+    player: null,
+
+    // Инвентарь
+    inventory: [],
+
+    // Текущая локация
+    currentLocation: null,
+
+    // Доступные локации
+    locations: [],
+
+    // Локации для рейтинга (map)
+    locationPositions: {},
+
+    // Рецепты крафта
+    recipes: [],
+
+    // Боссы
+    bosses: [],
+
+    // Текущий босс
+    currentBoss: null,
+
+    // Достижения
+    achievements: [],
+
+    // Задания
+    quests: [],
+
+    // Данные клана
+    clan: null,
+
+    // Активные баффы
+    buffs: {},
+
+    // Монеты и звёзды
+    coins: 0,
+    stars: 0,
+
+    // Текущий экран
+    currentScreen: 'main',
+
+    // Активные рейды
+    activeRaids: [],
+
+    // PvP матч
+    pvpMatch: null,
+
+    // Данные рейдов
+    raids: [],
+    raidsParticipating: [],
+
+    // Стрик входа (дней)
+    loginStreak: 0,
+
+    // Последний вход
+    lastLogin: null,
+
+    // Активные дебаффы
+    debuffs: {
+        radiation: {
+            level: 0,
+            expiresAt: null,
+            active: false
+        },
+        infections: []
+    },
+
+    // Модификаторы от дебаффов
+    modifiers: {
+        damage: 1.0,
+        luck: 1.0,
+        searchTime: 1.0,
+        dropChance: 1.0,
+        endurance: 1.0
+    }
+};
+
+window.gameState = gameState;
+
+// ============================================================================
 // КОНСТАНТЫ
 // ============================================================================
 
@@ -230,9 +316,10 @@ const Templates = {
     
     // Карточка предмета
     itemCard(item, actions = '') {
+        const itemActionId = item.index ?? item.id;
         return `
             <div class="item-card rarity-${item.rarity || 'common'}" 
-                 data-id="${item.id}" onclick="useItem(${item.id})">
+                 data-id="${item.id}" onclick="useItem(${itemActionId})">
                 <span class="item-icon">${item.icon || '📦'}</span>
                 <span class="item-name">${escapeHtml(item.name)}</span>
                 ${item.count ? `<span class="item-count">x${item.count}</span>` : ''}
@@ -276,9 +363,10 @@ const Templates = {
     
     // Слот инвентаря
     inventorySlot(item) {
+        const itemActionId = item.index ?? item.id;
         return `
             <div class="inventory-slot rarity-${item.rarity || 'common'}" 
-                 onclick="useItem(${item.id})" data-id="${item.id}">
+                 onclick="useItem(${itemActionId})" data-id="${item.id}">
                 <span class="item-icon">${item.icon || '📦'}</span>
                 ${item.count > 1 ? `<span class="item-count">${item.count}</span>` : ''}
             </div>
@@ -296,7 +384,7 @@ const API = {
         profile: '/api/game/profile',
         inventory: '/api/game/inventory',
         locations: '/api/game/locations',
-        bosses: '/game/bosses',
+        bosses: '/api/game/bosses',
         recipes: '/api/game/crafting/recipes',
         clan: '/api/game/clans/clan',
         market: '/api/game/market/listings',
@@ -336,20 +424,21 @@ const API = {
         let url = endpoint;
         if (id) url += `/${id}`;
         
-        const data = await this.get(url);
+        const response = await this.get(url);
+        const data = response?.data || response;
         
         // Автоматическое обновление gameState
         if (type === 'profile' && typeof gameState !== 'undefined') {
             gameState.player = data;
         }
         if (type === 'inventory' && typeof gameState !== 'undefined') {
-            gameState.inventory = data.items || data;
+            gameState.inventory = data.inventory || [];
         }
         if (type === 'locations' && typeof gameState !== 'undefined') {
-            gameState.locations = data.locations || data;
+            gameState.locations = data.locations || [];
         }
         if (type === 'bosses' && typeof gameState !== 'undefined') {
-            gameState.bosses = data.bosses || data;
+            gameState.bosses = data.bosses || [];
         }
         
         return data;
@@ -535,6 +624,21 @@ function setHtml(elementOrId, html) {
     if (!el) return null;
     el.innerHTML = html;
     return el;
+}
+
+/**
+ * Навесить обработчик клика только один раз на элемент
+ */
+function bindClickOnce(element, key, handler) {
+    if (!element) return;
+
+    const attr = `bound${key}`;
+    if (element.dataset[attr] === 'true') {
+        return;
+    }
+
+    element.addEventListener('click', handler);
+    element.dataset[attr] = 'true';
 }
 
 /**
@@ -855,3 +959,336 @@ window.formatTime = formatTime;
 window.updateEnergyTimer = updateEnergyTimer;
 window.getDamagePreview = getDamagePreview;
 window.updateDamagePreviewUI = updateDamagePreviewUI;
+
+// ============================================================================
+// УПРАВЛЕНИЕ ЭКРАНАМИ (объединено из game-screens.js)
+// ============================================================================
+
+// Доступные экраны
+const SCREENS = [
+    'main',           // Главный экран
+    'map',            // Карта города
+    'inventory',      // Инвентарь
+    'craft',          // Крафт
+    'bosses',         // Боссы
+    'boss-fight',     // Бой с боссом
+    'clan',           // Клан
+    'clans-list',     // Список кланов
+    'clan-create',    // Создание клана
+    'clan-chat',      // Чат клана
+    'shop',           // Магазин
+    'wheel',          // Колесо удачи
+    'rating',         // Рейтинг
+    'base',           // База
+    'pvp',            // PvP
+    'pvp-players',    // PvP игроки
+    'pvp-fight',      // PvP бой
+    'pvp-stats',      // PvP статистика
+    'market',         // Рынок
+    'market-create',  // Создание объявления
+    'achievements',   // Достижения
+    'referral',       // Рефералы
+    'quests',         // Задания
+    'profile'         // Профиль
+];
+
+/**
+ * Переход на экран
+ * @param {string} screenName - имя экрана
+ */
+function showScreen(screenName) {
+    // Защита от undefined/null
+    if (!screenName || typeof screenName !== 'string') {
+        console.warn('Invalid screen name:', screenName);
+        return;
+    }
+
+    // Валидация
+    if (!SCREENS.includes(screenName)) {
+        console.warn('Unknown screen:', screenName);
+        return;
+    }
+
+    // Скрываем все экраны
+    document.querySelectorAll('.screen').forEach(screen => {
+        screen.classList.remove('active');
+    });
+
+    // Показываем нужный экран
+    const targetScreen = document.getElementById(`${screenName}-screen`);
+    if (targetScreen) {
+        targetScreen.classList.add('active');
+        gameState.currentScreen = screenName;
+
+        // Выполняем специфичные действия при открытии
+        onScreenOpen(screenName);
+    }
+}
+
+/**
+ * Обработчик открытия экрана
+ * @param {string} screenName - имя экрана
+ */
+function onScreenOpen(screenName) {
+    switch (screenName) {
+        case 'main':
+            // Обновляем главный экран (данные уже загружены)
+            renderMain();
+            break;
+
+        case 'map':
+            // Загружаем инвентарь
+            loadInventory();
+            break;
+
+        case 'craft':
+            // Загружаем рецепты
+            loadRecipes();
+            break;
+
+        case 'bosses':
+            // Загружаем боссов
+            loadBosses();
+            break;
+
+        case 'shop':
+            // Открываем магазин (рендерим категорию)
+            openShop();
+            break;
+
+        case 'rating':
+            // Загружаем рейтинг
+            loadRating();
+            break;
+
+        case 'clan':
+            // Загружаем клан
+            loadClan();
+            break;
+
+        case 'clans-list':
+            // Загружаем список кланов
+            loadClansList();
+            break;
+
+        case 'base':
+            // Загружаем базу
+            loadBase();
+            break;
+
+        case 'achievements':
+            // Загружаем достижения
+            loadAchievements();
+            break;
+
+        case 'quests':
+            // Загружаем задания
+            loadQuests();
+            break;
+
+        case 'profile':
+            // Профиль уже загружен, обновляем UI из кэша
+            if (gameState.player) {
+                updateProfileUI(gameState.player);
+            }
+            break;
+
+        case 'market':
+            // Загружаем объявления рынка
+            loadMarketListings();
+            break;
+
+        case 'pvp-players':
+            // Загружаем список игроков PvP
+            loadPVPGamePlayers();
+            break;
+
+        case 'pvp-stats':
+            // Загружаем статистику PvP
+            loadPVPStats();
+            break;
+    }
+}
+
+/**
+ * Отрисовка главного экрана
+ * Обновляет все элементы главного экрана на основе данных игрока
+ */
+function renderMain() {
+    const player = gameState.player;
+    if (!player) return;
+
+    if (typeof updateProfileUI === 'function') {
+        updateProfileUI(player);
+    }
+
+    // Обновляем имя игрока
+    const nameEl = document.getElementById('player-name');
+    if (nameEl) {
+        nameEl.textContent = player.name || player.username || 'Выживший';
+    }
+
+    // Обновляем уровень
+    const levelEl = document.getElementById('player-level');
+    if (levelEl) {
+        levelEl.textContent = player.level || 1;
+    }
+
+    // Обновляем текущую локацию
+    const location = player.current_location || player.location || {};
+    const locationIcon = document.getElementById('location-icon');
+    const locationName = document.getElementById('location-name');
+    const locationDesc = document.getElementById('location-desc');
+    const locationRadiation = document.getElementById('location-radiation');
+    const locationDanger = document.getElementById('location-danger');
+
+    if (locationName) locationName.textContent = location.name || 'Спальный район';
+    if (locationDesc) locationDesc.textContent = location.description || 'Тихий жилой комплекс';
+    if (locationIcon) locationIcon.textContent = location.icon || '🏠';
+    if (locationRadiation) locationRadiation.textContent = location.radiation || 0;
+    if (locationDanger) locationDanger.textContent = location.danger_level || 1;
+
+    if (typeof refreshPlayerEnergyUI === 'function') {
+        refreshPlayerEnergyUI();
+    }
+
+    console.log('[renderMain] Главный экран обновлён');
+}
+
+/**
+ * Инициализация обработчиков кнопок навигации
+ */
+function initNavigationHandlers() {
+    // Обработчики кнопок "назад"
+    document.querySelectorAll('.back-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetScreen = btn.dataset.screen || 'main';
+            showScreen(targetScreen);
+        });
+    });
+
+    // Обработчики кнопок главного меню
+    const mainButtons = {
+        'map-btn': 'map',
+        'inventory-btn': 'inventory',
+        'btn-craft': 'craft',
+        'btn-bosses': 'bosses',
+        'btn-shop': 'shop',
+        'btn-clan': 'clan',
+        'btn-rating': 'rating',
+        'btn-base': 'base',
+        'btn-achievements': 'achievements',
+        'btn-quests': 'quests',
+        'btn-profile': 'profile'
+    };
+
+    for (const [btnId, screenName] of Object.entries(mainButtons)) {
+        const btn = document.getElementById(btnId);
+        if (btn) {
+            bindClickOnce(btn, btnId, () => showScreen(screenName));
+        }
+    }
+
+    // Обработчики табов (если есть)
+    initTabHandlers();
+}
+
+/**
+ * Инициализация табов (вкладок)
+ */
+function initTabHandlers() {
+    // Табы рейтинга
+    document.querySelectorAll('.rating-tab').forEach(tab => {
+        bindClickOnce(tab, `rating${tab.dataset.tab || ''}`, () => {
+            const tabName = tab.dataset.tab;
+            loadRating(tabName);
+        });
+    });
+
+    // Табы достижений
+    document.querySelectorAll('.achievements-tab').forEach(tab => {
+        bindClickOnce(tab, `achievements${tab.dataset.category || ''}`, () => {
+            const category = tab.dataset.category;
+            filterAchievements(category);
+        });
+    });
+
+    // Табы базы
+    document.querySelectorAll('.base-tab').forEach(tab => {
+        bindClickOnce(tab, `base${tab.dataset.tab || ''}`, () => {
+            const tabName = tab.dataset.tab;
+            if (tabName === 'available') {
+                loadBuildings();
+            } else if (tabName === 'built') {
+                loadBase();
+            }
+        });
+    });
+
+    // Табы PvP статистики (если есть)
+    document.querySelectorAll('.pvp-tab').forEach(tab => {
+        bindClickOnce(tab, `pvp${tab.dataset.tab || ''}`, () => {
+            const tabName = tab.dataset.tab;
+            loadPVPStats(tabName);
+        });
+    });
+
+    // Табы магазина (если ещё не инициализированы)
+    if (typeof initShopHandlers === 'function') {
+        initShopHandlers();
+    }
+}
+
+/**
+ * Скрыть экран загрузки
+ */
+function hideLoadingScreen() {
+    const loading = document.getElementById('loading-screen');
+    if (loading) {
+        loading.style.display = 'none';
+    }
+}
+
+/**
+ * Переключение на главный экран
+ */
+function goToMain() {
+    showScreen('main');
+}
+
+/**
+ * Показать экран профиля
+ */
+function showProfile() {
+    showScreen('profile');
+}
+
+/**
+ * Показать экран боя с боссом
+ * @param {number} bossId - ID босса
+ */
+function showBossFight(bossId) {
+    const boss = gameState.bosses?.find(b => b.id === bossId);
+    if (boss) {
+        // Используем существующую функцию startBossFight
+        startBossFight(boss);
+    }
+}
+
+/**
+ * Вернуться к списку боссов
+ */
+function backToBosses() {
+    gameState.currentBoss = null;
+    showScreen('bosses');
+}
+
+// Экспортируем расширенную версию showScreen (перезаписывает базовую из game-utils)
+window.showScreen = showScreen;
+window.onScreenOpen = onScreenOpen;
+window.renderMain = renderMain;
+window.goToMain = goToMain;
+window.showProfile = showProfile;
+window.showBossFight = showBossFight;
+window.backToBosses = backToBosses;
+window.hideLoadingScreen = hideLoadingScreen;

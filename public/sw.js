@@ -14,8 +14,6 @@ const STATIC_ASSETS = [
     '/game.js',
     '/game-api.js',
     '/game-utils.js',
-    '/game-state.js',
-    '/game-screens.js',
     '/game-store.js',
     '/game-map.js',
     '/game-animations.js',

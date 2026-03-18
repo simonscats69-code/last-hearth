@@ -19,13 +19,13 @@ const endpoints = {
     inventory: { endpoint: '/game/inventory', method: 'GET' },
     
     // Исследование и перемещение
-    search: { endpoint: '/game/search', method: 'POST' },
-    move: { endpoint: '/game/move', method: 'POST' },
+    search: { endpoint: '/game/locations/search', method: 'POST' },
+    move: { endpoint: '/game/locations/move', method: 'POST' },
     
     // Предметы
-    useItem: { endpoint: '/game/use-item', method: 'POST' },
-    craft: { endpoint: '/game/craft', method: 'POST' },
-    recipes: { endpoint: '/game/craft/recipes', method: 'GET' },
+    useItem: { endpoint: '/game/inventory/use-item', method: 'POST' },
+    craft: { endpoint: '/game/crafting', method: 'POST' },
+    recipes: { endpoint: '/game/crafting/recipes', method: 'GET' },
     
     // Боссы
     attackBoss: { endpoint: '/game/bosses/attack-boss', method: 'POST' },
@@ -34,7 +34,7 @@ const endpoints = {
     // Статус и магазин
     statusCheck: { endpoint: '/game/status/check', method: 'POST' },
     purchase: { endpoint: '/game/purchase', method: 'POST' },
-    achievements: { endpoint: '/game/achievements', method: 'GET' },
+    achievements: { endpoint: '/game/achievements/progress', method: 'GET' },
     
     // Рейтинги
     ratingsPlayers: { endpoint: '/rating/players', method: 'GET' },
@@ -46,10 +46,10 @@ const endpoints = {
     marketBuy: { endpoint: '/game/market/buy', method: 'POST' },
     
     // Клан
-    clan: { endpoint: '/game/clan', method: 'GET' },
-    clanCreate: { endpoint: '/game/clan/create', method: 'POST' },
-    clanJoin: { endpoint: '/game/clan/join', method: 'POST' },
-    clanLeave: { endpoint: '/game/clan/leave', method: 'POST' },
+    clan: { endpoint: '/game/clans/clan', method: 'GET' },
+    clanCreate: { endpoint: '/game/clans/clan/create', method: 'POST' },
+    clanJoin: { endpoint: '/game/clans/clan/join', method: 'POST' },
+    clanLeave: { endpoint: '/game/clans/clan/leave', method: 'POST' },
     
     // PvP
     pvpAttack: { endpoint: '/game/pvp/attack', method: 'POST' },

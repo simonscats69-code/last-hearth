@@ -686,17 +686,20 @@ async function useItem(itemId) {
  */
 async function loadInventory() {
     try {
-        const data = await apiRequest('/api/game/inventory');
-        gameState.inventory = data.items;
+        const response = await apiRequest('/api/game/inventory');
+        const data = response.data || response;
+        const inventoryItems = Array.isArray(data.inventory) ? data.inventory : [];
+
+        gameState.inventory = inventoryItems;
         
         // Обновляем статистику
         const invCoins = document.getElementById('inv-coins');
         const invStars = document.getElementById('inv-stars');
-        if (invCoins) invCoins.textContent = data.coins || 0;
-        if (invStars) invStars.textContent = data.stars || 0;
+        if (invCoins) invCoins.textContent = gameState.player?.coins || 0;
+        if (invStars) invStars.textContent = gameState.player?.stars || 0;
         
         // Применяем фильтр и сортировку
-        renderInventoryWithFilters(data.items);
+        renderInventoryWithFilters(inventoryItems);
         
     } catch (error) {
         console.error('Inventory error:', error);
@@ -711,19 +714,18 @@ function renderInventory(items) {
     if (!grid) return;
     grid.innerHTML = '';
     
-    // Сортируем предметы по ID
-    const sortedItems = Object.entries(items).sort((a, b) => a[0] - b[0]);
-    
-    for (const [itemId, item] of sortedItems) {
+    const normalizedItems = Array.isArray(items) ? items : [];
+
+    for (const item of normalizedItems) {
         const slot = document.createElement('div');
         slot.className = `inventory-slot item-rarity rarity-${item.rarity || 'common'}`;
         slot.innerHTML = `
-            <span class="item-icon">${item.icon}</span>
-            <span class="item-count">${item.count}</span>
+            <span class="item-icon">${item.icon || '📦'}</span>
+            <span class="item-count">${item.count || 1}</span>
         `;
         
         // Обработчик клика - использовать предмет
-        slot.addEventListener('click', () => useItem(itemId));
+        slot.addEventListener('click', () => useItem(item.index));
         
         grid.appendChild(slot);
     }
@@ -733,17 +735,17 @@ function renderInventory(items) {
  * Отрисовка инвентаря с учётом фильтра и сортировки
  */
 function renderInventoryWithFilters(items) {
-    if (!items) {
-        renderInventory({});
+    if (!Array.isArray(items)) {
+        renderInventory([]);
         return;
     }
     
     // Фильтрация предметов
-    let filteredItems = Object.entries(items);
+    let filteredItems = [...items];
     
     if (typeof currentInventoryFilter !== 'undefined' && currentInventoryFilter !== 'all') {
-        filteredItems = filteredItems.filter(([itemId, item]) => {
-            const category = getItemCategory(itemId);
+        filteredItems = filteredItems.filter((item) => {
+            const category = getItemCategory(item.id);
             return category === currentInventoryFilter;
         });
     }
@@ -751,28 +753,23 @@ function renderInventoryWithFilters(items) {
     // Сортировка предметов
     const sortKey = typeof currentInventorySort !== 'undefined' ? currentInventorySort : 'id';
     filteredItems.sort((a, b) => {
-        const [idA, itemA] = a;
-        const [idB, itemB] = b;
-        
         switch (sortKey) {
             case 'name':
-                return (itemA.name || '').localeCompare(itemB.name || '');
+                return (a.name || '').localeCompare(b.name || '');
             case 'rarity':
                 const rarityOrder = { legendary: 5, epic: 4, rare: 3, uncommon: 2, common: 1 };
-                const rA = rarityOrder[itemA.rarity] || 0;
-                const rB = rarityOrder[itemB.rarity] || 0;
+                const rA = rarityOrder[a.rarity] || 0;
+                const rB = rarityOrder[b.rarity] || 0;
                 return rB - rA;
             case 'count':
-                return (itemB.count || 0) - (itemA.count || 0);
+                return (b.count || 1) - (a.count || 1);
             case 'id':
             default:
-                return parseInt(idA) - parseInt(idB);
+                return (a.id || 0) - (b.id || 0);
         }
     });
-    
-    // Создаём отфильтрованный объект
-    const filteredObject = Object.fromEntries(filteredItems);
-    renderInventory(filteredObject);
+
+    renderInventory(filteredItems);
 }
 
 // ============================================================================

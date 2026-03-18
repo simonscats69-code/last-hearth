@@ -173,33 +173,6 @@ function closeModal() {
     }
 }
 
-/**
- * Показать экран
- * @param {string} screenName - Имя экрана
- */
-function showScreen(screenName) {
-    // Скрываем все экраны
-    document.querySelectorAll('.screen').forEach(screen => {
-        screen.classList.remove('active');
-    });
-    
-    // Показываем нужный экран
-    const screen = document.getElementById(`${screenName}-screen`);
-    if (screen) {
-        screen.classList.add('active');
-    } else {
-        console.warn(`showScreen: экран "${screenName}" не найден`);
-    }
-    
-    // Обновляем активную кнопку навигации
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.dataset.screen === screenName) {
-            btn.classList.add('active');
-        }
-    });
-}
-
 // ============================================================================
 // РАБОТА С ДАННЫМИ
 // ============================================================================
@@ -280,7 +253,7 @@ window.formatPercent = formatPercent;
 window.formatTime = formatTime;
 window.showModal = showModal;
 window.closeModal = closeModal;
-// showScreen удалён - используется расширенная версия из game-screens.js
+// showScreen удалён - используется расширенная версия из game-core.js
 window.getItemCategory = getItemCategory;
 window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;

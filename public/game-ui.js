@@ -606,13 +606,14 @@ function renderMarketHistory(history) {
  */
 async function loadMarketCreateForm() {
     try {
-        const data = await apiRequest('/api/game/inventory');
-        const items = data.items;
+        const response = await apiRequest('/api/game/inventory');
+        const data = response.data || response;
+        const items = Array.isArray(data.inventory) ? data.inventory : [];
         
         const grid = document.getElementById('market-inventory-grid');
         if (!grid) return;
         
-        if (!items || Object.keys(items).length === 0) {
+        if (items.length === 0) {
             grid.innerHTML = '<div class="empty-message">Инвентарь пуст</div>';
             return;
         }
@@ -623,8 +624,10 @@ async function loadMarketCreateForm() {
             itemsMap[item.id] = item;
         });
 
-        grid.innerHTML = Object.entries(items).map(([itemId, quantity]) => {
-            const itemInfo = itemsMap[itemId] || { id: itemId, name: 'Неизвестно', icon: '📦', rarity: 'common', type: 'resource' };
+        grid.innerHTML = items.map((item) => {
+            const itemId = item.id;
+            const quantity = item.count || 1;
+            const itemInfo = itemsMap[itemId] || item || { id: itemId, name: 'Неизвестно', icon: '📦', rarity: 'common', type: 'resource' };
             const rarityClass = `rarity-${itemInfo.rarity || 'common'}`;
 
             return `
@@ -1293,20 +1296,6 @@ function setElementText(id, value) {
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Навигация
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            showScreen(btn.dataset.screen);
-        });
-    });
-    
-    // Кнопки назад
-    document.querySelectorAll('.back-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            showScreen(btn.dataset.screen);
-        });
-    });
-    
     // Основные кнопки
     document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
     document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
@@ -1365,14 +1354,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('market-sort-filter')?.addEventListener('change', loadMarketListings);
     
     // Табы
-    document.querySelectorAll('.rating-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.rating-tab').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-            loadRating(tab.dataset.tab);
-        });
-    });
-    
     document.querySelectorAll('.market-info-bar .tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.market-info-bar .tab-btn').forEach(t => t.classList.remove('active'));
@@ -1389,9 +1370,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Инициализация - ждём загрузки всех модулей
     function startGame() {
-        // Проверяем, что game-screens.js загружен
+        // Проверяем, что экранный слой загружен
         if (typeof showScreen !== 'function') {
-            console.warn('game-screens.js не загружен, ожидаем...');
+            console.warn('Экранный слой не загружен, ожидаем...');
             setTimeout(startGame, 100);
             return;
         }
@@ -1399,7 +1380,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initGame();
         initReferralHandlers();
         
-        // Инициализация навигации из game-screens.js
+        // Инициализация навигации из game-core.js
         if (typeof initNavigationHandlers === 'function') {
             initNavigationHandlers();
         }

@@ -160,9 +160,12 @@ async function buyShopItem(itemId, category) {
     // Покупка
     try {
         const numericId = getNumericItemId(itemId);
-        const result = await apiPost('/game/purchase', {
-            item_id: numericId,
-            currency: item.currency
+        const result = await apiRequest('/api/game/purchase', {
+            method: 'POST',
+            body: {
+                item_id: numericId,
+                currency: item.currency
+            }
         });
         
         if (result.success) {
@@ -273,14 +276,8 @@ async function spinWheelPaid() {
         return;
     }
     
-    // Синхронизация с сервером перед списанием
-    try {
-        await apiPost('/game/wheel/spin', { is_paid: true });
-    } catch (e) {
-        showModal('❌ Ошибка', 'Не удалось начать вращение');
-        return;
-    }
-    
+    // Бэкенд-эндпоинта для синхронизации колеса пока нет,
+    // поэтому списываем стоимость локально и запускаем анимацию.
     player.stars -= 1;
     spinWheel(true);
 }
