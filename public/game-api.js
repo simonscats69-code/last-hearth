@@ -28,7 +28,7 @@ const endpoints = {
     recipes: { endpoint: '/game/craft/recipes', method: 'GET' },
     
     // Боссы
-    attackBoss: { endpoint: '/game/attack-boss', method: 'POST' },
+    attackBoss: { endpoint: '/game/bosses/attack-boss', method: 'POST' },
     bosses: { endpoint: '/game/bosses', method: 'GET' },
     
     // Статус и магазин
