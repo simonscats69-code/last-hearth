@@ -50,28 +50,38 @@ SECRET_KEY=your_secret_key
 
 ```
 last-hearth/
-├── src/
-│   ├── index.js          # Главный файл сервера
-│   ├── bot/
-│   │   └── webhook.js   # Telegram Webhook обработчики
-│   ├── db/
-│   │   └── database.js  # Подключение к PostgreSQL
-│   └── routes/
-│       ├── game.js      # Игровые API endpoints
-│       └── api.js       # Дополнительные API
-├── public/
-│   ├── index.html       # Главная страница Mini App
-│   ├── styles.css       # Стили
-│   └── game.js          # Клиентский JavaScript
-├── package.json
-└── README.md
+├── index.js                 # Точка входа сервера
+├── bot/
+│   └── webhook.js           # Telegram Webhook
+├── db/
+│   ├── database.js          # Подключение и DB-утилиты
+│   ├── schema.js            # DDL и миграции
+│   └── players.js           # DB-слой игроков
+├── routes/
+│   ├── api.js               # Общие API-роуты
+│   ├── leaderboard.js       # Рейтинги
+│   └── game/                # Игровые namespace-роуты
+├── services/
+│   └── playerService.js     # Бизнес-логика игрока
+├── utils/
+│   ├── serverApi.js         # Серверные утилиты и auth
+│   ├── gameConstants.js     # Игровые формулы
+│   └── playerState.js       # Нормализация состояния игрока
+└── public/
+    ├── index.html           # Главная страница Mini App
+    ├── styles.css           # Стили
+    ├── game-core.js         # Ядро клиента, state, экраны
+    ├── game-systems.js      # Игровые сценарии и механики
+    ├── game-ui.js           # DOM-binding и обработчики
+    ├── game-api.js          # Клиентские API-обёртки
+    └── прочие UI/эффект-модули
 ```
 
 ## Функции игры
 
 ### Персонаж
-- 5 характеристик: сила, выносливость, ловкость, интеллект, удача
-- 7 состояний: здоровье, голод, жажда, радиация, усталость, переломы, инфекции
+- 6 характеристик: сила, выносливость, ловкость, интеллект, удача, крафт
+- Основные состояния: здоровье, энергия, радиация, усталость, инфекции
 - Энергия: тратится на действия, восстанавливается 1/мин
 
 ### Локации
@@ -94,18 +104,29 @@ last-hearth/
 
 ## Разработка
 
-### API Endpoints
+### Основные API Endpoints
 
 ```
-GET  /api/game/profile     - Профиль игрока
-POST /api/game/search      - Поиск лута
-POST /api/game/move        - Переход к локации
-GET  /api/game/locations   - Список локаций
-POST /api/game/use-item    - Использовать предмет
-GET  /api/game/inventory   - Инвентарь
-GET  /api/game/bosses      - Список боссов
-POST /api/game/attack-boss - Атаковать босса
-POST /api/game/restore-energy - Восстановить энергию
+GET  /api/game/profile
+GET  /api/game/inventory
+POST /api/game/inventory/use-item
+
+GET  /api/game/locations
+POST /api/game/locations/search
+POST /api/game/locations/move
+
+GET  /api/game/bosses
+POST /api/game/bosses/attack-boss
+GET  /api/game/bosses/raids
+
+GET  /api/game/clans/clan
+POST /api/game/clans/clan/create
+POST /api/game/clans/clan/join
+
+POST /api/game/energy/buy-energy
+GET  /api/game/market/listings-v2
+POST /api/game/purchase
+POST /api/verify-telegram
 ```
 
 ## Лицензия

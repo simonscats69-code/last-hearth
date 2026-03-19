@@ -58,10 +58,10 @@ const endpoints = {
     referralCode: { endpoint: '/game/referral/code', method: 'GET' },
     referralUse: { endpoint: '/game/referral/use', method: 'POST' },
     
-    // Клановые боссы
-    clanBoss: { endpoint: '/game/clan-boss', method: 'GET' },
-    clanBossSpawn: { endpoint: '/game/clan-boss/spawn', method: 'POST' },
-    clanBossAttack: { endpoint: '/game/clan-boss/attack', method: 'POST' }
+    // Рейдовые боссы
+    clanBoss: { endpoint: '/game/bosses/raids', method: 'GET' },
+    clanBossSpawn: { endpoint: '/game/bosses/raid/start', method: 'POST' },
+    clanBossAttack: { endpoint: '/game/bosses/raid/attack', method: 'POST' }
 };
 
 // ============================================

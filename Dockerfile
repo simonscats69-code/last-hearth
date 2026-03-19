@@ -5,13 +5,12 @@ WORKDIR /app
 
 # Устанавливаем зависимости
 COPY package*.json ./
-RUN npm install
+RUN npm ci --omit=dev
 
 # Копируем весь проект
 COPY . .
 
-# Копируем entrypoint и делаем исполняемым
-COPY entrypoint.sh /app/entrypoint.sh
+# Делаем entrypoint исполняемым
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3000

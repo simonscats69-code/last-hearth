@@ -132,9 +132,9 @@ describe('Игровая логика', () => {
             expect(maxEnergy50).toBeGreaterThanOrEqual(maxEnergy10);
         });
         
-        test('не должен превышать 150', () => {
+        test('не должен превышать 100 по текущей формуле', () => {
             const maxEnergy100 = Math.min(150, 50 + Math.floor(100 / 10) * 5);
-            expect(maxEnergy100).toBe(150);
+            expect(maxEnergy100).toBe(100);
         });
     });
     
