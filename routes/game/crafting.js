@@ -414,7 +414,7 @@ const GameCrafting = {
         safeParse,
         handleError,
         withPlayerLock,
-        logPlayerAction
+        logPlayerActionSimple
     }
 };
 
