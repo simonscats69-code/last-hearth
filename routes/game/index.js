@@ -52,25 +52,11 @@ const criticalActionLimiter = rateLimit({
 });
 
 /**
- * Боссы - общий лимит для соло и массовых боёв
- * Лимит: 30 запросов в минуту
- * 
+ * Боссы - без лимита (защита только по энергии)
  * Endpoints: bosses/start, bosses/attack-boss, bosses/raid/start, bosses/raid/:id/join, bosses/raid/:id/attack
  */
-const bossActionLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 минута
-    max: 30, // 30 запросов в минуту
-    message: { 
-        error: 'Слишком много действий с боссами.', 
-        code: 'BOSS_ACTION_LIMIT',
-        retryAfter: 60 
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => {
-        return req.player?.id || req.ip;
-    }
-});
+// Лимит убран - игроки ограничены только энергией
+const bossActionLimiter = (req, res, next) => next();
 
 /**
  * Безлимитный режим для кликов (атака босса)
