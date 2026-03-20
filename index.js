@@ -171,7 +171,7 @@ const limiter = rateLimit({
 
 const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 30,
+    max: 1000, // Убрали лимит - игра требует много кликов
     message: { error: 'API лимит превышен' },
     keyGenerator: (req) => req.headers['x-telegram-id'] || req.ip
 });

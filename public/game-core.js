@@ -632,8 +632,9 @@ function setHtml(elementOrId, html) {
 function bindClickOnce(element, key, handler) {
     if (!element) return;
 
-    // Используем атрибут с data- префиксом для корректной работы с дефисами
-    const attrName = `data-bound${key}`;
+    // Используем безопасное имя атрибута - только буквы и цифры
+    const safeKey = key.replace(/[^a-zA-Z0-9]/g, '_');
+    const attrName = `data-bound-${safeKey}`;
     if (element.getAttribute(attrName) === 'true') {
         return;
     }
