@@ -845,14 +845,13 @@ function renderBossesInfo(info) {
 }
 
 function switchBossesTab(tabName = 'solo') {
-    const soloTab = document.getElementById('bosses-solo-tab');
-    const massTab = document.getElementById('bosses-mass-tab');
+    const toggle = document.getElementById('boss-mode-switch');
+    const isRaid = toggle ? toggle.checked : (tabName === 'mass');
+    const isSolo = !isRaid;
+    
     const bossesList = document.getElementById('bosses-list');
     const raidsList = document.getElementById('raids-list');
-    const isSolo = tabName === 'solo';
 
-    if (soloTab) soloTab.classList.toggle('active', isSolo);
-    if (massTab) massTab.classList.toggle('active', !isSolo);
     if (bossesList) bossesList.style.display = isSolo ? 'block' : 'none';
     if (raidsList) raidsList.style.display = isSolo ? 'none' : 'block';
 
@@ -862,6 +861,11 @@ function switchBossesTab(tabName = 'solo') {
         renderRaids(gameState.raids || []);
     }
 }
+
+// Обработчик переключателя режима боссов
+document.getElementById('boss-mode-switch')?.addEventListener('change', function() {
+    switchBossesTab(this.checked ? 'mass' : 'solo');
+});
 
 /**
  * Отрисовка боссов с новой механикой "Война с боссами"

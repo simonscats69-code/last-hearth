@@ -300,9 +300,13 @@
                 <button class="back-btn" data-screen="main">← Назад</button>
                 <h2>👹 Боссы</h2>
             </header>
-            <div class="bosses-tabs">
-                <button class="bosses-tab active" id="bosses-solo-tab" data-tab="solo">Обычные боссы</button>
-                <button class="bosses-tab" id="bosses-mass-tab" data-tab="mass">Массовые бои</button>
+            <div class="boss-mode-toggle">
+                <span class="toggle-label">Обычный бой</span>
+                <label class="switch">
+                    <input type="checkbox" id="boss-mode-switch">
+                    <span class="slider"></span>
+                </label>
+                <span class="toggle-label">Рейд</span>
             </div>
             <div class="bosses-info" id="bosses-info"></div>
             <div class="bosses-list" id="bosses-list">
