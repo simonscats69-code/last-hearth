@@ -857,7 +857,7 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
             const battleLog = document.getElementById('pvp-battle-log');
             if (battleLog) {
                 battleLog.innerHTML = `
-                    <p>⚔️ Бой начат против ${targetName}!</p>
+                    <p>⚔️ Бой начат против ${escapeHtml(targetName)}!</p>
                     <p>Каждый удар тратит 1 энергию</p>
                 `;
             }

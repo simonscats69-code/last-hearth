@@ -901,10 +901,10 @@ function renderBosses(bosses) {
         item.className = `boss-item ${isUnlocked ? '' : 'locked'} ${isUnlocked ? 'available' : 'unavailable'}`;
 
         item.innerHTML = `
-            <div class="boss-icon">${boss.icon}</div>
+            <div class="boss-icon">${escapeHtml(boss.icon)}</div>
             <div class="boss-info">
-                <div class="boss-name">${boss.name}</div>
-                <div class="boss-desc">${boss.description || ''}</div>
+                <div class="boss-name">${escapeHtml(boss.name)}</div>
+                <div class="boss-desc">${escapeHtml(boss.description || '')}</div>
                 <div class="boss-hp-bar">
                     <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
                 </div>
@@ -1012,7 +1012,7 @@ function startBossFight(boss) {
     }
     if (fightLog) {
         fightLog.innerHTML = `
-            <p class="fight-start">🎯 Бой с <strong>${boss.name}</strong> начался!</p>
+            <p class="fight-start">🎯 Бой с <strong>${escapeHtml(boss.name)}</strong> начался!</p>
             <p>1 удар = 1 энергия. Бой длится 8 часов.</p>
         `;
     }
@@ -1271,7 +1271,7 @@ function renderClanScreen(data) {
                     <span class="clan-level">Уровень ${clan.level}</span>
                 </div>
             </div>
-            ${clan.description ? `<p class="clan-description">${clan.description}</p>` : ''}
+            ${clan.description ? `<p class="clan-description">${escapeHtml(clan.description)}</p>` : ''}
             <div class="clan-stats">
                 <div class="clan-stat">
                     <span class="stat-icon">👥</span>
@@ -1452,13 +1452,13 @@ function renderClansList(clans) {
         list,
         clans,
         (clan) => {
-            return '<div class="clan-list-item" data-clan-id="' + clan.id + '">' +
+            return '<div class="clan-list-item" data-clan-id="' + escapeHtml(clan.id) + '">' +
                 '<div class="clan-list-icon">🏰</div>' +
                 '<div class="clan-list-info">' +
-                    '<div class="clan-list-name">' + clan.name + '</div>' +
-                    '<div class="clan-list-stats">👥 ' + (clan.member_count || 1) + ' | Уровень ' + clan.level + '</div>' +
+                    '<div class="clan-list-name">' + escapeHtml(clan.name) + '</div>' +
+                    '<div class="clan-list-stats">👥 ' + (clan.member_count || 1) + ' | Уровень ' + escapeHtml(clan.level) + '</div>' +
                 '</div>' +
-                '<button class="join-btn" data-clan-id="' + clan.id + '">Вступить</button>' +
+                '<button class="join-btn" data-clan-id="' + escapeHtml(clan.id) + '">Вступить</button>' +
             '</div>';
         },
         '<div class="empty-message">Нет доступных кланов</div>'

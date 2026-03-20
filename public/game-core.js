@@ -632,13 +632,14 @@ function setHtml(elementOrId, html) {
 function bindClickOnce(element, key, handler) {
     if (!element) return;
 
-    const attr = `bound${key}`;
-    if (element.dataset[attr] === 'true') {
+    // Используем атрибут с data- префиксом для корректной работы с дефисами
+    const attrName = `data-bound${key}`;
+    if (element.getAttribute(attrName) === 'true') {
         return;
     }
 
     element.addEventListener('click', handler);
-    element.dataset[attr] = 'true';
+    element.setAttribute(attrName, 'true');
 }
 
 /**
