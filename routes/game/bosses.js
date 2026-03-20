@@ -1,143 +1,46 @@
 /**
- * Боссы и война с боссами (механика как в Тюряге)
- * Namespace: player, bosses
- * 
- * Основные механики:
- * - Вход на босса: Босс 1 бесплатно, Босс N - 3 ключа от босса N-1
- * - Атака: каждый клик тратит 1 энергию
- * - Урон = 1 (базовый) + мастерство_босса + уровень_игрока + бонус_оружия + бонус_сетов
- * - Мастерство: при каждом убийстве босса мастерство++
- * - Награды: +1 ключ для следующего босса + монеты + опыт
- * 
- * Критерии продакшна:
- * - Транзакции и атомарность для операций записи
- * - Валидация входных данных
- * - Логирование действий игрока
- * - Единый формат ответов {success, data}
+ * Боссы: соло-боёвка и массовые бои.
+ *
+ * Согласованная модель:
+ * - Обычные боссы доступны соло и в массовом режиме
+ * - Ключи тратятся только при старте боя
+ * - Игрок может находиться только в одном активном бою одновременно
+ * - Соло и массовый бой — разные режимы
  */
 
 const express = require('express');
 const router = express.Router();
-const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { logger, safeJsonParse, PlayerHelper: playerHelper } = require('../../utils/serverApi');
+const { pool } = require('../../db/database');
+const { logger, safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
+const { normalizeInventory } = require('../../utils/playerState');
 
-// Константы
-const KEYS_REQUIRED_FOR_NEXT_BOSS = 3; // Ключей нужно для следующего босса
-const BOSS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000; // 8 часов на бой с боссом
+const KEYS_REQUIRED_FOR_BOSS = 3;
+const SOLO_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
+const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
+const DAMAGE_PER_KILL = 0.1;
+const KILL_DECAY_FACTOR = 0.1;
 
-// Константы для расчёта бонуса урона
-const DAMAGE_PER_KILL = 0.1;       // +0.1 урона за 1 убийство (10 убийств = +1 урон)
-const DAMAGE_PER_PREV_KILL = 0.1;   // +0.1 урона за 1 убийство предыдущего босса
-const KILL_DECAY_FACTOR = 0.1;      // Каждый следующий босс получает в 10 раз меньше
-const ATTACK_COOLDOWN_MS = 500;     // 500ms между атаками
+// handleError импортируется из utils/serverApi
 
-/**
- * Рассчитать бонус урона игрока против конкретного босса
- * 
- * Формула:
- * - kills босса N × 0.1 → бонус к боссу N
- * - kills босса N × 0.01 → бонус к боссу N+1
- * - kills босса N × 0.001 → бонус к боссу N+2
- * - и так далее (каждый следующий босс в 10 раз меньше)
- * 
- * @param {number} playerLevel - Уровень игрока
- * @param {number} bossId - ID босса (1-10)
- * @param {Array} masteries - Массив {boss_id, kills} всех убийств игрока
- * @returns {number} Бонус урона
- */
-function calculateDamageBonus(playerLevel, bossId, masteries) {
-    // Создаём map для быстрого доступа к kills
-    const masteryMap = {};
-    for (const m of masteries) {
-        masteryMap[m.boss_id] = m.kills;
-    }
-    
-    // Рассчитываем бонус от убийств всех предыдущих боссов
-    let killBonus = 0;
-    
-    // Для каждого босса от 1 до bossId-1
-    for (let i = 1; i < bossId; i++) {
-        const kills = masteryMap[i] || 0;
-        const distance = bossId - i; // Расстояние до целевого босса
-        const multiplier = Math.pow(KILL_DECAY_FACTOR, distance); // 0.1^distance
-        // Используем DAMAGE_PER_KILL = 0.1 для убийств предыдущих боссов
-        killBonus += kills * DAMAGE_PER_KILL * multiplier;
-    }
-    
-    // Бонус за убийства текущего босса
-    const currentKills = masteryMap[bossId] || 0;
-    killBonus += currentKills * DAMAGE_PER_KILL;
-    
-    return Math.floor(killBonus);
-}
-
-/**
- * Универсальный обработчик ошибок
- * @param {object} res - объект ответа Express
- * @param {Error} error - объект ошибки
- * @param {string} action - действие, в котором произошла ошибка
- */
-function handleError(res, error, action = 'unknown') {
-    logger.error(`[bosses] ${action}`, {
-        error: error.message,
-        stack: error.stack
-    });
-    
-    return res.status(500).json({
-        success: false,
-        error: 'Внутренняя ошибка сервера',
-        code: 'INTERNAL_ERROR'
-    });
-}
-
-/**
- * Выполнить запрос с таймаутом
- * @param {Promise} promise - промис запроса
- * @param {number} ms - таймаут в миллисекундах
- * @param {string} timeoutMessage - сообщение при таймауте
- */
-function withTimeout(promise, ms, timeoutMessage = 'Запрос занял слишком много времени') {
-    return Promise.race([
-        promise,
-        new Promise((_, reject) => 
-            setTimeout(() => reject(new Error(timeoutMessage)), ms)
-        )
-    ]);
-}
-
-/**
- * Валидация ID босса
- * @param {any} bossId - ID для валидации
- * @returns {boolean} результат валидации
- */
 function validateBossId(bossId) {
     return Number.isInteger(bossId) && bossId > 0;
 }
 
-/**
- * Получение бонусов от экипировки игрока
- * @param {object} player - объект игрока
- * @returns {object} бонусы {weaponBonus, setBonus}
- */
 function getEquipmentBonuses(player) {
     const equipment = safeJsonParse(player.equipment, {});
-    
+
     let weaponBonus = 0;
     let setBonus = 0;
-    
-    // Бонус от оружия
+
     if (equipment.weapon && equipment.weapon.damage) {
         weaponBonus = equipment.weapon.damage;
-        
-        // Модификации оружия
+
         if (equipment.weapon.modifications?.sharpening) {
             weaponBonus += equipment.weapon.modifications.sharpening * 2;
         }
     }
-    
-    // Бонус от сетов
+
     if (equipment.set_id) {
-        // Проверяем set_items - это может быть массив или JSON-строка
         let setItems = [];
         if (equipment.set_items) {
             if (Array.isArray(equipment.set_items)) {
@@ -146,643 +49,600 @@ function getEquipmentBonuses(player) {
                 setItems = safeJsonParse(equipment.set_items, []);
             }
         }
-        
+
         if (setItems.length > 0) {
-            const setItemCount = setItems.length;
-            
-            // Бонус за каждый предмет из сета (по 5% за предмет)
-            setBonus = setItemCount * Math.floor(player.level * 0.05);
+            setBonus = setItems.length * Math.floor((player.level || 1) * 0.05);
         }
     }
-    
+
     return { weaponBonus, setBonus };
 }
 
-/**
- * Вычисление урона по формуле
- * урон = 1 (базовый) + бонус_убийств + уровень_игрока + бонус_оружия + бонус_сетов
- * 
- * Бонус убийств:
- * - +0.1 за каждое убийство текущего босса (10 убийств = +1 урон)
- * - +0.01 за каждое убийство предыдущего босса (100 убийств = +1 урон)
- * 
- * @param {number} bossId - ID босса
- * @param {number} playerLevel - уровень игрока
- * @param {object} player - объект игрока
- * @param {Array} masteries - массив {boss_id, kills} всех убийств
- * @returns {number} итоговый урон
- */
-function calculateDamage(bossId, playerLevel, player, masteries = []) {
-    const { weaponBonus, setBonus } = getEquipmentBonuses(player);
-    
-    // Рассчитываем бонус от убийств
-    const killBonus = calculateDamageBonus(playerLevel, bossId, masteries);
-    
-    // Формула урона: 1 + бонус_убийств + уровень + бонус оружия + бонус сетов
-    const damage = 1 + killBonus + playerLevel + weaponBonus + setBonus;
-    
-    return Math.floor(damage);
+function calculateDamageBonus(bossId, masteries) {
+    const masteryMap = {};
+    for (const mastery of masteries) {
+        masteryMap[mastery.boss_id] = mastery.kills;
+    }
+
+    let killBonus = 0;
+
+    for (let i = 1; i < bossId; i++) {
+        const kills = masteryMap[i] || 0;
+        const distance = bossId - i;
+        const multiplier = Math.pow(KILL_DECAY_FACTOR, distance);
+        killBonus += kills * DAMAGE_PER_KILL * multiplier;
+    }
+
+    const currentKills = masteryMap[bossId] || 0;
+    killBonus += currentKills * DAMAGE_PER_KILL;
+
+    return Math.floor(killBonus);
 }
 
-/**
- * Получить бонусы урона игрока против всех боссов
- * GET /boss-bonuses
- * 
- * Показывает:
- * - Бонус за уровень игрока
- * - Бонус за убийства каждого босса
- * - Итоговый бонус для каждого босса
- */
-/**
- * Вход на босса (списание ключей и начало боя)
- * POST /boss/start
- * 
- * Тело запроса:
- * {
- *   boss_id: 1
- * }
- * 
- * Ключи списываются здесь, а не при каждой атаке!
- */
-router.post('/start', async (req, res) => {
-    const client = await pool.connect();
-    
-    try {
-        const { boss_id } = req.body;
-        const playerId = req.player.id;
-        
-        // Валидация
-        if (!validateBossId(boss_id)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите ID босса',
-                code: 'MISSING_BOSS_ID'
+function calculateDamage(bossId, player, masteries = []) {
+    const { weaponBonus, setBonus } = getEquipmentBonuses(player);
+    const killBonus = calculateDamageBonus(bossId, masteries);
+
+    return Math.floor(1 + killBonus + (player.level || 1) + weaponBonus + setBonus);
+}
+
+function getNextBossId(bossId) {
+    return bossId + 1;
+}
+
+function normalizeRewardItems(rawRewardItems) {
+    const parsed = safeJsonParse(rawRewardItems, []);
+    return Array.isArray(parsed) ? parsed : [];
+}
+
+async function getBossById(client, bossId) {
+    const result = await client.query('SELECT * FROM bosses WHERE id = $1', [bossId]);
+    return result.rows[0] || null;
+}
+
+async function getPlayerBaseState(client, playerId) {
+    const result = await client.query(
+        `SELECT id, first_name, level, energy, max_energy, equipment,
+                active_boss_id, active_boss_started_at, active_boss_mode, active_raid_id
+         FROM players
+         WHERE id = $1
+         FOR UPDATE`,
+        [playerId]
+    );
+
+    return result.rows[0] || null;
+}
+
+async function clearPlayerActiveBattle(client, playerId) {
+    await client.query(
+        `UPDATE players
+         SET active_boss_id = NULL,
+             active_boss_started_at = NULL,
+             active_boss_mode = NULL,
+             active_raid_id = NULL
+         WHERE id = $1`,
+        [playerId]
+    );
+}
+
+async function clearActiveBattleForPlayers(client, playerIds) {
+    if (!playerIds.length) return;
+
+    await client.query(
+        `UPDATE players
+         SET active_boss_id = NULL,
+             active_boss_started_at = NULL,
+             active_boss_mode = NULL,
+             active_raid_id = NULL
+         WHERE id = ANY($1::int[])`,
+        [playerIds]
+    );
+}
+
+async function resolveActiveBattle(client, playerId) {
+    const player = await getPlayerBaseState(client, playerId);
+    if (!player || !player.active_boss_mode) {
+        return null;
+    }
+
+    if (player.active_boss_mode === 'solo') {
+        if (!player.active_boss_started_at || !player.active_boss_id) {
+            await clearPlayerActiveBattle(client, playerId);
+            return null;
+        }
+
+        const startedAt = new Date(player.active_boss_started_at).getTime();
+        const timePassed = Date.now() - startedAt;
+        if (timePassed >= SOLO_FIGHT_DURATION_MS) {
+            await client.query('DELETE FROM player_boss_progress WHERE player_id = $1', [playerId]);
+            await clearPlayerActiveBattle(client, playerId);
+            return null;
+        }
+
+        const result = await client.query(
+            `SELECT b.id, b.name, b.icon, b.max_health, b.reward_coins, b.reward_experience,
+                    pbp.current_hp, pbp.max_hp, pbp.started_at
+             FROM bosses b
+             JOIN player_boss_progress pbp ON pbp.boss_id = b.id AND pbp.player_id = $1
+             WHERE b.id = $2`,
+            [playerId, player.active_boss_id]
+        );
+
+        const boss = result.rows[0];
+        if (!boss) {
+            await clearPlayerActiveBattle(client, playerId);
+            return null;
+        }
+
+        return {
+            type: 'solo',
+            boss_id: boss.id,
+            started_at: player.active_boss_started_at,
+            time_remaining_ms: SOLO_FIGHT_DURATION_MS - timePassed,
+            boss: {
+                id: boss.id,
+                name: boss.name,
+                icon: boss.icon,
+                hp: boss.current_hp,
+                max_hp: boss.max_hp,
+                reward_coins: boss.reward_coins,
+                reward_experience: boss.reward_experience
+            }
+        };
+    }
+
+    if (player.active_boss_mode === 'mass') {
+        if (!player.active_raid_id) {
+            await clearPlayerActiveBattle(client, playerId);
+            return null;
+        }
+
+        const raidResult = await client.query(
+            `SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at,
+                    b.name, b.icon, b.reward_coins, b.reward_experience
+             FROM raid_progress rp
+             JOIN bosses b ON b.id = rp.boss_id
+             WHERE rp.id = $1 AND rp.is_active = true AND rp.is_raid = true AND rp.expires_at > NOW()`,
+            [player.active_raid_id]
+        );
+
+        const raid = raidResult.rows[0];
+        if (!raid) {
+            await clearPlayerActiveBattle(client, playerId);
+            return null;
+        }
+
+        return {
+            type: 'mass',
+            raid_id: raid.id,
+            boss_id: raid.boss_id,
+            started_at: player.active_boss_started_at,
+            time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now(),
+            boss: {
+                id: raid.boss_id,
+                name: raid.name,
+                icon: raid.icon,
+                hp: raid.current_health,
+                max_hp: raid.max_health,
+                reward_coins: raid.reward_coins,
+                reward_experience: raid.reward_experience
+            }
+        };
+    }
+
+    await clearPlayerActiveBattle(client, playerId);
+    return null;
+}
+
+async function getBossMasteries(client, playerId) {
+    const result = await client.query('SELECT boss_id, kills FROM boss_mastery WHERE player_id = $1', [playerId]);
+    return result.rows;
+}
+
+async function getPlayerKeyCount(client, playerId, previousBossId) {
+    if (previousBossId <= 0) return 0;
+
+    const result = await client.query(
+        'SELECT quantity FROM boss_keys WHERE player_id = $1 AND boss_id = $2',
+        [playerId, previousBossId]
+    );
+
+    return result.rows[0]?.quantity || 0;
+}
+
+async function spendBossKeys(client, playerId, previousBossId) {
+    if (previousBossId <= 0) return;
+
+    const keyCount = await getPlayerKeyCount(client, playerId, previousBossId);
+    if (keyCount < KEYS_REQUIRED_FOR_BOSS) {
+        throw {
+            message: `Нужно ${KEYS_REQUIRED_FOR_BOSS} ключей от босса ${previousBossId}`,
+            code: 'INSUFFICIENT_KEYS',
+            statusCode: 400,
+            keys_owned: keyCount,
+            keys_required: KEYS_REQUIRED_FOR_BOSS
+        };
+    }
+
+    await client.query(
+        `UPDATE boss_keys
+         SET quantity = quantity - $1
+         WHERE player_id = $2 AND boss_id = $3`,
+        [KEYS_REQUIRED_FOR_BOSS, playerId, previousBossId]
+    );
+}
+
+async function grantNextBossKey(client, playerId, bossId) {
+    const nextBossId = getNextBossId(bossId);
+    const bossExists = await getBossById(client, nextBossId);
+    if (!bossExists) return null;
+
+    await client.query(
+        `INSERT INTO boss_keys (player_id, boss_id, quantity)
+         VALUES ($1, $2, 1)
+         ON CONFLICT (player_id, boss_id)
+         DO UPDATE SET quantity = boss_keys.quantity + 1`,
+        [playerId, nextBossId]
+    );
+
+    return {
+        boss_id: nextBossId,
+        quantity: 1,
+        boss_name: bossExists.name
+    };
+}
+
+async function loadItemTemplates(client, rewardItems) {
+    const templates = [];
+
+    for (const reward of rewardItems) {
+        if (reward.item_id || reward.id) {
+            const itemId = reward.item_id || reward.id;
+            const result = await client.query(
+                `SELECT id, name, type, rarity, icon,
+                        COALESCE((stats->>'damage')::integer, 0) AS damage,
+                        COALESCE((stats->>'defense')::integer, 0) AS defense
+                 FROM items WHERE id = $1`,
+                [itemId]
+            );
+
+            if (result.rows[0]) {
+                templates.push({ ...result.rows[0], quantity: Number(reward.quantity || 1) });
+            }
+        } else if (reward.name && reward.type) {
+            templates.push({
+                id: reward.id || reward.item_id || null,
+                name: reward.name,
+                type: reward.type,
+                rarity: reward.rarity || 'common',
+                icon: reward.icon || '📦',
+                damage: Number(reward.damage || 0),
+                defense: Number(reward.defense || 0),
+                quantity: Number(reward.quantity || 1)
             });
         }
-        
+    }
+
+    return templates;
+}
+
+async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
+    const normalizedItems = normalizeRewardItems(rewardItems);
+    if (!normalizedItems.length || multiplier <= 0) return [];
+
+    const templates = await loadItemTemplates(client, normalizedItems);
+    if (!templates.length) return [];
+
+    const playerResult = await client.query('SELECT inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
+    const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
+    const granted = [];
+
+    for (const template of templates) {
+        const totalQuantity = Math.max(1, template.quantity || 1);
+        const grantedQuantity = Math.floor(totalQuantity * multiplier);
+
+        if (grantedQuantity <= 0) continue;
+
+        for (let i = 0; i < grantedQuantity; i++) {
+            inventory.push({
+                id: template.id,
+                name: template.name,
+                type: template.type,
+                rarity: template.rarity || 'common',
+                icon: template.icon || '📦',
+                damage: template.damage || 0,
+                defense: template.defense || 0,
+                upgrade_level: 0,
+                modifications: {}
+            });
+        }
+
+        granted.push({
+            id: template.id,
+            name: template.name,
+            icon: template.icon || '📦',
+            quantity: grantedQuantity
+        });
+    }
+
+    if (granted.length) {
+        await client.query('UPDATE players SET inventory = $1 WHERE id = $2', [JSON.stringify(inventory), playerId]);
+    }
+
+    return granted;
+}
+
+async function getActiveRaids(client, playerId) {
+    const raidsResult = await client.query(
+        `SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at,
+                rp.leader_id, rp.leader_name,
+                b.name AS boss_name, b.icon, b.description AS boss_description,
+                (SELECT COUNT(*) FROM boss_sessions WHERE raid_id = rp.id) AS participants_count
+         FROM raid_progress rp
+         JOIN bosses b ON b.id = rp.boss_id
+         WHERE rp.is_active = true AND rp.is_raid = true AND rp.expires_at > NOW()
+         ORDER BY rp.started_at DESC`,
+        []
+    );
+
+    const participatingResult = await client.query(
+        'SELECT raid_id FROM boss_sessions WHERE player_id = $1 AND raid_id IS NOT NULL',
+        [playerId]
+    );
+
+    const participatingIds = participatingResult.rows.map((row) => row.raid_id);
+
+    return {
+        raids: raidsResult.rows.map((raid) => ({
+            id: raid.id,
+            boss: {
+                id: raid.boss_id,
+                name: raid.boss_name,
+                icon: raid.icon,
+                description: raid.boss_description
+            },
+            hp: raid.current_health,
+            max_hp: raid.max_health,
+            hp_percent: Math.round((raid.current_health / raid.max_health) * 100),
+            leader: {
+                id: raid.leader_id,
+                name: raid.leader_name
+            },
+            participants_count: Number(raid.participants_count || 0),
+            expires_at: raid.expires_at,
+            time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now()
+        })),
+        participatingIds
+    };
+}
+
+function buildAlreadyInFightResponse(activeBattle) {
+    return {
+        success: false,
+        error: 'У вас уже есть активный бой',
+        code: 'ALREADY_IN_FIGHT',
+        active_battle: activeBattle
+    };
+}
+
+router.post('/start', async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const bossId = Number(req.body?.boss_id);
+        const playerId = req.player.id;
+
+        if (!validateBossId(bossId)) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
+        }
+
         await client.query('BEGIN');
-        
+
         try {
-            // ПРОВЕРКА: есть ли уже активный бой с другим боссом?
-            const playerCheck = await client.query(`
-                SELECT active_boss_id, active_boss_started_at FROM players WHERE id = $1
-            `, [playerId]);
-            
-            const player = playerCheck.rows[0];
-            
-            // Если есть активный бой и он не истёк
-            if (player.active_boss_id) {
-                // Проверяем не истёк ли бой (8 часов)
-                if (player.active_boss_started_at) {
-                    const startedAt = new Date(player.active_boss_started_at).getTime();
-                    const timePassed = Date.now() - startedAt;
-                    
-                    if (timePassed < BOSS_FIGHT_DURATION_MS) {
-                        // Бой ещё идёт
-                        // Если это тот же босс - разрешаем продолжить
-                        if (player.active_boss_id === boss_id) {
-                            // Продолжаем бой
-                        } else {
-                            // Другой босс - запрещаем
-                            await client.query('ROLLBACK');
-                            return res.json({
-                                success: false,
-                                error: 'У вас уже есть активный бой с другим боссом!',
-                                code: 'ALREADY_IN_FIGHT',
-                                active_boss_id: player.active_boss_id,
-                                time_remaining_ms: BOSS_FIGHT_DURATION_MS - timePassed
-                            });
-                        }
-                    } else {
-                        // Бой истёк - очищаем
-                        await client.query(`
-                            UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
-                        `, [playerId]);
-                        await client.query(`
-                            DELETE FROM player_boss_progress WHERE player_id = $1
-                        `, [playerId]);
-                    }
-                }
-            }
-            
-            // Получаем босса
-            const bossResult = await client.query(`
-                SELECT * FROM bosses WHERE id = $1
-            `, [boss_id]);
-            
-            if (bossResult.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Босс не найден',
-                    code: 'BOSS_NOT_FOUND'
-                });
-            }
-            
-            const boss = bossResult.rows[0];
-            
-            // Проверяем доступность босса (нужные ключи)
-            if (boss_id > 1) {
-                const keyRecord = await client.query(`
-                    SELECT quantity FROM boss_keys 
-                    WHERE player_id = $1 AND boss_id = $2
-                `, [playerId, boss_id - 1]);
-                
-                const keyCount = keyRecord.rows[0]?.quantity || 0;
-                
-                if (keyCount < KEYS_REQUIRED_FOR_NEXT_BOSS) {
-                    await client.query('ROLLBACK');
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            if (activeBattle) {
+                if (activeBattle.type === 'solo' && activeBattle.boss_id === bossId) {
+                    await client.query('COMMIT');
                     return res.json({
-                        success: false,
-                        error: `Нужно ${KEYS_REQUIRED_FOR_NEXT_BOSS} ключей от босса ${boss_id - 1}`,
-                        code: 'INSUFFICIENT_KEYS',
-                        keys_owned: keyCount,
-                        keys_required: KEYS_REQUIRED_FOR_NEXT_BOSS
+                        success: true,
+                        data: {
+                            mode: 'solo',
+                            resumed: true,
+                            boss: activeBattle.boss,
+                            time_remaining_ms: activeBattle.time_remaining_ms
+                        }
                     });
                 }
-                
-                // Списываем ключи при входе (только один раз!)
-                await client.query(`
-                    UPDATE boss_keys SET quantity = quantity - $1
-                    WHERE player_id = $2 AND boss_id = $3
-                `, [KEYS_REQUIRED_FOR_NEXT_BOSS, playerId, boss_id - 1]);
+
+                await client.query('ROLLBACK');
+                return res.status(400).json(buildAlreadyInFightResponse(activeBattle));
             }
-            
-            // Создаём или обновляем прогресс игрока с боссом
-            // Если босс уже был начат - используем существующий HP
-            const existingProgress = await client.query(`
-                SELECT current_hp, max_hp FROM player_boss_progress
-                WHERE player_id = $1 AND boss_id = $2
-            `, [playerId, boss_id]);
-            
-            let currentHp, maxHp;
-            
-            if (existingProgress.rows.length > 0) {
-                // Используем сохранённый HP
-                currentHp = existingProgress.rows[0].current_hp;
-                maxHp = existingProgress.rows[0].max_hp;
-            } else {
-                // Новый бой - полное HP
-                currentHp = boss.max_health;
-                maxHp = boss.max_health;
-                
-                // Создаём запись прогресса
-                await client.query(`
-                    INSERT INTO player_boss_progress (player_id, boss_id, current_hp, max_hp, last_attack)
-                    VALUES ($1, $2, $3, $4, NOW())
-                    ON CONFLICT (player_id, boss_id) 
-                    DO UPDATE SET current_hp = $3, max_hp = $4, last_attack = NOW()
-                `, [playerId, boss_id, currentHp, maxHp]);
-                
-                // Устанавливаем активный бой
-                await client.query(`
-                    UPDATE players SET active_boss_id = $1, active_boss_started_at = NOW()
-                    WHERE id = $2
-                `, [boss_id, playerId]);
+
+            const boss = await getBossById(client, bossId);
+            if (!boss) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' });
             }
-            
+
+            if (bossId > 1) {
+                await spendBossKeys(client, playerId, bossId - 1);
+            }
+
+            await client.query(
+                `INSERT INTO player_boss_progress (player_id, boss_id, current_hp, max_hp, started_at, last_attack)
+                 VALUES ($1, $2, $3, $4, NOW(), NOW())
+                 ON CONFLICT (player_id, boss_id)
+                 DO UPDATE SET current_hp = $3, max_hp = $4, started_at = NOW(), last_attack = NOW()`,
+                [playerId, bossId, boss.max_health, boss.max_health]
+            );
+
+            await client.query(
+                `UPDATE players
+                 SET active_boss_id = $1,
+                     active_boss_started_at = NOW(),
+                     active_boss_mode = 'solo',
+                     active_raid_id = NULL
+                 WHERE id = $2`,
+                [bossId, playerId]
+            );
+
             await client.query('COMMIT');
-            
-            // Логируем
-            logger.info(`[bosses] Вход на босса`, {
-                playerId,
-                bossId: boss_id,
-                bossName: boss.name,
-                keysSpent: boss_id > 1 ? KEYS_REQUIRED_FOR_NEXT_BOSS : 0
-            });
-            
-            res.json({
+
+            return res.json({
                 success: true,
-                boss_hp: newHp,
-                boss_max_hp: boss.max_health,
-                damage_dealt: damage,
-                boss_defeated: killed,
-                player_energy: newEnergy,
-                rewards,
                 data: {
+                    mode: 'solo',
+                    keys_spent: bossId > 1 ? KEYS_REQUIRED_FOR_BOSS : 0,
                     boss: {
                         id: boss.id,
                         name: boss.name,
-                        hp: currentHp,
-                        max_hp: maxHp
+                        icon: boss.icon,
+                        hp: boss.max_health,
+                        max_hp: boss.max_health
                     },
-                    keys_spent: boss_id > 1 ? KEYS_REQUIRED_FOR_NEXT_BOSS : 0,
-                    is_new_fight: existingProgress.rows.length === 0
+                    time_remaining_ms: SOLO_FIGHT_DURATION_MS
                 }
             });
-            
         } catch (error) {
             await client.query('ROLLBACK');
+            if (error.code === 'INSUFFICIENT_KEYS') {
+                return res.status(400).json(error);
+            }
             throw error;
         }
-        
     } catch (error) {
-        handleError(res, error, 'boss_start');
+        return handleError(res, error, 'solo_start');
     } finally {
         client.release();
     }
 });
 
-/**
- * Получить бонусы урона игрока против всех боссов
- * GET /boss-bonuses
- * 
- * Показывает:
- * - Бонус за уровень игрока
- * - Бонус за убийства каждого босса
- * - Итоговый бонус для каждого босса
- */
 router.get('/bonuses', async (req, res) => {
+    const client = await pool.connect();
+
     try {
-        const player = req.player;
-        
-        // Получаем все убийства игрока
-        const masteriesResult = await queryAll(`
-            SELECT boss_id, kills FROM boss_mastery WHERE player_id = $1
-        `, [player.id]);
-        
-        const masteries = masteriesResult;
-        const masteryMap = {};
-        for (const m of masteries) {
-            masteryMap[m.boss_id] = m.kills;
-        }
-        
-        // Получаем всех боссов
-        const bossesResult = await queryAll(`
-            SELECT id, name FROM bosses ORDER BY id
-        `);
-        
-        // Рассчитываем бонус для каждого босса
-        const bonuses = bossesResult.map(boss => {
-            const bonus = calculateDamageBonus(player.level, boss.id, masteries);
-            const currentKills = masteryMap[boss.id] || 0;
-            const prevKills = boss.id > 1 ? (masteryMap[boss.id - 1] || 0) : 0;
-            
-            return {
-                boss_id: boss.id,
-                boss_name: boss.name,
-                kills: currentKills,
-                prev_boss_kills: prevKills,
-                level_bonus: player.level,
-                kill_bonus: Math.floor(currentKills * DAMAGE_PER_KILL),
-                prev_kill_bonus: Math.floor(prevKills * DAMAGE_PER_PREV_KILL),
-                total_bonus: bonus + player.level // Уровень добавляется отдельно в формуле урона
-            };
-        });
-        
+        const playerId = req.player.id;
+        const player = await getPlayerBaseState(client, playerId);
+        const masteries = await getBossMasteries(client, playerId);
+        const masteryMap = Object.fromEntries(masteries.map((m) => [m.boss_id, m.kills]));
+        const bossesResult = await client.query('SELECT id, name FROM bosses ORDER BY id');
+
         res.json({
             success: true,
             data: {
                 player_level: player.level,
-                total_kills: masteries.reduce((sum, m) => sum + m.kills, 0),
-                bonuses
+                bonuses: bossesResult.rows.map((boss) => ({
+                    boss_id: boss.id,
+                    boss_name: boss.name,
+                    defeated_count: masteryMap[boss.id] || 0,
+                    current_damage: calculateDamage(boss.id, player, masteries),
+                    mastery_bonus: calculateDamageBonus(boss.id, masteries)
+                }))
             }
         });
-        
     } catch (error) {
-        handleError(res, error, 'get_boss_bonuses');
+        return handleError(res, error, 'bonuses');
+    } finally {
+        client.release();
     }
 });
 
-/**
- * Получение списка боссов с их статусами и мастерством игрока
- * GET /bosses (доступен как /api/game/bosses)
- */
 router.get('/', async (req, res) => {
+    const client = await pool.connect();
+
     try {
-        const player = req.player;
-        
-        // Пагинация: параметры limit и offset
-        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
-        const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-        
-        // ОПТИМИЗАЦИЯ: получаем ключи, мастерство и прогресс в одном запросе
-        // Добавляем таймаут для защиты от зависаний
-        const playerDataResult = await withTimeout(
-            queryAll(`
-                SELECT 
-                    bk.boss_id as key_boss_id, bk.quantity as key_quantity,
-                    bm.boss_id as mastery_boss_id, bm.kills as mastery_kills,
-                    pbp.boss_id as progress_boss_id, pbp.current_hp, pbp.max_hp as progress_max_hp
-                FROM bosses b
-                LEFT JOIN boss_keys bk ON bk.boss_id = b.id AND bk.player_id = $1
-                LEFT JOIN boss_mastery bm ON bm.boss_id = b.id AND bm.player_id = $1
-                LEFT JOIN player_boss_progress pbp ON pbp.boss_id = b.id AND pbp.player_id = $1
-                WHERE b.id > 0
-                ORDER BY b.id
-            `, [player.id]),
-            5000,
-            'Таймаут при загрузке данных игрока'
-        );
-        
-        // Создаём карты для быстрого доступа
-        const keyMap = {};
-        const masteryMap = {};
-        const progressMap = {};
-        
-        playerDataResult.forEach(row => {
-            if (row.key_boss_id) {
-                keyMap[row.key_boss_id] = row.key_quantity;
-            }
-            if (row.mastery_boss_id) {
-                masteryMap[row.mastery_boss_id] = row.mastery_kills;
-            }
-            if (row.progress_boss_id) {
-                progressMap[row.progress_boss_id] = {
-                    current_hp: row.current_hp,
-                    max_hp: row.progress_max_hp
-                };
-            }
-        });
-        
-        // Получаем общее количество боссов с таймаутом
-        const countResult = await withTimeout(
-            query(`
-                SELECT COUNT(*) as total FROM bosses
-            `),
-            3000,
-            'Таймаут при подсчёте боссов'
-        );
-        const totalBosses = parseInt(countResult.rows[0].total);
-        
-        // Получаем боссов с пагинацией и таймаутом
-        const bosses = await withTimeout(
-            queryAll(`
-                SELECT * FROM bosses ORDER BY id ASC LIMIT $1 OFFSET $2
-            `, [limit, offset]),
-            5000,
-            'Таймаут при загрузке боссов'
-        );
-        
-        // Определяем доступность боссов и формируем ответ
-        const bossList = bosses.map(boss => {
-            // Первый босс доступен всегда, остальные - по ключам
-            const isUnlocked = boss.id === 1 || (keyMap[boss.id - 1] || 0) >= KEYS_REQUIRED_FOR_NEXT_BOSS;
-            
-            // Текущее HP босса - из прогресса игрока или полное
-            const progress = progressMap[boss.id];
-            const currentHp = progress ? progress.current_hp : boss.max_health;
-            
-            // Мастерство игрока против этого босса
-            const mastery = masteryMap[boss.id] || 0;
-            
-            // Доступен ли босс для атаки (достаточно ли энергии)
-            const canAttack = player.energy >= 1 && isUnlocked;
-            
-            // Босс в бою?
-            const inProgress = !!progress;
-            
-            // Вычисляем оставшееся время боя
-            let timeRemainingMs = null;
-            if (inProgress && progress.last_attack) {
-                const lastAttackTime = new Date(progress.last_attack).getTime();
-                const elapsedMs = Date.now() - lastAttackTime;
-                timeRemainingMs = Math.max(0, BOSS_FIGHT_DURATION_MS - elapsedMs);
-            }
-            
-            return {
+        const playerId = req.player.id;
+        const player = await getPlayerBaseState(client, playerId);
+        const activeBattle = await resolveActiveBattle(client, playerId);
+        const masteries = await getBossMasteries(client, playerId);
+        const masteryMap = Object.fromEntries(masteries.map((m) => [m.boss_id, m.kills]));
+
+        const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
+
+        const bossList = [];
+        for (const boss of bossesResult.rows) {
+            const ownedKeys = boss.id === 1 ? 0 : await getPlayerKeyCount(client, playerId, boss.id - 1);
+            const isUnlocked = boss.id === 1 || ownedKeys >= KEYS_REQUIRED_FOR_BOSS;
+            const soloProgress = activeBattle?.type === 'solo' && activeBattle.boss_id === boss.id
+                ? activeBattle.boss.hp
+                : boss.max_health;
+
+            bossList.push({
                 id: boss.id,
                 name: boss.name,
                 description: boss.description,
-                hp: currentHp,
+                icon: boss.icon,
+                hp: soloProgress,
                 max_hp: boss.max_health,
-                rewards: {
-                    coins: boss.reward_coins,
-                    exp: boss.reward_experience,
-                    key_boss_id: boss.id + 1 // ID босса, для которого выдаётся ключ
-                },
+                reward_coins: boss.reward_coins,
+                reward_experience: boss.reward_experience,
+                required_keys: boss.id === 1 ? 0 : KEYS_REQUIRED_FOR_BOSS,
+                owned_keys: ownedKeys,
                 is_unlocked: isUnlocked,
-                in_progress: inProgress,
-                time_remaining_ms: timeRemainingMs,
-                keys_required: boss.id > 1 ? KEYS_REQUIRED_FOR_NEXT_BOSS : 0,
-                player_keys: keyMap[boss.id] || 0,
-                mastery: mastery,
-                can_attack: canAttack
-            };
-        });
-        
-        // Логируем действие
-        logger.info(`[bosses] Получен список боссов`, {
-            playerId: player.id,
-            bossCount: bossList.length
-        });
-        
-        // Единый формат ответа
+                defeated_count: masteryMap[boss.id] || 0,
+                mastery: masteryMap[boss.id] || 0,
+                current_damage: calculateDamage(boss.id, player, masteries),
+                can_start_solo: isUnlocked && !activeBattle,
+                can_start_mass: isUnlocked && !activeBattle
+            });
+        }
+
+        const raids = await getActiveRaids(client, playerId);
+
         res.json({
             success: true,
             data: {
                 bosses: bossList,
-                player_keys: keyMap,
+                raids: raids.raids,
+                participating_boss_ids: raids.participatingIds,
                 player_energy: player.energy,
                 player_max_energy: player.max_energy,
                 player_level: player.level,
-                pagination: {
-                    total: totalBosses,
-                    limit: limit,
-                    offset: offset,
-                    has_more: offset + bosses.length < totalBosses
-                },
-                fight_duration_ms: BOSS_FIGHT_DURATION_MS
+                active_battle: activeBattle,
+                fight_duration_ms: SOLO_FIGHT_DURATION_MS,
+                raid_duration_ms: MASS_FIGHT_DURATION_MS,
+                info: {
+                    solo: 'Соло-бой: старт через кнопку, 1 удар = 1 энергия, бой длится 8 часов.',
+                    mastery: 'Каждая победа над боссом увеличивает урон по нему и частично усиливает урон по следующим боссам.',
+                    raids: 'Массовый бой — отдельный режим на 8 часов. Награды и предметы делятся пропорционально урону, ключ получает только лидер.'
+                }
             }
         });
-        
     } catch (error) {
-        handleError(res, error, 'bosses_list');
+        return handleError(res, error, 'boss_list');
+    } finally {
+        client.release();
     }
 });
 
-/**
- * Атака босса (один клик)
- * POST /attack-boss
- * 
- * Тело запроса:
- * {
- *   boss_id: 1
- * }
- * 
- * ВАЖНО: Ключи НЕ списываются здесь! Они списываются в /boss/start
- * HP босса сохраняется между атаками в player_boss_progress
- */
 router.post('/attack-boss', async (req, res) => {
     const client = await pool.connect();
-    
+
     try {
-        const { boss_id } = req.body;
+        const bossId = Number(req.body?.boss_id);
         const playerId = req.player.id;
-        
-        // Валидация входных данных
-        if (boss_id === undefined || boss_id === null) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите ID босса',
-                code: 'MISSING_BOSS_ID'
-            });
+
+        if (!validateBossId(bossId)) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
         }
-        
-        if (!validateBossId(boss_id)) {
-            return res.status(400).json({
-                success: false,
-                error: 'ID босса должен быть положительным целым числом',
-                code: 'INVALID_BOSS_ID'
-            });
-        }
-        
-        // Проверка: атаковать можно только активный бой
-        const playerCheck = await pool.query(`
-            SELECT active_boss_id, active_boss_started_at FROM players WHERE id = $1
-        `, [playerId]);
-        
-        const player = playerCheck.rows[0];
-        
-        if (player.active_boss_id && player.active_boss_id !== boss_id) {
-            // Проверяем не истёк ли бой
-            if (player.active_boss_started_at) {
-                const startedAt = new Date(player.active_boss_started_at).getTime();
-                const timePassed = Date.now() - startedAt;
-                
-                if (timePassed >= BOSS_FIGHT_DURATION_MS) {
-                    // Бой истёк - очищаем
-                    await pool.query(`
-                        UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
-                    `, [playerId]);
-                } else {
-                    // Бой идёт с другим боссом
-                    return res.json({
-                        success: false,
-                        error: 'Вы уже сражаетесь с другим боссом!',
-                        code: 'ALREADY_IN_FIGHT',
-                        active_boss_id: player.active_boss_id,
-                        time_remaining_ms: BOSS_FIGHT_DURATION_MS - timePassed
-                    });
-                }
-            }
-        }
-        
-        // Используем транзакцию для атомарности
+
         await client.query('BEGIN');
-        
+
         try {
-            // ОПТИМИЗАЦИЯ: объединяем запросы босса и прогресса в один
-            const bossProgressResult = await client.query(`
-                SELECT 
-                    b.id, b.name, b.max_health, b.reward_coins, b.reward_experience,
-                    pbp.current_hp, pbp.max_hp as progress_max_hp, pbp.last_attack
-                FROM bosses b
-                LEFT JOIN player_boss_progress pbp ON pbp.boss_id = b.id AND pbp.player_id = $1
-                WHERE b.id = $2
-            `, [playerId, boss_id]);
-            
-            if (bossProgressResult.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Босс не найден',
-                    code: 'BOSS_NOT_FOUND'
-                });
-            }
-            
-            const bossData = bossProgressResult.rows[0];
-            
-            // Проверяем, что игрок начал бой (через /boss/start)
-            if (!bossData.current_hp) {
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            if (!activeBattle || activeBattle.type !== 'solo' || activeBattle.boss_id !== bossId) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
-                    error: 'Сначала начните бой через /boss/start',
-                    code: 'BOSS_NOT_STARTED',
-                    hint: 'Вызовите POST /boss/start перед атакой'
+                    error: 'Сначала начните соло-бой с этим боссом',
+                    code: 'BOSS_NOT_STARTED'
                 });
             }
-            
-            // Проверка таймера боя - если с момента последней атаки прошло больше 5 минут, бой проигран
-            if (bossData.last_attack) {
-                const lastAttackTime = new Date(bossData.last_attack).getTime();
-                const timeSinceLastAttack = Date.now() - lastAttackTime;
-                
-                if (timeSinceLastAttack > BOSS_FIGHT_DURATION_MS) {
-                    // Бой проигран - сбрасываем прогресс
-                    await client.query(`
-                        DELETE FROM player_boss_progress 
-                        WHERE player_id = $1 AND boss_id = $2
-                    `, [playerId, boss_id]);
-                    
-                    // Очищаем активный бой
-                    await client.query(`
-                        UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
-                    `, [playerId]);
-                    
-                    await client.query('COMMIT');
-                    
-                    return res.json({
-                        success: false,
-                        error: 'Время боя истекло! Босс снова полон здоровья.',
-                        code: 'BOSS_FIGHT_TIMEOUT',
-                        time_expired_ms: timeSinceLastAttack,
-                        hint: 'Начните новый бой с боссом'
-                    });
-                }
-            }
-            
-            const boss = {
-                id: bossData.id,
-                name: bossData.name,
-                max_health: bossData.max_health,
-                reward_coins: bossData.reward_coins,
-                reward_experience: bossData.reward_experience
-            };
-            
-            const currentHp = bossData.current_hp;
-            
-            // Проверка cooldown (500ms между атаками)
-            if (bossData.last_attack) {
-                const lastAttackTime = new Date(bossData.last_attack).getTime();
-                const timeSinceLastAttack = Date.now() - lastAttackTime;
-                
-                if (timeSinceLastAttack < ATTACK_COOLDOWN_MS) {
-                    await client.query('ROLLBACK');
-                    const remainingMs = ATTACK_COOLDOWN_MS - timeSinceLastAttack;
-                    return res.status(429).json({
-                        success: false,
-                        error: 'Слишком быстро! Подождите немного.',
-                        code: 'ATTACK_TOO_FAST',
-                        cooldown_remaining_ms: remainingMs,
-                        hint: `Подождите ${Math.ceil(remainingMs / 1000)} секунд между атаками`
-                    });
-                }
-            }
-            
-            // ОПТИМИЗАЦИЯ: получаем игрока и мастерство в одном запросе
-            const playerMasteryResult = await client.query(`
-                SELECT 
-                    p.id, p.level, p.energy, p.equipment,
-                    bm.boss_id, bm.kills
-                FROM players p
-                LEFT JOIN boss_mastery bm ON bm.player_id = p.id AND bm.boss_id = $1
-                WHERE p.id = $2
-            `, [boss_id, playerId]);
-            
-            if (playerMasteryResult.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Игрок не найден',
-                    code: 'PLAYER_NOT_FOUND'
-                });
-            }
-            
-            const playerData = playerMasteryResult.rows[0];
-            const player = {
-                id: playerData.id,
-                level: playerData.level,
-                energy: playerData.energy,
-                equipment: playerData.equipment
-            };
-            const currentMastery = playerData.kills || 0;
-            
-            // Проверяем энергию
+
+            const player = await getPlayerBaseState(client, playerId);
             if (player.energy < 1) {
                 await client.query('ROLLBACK');
-                return res.json({
+                return res.status(400).json({
                     success: false,
                     error: 'Недостаточно энергии',
                     code: 'INSUFFICIENT_ENERGY',
@@ -790,758 +650,452 @@ router.post('/attack-boss', async (req, res) => {
                     energy_required: 1
                 });
             }
-            
-            // Получаем ВСЕ убийства игрока для расчёта бонуса (нужно для формулы)
-            const allMasteriesResult = await client.query(`
-                SELECT boss_id, kills FROM boss_mastery WHERE player_id = $1
-            `, [playerId]);
-            const allMasteries = allMasteriesResult.rows;
-            
-            // Вычисляем урон по формуле
-            const damage = calculateDamage(boss_id, player.level, player, allMasteries);
-            
-            // Списываем энергию (1 энергия за клик)
-            const energyResult = await client.query(`
-                UPDATE players SET energy = GREATEST(0, energy - 1), last_energy_update = NOW()
-                WHERE id = $1
-                RETURNING energy
-            `, [playerId]);
-            const newEnergy = energyResult.rows[0].energy;
-            
-            // Вычисляем новое HP босса (используем сохранённый прогресс)
-            const newHp = Math.max(0, currentHp - damage);
-            
-            // Обновляем прогресс игрока с боссом
-            await client.query(`
-                UPDATE player_boss_progress 
-                SET current_hp = $1, last_attack = NOW()
-                WHERE player_id = $2 AND boss_id = $3
-            `, [newHp, playerId, boss_id]);
-            
-            // Проверяем, убит ли босс
+
+            const masteries = await getBossMasteries(client, playerId);
+            const damage = calculateDamage(bossId, player, masteries);
+            const newHp = Math.max(0, activeBattle.boss.hp - damage);
+
+            const energyResult = await client.query(
+                `UPDATE players
+                 SET energy = GREATEST(0, energy - 1),
+                     last_energy_update = NOW()
+                 WHERE id = $1
+                 RETURNING energy`,
+                [playerId]
+            );
+
+            await client.query(
+                `UPDATE player_boss_progress
+                 SET current_hp = $1, last_attack = NOW()
+                 WHERE player_id = $2 AND boss_id = $3`,
+                [newHp, playerId, bossId]
+            );
+
             let killed = false;
             let rewards = null;
-            let newMastery = currentMastery;
-            
+            let mastery = masteries.find((m) => m.boss_id === bossId)?.kills || 0;
+
             if (newHp <= 0) {
                 killed = true;
-                
-                // Выдаём награды
+
+                const boss = await getBossById(client, bossId);
                 rewards = {
                     coins: boss.reward_coins || 0,
-                    exp: boss.reward_experience || 0,
-                    key_boss_id: boss.id + 1
+                    experience: boss.reward_experience || 0
                 };
-                
-                // Выдаём монеты
-                if (boss.reward_coins) {
-                    await client.query(`
-                        UPDATE players SET coins = coins + $1 WHERE id = $2
-                    `, [boss.reward_coins, playerId]);
+
+                if (boss.reward_coins > 0) {
+                    await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [boss.reward_coins, playerId]);
                 }
-                
-                // Выдаём опыт
-                if (boss.reward_experience) {
+
+                if (boss.reward_experience > 0) {
                     await playerHelper.addExperience(playerId, boss.reward_experience, client);
                 }
-                
-                // Увеличиваем мастерство
-                newMastery = currentMastery + 1;
-                await client.query(`
-                    INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
-                    VALUES ($1, $2, 1, NOW())
-                    ON CONFLICT (player_id, boss_id) 
-                    DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()
-                `, [playerId, boss_id]);
-                
-                // Выдаём ключ для следующего босса
-                const nextBossId = boss.id + 1;
-                await client.query(`
-                    INSERT INTO boss_keys (player_id, boss_id, quantity)
-                    VALUES ($1, $2, 1)
-                    ON CONFLICT (player_id, boss_id) 
-                    DO UPDATE SET quantity = boss_keys.quantity + 1
-                `, [playerId, nextBossId]);
-                
-                // Обновляем счётчик убитых боссов
-                await client.query(`
-                    UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1
-                `, [playerId]);
-                
-                // Очищаем прогресс после убийства
-                await client.query(`
-                    DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2
-                `, [playerId, boss_id]);
-                
-                // Очищаем активный бой
-                await client.query(`
-                    UPDATE players SET active_boss_id = NULL, active_boss_started_at = NULL WHERE id = $1
-                `, [playerId]);
+
+                const grantedKey = await grantNextBossKey(client, playerId, bossId);
+                if (grantedKey) {
+                    rewards.key = grantedKey;
+                }
+
+                const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, Math.random() < 0.5 ? 1 : 0);
+                if (grantedItems.length) {
+                    rewards.items = grantedItems;
+                }
+
+                await client.query(
+                    `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
+                     VALUES ($1, $2, 1, NOW())
+                     ON CONFLICT (player_id, boss_id)
+                     DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
+                    [playerId, bossId]
+                );
+
+                mastery += 1;
+
+                await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [playerId]);
+                await client.query('DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2', [playerId, bossId]);
+                await clearPlayerActiveBattle(client, playerId);
             }
-            
+
             await client.query('COMMIT');
-            
-            // Логируем действие
-            logger.info(`[bosses] Атака босса`, {
-                playerId,
-                bossId: boss_id,
-                bossName: boss.name,
-                damage,
-                mastery: currentMastery,
-                newMastery,
-                killed,
-                energyLeft: newEnergy
-            });
-            
-            // Единый формат ответа
-            res.json({
+
+            return res.json({
                 success: true,
+                boss_hp: newHp,
+                boss_max_hp: activeBattle.boss.max_hp,
+                damage_dealt: damage,
+                boss_defeated: killed,
+                player_energy: energyResult.rows[0].energy,
+                mastery,
+                rewards,
                 data: {
                     boss: {
-                        id: boss.id,
-                        name: boss.name,
+                        id: bossId,
                         hp: newHp,
-                        max_hp: boss.max_health
+                        max_hp: activeBattle.boss.max_hp
                     },
                     damage,
-                    mastery_before: currentMastery,
-                    mastery_after: newMastery,
                     killed,
                     rewards,
-                    energy_spent: 1,
-                    energy_left: newEnergy
+                    mastery,
+                    energy_left: energyResult.rows[0].energy
                 }
             });
-            
         } catch (error) {
             await client.query('ROLLBACK');
             throw error;
         }
-        
     } catch (error) {
-        handleError(res, error, 'attack_boss');
+        return handleError(res, error, 'solo_attack');
     } finally {
         client.release();
     }
 });
 
-// =============================================================================
-// НОВЫЕ ЭНДПОИНТЫ ДЛЯ РЕЙДОВ (СИСТЕМА МУЛЬТИПЛЕЕРНЫХ БОССОВ)
-// =============================================================================
-
-/**
- * Константы для рейдов
- */
-const RAID_DURATION_HOURS = 8; // Длительность рейда в часах
-const KEYS_REQUIRED_FOR_RAID = 3; // Ключей нужно для начала атаки
-
-/**
- * Получить активные рейды (публичные + клановые для участников клана)
- * GET /raids
- */
 router.get('/raids', async (req, res) => {
+    const client = await pool.connect();
+
     try {
-        const playerId = req.player?.id;
-        const playerClanId = req.player?.clan_id;
-        
-        // Основной запрос: публичные рейды
-        let query = `
-            SELECT 
-                rp.*,
-                b.name as boss_name,
-                b.reward_coins,
-                b.reward_experience,
-                b.icon,
-                b.description as boss_description,
-                (SELECT COUNT(*) FROM boss_sessions WHERE raid_id = rp.id) as participants_count
-            FROM raid_progress rp
-            JOIN bosses b ON rp.boss_id = b.id
-            WHERE rp.is_active = true 
-                AND rp.expires_at > NOW()
-        `;
-        
-        // Если игрок в клане - добавляем клановые рейды
-        if (playerClanId) {
-            query += ` AND (rp.is_clan_raid = false OR rp.clan_id = $1)`;
-        } else {
-            query += ` AND rp.is_clan_raid = false`;
-        }
-        
-        query += ` ORDER BY rp.started_at DESC LIMIT 50`;
-        
-        const raids = await queryAll(query, playerClanId ? [playerClanId] : []);
-        
-        // Получаем ID боссов, которые уже участвуют у игрока
-        let participatingBossIds = [];
-        if (playerId) {
-            const sessions = await queryAll(`
-                SELECT DISTINCT boss_id FROM boss_sessions 
-                WHERE player_id = $1 AND raid_id IS NOT NULL
-            `, [playerId]);
-            participatingBossIds = sessions.map(s => s.boss_id);
-        }
-        
+        const raids = await getActiveRaids(client, req.player.id);
         res.json({
             success: true,
             data: {
-                raids: raids.map(raid => ({
-                    id: raid.id,
-                    boss: {
-                        id: raid.boss_id,
-                        name: raid.boss_name,
-                        icon: raid.icon,
-                        description: raid.boss_description
-                    },
-                    hp: raid.current_health,
-                    max_hp: raid.max_health,
-                    hp_percent: Math.round((raid.current_health / raid.max_health) * 100),
-                    leader: {
-                        id: raid.leader_id,
-                        name: raid.leader_name
-                    },
-                    participants_count: parseInt(raid.participants_count || 0),
-                    started_at: raid.started_at,
-                    expires_at: raid.expires_at,
-                    is_raid: raid.is_raid,
-                    is_clan_raid: raid.is_clan_raid,
-                    clan_id: raid.clan_id,
-                    time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now()
-                })),
-                participating_boss_ids: participatingBossIds,
-                player_clan_id: playerClanId
+                raids: raids.raids,
+                participating_boss_ids: raids.participatingIds
             }
         });
-        
     } catch (error) {
-        handleError(res, error, 'get_raids');
+        return handleError(res, error, 'raids');
+    } finally {
+        client.release();
     }
 });
 
-/**
- * Начать атаку на босса (одиночную или рейд)
- * POST /raid/start
- * 
- * Тело запроса:
- * {
- *   boss_id: 1,
- *   is_raid: true  // true = мультиплеерный рейд, false = одиночный
- * }
- */
 router.post('/raid/start', async (req, res) => {
     const client = await pool.connect();
-    
+
     try {
-        const { boss_id, is_raid = false } = req.body;
+        const bossId = Number(req.body?.boss_id);
         const playerId = req.player.id;
         const playerName = req.player.first_name || 'Игрок';
-        
-        // Валидация
-        if (!validateBossId(boss_id)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите корректный ID босса',
-                code: 'INVALID_BOSS_ID'
-            });
+
+        if (!validateBossId(bossId)) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
         }
-        
+
         await client.query('BEGIN');
-        
+
         try {
-            // Получаем босса
-            const bossResult = await client.query(`
-                SELECT * FROM bosses WHERE id = $1
-            `, [boss_id]);
-            
-            if (bossResult.rows.length === 0) {
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            if (activeBattle) {
                 await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Босс не найден',
-                    code: 'BOSS_NOT_FOUND'
-                });
+                return res.status(400).json(buildAlreadyInFightResponse(activeBattle));
             }
-            
-            const boss = bossResult.rows[0];
-            
-            // Проверяем ключи (нужно 3 ключа от предыдущего босса)
-            if (boss_id > 1) {
-                const keyResult = await client.query(`
-                    SELECT quantity FROM boss_keys 
-                    WHERE player_id = $1 AND boss_id = $2
-                `, [playerId, boss_id - 1]);
-                
-                const keyCount = keyResult.rows[0]?.quantity || 0;
-                
-                if (keyCount < KEYS_REQUIRED_FOR_RAID) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        error: `Нужно ${KEYS_REQUIRED_FOR_RAID} ключей от босса ${boss_id - 1}`,
-                        code: 'INSUFFICIENT_KEYS',
-                        keys_owned: keyCount,
-                        keys_required: KEYS_REQUIRED_FOR_RAID
-                    });
-                }
-                
-                // Списываем ключи
-                await client.query(`
-                    UPDATE boss_keys SET quantity = quantity - $1
-                    WHERE player_id = $2 AND boss_id = $3
-                `, [KEYS_REQUIRED_FOR_RAID, playerId, boss_id - 1]);
+
+            const boss = await getBossById(client, bossId);
+            if (!boss) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' });
             }
-            
-            // Создаём рейд или одиночную атаку
-            const expiresAt = new Date(Date.now() + RAID_DURATION_HOURS * 60 * 60 * 1000);
-            
-            const existingRaid = await client.query(`
-                SELECT id FROM raid_progress WHERE boss_id = $1 AND is_active = true
-            `, [boss_id]);
+
+            if (bossId > 1) {
+                await spendBossKeys(client, playerId, bossId - 1);
+            }
+
+            const existingRaid = await client.query(
+                `SELECT id FROM raid_progress
+                 WHERE boss_id = $1 AND is_active = true AND is_raid = true AND expires_at > NOW()`,
+                [bossId]
+            );
 
             if (existingRaid.rows.length > 0) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
-                    error: 'На этого босса уже идёт активный рейд',
+                    error: 'Массовый бой на этого босса уже идёт',
                     code: 'RAID_ALREADY_ACTIVE',
                     raid_id: existingRaid.rows[0].id
                 });
             }
 
-            const raidResult = await client.query(`
-                INSERT INTO raid_progress 
-                (boss_id, current_health, max_health, started_at, expires_at, is_active, is_raid, leader_id, leader_name, is_clan_raid)
-                VALUES ($1, $2, $3, NOW(), $4, true, $5, $6, $7, false)
-                RETURNING id
-            `, [boss_id, boss.max_health, boss.max_health, expiresAt, is_raid, playerId, playerName]);
-            
+            const expiresAt = new Date(Date.now() + MASS_FIGHT_DURATION_MS);
+
+            const raidResult = await client.query(
+                `INSERT INTO raid_progress
+                 (boss_id, current_health, max_health, started_at, expires_at, is_active, is_raid, leader_id, leader_name)
+                 VALUES ($1, $2, $3, NOW(), $4, true, true, $5, $6)
+                 RETURNING id`,
+                [bossId, boss.max_health, boss.max_health, expiresAt, playerId, playerName]
+            );
+
             const raidId = raidResult.rows[0].id;
-            
-            // Создаём сессию игрока
-            await client.query(`
-                INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
-                VALUES ($1, $2, $3, 0, NOW(), NOW())
-                ON CONFLICT (boss_id, player_id) 
-                DO UPDATE SET raid_id = $3, damage_dealt = 0, last_hit_at = NOW()
-            `, [boss_id, playerId, raidId]);
-            
+
+            await client.query(
+                `INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
+                 VALUES ($1, $2, $3, 0, NOW(), NOW())`,
+                [bossId, playerId, raidId]
+            );
+
+            await client.query(
+                `UPDATE players
+                 SET active_boss_id = $1,
+                     active_boss_started_at = NOW(),
+                     active_boss_mode = 'mass',
+                     active_raid_id = $2
+                 WHERE id = $3`,
+                [bossId, raidId, playerId]
+            );
+
             await client.query('COMMIT');
-            
-            // Логируем
-            logger.info(`[raid] Начат рейд/атака`, {
-                playerId,
-                bossId: boss_id,
-                isRaid: is_raid,
-                raidId
-            });
-            
-            res.json({
+
+            return res.json({
                 success: true,
                 data: {
                     raid_id: raidId,
+                    mode: 'mass',
                     boss: {
                         id: boss.id,
                         name: boss.name,
+                        icon: boss.icon,
                         hp: boss.max_health,
                         max_hp: boss.max_health
                     },
-                    is_raid: is_raid,
-                    keys_spent: boss_id > 1 ? KEYS_REQUIRED_FOR_RAID : 0,
+                    keys_spent: bossId > 1 ? KEYS_REQUIRED_FOR_BOSS : 0,
                     expires_at: expiresAt,
-                    time_remaining_ms: RAID_DURATION_HOURS * 60 * 60 * 1000
+                    time_remaining_ms: MASS_FIGHT_DURATION_MS
                 }
             });
-            
         } catch (error) {
             await client.query('ROLLBACK');
+            if (error.code === 'INSUFFICIENT_KEYS') {
+                return res.status(400).json(error);
+            }
             throw error;
         }
-        
     } catch (error) {
-        handleError(res, error, 'raid_start');
+        return handleError(res, error, 'mass_start');
     } finally {
         client.release();
     }
 });
 
-/**
- * Присоединиться к существующему рейду
- * POST /raid/:id/join
- */
 router.post('/raid/:id/join', async (req, res) => {
     const client = await pool.connect();
-    
+
     try {
-        const raidId = parseInt(req.params.id);
+        const raidId = Number(req.params.id);
         const playerId = req.player.id;
-        
+
         if (!raidId || raidId <= 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите корректный ID рейда',
-                code: 'INVALID_RAID_ID'
-            });
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
         }
-        
+
         await client.query('BEGIN');
-        
+
         try {
-            // Получаем рейд
-            const raidResult = await client.query(`
-                SELECT rp.*, b.name as boss_name, b.max_health
-                FROM raid_progress rp
-                JOIN bosses b ON rp.boss_id = b.id
-                WHERE rp.id = $1 AND rp.is_active = true AND rp.expires_at > NOW()
-            `, [raidId]);
-            
-            if (raidResult.rows.length === 0) {
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            if (activeBattle) {
+                if (activeBattle.type === 'mass' && activeBattle.raid_id === raidId) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ success: false, error: 'Вы уже участвуете в этом массовом бою', code: 'ALREADY_PARTICIPATING' });
+                }
+
                 await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Рейд не найден или уже завершён',
-                    code: 'RAID_NOT_FOUND'
-                });
+                return res.status(400).json(buildAlreadyInFightResponse(activeBattle));
             }
-            
+
+            const raidResult = await client.query(
+                `SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at,
+                        b.name AS boss_name, b.icon
+                 FROM raid_progress rp
+                 JOIN bosses b ON b.id = rp.boss_id
+                 WHERE rp.id = $1 AND rp.is_active = true AND rp.is_raid = true AND rp.expires_at > NOW()`,
+                [raidId]
+            );
+
             const raid = raidResult.rows[0];
-            
-            // Проверка для клановых рейдов - только члены клана могут присоединиться
-            if (raid.is_clan_raid) {
-                // Получаем ID клана игрока
-                const playerClanResult = await client.query(`
-                    SELECT clan_id FROM players WHERE id = $1
-                `, [playerId]);
-                
-                const playerClanId = playerClanResult.rows[0]?.clan_id;
-                
-                if (!playerClanId || playerClanId !== raid.clan_id) {
-                    await client.query('ROLLBACK');
-                    return res.status(403).json({
-                        success: false,
-                        error: 'Только члены клана могут присоединиться к клановому рейду',
-                        code: 'CLAN_MEMBERSHIP_REQUIRED'
-                    });
-                }
-            }
-            
-            // Проверяем, что игрок ещё не участвует
-            const existingSession = await client.query(`
-                SELECT id FROM boss_sessions 
-                WHERE player_id = $1 AND raid_id = $2
-            `, [playerId, raidId]);
-            
-            if (existingSession.rows.length > 0) {
+            if (!raid) {
                 await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Вы уже участвуете в этом рейде',
-                    code: 'ALREADY_PARTICIPATING'
-                });
+                return res.status(404).json({ success: false, error: 'Массовый бой не найден', code: 'RAID_NOT_FOUND' });
             }
-            
-            // Проверяем ключи для присоединения
-            if (raid.boss_id > 1) {
-                const keyResult = await client.query(`
-                    SELECT quantity FROM boss_keys 
-                    WHERE player_id = $1 AND boss_id = $2
-                `, [playerId, raid.boss_id - 1]);
-                
-                const keyCount = keyResult.rows[0]?.quantity || 0;
-                
-                if (keyCount < KEYS_REQUIRED_FOR_RAID) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        error: `Нужно ${KEYS_REQUIRED_FOR_RAID} ключей от босса ${raid.boss_id - 1}`,
-                        code: 'INSUFFICIENT_KEYS',
-                        keys_owned: keyCount,
-                        keys_required: KEYS_REQUIRED_FOR_RAID
-                    });
-                }
-                
-                // Списываем ключи
-                await client.query(`
-                    UPDATE boss_keys SET quantity = quantity - $1
-                    WHERE player_id = $2 AND boss_id = $3
-                `, [KEYS_REQUIRED_FOR_RAID, playerId, raid.boss_id - 1]);
-            }
-            
-            // Создаём сессию игрока
-            await client.query(`
-                INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
-                VALUES ($1, $2, $3, 0, NOW(), NOW())
-            `, [raid.boss_id, playerId, raidId]);
-            
+
+            await client.query(
+                `INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
+                 VALUES ($1, $2, $3, 0, NOW(), NOW())`,
+                [raid.boss_id, playerId, raidId]
+            );
+
+            await client.query(
+                `UPDATE players
+                 SET active_boss_id = $1,
+                     active_boss_started_at = NOW(),
+                     active_boss_mode = 'mass',
+                     active_raid_id = $2
+                 WHERE id = $3`,
+                [raid.boss_id, raidId, playerId]
+            );
+
             await client.query('COMMIT');
-            
-            // Логируем
-            logger.info(`[raid] Игрок присоединился к рейду`, {
-                playerId,
-                raidId,
-                bossId: raid.boss_id
-            });
-            
-            res.json({
+
+            return res.json({
                 success: true,
                 data: {
                     raid_id: raidId,
+                    mode: 'mass',
                     boss: {
                         id: raid.boss_id,
                         name: raid.boss_name,
+                        icon: raid.icon,
                         hp: raid.current_health,
                         max_hp: raid.max_health
                     },
-                    keys_spent: raid.boss_id > 1 ? KEYS_REQUIRED_FOR_RAID : 0,
                     expires_at: raid.expires_at
                 }
             });
-            
         } catch (error) {
             await client.query('ROLLBACK');
             throw error;
         }
-        
     } catch (error) {
-        handleError(res, error, 'raid_join');
+        return handleError(res, error, 'mass_join');
     } finally {
         client.release();
     }
 });
 
-/**
- * Атаковать босса в рейде
- * POST /raid/:id/attack
- */
 router.post('/raid/:id/attack', async (req, res) => {
     const client = await pool.connect();
-    
+
     try {
-        const raidId = parseInt(req.params.id);
+        const raidId = Number(req.params.id);
         const playerId = req.player.id;
-        
+
         if (!raidId || raidId <= 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите корректный ID рейда',
-                code: 'INVALID_RAID_ID'
-            });
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
         }
-        
+
         await client.query('BEGIN');
-        
+
         try {
-            // Получаем рейд с блокировкой
-            const raidResult = await client.query(`
-                SELECT rp.*, b.name as boss_name, b.reward_coins, b.reward_experience
-                FROM raid_progress rp
-                JOIN bosses b ON rp.boss_id = b.id
-                WHERE rp.id = $1 AND rp.is_active = true AND rp.expires_at > NOW()
-                FOR UPDATE
-            `, [raidId]);
-            
-            if (raidResult.rows.length === 0) {
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            if (!activeBattle || activeBattle.type !== 'mass' || activeBattle.raid_id !== raidId) {
                 await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Рейд не найден или уже завершён',
-                    code: 'RAID_NOT_FOUND'
-                });
+                return res.status(400).json({ success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' });
             }
-            
+
+            const raidResult = await client.query(
+                `SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at, rp.leader_id,
+                        b.name AS boss_name, b.reward_coins, b.reward_experience, b.reward_items
+                 FROM raid_progress rp
+                 JOIN bosses b ON b.id = rp.boss_id
+                 WHERE rp.id = $1 AND rp.is_active = true AND rp.is_raid = true AND rp.expires_at > NOW()
+                 FOR UPDATE`,
+                [raidId]
+            );
+
             const raid = raidResult.rows[0];
-            const boss = {
-                id: raid.boss_id,
-                name: raid.boss_name,
-                reward_coins: raid.reward_coins,
-                reward_experience: raid.reward_experience
-            };
-            
-            // Проверяем участие игрока
-            const sessionResult = await client.query(`
-                SELECT * FROM boss_sessions 
-                WHERE player_id = $1 AND raid_id = $2
-                FOR UPDATE
-            `, [playerId, raidId]);
-            
-            if (sessionResult.rows.length === 0) {
+            if (!raid) {
                 await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Вы не участвуете в этом рейде. Сначала присоединитесь.',
-                    code: 'NOT_PARTICIPATING'
-                });
+                return res.status(404).json({ success: false, error: 'Массовый бой не найден', code: 'RAID_NOT_FOUND' });
             }
-            
+
+            const sessionResult = await client.query(
+                'SELECT * FROM boss_sessions WHERE player_id = $1 AND raid_id = $2 FOR UPDATE',
+                [playerId, raidId]
+            );
+
             const session = sessionResult.rows[0];
-            
-            // Получаем игрока для расчёта урона
-            const playerResult = await client.query(`
-                SELECT * FROM players WHERE id = $1
-            `, [playerId]);
-            
-            const player = playerResult.rows[0];
-            
-            // Рассчитываем урон
-            const { weaponBonus, setBonus } = getEquipmentBonuses(player);
-            
-            // Получаем мастерство
-            const masteryResult = await client.query(`
-                SELECT kills FROM boss_mastery WHERE player_id = $1 AND boss_id = $2
-            `, [playerId, raid.boss_id]);
-            const mastery = masteryResult.rows[0]?.kills || 0;
-            
-            // Получаем ВСЕ убийства игрока для расчёта бонуса
-            const allMasteriesResult = await client.query(`
-                SELECT boss_id, kills FROM boss_mastery WHERE player_id = $1
-            `, [playerId]);
-            const allMasteries = allMasteriesResult.rows;
-            
-            // Используем новую функцию расчёта урона
-            const damage = calculateDamage(raid.boss_id, player.level, player, allMasteries);
-            
-            // Новый HP босса
+            if (!session) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' });
+            }
+
+            const player = await getPlayerBaseState(client, playerId);
+            if (player.energy < 1) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, error: 'Недостаточно энергии', code: 'INSUFFICIENT_ENERGY' });
+            }
+
+            const masteries = await getBossMasteries(client, playerId);
+            const damage = calculateDamage(raid.boss_id, player, masteries);
             const newHp = Math.max(0, raid.current_health - damage);
-            
-            // Обновляем HP рейда
-            await client.query(`
-                UPDATE raid_progress SET current_health = $1
-                WHERE id = $2
-            `, [newHp, raidId]);
-            
-            // Обновляем урон игрока
             const newTotalDamage = session.damage_dealt + damage;
-            await client.query(`
-                UPDATE boss_sessions SET damage_dealt = $1, last_hit_at = NOW()
-                WHERE player_id = $2 AND raid_id = $3
-            `, [newTotalDamage, playerId, raidId]);
-            
-            // Проверяем, убит ли босс
+
+            await client.query(
+                `UPDATE players
+                 SET energy = GREATEST(0, energy - 1),
+                     last_energy_update = NOW()
+                 WHERE id = $1`,
+                [playerId]
+            );
+
+            await client.query('UPDATE raid_progress SET current_health = $1 WHERE id = $2', [newHp, raidId]);
+            await client.query('UPDATE boss_sessions SET damage_dealt = $1, last_hit_at = NOW() WHERE player_id = $2 AND raid_id = $3', [newTotalDamage, playerId, raidId]);
+
             let killed = false;
             let rewards = null;
-            
+
             if (newHp <= 0) {
                 killed = true;
-                
-                // Обновляем рейд как завершённый
-                await client.query(`
-                    UPDATE raid_progress SET is_active = false, ended_at = NOW(), current_health = 0
-                    WHERE id = $1
-                `, [raidId]);
-                
-                // Получаем всех участников для выдачи наград
-                const participants = await client.query(`
-                    SELECT bs.*, p.telegram_id, p.first_name, p.username
-                    FROM boss_sessions bs
-                    JOIN players p ON bs.player_id = p.id
-                    WHERE bs.raid_id = $1 AND bs.damage_dealt > 0
-                `, [raidId]);
-                
-                const totalDamage = participants.rows.reduce((sum, p) => sum + p.damage_dealt, 0);
-                const leaderId = raid.leader_id;
-                
-                // Выдаём награды пропорционально урону
-                let playerRewards = null; // Награды для текущего игрока
-                for (const participant of participants.rows) {
-                    const damagePercent = participant.damage_dealt / totalDamage;
-                    const coinsReward = Math.floor(boss.reward_coins * damagePercent);
-                    const expReward = Math.floor(boss.reward_experience * damagePercent);
-                    
-                    // Выдаём монеты
+                await client.query('UPDATE raid_progress SET is_active = false, ended_at = NOW(), current_health = 0 WHERE id = $1', [raidId]);
+
+                const participantsResult = await client.query(
+                    'SELECT player_id, damage_dealt FROM boss_sessions WHERE raid_id = $1 AND damage_dealt > 0',
+                    [raidId]
+                );
+
+                const participants = participantsResult.rows;
+                const totalDamage = participants.reduce((sum, row) => sum + Number(row.damage_dealt || 0), 0) || 1;
+                const participantIds = participants.map((row) => row.player_id);
+
+                for (const participant of participants) {
+                    const share = Number(participant.damage_dealt || 0) / totalDamage;
+                    const coinsReward = Math.floor((raid.reward_coins || 0) * share);
+                    const experienceReward = Math.floor((raid.reward_experience || 0) * share);
+
                     if (coinsReward > 0) {
-                        await client.query(`
-                            UPDATE players SET coins = coins + $1 WHERE id = $2
-                        `, [coinsReward, participant.player_id]);
+                        await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [coinsReward, participant.player_id]);
                     }
-                    
-                    // Выдаём опыт
-                    if (expReward > 0) {
-                        await playerHelper.addExperience(participant.player_id, expReward, client);
+
+                    if (experienceReward > 0) {
+                        await playerHelper.addExperience(participant.player_id, experienceReward, client);
                     }
-                    
-                    // Выдаём ключ:
-                    // - Публичные рейды: только лидеру
-                    // - Клановые рейды: ВСЕМ участникам (мотивация вступать в клан)
-                    const nextBossId = boss.id + 1;
-                    
-                    // Сохраняем награды только для текущего игрока (того, кто сделал запрос)
-                    const isCurrentPlayer = participant.player_id === playerId;
-                    
-                    if (raid.is_clan_raid) {
-                        // Клановый рейд - все получают ключ
-                        await client.query(`
-                            INSERT INTO boss_keys (player_id, boss_id, quantity)
-                            VALUES ($1, $2, 1)
-                            ON CONFLICT (player_id, boss_id) 
-                            DO UPDATE SET quantity = boss_keys.quantity + 1
-                        `, [participant.player_id, nextBossId]);
-                        
-                        // Записываем кому выдали ключ (для логов/аналитики)
-                        if (isCurrentPlayer) {
-                            playerRewards = {
-                                coins: coinsReward,
-                                exp: expReward,
-                                key: { boss_id: nextBossId, quantity: 1 }
-                            };
-                        }
-                    } else if (participant.player_id === leaderId) {
-                        // Публичный рейд - только лидер получает ключ
-                        await client.query(`
-                            INSERT INTO boss_keys (player_id, boss_id, quantity)
-                            VALUES ($1, $2, 1)
-                            ON CONFLICT (player_id, boss_id) 
-                            DO UPDATE SET quantity = boss_keys.quantity + 1
-                        `, [leaderId, nextBossId]);
-                        
-                        if (isCurrentPlayer) {
-                            playerRewards = {
-                                coins: coinsReward,
-                                exp: expReward,
-                                key: { boss_id: nextBossId, quantity: 1 }
-                            };
-                        }
-                    } else {
-                        // Публичный рейд, не лидер - только монеты и опыт
-                        if (isCurrentPlayer) {
-                            playerRewards = {
-                                coins: coinsReward,
-                                exp: expReward
-                            };
+
+                    const grantedItems = await grantRewardItems(client, participant.player_id, raid.reward_items, share);
+
+                    if (participant.player_id === playerId) {
+                        rewards = {
+                            coins: coinsReward,
+                            experience: experienceReward
+                        };
+                        if (grantedItems.length) {
+                            rewards.items = grantedItems;
                         }
                     }
-                    
-                    // Всем участникам засчитываем убийство
-                    await client.query(`
-                        INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
-                        VALUES ($1, $2, 1, NOW())
-                        ON CONFLICT (player_id, boss_id) 
-                        DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()
-                    `, [participant.player_id, boss.id]);
-                    
-                    // Обновляем счётчик убитых боссов
-                    await client.query(`
-                        UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1
-                    `, [participant.player_id]);
-                    
-                    // Помечаем, что награда получена
-                    await client.query(`
-                        UPDATE boss_sessions SET rewards_earned = true 
-                        WHERE player_id = $1 AND raid_id = $2
-                    `, [participant.player_id, raidId]);
+
+                    await client.query(
+                        `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
+                         VALUES ($1, $2, 1, NOW())
+                         ON CONFLICT (player_id, boss_id)
+                         DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
+                        [participant.player_id, raid.boss_id]
+                    );
+
+                    await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [participant.player_id]);
                 }
+
+                const leaderKey = await grantNextBossKey(client, raid.leader_id, raid.boss_id);
+                if (playerId === raid.leader_id && leaderKey) {
+                    rewards = rewards || { coins: 0, experience: 0 };
+                    rewards.key = leaderKey;
+                }
+
+                await clearActiveBattleForPlayers(client, participantIds);
             }
-            
+
             await client.query('COMMIT');
-            
-            // Логируем
-            logger.info(`[raid] Атака в рейде`, {
-                playerId,
-                raidId,
-                bossId: boss.id,
-                damage,
-                newHp,
-                killed
-            });
-            
-            res.json({
+
+            return res.json({
                 success: true,
                 data: {
                     raid: {
@@ -1553,358 +1107,37 @@ router.post('/raid/:id/attack', async (req, res) => {
                     damage,
                     your_total_damage: newTotalDamage,
                     killed,
-                    rewards: killed ? playerRewards : null
+                    rewards
                 }
             });
-            
         } catch (error) {
             await client.query('ROLLBACK');
             throw error;
         }
-        
     } catch (error) {
-        handleError(res, error, 'raid_attack');
+        return handleError(res, error, 'mass_attack');
     } finally {
         client.release();
     }
 });
 
-// =============================================================================
-// КЛАНОВЫЕ РЕЙДЫ (ИНТЕГРАЦИЯ С КЛАНАМИ)
-// =============================================================================
-
-/**
- * Получить клановые рейды для текущего игрока
- * GET /clan-raids
- */
-router.get('/clan-raids', async (req, res) => {
-    try {
-        const player = req.player;
-        
-        if (!player.clan_id) {
-            return res.json({
-                success: true,
-                data: { raids: [] }
-            });
-        }
-        
-        // Получаем активные клановые рейды
-        const raids = await queryAll(`
-            SELECT 
-                rp.*,
-                b.name as boss_name,
-                b.reward_coins,
-                b.reward_experience,
-                b.icon,
-                b.description as boss_description,
-                (SELECT COUNT(*) FROM boss_sessions WHERE raid_id = rp.id) as participants_count
-            FROM raid_progress rp
-            JOIN bosses b ON rp.boss_id = b.id
-            WHERE rp.is_active = true 
-                AND rp.expires_at > NOW()
-                AND rp.is_clan_raid = true
-                AND rp.clan_id = $1
-            ORDER BY rp.started_at DESC
-            LIMIT 50
-        `, [player.clan_id]);
-        
-        res.json({
-            success: true,
-            data: {
-                clan_id: player.clan_id,
-                raids: raids.map(raid => ({
-                    id: raid.id,
-                    boss: {
-                        id: raid.boss_id,
-                        name: raid.boss_name,
-                        icon: raid.icon,
-                        description: raid.boss_description
-                    },
-                    hp: raid.current_health,
-                    max_hp: raid.max_health,
-                    hp_percent: Math.round((raid.current_health / raid.max_health) * 100),
-                    leader: {
-                        id: raid.leader_id,
-                        name: raid.leader_name
-                    },
-                    participants_count: parseInt(raid.participants_count || 0),
-                    started_at: raid.started_at,
-                    expires_at: raid.expires_at,
-                    time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now()
-                }))
-            }
-        });
-        
-    } catch (error) {
-        handleError(res, error, 'get_clan_raids');
-    }
-});
-
-/**
- * Начать клановый рейд
- * POST /clan-raids/start
- * 
- * Тело запроса:
- * {
- *   boss_id: 1
- * }
- */
-router.post('/clan-raids/start', async (req, res) => {
-    const client = await pool.connect();
-    
-    try {
-        const { boss_id } = req.body;
-        const playerId = req.player.id;
-        const playerName = req.player.first_name || 'Игрок';
-        const clanId = req.player.clan_id;
-        
-        // Проверяем членство в клане
-        if (!clanId) {
-            return res.status(403).json({
-                success: false,
-                error: 'Вы не состоите в клане',
-                code: 'NOT_IN_CLAN'
-            });
-        }
-        
-        // Проверяем роль лидера
-        if (req.player.clan_role !== 'leader') {
-            return res.status(403).json({
-                success: false,
-                error: 'Только лидер клана может начать рейд',
-                code: 'NOT_LEADER'
-            });
-        }
-        
-        // Начинаем транзакцию ДО проверки и списания ключей
-        await client.query('BEGIN');
-        
-        try {
-            // Проверяем ключи
-            if (boss_id > 1) {
-                const keyResult = await client.query(`
-                    SELECT quantity FROM boss_keys 
-                    WHERE player_id = $1 AND boss_id = $2
-                `, [playerId, boss_id - 1]);
-                
-                const keyCount = keyResult.rows[0]?.quantity || 0;
-                
-                if (keyCount < KEYS_REQUIRED_FOR_RAID) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        error: `Нужно ${KEYS_REQUIRED_FOR_RAID} ключей от босса ${boss_id - 1}`,
-                        code: 'INSUFFICIENT_KEYS',
-                        keys_owned: keyCount,
-                        keys_required: KEYS_REQUIRED_FOR_RAID
-                    });
-                }
-                
-                // Списываем ключи внутри транзакции
-                await client.query(`
-                    UPDATE boss_keys SET quantity = quantity - $1
-                    WHERE player_id = $2 AND boss_id = $3
-                `, [KEYS_REQUIRED_FOR_RAID, playerId, boss_id - 1]);
-            }
-            
-            // Получаем босса
-            const bossResult = await client.query(`
-                SELECT * FROM bosses WHERE id = $1
-            `, [boss_id]);
-            
-            if (bossResult.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Босс не найден',
-                    code: 'BOSS_NOT_FOUND'
-                });
-            }
-            
-            const boss = bossResult.rows[0];
-            
-            // Проверяем, есть ли уже активный клановый рейд
-            const existingRaid = await client.query(`
-                SELECT id FROM raid_progress 
-                WHERE clan_id = $1 AND is_clan_raid = true AND is_active = true
-            `, [clanId]);
-            
-            if (existingRaid.rows.length > 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'У клана уже есть активный рейд',
-                    code: 'RAID_ALREADY_ACTIVE'
-                });
-            }
-            
-            // Создаём клановый рейд (4 часа)
-            const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000);
-            
-            const raidResult = await client.query(`
-                INSERT INTO raid_progress 
-                (boss_id, current_health, max_health, started_at, expires_at, is_active, is_raid, leader_id, leader_name, is_clan_raid, clan_id)
-                VALUES ($1, $2, $3, NOW(), $4, true, true, $5, $6, true, $7)
-                RETURNING id
-            `, [boss_id, boss.max_health, boss.max_health, expiresAt, playerId, playerName, clanId]);
-            
-            const raidId = raidResult.rows[0].id;
-            
-            // Создаём сессию лидера
-            await client.query(`
-                INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
-                VALUES ($1, $2, $3, 0, NOW(), NOW())
-            `, [boss_id, playerId, raidId]);
-            
-            await client.query('COMMIT');
-            
-            logger.info(`[clan_raid] Начат клановый рейд`, {
-                playerId,
-                clanId,
-                bossId: boss_id,
-                raidId
-            });
-            
-            res.json({
-                success: true,
-                data: {
-                    raid_id: raidId,
-                    boss: {
-                        id: boss.id,
-                        name: boss.name,
-                        hp: boss.max_health,
-                        max_hp: boss.max_health
-                    },
-                    keys_spent: boss_id > 1 ? KEYS_REQUIRED_FOR_RAID : 0,
-                    expires_at: expiresAt,
-                    time_remaining_ms: 4 * 60 * 60 * 1000
-                }
-            });
-            
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        }
-        
-    } catch (error) {
-        handleError(res, error, 'clan_raid_start');
-    } finally {
-        client.release();
-    }
-});
-
-/**
- * Получить активный бой игрока
- * GET /boss/active
- * 
- * Возвращает информацию о текущем активном бое (если есть)
- */
 router.get('/active', async (req, res) => {
+    const client = await pool.connect();
+
     try {
-        const playerId = req.player.id;
-        
-        // Получаем игрока с информацией об активном бое
-        const playerResult = await query(`
-            SELECT 
-                p.active_boss_id, 
-                p.active_boss_started_at,
-                p.energy,
-                p.max_energy,
-                p.level
-            FROM players p 
-            WHERE p.id = $1
-        `, [playerId]);
-        
-        const player = playerResult.rows[0];
-        
-        // Если нет активного боя
-        if (!player.active_boss_id) {
-            return res.json({
-                success: true,
-                data: {
-                    has_active_boss: false,
-                    active_boss: null
-                }
-            });
-        }
-        
-        // Проверяем не истёк ли бой
-        let isExpired = false;
-        let timeRemainingMs = null;
-        
-        if (player.active_boss_started_at) {
-            const startedAt = new Date(player.active_boss_started_at).getTime();
-            const timePassed = Date.now() - startedAt;
-            
-            if (timePassed >= BOSS_FIGHT_DURATION_MS) {
-                isExpired = true;
-            } else {
-                timeRemainingMs = BOSS_FIGHT_DURATION_MS - timePassed;
-            }
-        }
-        
-        // Если бой истёк - возвращаем что активного боя нет
-        if (isExpired) {
-            return res.json({
-                success: true,
-                data: {
-                    has_active_boss: false,
-                    active_boss: null,
-                    was_expired: true
-                }
-            });
-        }
-        
-        // Получаем информацию о боссе
-        const bossResult = await query(`
-            SELECT 
-                b.id, b.name, b.icon, b.max_health, 
-                b.reward_coins, b.reward_experience,
-                pbp.current_hp, pbp.max_hp as progress_max_hp
-            FROM bosses b
-            LEFT JOIN player_boss_progress pbp ON pbp.boss_id = b.id AND pbp.player_id = $1
-            WHERE b.id = $2
-        `, [playerId, player.active_boss_id]);
-        
-        if (bossResult.rows.length === 0) {
-            return res.json({
-                success: true,
-                data: {
-                    has_active_boss: false,
-                    active_boss: null
-                }
-            });
-        }
-        
-        const boss = bossResult.rows[0];
-        
+        const activeBattle = await resolveActiveBattle(client, req.player.id);
+
         res.json({
             success: true,
             data: {
-                has_active_boss: true,
-                active_boss: {
-                    id: boss.id,
-                    name: boss.name,
-                    icon: boss.icon,
-                    hp: boss.current_hp || boss.max_health,
-                    max_hp: boss.max_health,
-                    hp_percent: Math.round(((boss.current_hp || boss.max_health) / boss.max_health) * 100),
-                    rewards: {
-                        coins: boss.reward_coins,
-                        exp: boss.reward_experience
-                    }
-                },
-                time_remaining_ms: timeRemainingMs,
-                player: {
-                    energy: player.energy,
-                    max_energy: player.max_energy,
-                    level: player.level
-                }
+                has_active_boss: Boolean(activeBattle),
+                active_boss: activeBattle
             }
         });
-        
     } catch (error) {
-        handleError(res, error, 'get_active_boss');
+        return handleError(res, error, 'active');
+    } finally {
+        client.release();
     }
 });
 

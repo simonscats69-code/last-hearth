@@ -9,43 +9,14 @@ const { pool, query, queryOne } = require('../../db/database');
 const { logPlayerAction, serializeJSONField, handleError } = require('../../utils/serverApi');
 const { logger } = require('../../utils/serverApi');
 
-/**
- * Универсальный формат успешного ответа
- * @param {object} res 
- * @param {object} data 
- */
-function successResponse(res, data) {
-    res.json({ success: true, ...data });
-}
-
-/**
- * Универсальный формат ответа с ошибкой
- * @param {object} res 
- * @param {string} error 
- * @param {number} code 
- * @param {number} statusCode 
- */
-function errorResponse(res, error, code = 'INTERNAL_ERROR', statusCode = 400, extraData = {}) {
-    res.status(statusCode).json({ success: false, error, code, ...extraData });
-}
-
-/**
- * Валидация ID предмета
- * @param {any} value 
- * @returns {boolean}
- */
-function isValidItemId(value) {
-    return Number.isInteger(value) && value > 0;
-}
-
-/**
- * Валидация валюты
- * @param {any} value 
- * @returns {boolean}
- */
-function isValidCurrency(value) {
-    return value === 'coins' || value === 'stars';
-}
+// Общие функции API из utils/apiHelpers
+const { 
+    successResponse, 
+    errorResponse, 
+    isValidItemId, 
+    isValidCurrency,
+    safeParse
+} = require('../../utils/apiHelpers');
 
 /**
  * Покупка предмета

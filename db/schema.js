@@ -45,6 +45,8 @@ async function createTables() {
             days_played INTEGER DEFAULT 1,
             last_energy_update TIMESTAMP DEFAULT NOW(),
             last_action_time TIMESTAMP DEFAULT NOW(),
+            active_boss_mode VARCHAR(20),
+            active_raid_id INTEGER,
             last_daily_bonus TIMESTAMP,
             daily_streak INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT NOW(),
@@ -707,6 +709,32 @@ async function runMigrations() {
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                            WHERE table_name = 'players' AND column_name = 'active_boss_started_at') THEN
                 ALTER TABLE players ADD COLUMN active_boss_started_at TIMESTAMP;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'players' AND column_name = 'active_boss_mode') THEN
+                ALTER TABLE players ADD COLUMN active_boss_mode VARCHAR(20);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'players' AND column_name = 'active_raid_id') THEN
+                ALTER TABLE players ADD COLUMN active_raid_id INTEGER;
+            END IF;
+        END $do$
+    `);
+
+    // Миграция: добавить FK для active_raid_id после создания raid_progress
+    await query(`
+        DO $do$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'players' AND column_name = 'active_raid_id'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE constraint_name = 'fk_players_active_raid'
+            ) THEN
+                ALTER TABLE players
+                ADD CONSTRAINT fk_players_active_raid
+                FOREIGN KEY (active_raid_id) REFERENCES raid_progress(id) ON DELETE SET NULL;
             END IF;
         END $do$
     `);

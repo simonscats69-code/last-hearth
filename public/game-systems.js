@@ -782,41 +782,84 @@ function renderInventoryWithFilters(items) {
  */
 async function loadBosses() {
     try {
-        // Загружаем боссов через новый API
-        const data = await apiRequest('/game/bosses');
-        
-        // Обрабатываем разные форматы ответа API
-        // Сервер возвращает: { success: true, data: { bosses: [...] } }
-        if (data && data.data && data.data.bosses) {
-            gameState.bosses = data.data.bosses;
-        } else if (data && data.bosses) {
-            // Альтернативный формат: { bosses: [...] }
-            gameState.bosses = data.bosses;
-        } else if (Array.isArray(data)) {
-            // Формат напрямую: массив боссов
-            gameState.bosses = data;
-        } else {
-            // Неизвестный формат - используем пустой массив
-            console.warn('[loadBosses] Неизвестный формат ответа:', data);
-            gameState.bosses = [];
-        }
-        
+        const response = await apiRequest('/api/game/bosses');
+        const data = response?.data || response;
+
+        gameState.bosses = Array.isArray(data?.bosses) ? data.bosses : [];
+        gameState.raids = Array.isArray(data?.raids) ? data.raids : [];
+        gameState.raidsParticipating = data?.participating_boss_ids || [];
+        gameState.bossesInfo = data?.info || null;
+        gameState.activeBattle = data?.active_battle || null;
+
         // Обновляем информацию об энергии игрока
-        const playerEnergy = data?.data?.player_energy ?? data?.player_energy;
+        const playerEnergy = data?.player_energy;
         if (playerEnergy !== undefined) {
             syncPlayerEnergyState(
                 playerEnergy,
-                data?.data?.player_max_energy ?? data?.player_max_energy ?? 100
+                data?.player_max_energy ?? 100
             );
             refreshPlayerEnergyUI();
         }
-        
+
+        renderBossesInfo(gameState.bossesInfo);
+
+        if (gameState.activeBattle?.type === 'solo' && gameState.activeBattle?.boss) {
+            startBossFight(gameState.activeBattle.boss);
+            return;
+        }
+
+        if (gameState.activeBattle?.type === 'mass') {
+            showScreen('bosses');
+            switchBossesTab('mass');
+            renderRaids(gameState.raids);
+            return;
+        }
+
+        showScreen('bosses');
+        switchBossesTab('solo');
         renderBosses(gameState.bosses);
     } catch (error) {
         console.error('Bosses error:', error);
         // При ошибке показываем пустой список
         gameState.bosses = [];
         renderBosses([]);
+    }
+}
+
+function renderBossesInfo(info) {
+    const container = document.getElementById('bosses-info');
+    if (!container) return;
+
+    if (!info) {
+        container.innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="bosses-info-card">
+            <div><strong>Соло:</strong> ${info.solo || ''}</div>
+            <div><strong>Прокачка:</strong> ${info.mastery || ''}</div>
+            <div><strong>Массовый бой:</strong> ${info.raids || ''}</div>
+        </div>
+    `;
+}
+
+function switchBossesTab(tabName = 'solo') {
+    const soloTab = document.getElementById('bosses-solo-tab');
+    const massTab = document.getElementById('bosses-mass-tab');
+    const bossesList = document.getElementById('bosses-list');
+    const raidsList = document.getElementById('raids-list');
+    const isSolo = tabName === 'solo';
+
+    if (soloTab) soloTab.classList.toggle('active', isSolo);
+    if (massTab) massTab.classList.toggle('active', !isSolo);
+    if (bossesList) bossesList.style.display = isSolo ? 'block' : 'none';
+    if (raidsList) raidsList.style.display = isSolo ? 'none' : 'block';
+
+    if (isSolo) {
+        renderBosses(gameState.bosses || []);
+    } else {
+        renderRaids(gameState.raids || []);
     }
 }
 
@@ -839,77 +882,104 @@ function renderBosses(bosses) {
     }
     
     for (const boss of bosses) {
-        // Используем новые поля или fallback на старые
-        const isUnlocked = boss.is_unlocked ?? boss.unlocked ?? false;
-        const canAttack = boss.can_attack !== false;
-        const playerKeys = boss.player_keys ?? boss.keys_owned ?? 0;
-        const keysRequired = boss.keys_required ?? 1;
-        const mastery = boss.mastery ?? 0;
-        const maxMastery = boss.max_mastery || 5; // Максимум 5 убийств для полного мастерства
-        
+        const isUnlocked = boss.is_unlocked ?? false;
+        const canStartSolo = boss.can_start_solo !== false;
+        const canStartMass = boss.can_start_mass !== false;
+        const playerKeys = boss.owned_keys ?? boss.player_keys ?? 0;
+        const keysRequired = boss.required_keys ?? 0;
+        const defeatedCount = boss.defeated_count ?? boss.mastery ?? 0;
+        const currentDamage = boss.current_damage ?? 1;
+        const currentHp = boss.hp ?? boss.max_hp;
+        const maxHp = boss.max_hp || 1;
+        const hpPercent = Math.max(0, Math.min(100, (currentHp / maxHp) * 100));
+
         const item = document.createElement('div');
-        item.className = `boss-item ${isUnlocked ? '' : 'locked'} ${canAttack && isUnlocked ? 'available' : 'unavailable'}`;
-        
-        // Генерируем звёзды мастерства
-        let masteryStars = '';
-        for (let i = 0; i < maxMastery; i++) {
-            masteryStars += i < mastery ? '⭐' : '☆';
-        }
-        
-        // Формируем HTML карточки босса
+        item.className = `boss-item ${isUnlocked ? '' : 'locked'} ${isUnlocked ? 'available' : 'unavailable'}`;
+
         item.innerHTML = `
             <div class="boss-icon">${boss.icon}</div>
             <div class="boss-info">
                 <div class="boss-name">${boss.name}</div>
                 <div class="boss-desc">${boss.description || ''}</div>
-                <div class="boss-mastery">
-                    <span class="mastery-label">Убийств: ${mastery}</span>
-                    <span class="mastery-stars">${masteryStars}</span>
+                <div class="boss-hp-bar">
+                    <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
                 </div>
+                <div class="boss-hp-text">${formatNumber(currentHp)} / ${formatNumber(maxHp)} HP</div>
+                <div class="boss-mastery">Побеждено: ${defeatedCount}</div>
+                <div class="boss-damage">Урон по боссу: ${currentDamage}</div>
                 <div class="boss-reward">💰 ${boss.reward_coins || 0} | ✨ ${boss.reward_experience || 0} XP</div>
-                ${!isUnlocked ? `
-                    <div class="boss-keys">
-                        <span class="keys-owned">🔑 ${playerKeys}/${keysRequired}</span>
-                        <span class="keys-needed">нужно ${keysRequired} ключей</span>
-                    </div>
-                ` : `
-                    <div class="boss-keys unlocked">
-                        <span class="keys-owned">🔑 ${playerKeys} ключей</span>
-                    </div>
-                `}
+                <div class="boss-keys ${isUnlocked ? 'unlocked' : ''}">
+                    <span class="keys-owned">🔑 ${playerKeys}/${keysRequired}</span>
+                    ${boss.id > 1 ? `<span class="keys-needed">нужно ${keysRequired} ключей</span>` : '<span class="keys-needed">первый босс без ключей</span>'}
+                </div>
             </div>
             <div class="boss-actions">
-                ${canAttack && isUnlocked ? 
-                    `<button class="attack-btn" data-boss-id="${boss.id}">⚔️ Атаковать</button>` :
-                    !isUnlocked ?
-                    `<button class="attack-btn disabled" disabled>🔒 Заблокировано</button>` :
-                    `<button class="attack-btn disabled" disabled>⚡ Нет энергии</button>`
-                }
+                ${isUnlocked && canStartSolo
+                    ? `<button class="attack-btn start-solo-btn" data-boss-id="${boss.id}">⚔️ Начать бой</button>`
+                    : `<button class="attack-btn disabled" disabled>🔒 Соло-бой недоступен</button>`}
+                ${isUnlocked && canStartMass
+                    ? `<button class="attack-btn mass-btn" data-boss-id="${boss.id}">👥 Массовый бой</button>`
+                    : `<button class="attack-btn disabled" disabled>👥 Массовый бой недоступен</button>`}
             </div>
         `;
-        
-        // Клик по боссу - открываем экран боя
-        item.addEventListener('click', (e) => {
-            // Игнорируем клик на кнопку
-            if (e.target.classList.contains('attack-btn')) return;
-            
-            if (isUnlocked) {
-                startBossFight(boss);
-            } else {
-                showModal('🔒 Заблокировано', `Нужно ${keysRequired} ключей от предыдущего босса\nУ вас есть: ${playerKeys} ключей`);
-            }
-        });
-        
-        // Обработчик кнопки атаки
-        const attackBtn = item.querySelector('.attack-btn');
-        if (attackBtn && canAttack && isUnlocked) {
-            attackBtn.addEventListener('click', (e) => {
+
+        const soloBtn = item.querySelector('.start-solo-btn');
+        if (soloBtn) {
+            soloBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                startBossFight(boss);
+                await startSoloBossFight(boss.id);
             });
         }
-        
+
+        const massBtn = item.querySelector('.mass-btn');
+        if (massBtn) {
+            massBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await startMassBossFight(boss.id);
+            });
+        }
+
         list.appendChild(item);
+    }
+}
+
+async function startSoloBossFight(bossId) {
+    try {
+        const result = await apiRequest('/api/game/bosses/start', {
+            method: 'POST',
+            body: { boss_id: bossId }
+        });
+
+        if (result.success) {
+            const boss = result?.data?.boss;
+            if (boss) {
+                startBossFight(boss);
+            }
+        } else {
+            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось начать бой');
+        }
+    } catch (error) {
+        console.error('Start solo boss fight error:', error);
+        showModal('❌ Ошибка', 'Не удалось начать бой с боссом');
+    }
+}
+
+async function startMassBossFight(bossId) {
+    try {
+        const result = await apiRequest('/api/game/bosses/raid/start', {
+            method: 'POST',
+            body: { boss_id: bossId }
+        });
+
+        if (result.success) {
+            await loadBosses();
+            switchBossesTab('mass');
+        } else {
+            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось начать массовый бой');
+        }
+    } catch (error) {
+        console.error('Start mass boss fight error:', error);
+        showModal('❌ Ошибка', 'Не удалось начать массовый бой');
     }
 }
 
@@ -939,7 +1009,7 @@ function startBossFight(boss) {
     if (fightLog) {
         fightLog.innerHTML = `
             <p class="fight-start">🎯 Бой с <strong>${boss.name}</strong> начался!</p>
-            <p>Выбери количество атак:</p>
+            <p>1 удар = 1 энергия. Бой длится 8 часов.</p>
         `;
     }
     
@@ -954,6 +1024,8 @@ function startBossFight(boss) {
     
     // Скрываем прогресс
     if (progressContainer) progressContainer.style.display = 'none';
+    const attackMultiBtn = document.getElementById('attack-boss-multiple-btn');
+    if (attackMultiBtn) attackMultiBtn.style.display = 'none';
     
     // Добавляем обработчики кнопок если ещё не добавлены
     if (attackSingleBtn && !attackSingleBtn.hasAttribute('data-handler')) {
@@ -2090,7 +2162,8 @@ window.attackBoss = attackBoss;
  */
 async function loadRaids() {
     try {
-        const data = await apiRequest('/api/game/bosses/raids');
+        const response = await apiRequest('/api/game/bosses/raids');
+        const data = response?.data || response;
         gameState.raids = data.raids || [];
         gameState.raidsParticipating = data.participating_boss_ids || [];
         return data;
@@ -2140,39 +2213,16 @@ function renderRaids(raids) {
 }
 
 /**
- * Начать рейд или одиночную атаку
+ * Начать массовый бой или одиночный бой
  * @param {number} bossId - ID босса
- * @param {boolean} isRaid - true = мультиплеер, false = одиночный
+ * @param {boolean} isRaid - true = массовый бой, false = соло
  */
 async function startRaid(bossId, isRaid = true) {
-    try {
-        const result = await apiRequest('/api/game/bosses/raid/start', {
-            method: 'POST',
-            body: { boss_id: bossId, is_raid: isRaid }
-        });
-        
-        if (result.success) {
-            showNotification(isRaid ? 'Рейд начат!' : 'Атака начата!', 'success');
-            
-            // Обновляем список рейдов
-            if (isRaid) {
-                await loadRaids();
-                renderRaids(gameState.raids);
-            }
-            
-            // Если одиночная атака - показываем экран боя
-            if (!isRaid) {
-                startBossFight(result.data.boss);
-            }
-        } else {
-            showNotification(result.error || 'Ошибка', 'error');
-        }
-        
-        return result;
-    } catch (error) {
-        console.error('Ошибка начала рейда:', error);
-        showNotification('Ошибка при начале рейда', 'error');
+    if (isRaid) {
+        return startMassBossFight(bossId);
     }
+
+    return startSoloBossFight(bossId);
 }
 
 /**

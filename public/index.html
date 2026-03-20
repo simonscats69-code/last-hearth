@@ -300,9 +300,15 @@
                 <button class="back-btn" data-screen="main">← Назад</button>
                 <h2>👹 Боссы</h2>
             </header>
+            <div class="bosses-tabs">
+                <button class="bosses-tab active" id="bosses-solo-tab" data-tab="solo">Обычные боссы</button>
+                <button class="bosses-tab" id="bosses-mass-tab" data-tab="mass">Массовые бои</button>
+            </div>
+            <div class="bosses-info" id="bosses-info"></div>
             <div class="bosses-list" id="bosses-list">
                 <!-- Боссы будут добавлены через JS -->
             </div>
+            <div class="raids-list" id="raids-list" style="display: none;"></div>
         </div>
 
         <!-- Экран боя с боссом -->
@@ -344,12 +350,6 @@
                         <span class="btn-icon">⚔️</span>
                         <span class="btn-text">Атаковать</span>
                         <span class="btn-cost">-1 ⚡</span>
-                    </button>
-                    
-                    <button class="action-btn attack-btn multiple" id="attack-boss-multiple-btn" style="display: none;">
-                        <span class="btn-icon">💥</span>
-                        <span class="btn-text">Атаковать 10 раз</span>
-                        <span class="btn-cost">-10 ⚡</span>
                     </button>
                 </div>
             </div>
@@ -920,8 +920,7 @@
     <script src="game-systems.js?v=10" defer></script>
     <script src="game-ui.js?v=10" defer></script>
     <script src="game-store.js?v=10" defer></script>
-    <script src="game-particles.js?v=10" defer></script>
-    <script src="game-map.js?v=10" defer></script>
+    <script src="game-visualEffects.js?v=10" defer></script>
     <script src="game-animations.js?v=10" defer></script>
 </body>
 </html>

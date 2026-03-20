@@ -8,85 +8,16 @@ const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const { logPlayerAction, serializeJSONField, handleError } = require('../../utils/serverApi');
 
-/**
- * Универсальный формат успешного ответа
- * @param {object} res 
- * @param {object} data 
- */
-function successResponse(res, data) {
-    res.json({ success: true, ...data });
-}
-
-/**
- * Универсальный формат ответа с ошибкой
- * @param {object} res 
- * @param {string} error 
- * @param {number} code 
- * @param {number} statusCode 
- */
-function errorResponse(res, error, code = 'INTERNAL_ERROR', statusCode = 400, extraData = {}) {
-    res.status(statusCode).json({ success: false, error, code, ...extraData });
-}
-
-/**
- * Валидация ID
- * @param {any} value 
- * @returns {boolean}
- */
-function isValidId(value) {
-    return Number.isInteger(value) && value > 0;
-}
-
-/**
- * Валидация цены
- * @param {any} value 
- * @returns {boolean}
- */
-function isValidPrice(value) {
-    return Number.isInteger(value) && value > 0 && value <= 1000000;
-}
-
-/**
- * Валидация индекса
- * @param {any} value 
- * @param {number} maxLength 
- * @returns {boolean}
- */
-function isValidIndex(value, maxLength) {
-    return Number.isInteger(value) && value >= 0 && value < maxLength;
-}
-
-/**
- * Безопасный парсинг JSON поля из БД
- * @param {any} field 
- * @returns {object}
- */
-function safeParse(field) {
-    if (!field) return null;
-    try {
-        if (typeof field === 'object') {
-            return field;
-        }
-        return JSON.parse(field);
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Пагинация
- */
-function parsePagination(queryParams, defaultLimit = 50, maxLimit = 100) {
-    let limit = parseInt(queryParams.limit) || defaultLimit;
-    let offset = parseInt(queryParams.offset) || 0;
-    
-    // Ограничиваем максимальный limit
-    limit = Math.min(limit, maxLimit);
-    // Ограничиваем минимальный offset
-    offset = Math.max(0, offset);
-    
-    return { limit, offset };
-}
+// Общие функции API из utils/apiHelpers
+const { 
+    successResponse, 
+    errorResponse, 
+    isValidId,
+    isValidPrice, 
+    isValidIndex,
+    safeParse,
+    parsePagination
+} = require('../../utils/apiHelpers');
 
 /**
  * Получение объявлений на рынке

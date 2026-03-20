@@ -16,26 +16,9 @@ const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, transaction: tx } = require('../../db/database');
 const { DEBUFF_CURES } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, PlayerHelper: playerHelper } = require('../../utils/serverApi');
+const { logger, safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
 
-/**
- * Универсальный обработчик ошибок
- * @param {object} res - объект ответа Express
- * @param {Error} error - объект ошибки
- * @param {string} action - действие, в котором произошла ошибка
- */
-function handleError(res, error, action = 'unknown') {
-    logger.error(`[inventory] ${action}`, {
-        error: error.message,
-        stack: error.stack
-    });
-    
-    return res.status(500).json({
-        success: false,
-        error: 'Внутренняя ошибка сервера',
-        code: 'INTERNAL_ERROR'
-    });
-}
+// handleError импортируется из utils/serverApi
 
 /**
  * Safe JSON parsing с fallback

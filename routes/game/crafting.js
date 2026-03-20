@@ -18,9 +18,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const { calculateCraftSuccess } = require('../../utils/gameConstants');
 const { logger, logGameAction, logPlayerError, safeParse, safeJsonParse, safeStringify, withPlayerLock, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 
-// ============================================================================
-// Утилиты
-// ============================================================================
+
 
 /**
  * Валидация ID (Number.isInteger и > 0)
@@ -102,9 +100,7 @@ const logPlayerAction = async (playerId, action, metadata = {}) => {
     }
 };
 
-// ============================================================================
-// Маршруты
-// ============================================================================
+
 
 /**
  * Получение списка рецептов с пагинацией
@@ -368,9 +364,7 @@ router.post('/', async (req, res) => {
     }
 });
 
-// ============================================================================
-// Обратная совместимость (deprecated маршруты)
-// ============================================================================
+
 
 /**
  * @deprecated Используйте /craft/recipes с параметрами limit и offset
@@ -434,9 +428,7 @@ router.get('/recipes/old', async (req, res) => {
     }
 });
 
-// ============================================================================
-// Namespace экспорт
-// ============================================================================
+
 
 const GameCrafting = {
     router,

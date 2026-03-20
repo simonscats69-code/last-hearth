@@ -9,7 +9,7 @@
  * 
  * Лимиты ТОЛЬКО на действия (POST/PUT/DELETE):
  * - criticalActionLimiter: 15/мин (PvP атака)
- * - clanBossActionLimiter: 20/мин (клан-босс)
+ * - bossActionLimiter: 30/мин (боссы - соло и массовые бои)
  * - bossClickLimiter: УДАЛЁН (защита energy + cooldown на уровне логики)
  * - generalActionLimiter: 50/мин (крафтинг, перемещение)
  * - purchaseLimiter: 10/мин (покупки)
@@ -52,17 +52,17 @@ const criticalActionLimiter = rateLimit({
 });
 
 /**
- * Клан-босс - отдельный лимитер
- * Лимит: 20 запросов в минуту (координированная атака клана)
+ * Боссы - общий лимит для соло и массовых боёв
+ * Лимит: 30 запросов в минуту
  * 
- * Endpoints: clans/clan-boss/attack, clans/clan-boss/spawn
+ * Endpoints: bosses/start, bosses/attack-boss, bosses/raid/start, bosses/raid/:id/join, bosses/raid/:id/attack
  */
-const clanBossActionLimiter = rateLimit({
+const bossActionLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 минута
-    max: 20, // 20 запросов в минуту
+    max: 30, // 30 запросов в минуту
     message: { 
-        error: 'Слишком много атак на кланового босса.', 
-        code: 'CLAN_BOSS_LIMIT',
+        error: 'Слишком много действий с боссами.', 
+        code: 'BOSS_ACTION_LIMIT',
         retryAfter: 60 
     },
     standardHeaders: true,
@@ -143,7 +143,7 @@ const purchaseLimiter = rateLimit({
     keyGenerator: (req) => req.player?.id || req.ip
 });
 
-// createInlineLimiter УДАЛЁН - не используется в дочерних роутерах
+
 
 /**
  * Middleware авторизации для Telegram Mini App
@@ -296,7 +296,6 @@ router.use('/debuffs', debuffsRouter);
 module.exports = Object.assign(router, { 
     authenticatePlayer, 
     criticalActionLimiter,     // 15/мин - PvP атака
-    clanBossActionLimiter,     // 20/мин - клан-босс
     generalActionLimiter,      // 50/мин - крафтинг, перемещение
     purchaseLimiter            // 10/мин - покупки
 });

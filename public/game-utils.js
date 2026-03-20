@@ -3,9 +3,7 @@
  * Общие функции, используемые во всей игре
  */
 
-// ============================================================================
-// ТЕЛЕГРАМ УТИЛИТЫ
-// ============================================================================
+
 
 /**
  * Получить ID текущего пользователя Telegram
@@ -85,9 +83,7 @@ function hapticSelection() {
     }
 }
 
-// ============================================================================
-// HTML УТИЛИТЫ
-// ============================================================================
+
 
 /**
  * Экранирование HTML
@@ -141,41 +137,10 @@ function formatTime(seconds) {
     return `${s}с`;
 }
 
-// ============================================================================
-// UI УТИЛИТЫ
-// ============================================================================
 
-/**
- * Показать модальное окно
- * @param {string} title - Заголовок
- * @param {string} message - Сообщение
- */
-function showModal(title, message) {
-    const modal = document.getElementById('modal');
-    if (!modal) return;
-    
-    const titleEl = document.getElementById('modal-title');
-    const messageEl = document.getElementById('modal-message');
-    
-    if (titleEl) titleEl.textContent = title;
-    if (messageEl) messageEl.textContent = message;
-    
-    modal.classList.add('active');
-}
+// closeModal не используется - удалён дубликат
 
-/**
- * Закрыть модальное окно
- */
-function closeModal() {
-    const modal = document.getElementById('modal');
-    if (modal) {
-        modal.classList.remove('active');
-    }
-}
 
-// ============================================================================
-// РАБОТА С ДАННЫМИ
-// ============================================================================
 
 /**
  * Получить категорию предмета
@@ -231,14 +196,10 @@ function getClanRoleEmoji(role) {
     return emojis[role] || emojis.member;
 }
 
-// ============================================================================
-// ВАЛИДАЦИЯ
-// ============================================================================
 
 
-// ============================================================================
-// ЭКСПОРТ
-// ============================================================================
+
+
 
 // Делаем функции глобальными для обратной совместимости
 window.getTelegramId = getTelegramId;
@@ -251,9 +212,8 @@ window.escapeHtml = escapeHtml;
 window.formatNumber = formatNumber;
 window.formatPercent = formatPercent;
 window.formatTime = formatTime;
-window.showModal = showModal;
-window.closeModal = closeModal;
-// showScreen удалён - используется расширенная версия из game-core.js
+// showModal/hideModal - в game-animations.js
+// showScreen - в game-core.js
 window.getItemCategory = getItemCategory;
 window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;

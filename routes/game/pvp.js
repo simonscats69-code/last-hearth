@@ -17,9 +17,7 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError, safeParse, safeJsonParse, safeStringify, withPlayerLock, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 
-// ============================================================================
-// Утилиты
-// ============================================================================
+
 
 /**
  * Валидация ID (Number.isInteger и > 0)
@@ -108,9 +106,7 @@ const logPlayerAction = async (playerId, action, metadata = {}) => {
     }
 };
 
-// ============================================================================
-// Маршруты
-// ============================================================================
+
 
 /**
  * Получение списка игроков для PvP с пагинацией
@@ -446,9 +442,7 @@ router.get('/stats', async (req, res) => {
     }
 });
 
-// ============================================================================
-// Namespace экспорт
-// ============================================================================
+
 
 const GamePVP = {
     router,

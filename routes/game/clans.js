@@ -16,9 +16,7 @@ const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, badRequest, wrap, logPlayerAction, serializeJSONField, logger } = require('../../utils/serverApi');
 
-// =============================================================================
-// УТИЛИТЫ
-// =============================================================================
+
 
 const { pool } = require('../../db/database');
 
@@ -33,9 +31,7 @@ function generateClanInviteCode() {
     return code;
 }
 
-// ============================================================================
-// Маршруты
-// ============================================================================
+
 
 /**
  * Получение информации о клане игрока
@@ -536,9 +532,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
     ok(res, result);
 }));
 
-// ============================================================================
-// Namespace экспорт
-// ============================================================================
+
 
 const GameClans = {
     router,
