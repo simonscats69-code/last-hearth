@@ -230,9 +230,17 @@ router.post('/use-item', async (req, res) => {
                     updated = true;
                     
                 } else if (item.type === 'bandage') {
-                    // Перевязочные материалы - просто расходуются
-                    // Система переломов удалена
-                    message = `Использовали ${item.name}. Перевязочные материалы израсходованы`;
+                    // Перевязочные материалы - расходуются и восстанавливают здоровье
+                    const healthRestored = item.heal || item.stats?.health_restore || 10;
+                    
+                    await client.query(`
+                        UPDATE players 
+                        SET health = LEAST(max_health, health + $1),
+                            inventory = $2
+                        WHERE id = $3
+                    `, [healthRestored, JSON.stringify(newInventory), playerId]);
+                    
+                    message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
                     updated = true;
                     
                 } else {

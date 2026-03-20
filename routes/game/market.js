@@ -75,7 +75,7 @@ router.get('/listings-v2', async (req, res) => {
         const { type, rarity, sort = 'price', order = 'asc' } = req.query;
         const { limit, offset } = parsePagination(req.query, 50, 100);
         
-        let sql = 'SELECT ml.*, p.username as seller_username FROM market_listings ml LEFT JOIN players p ON ml.seller_id = p.id WHERE ml.status = $1';
+        let sql = 'SELECT ml.*, p.username as seller_username FROM market_listings ml LEFT JOIN players p ON ml.seller_id = p.telegram_id WHERE ml.status = $1';
         const params = ['active'];
         
         if (type && typeof type === 'string') {

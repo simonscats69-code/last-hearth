@@ -219,26 +219,35 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
             logger.debug(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
         }
         
-        const winner = await client.query(
-            `UPDATE players SET 
+        // Формируем правильный запрос для обновления инвентаря
+        let winnerUpdateQuery = `
+            UPDATE players SET 
                 pvp_wins = pvp_wins + 1,
                 pvp_streak = pvp_streak + 1,
                 pvp_max_streak = GREATEST(pvp_max_streak, pvp_streak + 1),
                 pvp_rating = pvp_rating + 25,
                 pvp_total_damage_dealt = pvp_total_damage_dealt + $1,
                 experience = experience + $2,
-                coins = coins + $3,
-                inventory = inventory || $4::jsonb
-             WHERE id = $5
-             RETURNING *`,
-            [winnerDamageDealt, experienceGained, 
-             coinsStolen, JSON.stringify(itemsStolen), winnerId]
-        );
+                coins = coins + $3
+        `;
+        
+        const winnerParams = [winnerDamageDealt, experienceGained, coinsStolen, winnerId];
+        
+        // Добавляем обновление инвентаря только если есть украденные предметы
+        if (itemsStolen && itemsStolen.length > 0) {
+            winnerUpdateQuery += `, inventory = COALESCE(inventory, '{}'::jsonb) || $4::jsonb`;
+            winnerParams.splice(3, 0, JSON.stringify(itemsStolen));
+        }
+        
+        winnerUpdateQuery += ` WHERE id = ${winnerParams.length} RETURNING *`;
+        
+        const winner = await client.query(winnerUpdateQuery, winnerParams);
 
         // Обновляем прогресс достижений для победителя
         await updateAchievementProgress(winnerId, 'pvp_wins');
         
         // Обновляем статистику проигравшего
+        // Телепортируем в первую безопасную локацию (не красную зону)
         const loser = await client.query(
             `UPDATE players SET 
                 pvp_losses = pvp_losses + 1,
@@ -247,7 +256,10 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
                 pvp_total_damage_taken = pvp_total_damage_taken + $1,
                 coins = GREATEST(0, coins - $2),
                 coins_stolen_from_me = coins_stolen_from_me + $2,
-                current_location_id = 1  -- Телепорт в безопасную локацию
+                current_location_id = COALESCE(
+                    (SELECT id FROM locations WHERE is_red_zone IS NOT TRUE ORDER BY id LIMIT 1),
+                    1
+                )
              WHERE id = $3
              RETURNING *`,
             [attackerDamageTaken + defenderDamageTaken, coinsStolen, loserId]

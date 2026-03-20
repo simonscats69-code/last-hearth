@@ -158,7 +158,8 @@ async function loadProfile() {
     updateLuckDisplay();
 }
 
-const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
+// Ссылка на константу интервала энергии из game-core.js
+const ENERGY_REGEN_INTERVAL_MS = CONSTANTS?.INTERVALS?.ENERGY_UPDATE || 60000;
 
 function ensurePlayerStatus() {
     if (!gameState.player) {

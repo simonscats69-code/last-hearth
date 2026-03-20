@@ -260,9 +260,9 @@ const DEBUFF_EFFECTS = {
 // Предметы для лечения дебаффов
 const DEBUFF_CURES = {
     // Радиация
-    antiraid: {
+    antirad: {
         radiationReduction: 4,
-        itemId: 'antiraid',
+        itemId: 'antirad',
         name: 'Антирад'
     },
     medkit: {

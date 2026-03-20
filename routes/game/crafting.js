@@ -16,7 +16,7 @@ const { randomInt } = require('crypto');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
 const { calculateCraftSuccess } = require('../../utils/gameConstants');
-const { logger, logGameAction, logPlayerError, safeParse, safeJsonParse, safeStringify, withPlayerLock, PlayerHelper: playerHelper } = require('../../utils/serverApi');
+const { logger, logGameAction, logPlayerError, safeParse, safeJsonParse, safeStringify, withPlayerLock, PlayerHelper: playerHelper, logPlayerActionSimple } = require('../../utils/serverApi');
 
 
 
@@ -76,31 +76,6 @@ const ok = (res, data = {}) => res.json({ success: true, ...data });
  */
 const fail = (res, message, code = 400, statusCode = 400) => 
     res.status(statusCode).json({ success: false, error: message, code });
-
-/**
- * Логирование действия в player_logs
- * @param {number} playerId - ID игрока
- * @param {string} action - Действие
- * @param {object} metadata - Метаданные
- */
-const logPlayerAction = async (playerId, action, metadata = {}) => {
-    try {
-        await query(
-            `INSERT INTO player_logs (player_id, action, metadata, created_at) 
-             VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, safeStringify(metadata)]
-        );
-    } catch (error) {
-        // Логирование не должно ломать основную логику
-        logger.warn('Не удалось залогировать действие игрока', {
-            playerId,
-            action,
-            error: error.message
-        });
-    }
-};
-
-
 
 /**
  * Получение списка рецептов с пагинацией
@@ -172,7 +147,7 @@ router.get('/recipes', async (req, res) => {
         const lockedRecipes = recipesWithStatus.filter(r => !r.can_craft);
 
         // Логируем действие
-        await logPlayerAction(playerId, 'view_recipes', {
+        await logPlayerActionSimple(query, playerId, 'view_recipes', {
             limit,
             offset,
             total,
@@ -309,7 +284,7 @@ router.post('/', async (req, res) => {
                 `, [safeStringify(newInventory), newCraftingLevel, energyCost, playerId]);
 
                 // Логируем успешный крафт
-                await logPlayerAction(playerId, 'craft_success', {
+                await logPlayerActionSimple(query, playerId, 'craft_success', {
                     recipe_id,
                     recipe_name: recipe.name,
                     result_item_id: newItem.id,
@@ -338,7 +313,7 @@ router.post('/', async (req, res) => {
                 `, [energyCost, playerId]);
 
                 // Логируем неудачный крафт
-                await logPlayerAction(playerId, 'craft_failed', {
+                await logPlayerActionSimple(query, playerId, 'craft_failed', {
                     recipe_id,
                     recipe_name: recipe.name,
                     rolled: rolled.toFixed(2),

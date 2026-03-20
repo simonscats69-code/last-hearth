@@ -208,9 +208,9 @@ router.post('/attack', async (req, res) => {
                 throw new Error('PvP доступно только на красных зонах');
             }
 
-            // Получаем цель
+            // Получаем цель с блокировкой для предотвращения race condition
             const target = await queryOne(`
-                SELECT * FROM players WHERE id = $1
+                SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [target_id]);
 
             if (!target) {
@@ -221,10 +221,8 @@ router.post('/attack', async (req, res) => {
                 throw new Error('Игрок не на этой локации');
             }
 
-            // Проверяем наличие энергии для атаки
-            const attacker = await playerHelper.getById(playerId);
-
-            if (!attacker || attacker.energy < 1) {
+            // Проверяем наличие энергии - используем lockedPlayer вместо повторного запроса
+            if (!lockedPlayer || lockedPlayer.energy < 1) {
                 throw new Error('Нужна энергия для атаки');
             }
 
@@ -238,17 +236,17 @@ router.post('/attack', async (req, res) => {
             await logPlayerAction(playerId, 'pvp_attack_start', {
                 target_id,
                 target_name: target.username || target.first_name || 'Unknown',
-                location_id: attacker.current_location_id,
+                location_id: lockedPlayer.current_location_id,
                 battle_id: battleId
             });
 
             return {
                 battle_id: battleId,
                 attacker: {
-                    id: attacker.id,
-                    health: attacker.health,
-                    max_health: attacker.max_health,
-                    strength: attacker.strength
+                    id: lockedPlayer.id,
+                    health: lockedPlayer.health,
+                    max_health: lockedPlayer.max_health,
+                    strength: lockedPlayer.strength
                 },
                 target: {
                     id: target.id,
@@ -308,8 +306,19 @@ router.post('/attack-hit', async (req, res) => {
             const attackerId = isAttacker ? battle.attacker_id : battle.target_id;
             const defenderId = isAttacker ? battle.target_id : battle.attacker_id;
 
-            const attacker = await playerHelper.getById(attackerId);
-            const defender = await playerHelper.getById(defenderId);
+            // Получаем игроков с блокировкой для предотвращения race condition
+            // Используем direct query с FOR UPDATE для обоих игроков
+            const attackerResult = await queryOne(
+                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                [attackerId]
+            );
+            const defenderResult = await queryOne(
+                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                [defenderId]
+            );
+            
+            const attacker = attackerResult;
+            const defender = defenderResult;
 
             if (!attacker || !defender) {
                 throw new Error('Игрок не найден');

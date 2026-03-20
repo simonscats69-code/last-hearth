@@ -934,6 +934,36 @@ async function logPlayerActionWithTx(txConnection, playerId, action, meta = {}) 
     }
 }
 
+/**
+ * Универсальное логирование действия игрока (работает с query, pool или tx client)
+ * @param {Function|object} queryFn - Функция запроса (query из database.js) или client объект
+ * @param {number} playerId - ID игрока
+ * @param {string} action - Действие
+ * @param {object} metadata - Метаданные
+ */
+async function logPlayerActionSimple(queryFn, playerId, action, metadata = {}) {
+    try {
+        // Определяем, передан ли pool/client или функция query
+        let execFn;
+        if (typeof queryFn === 'function') {
+            execFn = queryFn;
+        } else if (queryFn && typeof queryFn.query === 'function') {
+            execFn = queryFn.query.bind(queryFn);
+        } else {
+            logger.warn('[logPlayerActionSimple] Некорректный параметр queryFn');
+            return;
+        }
+        
+        await execFn(
+            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, metadata, created_at) 
+             VALUES ($1, $2, $3, NOW())`,
+            [playerId, action, serializeJSONField(metadata)]
+        );
+    } catch (error) {
+        handleLogError(error, 'logPlayerActionSimple');
+    }
+}
+
 
 
 /**
@@ -1309,6 +1339,7 @@ module.exports = {
     // Логирование игроков
     logPlayerAction,
     logPlayerActionWithTx,
+    logPlayerActionSimple,
     PLAYER_ACTIONS_TABLE,
     
     // Обработка ошибок

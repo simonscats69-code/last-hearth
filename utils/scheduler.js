@@ -454,10 +454,6 @@ async function cleanupExpiredRaids() {
             duration_ms: duration
         });
         
-        // Запускаем следующую итерацию через 5 минут
-        if (schedulerEnabled) {
-            setTimeout(cleanupExpiredRaids, 5 * 60 * 1000);
-        }
         return;
     } finally {
         isRunning.raids = false;

@@ -143,7 +143,15 @@ async function regenerateEnergy(playerId) {
         }
         
         const now = new Date();
-        const lastUpdate = new Date(lockedPlayer.last_energy_update || lockedPlayer.updated_at);
+        const lastUpdateRaw = lockedPlayer.last_energy_update || lockedPlayer.updated_at;
+        // Проверяем что дата валидна
+        const lastUpdate = lastUpdateRaw ? new Date(lastUpdateRaw) : new Date();
+        
+        // Если дата всё ещё невалидна, используем текущее время
+        if (isNaN(lastUpdate.getTime())) {
+            lastUpdate.setTime(now.getTime());
+        }
+        
         const minutesPassed = Math.floor((now - lastUpdate) / 60000);
         
         // 1 энергия каждую минуту

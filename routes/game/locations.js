@@ -167,8 +167,9 @@ router.post('/search', async (req, res) => {
                     FROM items
                     WHERE rarity = $1
                       AND type != 'key'
-                    ORDER BY RANDOM()
-                    LIMIT 1
+                    LIMIT 1 OFFSET floor(random() * (
+                        SELECT COUNT(*) FROM items WHERE rarity = $1 AND type != 'key'
+                    ))::integer
                 `, [itemRarity]);
 
                 foundItem = itemResult.rows[0] || null;

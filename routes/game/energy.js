@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, transaction: tx } = require('../../db/database');
-const { logger, safeJsonParse } = require('../../utils/serverApi');
+const { logger, safeJsonParse, logPlayerActionSimple } = require('../../utils/serverApi');
 
 
 
@@ -41,25 +41,6 @@ function handleError(error, context, res, player = null) {
  * Теперь импортируется из utils/jsonHelper.js
  */
 // safeJsonParse теперь импортируется
-
-/**
- * Логирование действия игрока в player_logs
- * @param {number} playerId - ID игрока
- * @param {string} action - Действие
- * @param {object} metadata - JSON метаданные
- */
-async function logPlayerAction(playerId, action, metadata = {}, client = null) {
-    try {
-        const exec = client ? client.query.bind(client) : query;
-        await exec(
-            `INSERT INTO player_logs (player_id, action, metadata, created_at) 
-             VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, JSON.stringify(metadata)]
-        );
-    } catch (err) {
-        logger.warn(`Не удалось залогировать действие ${action} для игрока ${playerId}: ${err.message}`);
-    }
-}
 
 async function performBuyEnergy(client, playerId, amount) {
     const lockResult = await client.query(
@@ -97,7 +78,7 @@ async function performBuyEnergy(client, playerId, amount) {
         [actualAmount, actualCost, playerId]
     );
 
-    await logPlayerAction(playerId, 'buy_energy', {
+    await logPlayerActionSimple(client, playerId, 'buy_energy', {
         amount: actualAmount,
         stars_spent: actualCost,
         cost_per_unit: 0.1
@@ -161,8 +142,8 @@ router.post('/buy-energy', async (req, res) => {
                 success: false,
                 message: 'Недостаточно Stars',
                 code: 'NOT_ENOUGH_STARS',
-                required: Math.ceil((Number(req.body.amount || 50)) / 10),
-                have: req.player.stars
+                required: Math.ceil((Number(req.body.amount || 50)) / 10)
+                // Примечание: have убран, т.к. данные могут быть устаревшими после транзакции
             });
         }
         if (error.code === 'ENERGY_FULL') {
@@ -196,7 +177,7 @@ const EnergyAPI = {
         
         return await tx(async (client) => {
             const result = await performBuyEnergy(client, playerId, amount);
-            await logPlayerAction(playerId, 'buy_energy_api', {
+            await logPlayerActionSimple(query, playerId, 'buy_energy_api', {
                 amount: result.energy_restored,
                 stars_spent: result.stars_spent
             }, client);

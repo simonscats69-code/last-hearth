@@ -297,28 +297,37 @@ router.get('/', wrap(async (req, res) => {
     offset = Math.max(0, offset);
 
     // Получаем общее количество
-    const searchPattern = `%${search}%`;
+    const hasSearch = search && search.trim().length > 0;
+    const searchPattern = hasSearch ? `%${search}%` : '%%';
 
-    const countResult = await queryOne(
-        `SELECT COUNT(*) as total
-         FROM clans c
-         WHERE $1 = '%%'
-            OR c.name ILIKE $1
-            OR c.description ILIKE $1`,
-        [searchPattern]
-    );
+    let countQuery = 'SELECT COUNT(*) as total FROM clans c';
+    let searchQuery = '';
+    
+    if (hasSearch) {
+        searchQuery = ` WHERE c.name ILIKE $1 OR c.description ILIKE $1`;
+        countQuery += searchQuery;
+    }
+
+    const countResult = hasSearch 
+        ? await queryOne(countQuery, [searchPattern])
+        : await queryOne(countQuery);
     const total = parseInt(countResult?.total || 0);
 
     // Получаем кланы с пагинацией
-    const clans = await queryAll(`
+    let clansQuery = `
         SELECT c.*, (SELECT COUNT(*) FROM players WHERE clan_id = c.id) AS members_count 
         FROM clans c 
-        WHERE $3 = '%%'
-           OR c.name ILIKE $3
-           OR c.description ILIKE $3
-        ORDER BY c.total_donated DESC 
-        LIMIT $1 OFFSET $2
-    `, [limit, offset, searchPattern]);
+    `;
+    
+    if (hasSearch) {
+        clansQuery += ` WHERE c.name ILIKE $3 OR c.description ILIKE $3`;
+    }
+    
+    clansQuery += ` ORDER BY c.total_donated DESC LIMIT $1 OFFSET $2`;
+
+    const clans = hasSearch
+        ? await queryAll(clansQuery, [limit, offset, searchPattern])
+        : await queryAll(clansQuery, [limit, offset]);
 
     // Логируем
     await logPlayerAction(pool, playerId, 'view_clans', {

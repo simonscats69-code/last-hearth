@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, transaction: tx } = require('../../db/database');
 const { DEBUFF_CONFIG } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
 const { DebuffAPI } = require('./debuffs');
 const { buildPlayerStatus, normalizeInventory } = require('../../utils/playerState');
 
@@ -22,18 +22,6 @@ function getPlayerStatus(player) {
         success: true,
         ...buildPlayerStatus(player)
     };
-}
-
-async function logPlayerAction(playerId, action, metadata = {}) {
-    try {
-        await query(
-            `INSERT INTO player_logs (player_id, action, metadata, created_at)
-             VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, JSON.stringify(metadata)]
-        );
-    } catch (error) {
-        logger.warn(`[status] Не удалось залогировать действие ${action}: ${error.message}`);
-    }
 }
 
 async function runStatusCheck(client, playerId) {
@@ -143,7 +131,7 @@ router.post('/check', async (req, res) => {
         const result = await tx(async (client) => runStatusCheck(client, playerId));
         
         // Логируем действие
-        await logPlayerAction(playerId, 'status_check', {
+        await logPlayerActionSimple(query, playerId, 'status_check', {
             damage: result.totalDamage,
             effects: result.effects
         });
@@ -245,9 +233,24 @@ router.post('/heal', async (req, res) => {
                     
                 } else if (type === 'radiation') {
                     healAmount = item.rad_removal || 30;
+                    
+                    // Получаем текущее значение радиации (может быть JSON или числом)
+                    const currentRadiation = p.radiation;
+                    let currentLevel = 0;
+                    
+                    if (typeof currentRadiation === 'object' && currentRadiation !== null) {
+                        currentLevel = currentRadiation.level || 0;
+                    } else if (typeof currentRadiation === 'number') {
+                        currentLevel = currentRadiation;
+                    }
+                    
+                    const newLevel = Math.max(0, currentLevel - healAmount);
+                    
+                    // Обновляем как JSON объект
                     await client.query(`
-                        UPDATE players SET radiation = GREATEST(0, radiation - $1) WHERE id = $2
-                    `, [healAmount, playerId]);
+                        UPDATE players SET radiation = $1 WHERE id = $2
+                    `, [JSON.stringify({ level: newLevel, expires_at: null, applied_at: null }), playerId]);
+                    
                     message = 'Радиация -' + healAmount;
                     healed = true;
                 }
@@ -260,7 +263,7 @@ router.post('/heal', async (req, res) => {
                     `, [JSON.stringify(newInventory), playerId]);
                     
                     // Логируем действие
-                    await logPlayerAction(playerId, 'status_heal', {
+                    await logPlayerActionSimple(client, playerId, 'status_heal', {
                         type,
                         item_id,
                         amount: healAmount
@@ -311,7 +314,7 @@ const StatusAPI = {
         
         const result = await tx(async (client) => runStatusCheck(client, playerId));
 
-        await logPlayerAction(playerId, 'status_check_api', {
+        await logPlayerActionSimple(query, playerId, 'status_check_api', {
             damage: result.totalDamage,
             effects: result.effects
         });
@@ -394,9 +397,22 @@ const StatusAPI = {
             if (type === 'radiation') {
                 const healAmount = item.rad_removal || 30;
 
+                // Получаем текущее значение радиации (может быть JSON или числом)
+                const currentRadiation = p.radiation;
+                let currentLevel = 0;
+                
+                if (typeof currentRadiation === 'object' && currentRadiation !== null) {
+                    currentLevel = currentRadiation.level || 0;
+                } else if (typeof currentRadiation === 'number') {
+                    currentLevel = currentRadiation;
+                }
+                
+                const newLevel = Math.max(0, currentLevel - healAmount);
+                
+                // Обновляем как JSON объект
                 await client.query(
-                    `UPDATE players SET radiation = GREATEST(0, radiation - $1) WHERE id = $2`,
-                    [healAmount, playerId]
+                    `UPDATE players SET radiation = $1 WHERE id = $2`,
+                    [JSON.stringify({ level: newLevel, expires_at: null, applied_at: null }), playerId]
                 );
 
                 const newInventory = inventory.filter((candidate) => candidate.id !== itemId);
