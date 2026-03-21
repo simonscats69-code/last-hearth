@@ -82,7 +82,7 @@ async function performBuyEnergy(client, playerId, amount) {
         amount: actualAmount,
         stars_spent: actualCost,
         cost_per_unit: 0.1
-    }, client);
+    });
 
     return {
         success: true,

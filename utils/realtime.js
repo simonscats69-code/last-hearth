@@ -166,8 +166,9 @@ const pingTimers = new Map();
 
 /**
  * Проверка токена
+ * Токен генерируется на клиенте с использованием timestamp от сервера
  */
-function verifyToken(playerId, token) {
+function verifyToken(playerId, token, timestamp) {
     if (!token) {
         logger.warn({ type: 'ws_auth_failed', playerId, reason: 'no_token' });
         return false;
@@ -185,8 +186,19 @@ function verifyToken(playerId, token) {
         return true;
     }
     
-    // Встроенная генерация токена для проверки
-    const payload = `${playerId}:${Date.now()}`;
+    // Проверяем timestamp (не старше 5 минут)
+    if (timestamp) {
+        const tokenTime = parseInt(timestamp, 10);
+        const now = Date.now();
+        const age = Math.abs(now - tokenTime);
+        if (age > 5 * 60 * 1000) {
+            logger.warn({ type: 'ws_auth_failed', playerId, reason: 'token_expired', age });
+            return false;
+        }
+    }
+    
+    // Генерируем ожидаемый токен
+    const payload = `${playerId}:${timestamp || ''}`;
     const expectedToken = crypto.createHmac('sha256', tokenSecret)
         .update(payload)
         .digest('hex');

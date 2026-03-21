@@ -114,6 +114,16 @@ router.post('/use-item', async (req, res) => {
             
             const item = inventory[item_index];
             
+            // Валидация структуры предмета
+            if (!item || typeof item !== 'object' || !item.id || !item.name) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Некорректная структура предмета',
+                    code: 'INVALID_ITEM_STRUCTURE'
+                });
+            }
+            
             if (equip) {
                 // Экипировка предмета
                 const equipment = safeJsonParse(player.equipment, {});
@@ -175,7 +185,7 @@ router.post('/use-item', async (req, res) => {
                 const newInventory = inventory.filter((_, i) => i !== item_index);
                 
                 if (item.type === 'medicine') {
-                    const healthRestored = item.heal || 20;
+                    const healthRestored = item.heal ?? 20;
                     await client.query(`
                         UPDATE players 
                         SET health = LEAST(max_health, health + $1),
@@ -190,19 +200,13 @@ router.post('/use-item', async (req, res) => {
                     // Антирад - лечим радиацию через систему дебаффов
                     const radiationCure = item.stats?.radiation_cure || item.rad_removal || 2;
                     
-                    // Лечим радиацию в той же транзакции
-                    const currentPlayer = await client.query(
-                        `SELECT radiation FROM players WHERE id = $1`,
-                        [playerId]
-                    );
-                    
+                    // Используем данные из уже полученного player
                     let currentRadiation = { level: 0 };
-                    if (currentPlayer.rows[0]?.radiation) {
-                        if (typeof currentPlayer.rows[0].radiation === 'object') {
-                            currentRadiation = currentPlayer.rows[0].radiation;
-                        } else {
-                            // Старый формат INTEGER - конвертируем
-                            currentRadiation = { level: currentPlayer.rows[0].radiation || 0 };
+                    if (player.radiation) {
+                        if (typeof player.radiation === 'object') {
+                            currentRadiation = player.radiation;
+                        } else if (typeof player.radiation === 'number') {
+                            currentRadiation = { level: player.radiation };
                         }
                     }
                     
@@ -337,8 +341,8 @@ router.get('/legacy', async (req, res) => {
     try {
         const player = req.player;
         
-        const inventory = player.inventory || [];
-        const equipment = player.equipment || {};
+        const inventory = safeJsonParse(player.inventory, []);
+        const equipment = safeJsonParse(player.equipment, {});
         
         // Группируем по типам
         const itemsByType = {};

@@ -6,8 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne } = require('../../db/database');
-const { logPlayerAction, serializeJSONField, handleError } = require('../../utils/serverApi');
-const { logger } = require('../../utils/serverApi');
+const { logPlayerAction, safeJsonParse, handleError, logger } = require('../../utils/serverApi');
 
 // Общие функции API из utils/apiHelpers
 const { 
@@ -117,7 +116,7 @@ router.post('/', async (req, res) => {
         };
         
         // Добавляем в инвентарь
-        const inventory = serializeJSONField(playerData.inventory) || [];
+        const inventory = safeJsonParse(playerData.inventory, []);
         inventory.push(newItem);
         
         // Списываем валюту
@@ -142,7 +141,7 @@ router.post('/', async (req, res) => {
                 currency: actualCurrency
             });
         } catch (logErr) {
-            handleError(logErr, 'logPlayerAction - purchase');
+            logger.error('[purchase] Ошибка логирования:', logErr.message);
         }
         
         successResponse(res, {
@@ -154,7 +153,7 @@ router.post('/', async (req, res) => {
         
     } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
-        handleError(error, '/purchase');
+        logger.error('[purchase] Ошибка:', error.message);
         errorResponse(res, 'Ошибка покупки', 'PURCHASE_ERROR', 500);
     } finally {
         client.release();

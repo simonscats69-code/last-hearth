@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { logPlayerAction, serializeJSONField, handleError } = require('../../utils/serverApi');
+const { logPlayerAction, serializeJSONField, handleError, safeJsonParse, logger } = require('../../utils/serverApi');
 
 // Общие функции API из utils/apiHelpers
 const { 

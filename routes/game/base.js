@@ -19,14 +19,14 @@ const { logger, logPlayerError, withPlayerLock } = require('../../utils/serverAp
 
 // Доступные постройки
 const BUILDINGS = {
-    wall: { id: 'wall', name: 'Стена', description: 'Защита от рейдов', cost: 100, level: 1 },
-    floor: { id: 'floor', name: 'Пол', description: 'Основа для построек', cost: 50, level: 1 },
-    workbench: { id: 'workbench', name: 'Верстак', description: 'Простой крафт', cost: 200, level: 1 },
-    forge: { id: 'forge', name: 'Кузня', description: 'Крафт оружия и брони', cost: 500, level: 1 },
-    lab: { id: 'lab', name: 'Лаборатория', description: 'Медицина и химия', cost: 800, level: 1 },
-    garden: { id: 'garden', name: 'Огород', description: 'Еда и вода', cost: 300, level: 1 },
-    storage: { id: 'storage', name: 'Кладовая', description: 'Хранение вещей', cost: 400, level: 1 },
-    watchtower: { id: 'watchtower', name: 'Вышка', description: 'Раннее предупреждение', cost: 350, level: 1 }
+    wall: { id: 'wall', name: 'Стена', description: 'Защита от рейдов', cost: 100, level: 1, maxLevel: 10 },
+    floor: { id: 'floor', name: 'Пол', description: 'Основа для построек', cost: 50, level: 1, maxLevel: 5 },
+    workbench: { id: 'workbench', name: 'Верстак', description: 'Простой крафт', cost: 200, level: 1, maxLevel: 5 },
+    forge: { id: 'forge', name: 'Кузня', description: 'Крафт оружия и брони', cost: 500, level: 1, maxLevel: 5 },
+    lab: { id: 'lab', name: 'Лаборатория', description: 'Медицина и химия', cost: 800, level: 1, maxLevel: 5 },
+    garden: { id: 'garden', name: 'Огород', description: 'Еда и вода', cost: 300, level: 1, maxLevel: 5 },
+    storage: { id: 'storage', name: 'Кладовая', description: 'Хранение вещей', cost: 400, level: 1, maxLevel: 5 },
+    watchtower: { id: 'watchtower', name: 'Вышка', description: 'Раннее предупреждение', cost: 350, level: 1, maxLevel: 5 }
 };
 
 /**
@@ -229,6 +229,11 @@ router.post('/build', async (req, res) => {
                 throw new Error('Здание уже построено. Используйте upgrade для улучшения.');
             }
 
+            // Проверяем максимальный уровень при улучшении
+            if (upgrade && currentLevel >= BUILDINGS[building_id].maxLevel) {
+                throw new Error(`Максимальный уровень здания достигнут (${BUILDINGS[building_id].maxLevel})`);
+            }
+
             // Вычисляем стоимость
             const baseCost = BUILDINGS[building_id].cost;
             const cost = baseCost * (upgrade ? currentLevel + 1 : 1);
@@ -282,10 +287,10 @@ router.post('/build', async (req, res) => {
 
 /**
  * Улучшение здания (алиас для build с upgrade=true)
- * POST /base/upgrade
+ * POST /upgrade
  * @deprecated Используйте /base/build с параметром upgrade: true
  */
-router.post('/base/upgrade', async (req, res) => {
+router.post('/upgrade', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     

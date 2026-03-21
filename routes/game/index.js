@@ -39,7 +39,12 @@ const purchaseLimiter = rateLimit({
 // Safe require - не падает если модуль не найден
 function safeRequire(path, name) {
     try {
-        return require(path);
+        const module = require(path);
+        // Если модуль экспортирует объект с полем router, извлекаем его
+        if (module && typeof module === 'object' && module.router) {
+            return module.router;
+        }
+        return module;
     } catch (error) {
         logger.warn(`[game] Не удалось загрузить роутер ${name}: ${error.message}`);
         const mockRouter = express.Router();

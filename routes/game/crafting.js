@@ -272,14 +272,14 @@ router.post('/', async (req, res) => {
                 // Добавляем предмет в инвентарь
                 newInventory.push(newItem);
 
-                // Повышаем навык крафта (+1 к текущему, макс 100)
+                // Повышаем навык крафта на основе опыта
                 const expGained = recipe.difficulty * 10;
-                const newCraftingLevel = Math.min(100, currentCrafting + 1);
+                const newCraftingLevel = Math.min(100, currentCrafting + Math.floor(expGained / 100));
 
                 // Обновляем игрока (энергия списывается ВСЕГДА)
                 await query(`
                     UPDATE players 
-                    SET inventory = $1, crafting = $2, energy = energy - $3
+                    SET inventory = $1, crafting = $2, energy = GREATEST(0, energy - $3)
                     WHERE id = $4
                 `, [safeStringify(newInventory), newCraftingLevel, energyCost, playerId]);
 
@@ -305,10 +305,10 @@ router.post('/', async (req, res) => {
                     success_chance: successChance
                 };
             } else {
-                // Неудача - энергия списывается, материалы сохраняются
+                // Неудача - энергия списывается ВНУТРИ транзакции (для атомарности)
                 await query(`
                     UPDATE players 
-                    SET energy = energy - $1
+                    SET energy = GREATEST(0, energy - $1)
                     WHERE id = $2
                 `, [energyCost, playerId]);
 

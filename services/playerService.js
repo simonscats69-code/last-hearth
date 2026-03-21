@@ -92,7 +92,7 @@ async function updateHealth(playerId, health) {
         throw { message: 'health должен быть неотрицательным числом', code: 'INVALID_HEALTH', statusCode: 400 };
     }
     
-    const result = await db.updatePlayerHealth(playerId, health);
+    const result = await db.updatePlayerHealth(playerId, health, { useReturning: true });
     
     if (!result) {
         throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };

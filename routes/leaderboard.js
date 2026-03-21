@@ -69,7 +69,8 @@ router.get('/players', async (req, res) => {
         const result = await query(
             `SELECT ${selectFields}, COUNT(*) OVER() as total_players
              FROM players 
-             ${orderBy} 
+             ${whereClause}
+             ORDER BY ${orderBy} 
              LIMIT $1`,
             [limit]
         );

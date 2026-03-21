@@ -43,10 +43,23 @@ async function runStatusCheck(client, playerId) {
     }
 
     let radDamage = 0;
-    const radiation = safeJsonParse(p.radiation, { level: 0 });
     const radConfig = DEBUFF_CONFIG.radiation;
-    if ((radiation.level || 0) >= 5) {
-        radDamage = (radiation.level - 4) * radConfig.damagePerLevel;
+    
+    // Обрабатываем оба формата хранения радиации (JSON и число)
+    let radiationLevel = 0;
+    const rawRadiation = p.radiation;
+    
+    if (typeof rawRadiation === 'object' && rawRadiation !== null) {
+        radiationLevel = rawRadiation.level || 0;
+    } else if (typeof rawRadiation === 'number') {
+        radiationLevel = rawRadiation;
+    } else if (typeof rawRadiation === 'string') {
+        const parsed = safeJsonParse(rawRadiation, { level: 0 });
+        radiationLevel = typeof parsed === 'object' ? (parsed.level || 0) : (parseInt(parsed) || 0);
+    }
+    
+    if (radiationLevel >= 5) {
+        radDamage = (radiationLevel - 4) * radConfig.damagePerLevel;
     }
 
     const infections = safeJsonParse(p.infections, []);

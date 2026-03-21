@@ -95,39 +95,46 @@ router.get('/daily-tasks', async (req, res) => {
             return res.status(404).json({ error: 'Игрок не найден' });
         }
 
-        const today = new Date();
-        today.setHours(23, 59, 59, 999);
+        // Получаем или создаём задания на день (с транзакцией для предотвращения race condition)
+        const { transaction } = require('../db/database');
+        
+        const tasks = await transaction(async (client) => {
+            // Проверяем существующие задания с блокировкой
+            let existingTasks = await client.query(`
+                SELECT * FROM daily_tasks 
+                WHERE player_id = $1 AND expires_at > NOW()
+                FOR UPDATE
+            `, [player.id]);
 
-        // Получаем или создаём задания на день
-        let tasks = await queryAll(`
-            SELECT * FROM daily_tasks 
-            WHERE player_id = $1 AND expires_at > NOW()
-        `, [player.id]);
+            // Если нет заданий - создаём
+            if (existingTasks.rows.length === 0) {
+                const taskTypes = [
+                    { type: 'search', target: 10, reward: { coins: 50, stars: 1 } },
+                    { type: 'boss_damage', target: 100, reward: { coins: 100, stars: 2 } },
+                    { type: 'collect_items', target: 5, reward: { coins: 75, stars: 1 } }
+                ];
 
-        // Если нет заданий - создаём
-        if (tasks.length === 0) {
-            const taskTypes = [
-                { type: 'search', target: 10, reward: { coins: 50, stars: 1 } },
-                { type: 'boss_damage', target: 100, reward: { coins: 100, stars: 2 } },
-                { type: 'collect_items', target: 5, reward: { coins: 75, stars: 1 } }
-            ];
-
-            for (const taskType of taskTypes) {
                 const expiresAt = new Date();
                 expiresAt.setDate(expiresAt.getDate() + 1);
                 expiresAt.setHours(0, 0, 0, 0);
 
-                await query(`
-                    INSERT INTO daily_tasks (player_id, task_type, target_value, reward, expires_at)
-                    VALUES ($1, $2, $3, $4, $5)
-                `, [player.id, taskType.type, taskType.target, JSON.stringify(taskType.reward), expiresAt]);
+                for (const taskType of taskTypes) {
+                    await client.query(`
+                        INSERT INTO daily_tasks (player_id, task_type, target_value, reward, expires_at)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (player_id, task_type, expires_at) DO NOTHING
+                    `, [player.id, taskType.type, taskType.target, JSON.stringify(taskType.reward), expiresAt]);
+                }
+
+                // Получаем созданные задания
+                existingTasks = await client.query(`
+                    SELECT * FROM daily_tasks 
+                    WHERE player_id = $1 AND expires_at > NOW()
+                `, [player.id]);
             }
 
-            tasks = await queryAll(`
-                SELECT * FROM daily_tasks 
-                WHERE player_id = $1 AND expires_at > NOW()
-            `, [player.id]);
-        }
+            return existingTasks.rows;
+        });
 
         res.json({ tasks });
     } catch (error) {
@@ -207,7 +214,7 @@ router.get('/achievements/progress', async (req, res) => {
         }
 
         const player = await queryOne(
-            'SELECT id, level, days_played, bosses_killed, pvp_wins, items_crafted, unique_items, locations_visited, clan_id FROM players WHERE telegram_id = $1',
+            'SELECT id, level, days_played, bosses_killed, pvp_wins, items_crafted, unique_items, locations_visited, clan_id, clan_role, clans_joined FROM players WHERE telegram_id = $1',
             [telegramId]
         );
 
@@ -273,7 +280,7 @@ router.get('/achievements/progress', async (req, res) => {
             }
 
             const targetValue = condition.value;
-            const percent = Math.min(100, Math.round((currentValue / targetValue) * 100));
+            const percent = targetValue > 0 ? Math.min(100, Math.round((currentValue / targetValue) * 100)) : 0;
 
             return {
                 id: ach.id,
@@ -355,124 +362,134 @@ router.post('/achievements/claim', async (req, res) => {
             return res.status(404).json({ error: 'Достижение не найдено' });
         }
 
-        // Проверяем прогресс игрока
-        let playerAchievement = await queryOne(`
-            SELECT * FROM player_achievements 
-            WHERE player_id = $1 AND achievement_id = $2
-        `, [player.id, achievement_id]);
-
-        // Если записи нет, создаём
-        if (!playerAchievement) {
-            let condition;
-            try {
-                condition = typeof achievement.condition === 'string' 
-                    ? JSON.parse(achievement.condition) 
-                    : achievement.condition;
-            } catch(e) {
-                logger.error('[api] JSON.parse condition failed:', achievement.condition);
-                throw e;
-            }
-            
-            await query(`
-                INSERT INTO player_achievements (player_id, achievement_id, progress_value, completed)
-                VALUES ($1, $2, 0, false)
-            `, [player.id, achievement_id]);
-            
-            playerAchievement = { completed: false, reward_claimed: false };
-        }
-
-        // Проверяем, выполнено ли достижение
+        // Парсим условие и награду
         let condition;
+        let reward;
         try {
             condition = typeof achievement.condition === 'string' 
                 ? JSON.parse(achievement.condition) 
                 : achievement.condition;
-        } catch(e) {
-            logger.error('[api] JSON.parse condition failed:', achievement.condition);
-            throw e;
-        }
-        
-        let currentValue = 0;
-        switch (condition.type) {
-            case 'days_played': currentValue = player.days_played || 1; break;
-            case 'bosses_killed': currentValue = player.bosses_killed || 0; break;
-            case 'pvp_wins': currentValue = player.pvp_wins || 0; break;
-            case 'items_crafted': currentValue = player.items_crafted || 0; break;
-            case 'unique_items': currentValue = (player.unique_items || []).length; break;
-            case 'locations_visited': currentValue = (player.locations_visited || []).length; break;
-            case 'in_clan': currentValue = player.clan_id ? 1 : 0; break;
-            case 'clan_leader': currentValue = player.clan_role === 'leader' ? 1 : 0; break;
-            case 'clans_joined': currentValue = player.clans_joined || 0; break;
-        }
-
-        if (currentValue < condition.value) {
-            return res.status(400).json({ error: 'Достижение ещё не выполнено' });
-        }
-
-        if (playerAchievement.reward_claimed) {
-            return res.status(400).json({ error: 'Награда уже получена' });
-        }
-
-        // Получаем награду
-        let reward;
-        try {
             reward = typeof achievement.reward === 'string' 
                 ? JSON.parse(achievement.reward) 
                 : achievement.reward;
         } catch(e) {
-            logger.error('[api] JSON.parse reward failed:', achievement.reward);
-            throw e;
+            logger.error('[api] JSON.parse failed:', e.message);
+            return res.status(500).json({ error: 'Ошибка обработки достижения' });
         }
 
-        // Обновляем баланс игрока
-        const updates = [];
-        const params = [player.id];
-        let paramIndex = 2;
+        // Используем транзакцию с блокировкой для предотвращения race condition
+        const { transaction } = require('../db/database');
+        
+        const result = await transaction(async (client) => {
+            // Блокируем запись игрока
+            const lockedPlayer = await client.query(
+                'SELECT * FROM players WHERE id = $1 FOR UPDATE',
+                [player.id]
+            );
+            
+            if (!lockedPlayer.rows[0]) {
+                throw new Error('Игрок не найден');
+            }
+            
+            // Проверяем прогресс игрока с блокировкой
+            let playerAchievement = await client.query(`
+                SELECT * FROM player_achievements 
+                WHERE player_id = $1 AND achievement_id = $2
+                FOR UPDATE
+            `, [player.id, achievement_id]);
 
-        if (reward.coins && reward.coins > 0) {
-            updates.push(`coins = coins + ${paramIndex}`);
-            params.push(reward.coins);
-            paramIndex++;
-        }
+            // Если записи нет, создаём
+            if (playerAchievement.rows.length === 0) {
+                await client.query(`
+                    INSERT INTO player_achievements (player_id, achievement_id, progress_value, completed, reward_claimed)
+                    VALUES ($1, $2, 0, false, false)
+                `, [player.id, achievement_id]);
+                
+                playerAchievement = { rows: [{ completed: false, reward_claimed: false }] };
+            }
 
-        if (reward.stars && reward.stars > 0) {
-            updates.push(`stars = stars + ${paramIndex}`);
-            params.push(reward.stars);
-            paramIndex++;
-        }
+            const achievementData = playerAchievement.rows[0];
+            
+            // Проверяем, выполнено ли достижение
+            let currentValue = 0;
+            switch (condition.type) {
+                case 'days_played': currentValue = lockedPlayer.rows[0].days_played || 1; break;
+                case 'bosses_killed': currentValue = lockedPlayer.rows[0].bosses_killed || 0; break;
+                case 'pvp_wins': currentValue = lockedPlayer.rows[0].pvp_wins || 0; break;
+                case 'items_crafted': currentValue = lockedPlayer.rows[0].items_crafted || 0; break;
+                case 'unique_items': currentValue = (lockedPlayer.rows[0].unique_items || []).length; break;
+                case 'locations_visited': currentValue = (lockedPlayer.rows[0].locations_visited || []).length; break;
+                case 'in_clan': currentValue = lockedPlayer.rows[0].clan_id ? 1 : 0; break;
+                case 'clan_leader': currentValue = lockedPlayer.rows[0].clan_role === 'leader' ? 1 : 0; break;
+                case 'clans_joined': currentValue = lockedPlayer.rows[0].clans_joined || 0; break;
+            }
 
-        if (updates.length > 0) {
-            await query(`
-                UPDATE players SET ${updates.join(', ')}, updated_at = NOW()
-                WHERE id = $1
-            `, params);
-        }
+            if (currentValue < condition.value) {
+                throw { statusCode: 400, message: 'Достижение ещё не выполнено' };
+            }
 
-        // Отмечаем награду как полученную
-        await query(`
-            UPDATE player_achievements 
-            SET completed = true, completed_at = NOW(), reward_claimed = true, claimed_at = NOW()
-            WHERE player_id = $1 AND achievement_id = $2
-        `, [player.id, achievement_id]);
+            if (achievementData.reward_claimed) {
+                throw { statusCode: 400, message: 'Награда уже получена' };
+            }
 
-        // Получаем актуальный баланс после обновления
-        const updatedPlayer = await queryOne(`
-            SELECT coins, stars FROM players WHERE id = $1
-        `, [player.id]);
+            // Обновляем баланс игрока
+            const updates = [];
+            const params = [player.id];
+            let paramIndex = 2;
+
+            if (reward.coins && reward.coins > 0) {
+                updates.push(`coins = coins + $${paramIndex}`);
+                params.push(reward.coins);
+                paramIndex++;
+            }
+
+            if (reward.stars && reward.stars > 0) {
+                updates.push(`stars = stars + $${paramIndex}`);
+                params.push(reward.stars);
+                paramIndex++;
+            }
+
+            if (updates.length > 0) {
+                await client.query(`
+                    UPDATE players SET ${updates.join(', ')}, updated_at = NOW()
+                    WHERE id = $1
+                `, params);
+            }
+
+            // Отмечаем награду как полученную
+            await client.query(`
+                UPDATE player_achievements 
+                SET completed = true, completed_at = NOW(), reward_claimed = true, claimed_at = NOW()
+                WHERE player_id = $1 AND achievement_id = $2
+            `, [player.id, achievement_id]);
+
+            // Получаем актуальный баланс после обновления
+            const updatedPlayer = await client.query(`
+                SELECT coins, stars FROM players WHERE id = $1
+            `, [player.id]);
+
+            return {
+                reward,
+                new_balance: {
+                    coins: updatedPlayer.rows[0].coins || 0,
+                    stars: updatedPlayer.rows[0].stars || 0
+                }
+            };
+        });
 
         res.json({
             success: true,
-            message: `Вы получили награду: ${reward.coins || 0} монет, ${reward.stars || 0} звёзд`,
+            message: `Вы получили награду: ${result.reward.coins || 0} монет, ${result.reward.stars || 0} звёзд`,
             reward: {
-                coins: reward.coins || 0,
-                stars: reward.stars || 0
+                coins: result.reward.coins || 0,
+                stars: result.reward.stars || 0
             },
-            new_balance: {
-                coins: (updatedPlayer.coins || 0),
-                stars: (updatedPlayer.stars || 0)
-            }
+            new_balance: result.new_balance
         });
     } catch (error) {
+        if (error.statusCode) {
+            return res.status(error.statusCode).json({ error: error.message });
+        }
         logger.error({ type: 'achievements_claim_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения награды' });
     }
@@ -527,10 +544,44 @@ router.options('/verify-telegram', (req, res) => {
 router.post('/verify-telegram', async (req, res) => {
     try {
         logger.debug('[verify-telegram] req.body:', JSON.stringify(req.body).substring(0, 200));
-        const { telegram_id, hash } = req.body;
+        const { telegram_id, hash, auth_date } = req.body;
 
         if (!telegram_id) {
             return res.status(400).json({ error: 'Отсутствует telegram_id' });
+        }
+
+        // Проверка подписи Telegram (если есть hash и bot token)
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (hash && botToken) {
+            const crypto = require('crypto');
+            
+            // Формируем строку для проверки
+            const dataCheckString = Object.keys(req.body)
+                .filter(key => key !== 'hash')
+                .sort()
+                .map(key => `${key}=${req.body[key]}`)
+                .join('\n');
+            
+            const secretKey = crypto.createHash('sha256').update(botToken).digest();
+            const calculatedHash = crypto
+                .createHmac('sha256', secretKey)
+                .update(dataCheckString)
+                .digest('hex');
+            
+            if (calculatedHash !== hash) {
+                logger.warn({ type: 'telegram_hash_mismatch', telegram_id });
+                return res.status(401).json({ error: 'Неверная подпись Telegram' });
+            }
+            
+            // Проверяем время (не старше 24 часов)
+            if (auth_date) {
+                const authTime = parseInt(auth_date, 10);
+                const now = Math.floor(Date.now() / 1000);
+                if (now - authTime > 86400) {
+                    logger.warn({ type: 'telegram_auth_expired', telegram_id, age: now - authTime });
+                    return res.status(401).json({ error: 'Данные авторизации устарели' });
+                }
+            }
         }
 
         // Проверяем, существует ли игрок

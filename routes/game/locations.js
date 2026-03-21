@@ -217,18 +217,25 @@ router.post('/search', async (req, res) => {
             
             // Проверяем последствия радиации
             let radiationEffect = null;
-            if (resultingRadiationLevel >= DEBUFF_CONFIG.radiation.maxLevel) {
+            let radiationDamage = 0;
+            
+            if (resultingRadiationLevel >= 10) {
                 radiationEffect = 'critical';
-                // Наносим урон от радиации
-                await client.query(`
-                    UPDATE players 
-                    SET health = GREATEST(0, health - 10)
-                    WHERE id = $1
-                `, [playerId]);
+                radiationDamage = 10;
             } else if (resultingRadiationLevel >= 5) {
                 radiationEffect = 'danger';
+                radiationDamage = DEBUFF_CONFIG.radiation.damagePerLevel || 2;
             } else if (radiationGain > 0) {
                 radiationEffect = 'applied';
+            }
+            
+            // Наносим урон от радиации (при уровне >= 5)
+            if (radiationDamage > 0) {
+                await client.query(`
+                    UPDATE players 
+                    SET health = GREATEST(0, health - $1)
+                    WHERE id = $2
+                `, [radiationDamage, playerId]);
             }
             
             await client.query('COMMIT');

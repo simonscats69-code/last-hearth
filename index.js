@@ -64,28 +64,6 @@ app.use((req, res, next) => {
 // requestMiddleware - первый в цепочке для точного времени начала запроса
 app.use(requestMiddleware);
 
-// Middleware для логирования ответов и ошибок
-app.use((req, res, next) => {
-    const start = Date.now();
-    res.on('finish', () => {
-        const duration = Date.now() - start;
-        logger.debug(`[RES] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${duration}ms)`);
-        // Логируем ошибки и медленные запросы
-        if (res.statusCode >= 400) {
-            logger.error(`[REQUEST] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)`);
-        } else if (duration > 1000) {
-            logger.warn({
-                type: 'slow_request',
-                url: req.originalUrl,
-                duration,
-                method: req.method,
-                ip: req.ip
-            });
-        }
-    });
-    next();
-});
-
 // Конфигурация парсеров
 const jsonParser = express.json({ limit: '1mb' });
 
@@ -221,12 +199,6 @@ app.use((req, res, next) => {
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
     }
-    next();
-});
-
-app.use((req, res, next) => {
-    req.requestId = randomUUID();
-    res.setHeader('X-Request-ID', req.requestId);
     next();
 });
 

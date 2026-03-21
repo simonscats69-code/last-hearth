@@ -331,6 +331,7 @@ async function cleanupExpiredDebuffs() {
     
     const startTime = Date.now();
     isRunning.debuffs = true;
+    let success = false;
     
     try {
         // Очистка radiation (с LIMIT для предотвращения блокировки большого количества строк)
@@ -358,6 +359,7 @@ async function cleanupExpiredDebuffs() {
             WHERE jsonb_array_length(infections) > 0
         `);
         
+        success = true;
         const duration = Date.now() - startTime;
         logger.info({ 
             type: 'debuffs_cleanup', 
@@ -382,16 +384,17 @@ async function cleanupExpiredDebuffs() {
         if (schedulerEnabled) {
             setTimeout(cleanupExpiredDebuffs, delay);
         }
-        return; // Важно: возвращаем, чтобы не выполнять finally код повторно
     } finally {
-        // Сброс счётчика при успехе
-        debuffRetryCount = 0;
-        
         isRunning.debuffs = false;
         
-        // Запускаем следующую итерацию через 5 минут (если планировщик не остановлен)
-        if (schedulerEnabled) {
-            setTimeout(cleanupExpiredDebuffs, 5 * 60 * 1000);
+        // Сброс счётчика только при успехе
+        if (success) {
+            debuffRetryCount = 0;
+            
+            // Запускаем следующую итерацию через 5 минут (если планировщик не остановлен)
+            if (schedulerEnabled) {
+                setTimeout(cleanupExpiredDebuffs, 5 * 60 * 1000);
+            }
         }
     }
 }

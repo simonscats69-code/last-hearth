@@ -159,7 +159,7 @@ function rollItemRarity(locationId) {
 
 /**
  * Определить, выпал ли предмет
- * @param {Array} lootTable - Таблица лута для локации
+ * @param {Array|Object} lootTable - Таблица лута для локации (массив предметов или объект вероятностей)
  * @param {number} luck - Удача игрока
  * @param {string} itemRarity - Редкость предмета
  * @returns {Object|null} Найденный предмет или null
@@ -169,6 +169,12 @@ function rollLootDrop(lootTable, luck, itemRarity) {
     const roll = Math.random() * 100;
     
     if (roll > dropChance) {
+        return null;
+    }
+    
+    // Если lootTable - объект (таблица вероятностей), возвращаем null
+    // Предметы должны выбираться из БД отдельно
+    if (!Array.isArray(lootTable)) {
         return null;
     }
     
@@ -313,7 +319,6 @@ function calculateDebuffModifiers(player) {
             try {
                 radiation = JSON.parse(player.radiation);
             } catch {
-                logger.error('JSON.parse radiation failed:', { type: typeof player.radiation, preview: player.radiation?.toString?.().substring(0, 100) });
                 radiation = { level: 0 };
             }
         } else {
@@ -326,7 +331,6 @@ function calculateDebuffModifiers(player) {
             try {
                 infections = JSON.parse(player.infections);
             } catch {
-                logger.error('JSON.parse infections failed:', { type: typeof player.infections, preview: player.infections?.toString?.().substring(0, 100) });
                 infections = [];
             }
         } else {

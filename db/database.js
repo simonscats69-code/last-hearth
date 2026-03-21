@@ -914,6 +914,29 @@ async function getReferralStats(playerId) {
 
 
 // ============================================
+// СЕЗОННАЯ СИСТЕМА
+// ============================================
+
+async function getCurrentSeason() {
+    return await queryOne(
+        `SELECT * FROM seasons 
+         WHERE is_active = true 
+         AND start_date <= NOW() 
+         AND end_date >= NOW()
+         LIMIT 1`
+    );
+}
+
+async function addSeasonPoints(playerId, seasonId, points) {
+    await query(`
+        INSERT INTO season_participants (player_id, season_id, points, tasks_completed)
+        VALUES ($1, $2, $3, 0)
+        ON CONFLICT (player_id, season_id)
+        DO UPDATE SET points = season_participants.points + $3
+    `, [playerId, seasonId, points]);
+}
+
+// ============================================
 // ЕЖЕДНЕВНЫЕ ЗАДАНИЯ
 // ============================================
 
@@ -1140,6 +1163,8 @@ module.exports = {
     checkReferralLevelBonuses,
     getReferralsList,
     getReferralStats,
+    getCurrentSeason,
+    addSeasonPoints,
     DAILY_TASK_TEMPLATES,
     createDailyTasks,
     getDailyTasks,

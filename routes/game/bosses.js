@@ -403,7 +403,7 @@ async function getActiveRaids(client, playerId) {
             },
             hp: raid.current_health,
             max_hp: raid.max_health,
-            hp_percent: Math.round((raid.current_health / raid.max_health) * 100),
+            hp_percent: raid.max_health > 0 ? Math.round((raid.current_health / raid.max_health) * 100) : 0,
             leader: {
                 id: raid.leader_id,
                 name: raid.leader_name
@@ -648,6 +648,16 @@ router.post('/attack-boss', async (req, res) => {
                     code: 'INSUFFICIENT_ENERGY',
                     energy: player.energy,
                     energy_required: 1
+                });
+            }
+
+            // Проверяем здоровье игрока
+            if (player.health <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Вы мертвы. Нельзя атаковать босса.',
+                    code: 'PLAYER_DEAD'
                 });
             }
 
@@ -1102,7 +1112,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         id: raidId,
                         hp: newHp,
                         max_hp: raid.max_health,
-                        hp_percent: Math.round((newHp / raid.max_health) * 100)
+                        hp_percent: raid.max_health > 0 ? Math.round((newHp / raid.max_health) * 100) : 0
                     },
                     damage,
                     your_total_damage: newTotalDamage,

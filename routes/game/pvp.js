@@ -230,18 +230,18 @@ router.post('/attack', async (req, res) => {
             await playerHelper.updateEnergy(playerId, -1);
 
             // Создаём сессию боя
-            const battleId = await pvp.startBattle(playerId, target_id);
+            const battle = await pvp.createPVPMatch(playerId, target_id, lockedPlayer.current_location_id);
 
             // Логируем начало боя
             await logPlayerAction(playerId, 'pvp_attack_start', {
                 target_id,
                 target_name: target.username || target.first_name || 'Unknown',
                 location_id: lockedPlayer.current_location_id,
-                battle_id: battleId
+                battle_id: battle.id
             });
 
             return {
-                battle_id: battleId,
+                battle_id: battle.id,
                 attacker: {
                     id: lockedPlayer.id,
                     health: lockedPlayer.health,
@@ -389,6 +389,22 @@ router.post('/attack-hit', async (req, res) => {
                     UPDATE pvp_battles SET status = 'completed', winner_id = $1, ended_at = NOW()
                     WHERE id = $2
                 `, [attackerId, battle_id]);
+
+                // Обновляем PvP статистику победителя
+                await query(`
+                    UPDATE players 
+                    SET pvp_wins = pvp_wins + 1,
+                        pvp_damage_dealt = pvp_damage_dealt + $1
+                    WHERE id = $2
+                `, [damage, attackerId]);
+
+                // Обновляем PvP статистику проигравшего
+                await query(`
+                    UPDATE players 
+                    SET pvp_losses = pvp_losses + 1,
+                        pvp_damage_taken = pvp_damage_taken + $1
+                    WHERE id = $2
+                `, [damage, defenderId]);
 
                 // Логируем завершение боя
                 await logPlayerAction(playerId, 'pvp_battle_win', {

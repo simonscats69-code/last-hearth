@@ -20,12 +20,15 @@ const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, badRequest
 
 const { pool } = require('../../db/database');
 
+const crypto = require('crypto');
+
 function generateClanInviteCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = 'CL-';
 
     for (let i = 0; i < 6; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
+        const randomIndex = crypto.randomInt(0, chars.length);
+        code += chars.charAt(randomIndex);
     }
 
     return code;
@@ -138,10 +141,19 @@ router.post('/clan/create', wrap(async (req, res) => {
             throw new Error('Недостаточно монет');
         }
 
+        // Проверяем уникальность имени клана
+        const existingClan = await queryOne(
+            'SELECT id FROM clans WHERE LOWER(name) = LOWER($1)',
+            [nameValidation.value]
+        );
+        if (existingClan) {
+            throw new Error('Клан с таким именем уже существует');
+        }
+
         const insertResult = await query(
             `INSERT INTO clans (name, description, leader_id, created_at, is_open, is_public, invite_code) 
-             VALUES ($1, $2, $3, NOW(), $4, $4, $5) RETURNING id`,
-            [nameValidation.value, String(description).slice(0, 200), lockedPlayer.telegram_id, Boolean(is_public), inviteCode]
+             VALUES ($1, $2, $3, NOW(), $4, $5, $6) RETURNING id`,
+            [nameValidation.value, String(description).slice(0, 200), lockedPlayer.telegram_id, Boolean(is_public), Boolean(is_public), inviteCode]
         );
         const clanId = insertResult.rows[0].id;
         
