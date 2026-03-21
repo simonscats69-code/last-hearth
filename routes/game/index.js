@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne } = require('../../db/database');
+const { query } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger } = require('../../utils/serverApi');
 
@@ -53,20 +53,14 @@ function safeRequire(path, name) {
     }
 }
 
-// Импорт роутеров
-const locationsRouter = safeRequire('./locations', 'locations');
-const inventoryRouter = safeRequire('./inventory', 'inventory');
+// Импорт роутеров (объединённые модули)
+const worldRouter = safeRequire('./world', 'world');
 const bossesRouter = safeRequire('./bosses', 'bosses');
-const craftingRouter = safeRequire('./crafting', 'crafting');
-const baseRouter = safeRequire('./base', 'base');
 const clansRouter = safeRequire('./clans', 'clans');
 const pvpRouter = safeRequire('./pvp', 'pvp');
-const profileRouter = safeRequire('./profile', 'profile');
+const playerRouter = safeRequire('./player', 'player');
 const debuffsRouter = safeRequire('./debuffs', 'debuffs');
 const marketRouter = safeRequire('./market', 'market');
-const energyRouter = safeRequire('./energy', 'energy');
-const referralRouter = safeRequire('./referral', 'referral');
-const purchaseRouter = safeRequire('./purchase', 'purchase');
 const itemsRouter = safeRequire('./items', 'items');
 
 // Middleware для валидации Telegram данных
@@ -93,21 +87,26 @@ async function validatePlayer(req, res, next) {
 // Применяем валидацию ко всем роутерам
 router.use(validatePlayer);
 
-// Подключение роутеров
-router.use('/locations', locationsRouter);
-router.use('/inventory', inventoryRouter);
+// Подключение роутеров (объединённые модули)
+router.use('/world', worldRouter);
 router.use('/bosses', bossesRouter);
-router.use('/crafting', craftingRouter);
-router.use('/base', baseRouter);
 router.use('/clans', clansRouter);
 router.use('/pvp', pvpRouter);
-router.use('/profile', profileRouter);
+router.use('/player', playerRouter);
 router.use('/debuffs', debuffsRouter);
 router.use('/market', marketRouter);
-router.use('/energy', energyRouter);
-router.use('/referral', referralRouter);
-router.use('/purchase', purchaseRouter);
 router.use('/items', itemsRouter);
+
+// Алиасы для обратной совместимости
+router.use('/locations', worldRouter);
+router.use('/base', worldRouter);
+router.use('/profile', playerRouter);
+router.use('/achievements', playerRouter);
+router.use('/referral', playerRouter);
+router.use('/energy', playerRouter);
+router.use('/inventory', itemsRouter);
+router.use('/crafting', itemsRouter);
+router.use('/purchase', marketRouter);
 
 // Экспорт
 module.exports = router;

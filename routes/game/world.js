@@ -1,46 +1,318 @@
 /**
- * Локации и поиск лута
- * Namespace: player, locations
+ * База игрока и локации
+ * @module game/world
  * 
- * Критерии продакшна:
- * - Транзакции и атомарность для операций записи
- * - Валидация входных данных
- * - Логирование действий игрока
- * - Единый формат ответов {success, data}
- * - Обратная совместимость (@deprecated)
- * - Централизованный namespace
- * - Единый обработчик ошибок
- * - Пагинация для списка локаций
+ * Объединённые модули:
+ * - base.js (база игрока)
+ * - locations.js (локации и поиск лута)
  */
 
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const { DEBUFF_CONFIG, calculateDropChance, rollItemRarity, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
+const { logger, withPlayerLock, safeJsonParse, handleError } = require('../../utils/serverApi');
 const { normalizeInventory, normalizeRadiation } = require('../../utils/playerState');
 
-// handleError импортируется из utils/serverApi
 
-/**
- * Safe JSON parsing с fallback
- * Теперь импортируется из utils/jsonHelper.js
- */
-// safeJsonParse теперь импортируется
 
-/**
- * Валидация ID локации
- * @param {any} locationId - ID для валидации
- * @returns {boolean} результат валидации
- */
+// =============================================================================
+// УТИЛИТЫ
+// =============================================================================
+
+const BUILDINGS = {
+    wall: { id: 'wall', name: 'Стена', description: 'Защита от рейдов', cost: 100, level: 1, maxLevel: 10 },
+    floor: { id: 'floor', name: 'Пол', description: 'Основа для построек', cost: 50, level: 1, maxLevel: 5 },
+    workbench: { id: 'workbench', name: 'Верстак', description: 'Простой крафт', cost: 200, level: 1, maxLevel: 5 },
+    forge: { id: 'forge', name: 'Кузня', description: 'Крафт оружия и брони', cost: 500, level: 1, maxLevel: 5 },
+    lab: { id: 'lab', name: 'Лаборатория', description: 'Медицина и химия', cost: 800, level: 1, maxLevel: 5 },
+    garden: { id: 'garden', name: 'Огород', description: 'Еда и вода', cost: 300, level: 1, maxLevel: 5 },
+    storage: { id: 'storage', name: 'Кладовая', description: 'Хранение вещей', cost: 400, level: 1, maxLevel: 5 },
+    watchtower: { id: 'watchtower', name: 'Вышка', description: 'Раннее предупреждение', cost: 350, level: 1, maxLevel: 5 }
+};
+
+const isValidId = (id) => Number.isInteger(id) && id > 0;
+const isValidString = (str, minLen = 1, maxLen = 100) => {
+    return typeof str === 'string' && str.length >= minLen && str.length <= maxLen;
+};
+
+const safeStringify = (value) => {
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return JSON.stringify({});
+    }
+};
+
+const safeParse = (value, fallback = {}) => {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'object') return value;
+    try {
+        return typeof value === 'string' ? JSON.parse(value) : value;
+    } catch {
+        logger.error({ type: 'world_json_parse_error', value: typeof value, value_preview: String(value).substring(0, 100) });
+        return fallback;
+    }
+};
+
 function validateLocationId(locationId) {
     return Number.isInteger(locationId) && locationId > 0;
 }
 
 
 
+// =============================================================================
+// БАЗА ИГРОКА
+// =============================================================================
+
+/**
+ * Получение списка зданий
+ * GET /world/buildings → GET /api/game/world/buildings
+ */
+router.get('/buildings', async (req, res) => {
+    const playerId = req.player?.id;
+    
+    try {
+        const buildings = Object.values(BUILDINGS).map(b => ({
+            id: b.id,
+            name: b.name,
+            description: b.description,
+            cost: b.cost,
+            level: b.level
+        }));
+
+        logger.info(`[world] Просмотр зданий`, {
+            playerId,
+            buildings_count: buildings.length
+        });
+
+        res.json({ success: true, buildings });
+
+    } catch (error) {
+        return handleError(res, error, 'view_buildings', playerId);
+    }
+});
+
+/**
+ * Получение базы игрока
+ * GET /world/base → GET /api/game/world/base
+ */
+router.get('/base', async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    
+    try {
+        const base = safeParse(player.base, {});
+        
+        res.json({
+            success: true,
+            base,
+            coins: player.coins
+        });
+
+    } catch (error) {
+        return handleError(res, error, 'view_base', playerId);
+    }
+});
+
+/**
+ * Постройка/улучшение здания
+ * POST /world/build → POST /api/game/world/build
+ */
+router.post('/build', async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+
+    try {
+        const { building_id, upgrade = false } = req.body;
+        
+        if (!isValidString(building_id, 1, 50)) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID здания', code: 'INVALID_BUILDING_ID' });
+        }
+
+        if (!BUILDINGS[building_id]) {
+            return res.status(400).json({ success: false, error: 'Здание не найдено: ' + building_id, code: 'BUILDING_NOT_FOUND' });
+        }
+
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+            if (!lockedPlayer) {
+                throw new Error('Игрок не найден');
+            }
+
+            const base = safeParse(lockedPlayer.base, {});
+            const currentLevel = base[building_id] || 0;
+            const currentCoins = lockedPlayer.coins || 0;
+
+            if (!upgrade && currentLevel > 0) {
+                throw new Error('Здание уже построено. Используйте upgrade для улучшения.');
+            }
+
+            if (upgrade && currentLevel >= BUILDINGS[building_id].maxLevel) {
+                throw new Error(`Максимальный уровень здания достигнут (${BUILDINGS[building_id].maxLevel})`);
+            }
+
+            const baseCost = BUILDINGS[building_id].cost;
+            const cost = baseCost * (upgrade ? currentLevel + 1 : 1);
+
+            if (currentCoins < cost) {
+                throw new Error('Недостаточно монет');
+            }
+
+            base[building_id] = currentLevel + 1;
+
+            const updated = await query(`
+                UPDATE players 
+                SET base = $1, coins = coins - $2
+                WHERE id = $3
+                RETURNING coins
+            `, [safeStringify(base), cost, playerId]);
+            
+            const coinsRemaining = updated.rows[0]?.coins || 0;
+
+            const logPlayerAction = async (pid, action, metadata = {}) => {
+                try {
+                    await query(
+                        `INSERT INTO player_logs (player_id, action, metadata, created_at) 
+                         VALUES ($1, $2, $3, NOW())`,
+                        [pid, action, safeStringify(metadata)]
+                    );
+                } catch (error) {
+                    logger.warn('Не удалось залогировать действие игрока', {
+                        playerId: pid,
+                        action,
+                        error: error.message
+                    });
+                }
+            };
+
+            await logPlayerAction(playerId, 'build_structure', {
+                building_id,
+                building_name: BUILDINGS[building_id].name,
+                level: base[building_id],
+                cost,
+                is_upgrade: upgrade,
+                previous_level: currentLevel
+            });
+
+            return {
+                message: 'Постройка завершена!',
+                building: {
+                    id: building_id,
+                    level: base[building_id],
+                    name: BUILDINGS[building_id].name
+                },
+                coins_spent: cost,
+                coins_remaining: coinsRemaining
+            };
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (error) {
+        return handleError(res, error, 'build_structure', playerId);
+    }
+});
+
+/**
+ * Улучшение здания (алиас)
+ * POST /world/upgrade
+ * @deprecated Используйте /world/build с параметром upgrade: true
+ */
+router.post('/upgrade', async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    
+    try {
+        logger.warn('Используется устаревший маршрут /world/upgrade', { playerId });
+        
+        const { building_id } = req.body;
+        
+        if (!isValidString(building_id, 1, 50)) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID здания', code: 'INVALID_BUILDING_ID' });
+        }
+
+        if (!BUILDINGS[building_id]) {
+            return res.status(400).json({ success: false, error: 'Здание не найдено: ' + building_id, code: 'BUILDING_NOT_FOUND' });
+        }
+
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+            if (!lockedPlayer) {
+                throw new Error('Игрок не найден');
+            }
+
+            const base = safeParse(lockedPlayer.base, {});
+            const currentLevel = base[building_id] || 0;
+            const currentCoins = lockedPlayer.coins || 0;
+
+            if (currentLevel === 0) {
+                throw new Error('Здание не построено. Сначала постройте его.');
+            }
+
+            const baseCost = BUILDINGS[building_id].cost;
+            const cost = baseCost * (currentLevel + 1);
+
+            if (currentCoins < cost) {
+                throw new Error('Недостаточно монет');
+            }
+
+            base[building_id] = currentLevel + 1;
+
+            await query(`
+                UPDATE players 
+                SET base = $1, coins = coins - $2
+                WHERE id = $3
+            `, [safeStringify(base), cost, playerId]);
+
+            const logPlayerAction = async (pid, action, metadata = {}) => {
+                try {
+                    await query(
+                        `INSERT INTO player_logs (player_id, action, metadata, created_at) 
+                         VALUES ($1, $2, $3, NOW())`,
+                        [pid, action, safeStringify(metadata)]
+                    );
+                } catch (error) {
+                    logger.warn('Не удалось залогировать действие игрока', {
+                        playerId: pid,
+                        action,
+                        error: error.message
+                    });
+                }
+            };
+
+            await logPlayerAction(playerId, 'upgrade_structure', {
+                building_id,
+                building_name: BUILDINGS[building_id].name,
+                new_level: base[building_id],
+                cost
+            });
+
+            return {
+                message: 'Улучшение завершено!',
+                building: {
+                    id: building_id,
+                    level: base[building_id],
+                    name: BUILDINGS[building_id].name
+                },
+                coins_spent: cost
+            };
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (error) {
+        return handleError(res, error, 'upgrade_structure', playerId);
+    }
+});
+
+
+
+// =============================================================================
+// ЛОКАЦИИ
+// =============================================================================
+
 /**
  * Поиск лута на локации
+ * POST /world/search → POST /api/game/world/search
  */
 router.post('/search', async (req, res) => {
     const client = await pool.connect();
@@ -48,11 +320,9 @@ router.post('/search', async (req, res) => {
     try {
         const playerId = req.player.id;
         
-        // Используем транзакцию для атомарности
         await client.query('BEGIN');
         
         try {
-            // Получаем игрока с блокировкой
             const playerResult = await client.query(`
                 SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
@@ -68,7 +338,6 @@ router.post('/search', async (req, res) => {
                 });
             }
             
-            // Проверяем энергию
             const energyCost = 1;
             if (updatedPlayer.energy < energyCost) {
                 await client.query('ROLLBACK');
@@ -81,7 +350,6 @@ router.post('/search', async (req, res) => {
                 });
             }
             
-            // Получаем данные локации
             const location = await client.query(`
                 SELECT * FROM locations WHERE id = $1
             `, [updatedPlayer.current_location_id]);
@@ -97,25 +365,19 @@ router.post('/search', async (req, res) => {
             
             const locationData = location.rows[0];
             
-            // === СИСТЕМА ДЕБАФФОВ: Радиация от локации ===
             let radiationGain = 0;
             let radiationDefense = 0;
             let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             
             if (locationData.radiation > 0) {
-                // Базовая радиация от локации
                 const baseRadiation = Math.ceil(locationData.radiation / 10);
                 
-                // Защита от радиации из экипировки
                 const equipment = safeJsonParse(updatedPlayer.equipment, {});
                 radiationDefense = calculateRadiationDefense(equipment);
                 
-                // Итоговая радиация с случайностью (±30%)
                 const randomFactor = 0.7 + Math.random() * 0.6;
                 radiationGain = Math.max(0, Math.ceil((baseRadiation - radiationDefense) * randomFactor));
                 
-                // Применяем радиацию в рамках той же транзакции поиска,
-                // чтобы состояние игрока оставалось атомарным.
                 if (radiationGain > 0) {
                     const currentRadiation = normalizeRadiation(updatedPlayer.radiation);
                     const radiationConfig = DEBUFF_CONFIG.radiation;
@@ -139,11 +401,9 @@ router.post('/search', async (req, res) => {
                 }
             }
             
-            // Расчёт модификаторов от дебаффов
             const modifiers = calculateDebuffModifiers(updatedPlayer);
             const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck) * 10) / 10);
             
-            // Вычисляем шанс дропа с учётом дебаффов
             const baseDropChance = calculateDropChance(effectiveLuck);
             const dropChance = Math.max(0.01, baseDropChance * modifiers.dropChance);
             const rolled = Math.random() * 100;
@@ -152,7 +412,6 @@ router.post('/search', async (req, res) => {
             let itemRarity = null;
             
             if (rolled <= dropChance) {
-                // Определяем редкость
                 itemRarity = rollItemRarity(locationData.id);
 
                 const itemResult = await client.query(`
@@ -175,11 +434,8 @@ router.post('/search', async (req, res) => {
                 foundItem = itemResult.rows[0] || null;
                 
                 if (foundItem) {
-                    // Добавляем в инвентарь. Старые данные могут лежать как объект,
-                    // поэтому приводим всё к единому массивному формату.
                     const inventory = normalizeInventory(updatedPlayer.inventory);
                     
-                    // Создаём объект предмета
                     const newItem = {
                         id: foundItem.id,
                         name: foundItem.name,
@@ -201,7 +457,6 @@ router.post('/search', async (req, res) => {
                 }
             }
             
-            // Тратим энергию и фиксируем действие вне зависимости от результата поиска.
             const energyResult = await client.query(`
                 UPDATE players 
                 SET energy = energy - $1,
@@ -215,7 +470,6 @@ router.post('/search', async (req, res) => {
             const newMaxEnergy = energyResult.rows[0].max_energy;
             const lastEnergyUpdate = energyResult.rows[0].last_energy_update;
             
-            // Проверяем последствия радиации
             let radiationEffect = null;
             let radiationDamage = 0;
             
@@ -229,7 +483,6 @@ router.post('/search', async (req, res) => {
                 radiationEffect = 'applied';
             }
             
-            // Наносим урон от радиации (при уровне >= 5)
             if (radiationDamage > 0) {
                 await client.query(`
                     UPDATE players 
@@ -240,8 +493,7 @@ router.post('/search', async (req, res) => {
             
             await client.query('COMMIT');
             
-            // Логируем действие
-            logger.info(`[locations] Поиск лута`, {
+            logger.info(`[world] Поиск лута`, {
                 playerId,
                 foundItem: foundItem?.name || null,
                 effectiveLuck,
@@ -295,6 +547,7 @@ router.post('/search', async (req, res) => {
 
 /**
  * Перемещение между локациями
+ * POST /world/move → POST /api/game/world/move
  */
 router.post('/move', async (req, res) => {
     const client = await pool.connect();
@@ -303,7 +556,6 @@ router.post('/move', async (req, res) => {
         const { location_id } = req.body;
         const playerId = req.player.id;
         
-        // Валидация входных данных
         if (location_id === undefined || location_id === null) {
             return res.status(400).json({
                 success: false,
@@ -320,18 +572,15 @@ router.post('/move', async (req, res) => {
             });
         }
         
-        // Используем транзакцию для атомарности
         await client.query('BEGIN');
         
         try {
-            // Получаем игрока с блокировкой
             const playerResult = await client.query(`
                 SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
             
             const player = playerResult.rows[0];
             
-            // Получаем целевую локацию
             const targetLocation = await client.query(`
                 SELECT * FROM locations WHERE id = $1
             `, [location_id]);
@@ -347,7 +596,6 @@ router.post('/move', async (req, res) => {
             
             const locationData = targetLocation.rows[0];
             
-            // Проверяем требования удачи
             const requiredLuck = locationData.min_luck || locationData.required_luck || 0;
             if (player.luck < requiredLuck) {
                 await client.query('ROLLBACK');
@@ -360,7 +608,6 @@ router.post('/move', async (req, res) => {
                 });
             }
             
-            // Перемещаем игрока
             await client.query(`
                 UPDATE players 
                 SET current_location_id = $1
@@ -369,8 +616,7 @@ router.post('/move', async (req, res) => {
             
             await client.query('COMMIT');
             
-            // Логируем действие
-            logger.info(`[locations] Перемещение`, {
+            logger.info(`[world] Перемещение`, {
                 playerId,
                 fromLocationId: player.current_location_id,
                 toLocationId: location_id
@@ -402,24 +648,21 @@ router.post('/move', async (req, res) => {
 });
 
 /**
- * Получение списка локаций с пагинацией
- * Путь: / (корень внутри роутера, который подключается с namespace /locations)
+ * Получение списка локаций
+ * GET /world/locations → GET /api/game/world/locations
  */
-router.get('/', async (req, res) => {
+router.get('/locations', async (req, res) => {
     try {
         const player = req.player;
         
-        // Пагинация: параметры limit и offset
         const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
         const offset = Math.max(parseInt(req.query.offset) || 0, 0);
         
-        // Получаем общее количество локаций
         const countResult = await query(`
             SELECT COUNT(*) as total FROM locations
         `);
         const totalLocations = parseInt(countResult.rows[0].total);
         
-        // Получаем локации с пагинацией
         const locations = await queryAll(`
             SELECT id, name, icon, color, radiation, danger_level,
                    min_luck as required_luck, description
@@ -428,7 +671,6 @@ router.get('/', async (req, res) => {
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
         
-        // Фильтруем по доступности
         const availableLocations = locations.map(loc => ({
             id: loc.id,
             name: loc.name,
@@ -443,7 +685,6 @@ router.get('/', async (req, res) => {
             current: loc.id === player.current_location_id
         }));
         
-        // Единый формат ответа
         res.json({
             success: true,
             locations: availableLocations,
@@ -471,41 +712,6 @@ router.get('/', async (req, res) => {
     }
 });
 
-/**
- * Получение списка локаций (устаревшая версия)
- * @deprecated Используйте GET /locations
- * Путь: /legacy (внутри роутера)
- */
-router.get('/legacy', async (req, res) => {
-    try {
-        const player = req.player;
-        
-        const locations = await queryAll(`
-            SELECT id, name, radiation, min_luck as required_luck, description, is_red_zone
-            FROM locations
-            ORDER BY min_luck ASC
-        `);
-        
-        // Фильтруем по доступности
-        const availableLocations = locations.map(loc => ({
-            id: loc.id,
-            name: loc.name,
-            radiation: loc.radiation,
-            required_luck: loc.required_luck,
-            description: loc.description,
-            is_red_zone: loc.is_red_zone,
-            unlocked: player.luck >= loc.required_luck,
-            current: loc.id === player.current_location_id
-        }));
-        
-        res.json({
-            locations: availableLocations,
-            current_location_id: player.current_location_id
-        });
-        
-    } catch (error) {
-        handleError(res, error, 'locations_list_legacy');
-    }
-});
+
 
 module.exports = router;

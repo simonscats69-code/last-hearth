@@ -501,6 +501,127 @@ router.post('/cancel', async (req, res) => {
 });
 
 /**
+ * Покупка предмета из магазина (NPC)
+ * POST /market/shop → POST /api/game/market/shop
+ * Путь: /shop (внутри роутера)
+ */
+router.post('/shop', async (req, res) => {
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+        
+        const { item_id, currency = 'coins' } = req.body;
+        const player = req.player;
+        
+        // Валидация входных данных
+        if (!isValidId(item_id)) {
+            await client.query('ROLLBACK');
+            return errorResponse(res, 'Укажите корректный ID предмета', 'INVALID_ITEM_ID');
+        }
+        
+        if (!['coins', 'stars'].includes(currency)) {
+            await client.query('ROLLBACK');
+            return errorResponse(res, 'Укажите корректную валюту (coins или stars)', 'INVALID_CURRENCY');
+        }
+        
+        // Получаем товар из магазина с блокировкой
+        const itemResult = await client.query(`
+            SELECT * FROM shop_items WHERE id = $1
+        `, [item_id]);
+        
+        if (itemResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return errorResponse(res, 'Предмет не найден', 'ITEM_NOT_FOUND', 404);
+        }
+        
+        const item = itemResult.rows[0];
+        
+        // Проверяем валюту и цену
+        let price = currency === 'stars' ? item.price_stars : item.price_coins;
+        
+        if (!price) {
+            await client.query('ROLLBACK');
+            return errorResponse(res, `Этот предмет нельзя купить за ${currency === 'stars' ? 'Stars' : 'монеты'}`, 'INVALID_CURRENCY');
+        }
+        
+        // Блокируем игрока для проверки баланса
+        const playerResult = await client.query(`
+            SELECT id, coins, stars, inventory FROM players WHERE id = $1 FOR UPDATE
+        `, [player.id]);
+        
+        const playerData = playerResult.rows[0];
+        
+        // Проверяем баланс
+        const balance = currency === 'stars' ? parseInt(playerData.stars) || 0 : parseInt(playerData.coins) || 0;
+        
+        if (balance < price) {
+            await client.query('ROLLBACK');
+            return errorResponse(res, `Недостаточно ${currency === 'stars' ? 'Stars' : 'монет'}`, 
+                currency === 'stars' ? 'INSUFFICIENT_STARS' : 'INSUFFICIENT_COINS', 400, {
+                required: price,
+                have: balance
+            });
+        }
+        
+        // Создаём предмет
+        const newItem = {
+            id: item.item_id,
+            name: item.item_name,
+            type: item.item_type,
+            damage: item.item_damage,
+            defense: item.item_defense,
+            rarity: item.item_rarity || 'common',
+            upgrade_level: 0,
+            modifications: {}
+        };
+        
+        // Добавляем в инвентарь
+        const inventory = safeParse(playerData.inventory, []);
+        inventory.push(newItem);
+        
+        // Списываем валюту
+        if (currency === 'coins') {
+            await client.query(`
+                UPDATE players SET coins = coins - $1, inventory = $2 WHERE id = $3
+            `, [price, serializeJSONField(inventory), player.id]);
+        } else {
+            await client.query(`
+                UPDATE players SET stars = stars - $1, inventory = $2 WHERE id = $3
+            `, [price, serializeJSONField(inventory), player.id]);
+        }
+        
+        await client.query('COMMIT');
+        
+        // Логируем действие
+        try {
+            await logPlayerAction(player.id, 'shop_purchase', {
+                item_id: item_id,
+                item_type: item.item_type,
+                price: price,
+                currency: currency
+            });
+        } catch (logErr) {
+            logger.error('[market] Ошибка логирования:', logErr.message);
+        }
+        
+        successResponse(res, {
+            message: 'Покупка совершена!',
+            item: newItem,
+            price: price,
+            currency: currency
+        });
+        
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        logger.error('[market/shop] Ошибка:', error.message);
+        errorResponse(res, 'Ошибка покупки', 'PURCHASE_ERROR', 500);
+    } finally {
+        client.release();
+    }
+});
+
+/**
  * Информация о рынке
  * GET /market/info → GET /api/game/market/info
  * Путь: /info (внутри роутера)

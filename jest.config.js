@@ -4,7 +4,7 @@
 module.exports = {
   // Тестовые файлы
   testMatch: [
-    '**/tests/**/*.test.js'
+    '**/*.test.js'
   ],
   // Для CommonJS модулей
   testEnvironment: 'node'

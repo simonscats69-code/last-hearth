@@ -11,7 +11,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../db/database');
-const { logger, safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
+const { safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
 const { normalizeInventory } = require('../../utils/playerState');
 
 const KEYS_REQUIRED_FOR_BOSS = 3;
@@ -20,7 +20,6 @@ const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAMAGE_PER_KILL = 0.1;
 const KILL_DECAY_FACTOR = 0.1;
 
-// handleError импортируется из utils/serverApi
 
 function validateBossId(bossId) {
     return Number.isInteger(bossId) && bossId > 0;
@@ -102,7 +101,7 @@ async function getBossById(client, bossId) {
 
 async function getPlayerBaseState(client, playerId) {
     const result = await client.query(
-        `SELECT id, first_name, level, energy, max_energy, equipment,
+        `SELECT id, first_name, level, health, max_health, energy, max_energy, equipment,
                 active_boss_id, active_boss_started_at, active_boss_mode, active_raid_id
          FROM players
          WHERE id = $1

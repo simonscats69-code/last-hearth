@@ -387,4 +387,519 @@ router.get('/', async (req, res) => {
     }
 });
 
+
+
+// =============================================================================
+// ИНВЕНТАРЬ
+// =============================================================================
+
+/**
+ * Получение инвентаря игрока
+ * GET /items/inventory → GET /api/game/items/inventory
+ */
+router.get('/inventory', async (req, res) => {
+    try {
+        const player = req.player;
+        
+        const inventory = safeJsonParse(player.inventory, []);
+        const equipment = safeJsonParse(player.equipment, {});
+        
+        const itemsByType = {};
+        inventory.forEach((item, index) => {
+            if (!itemsByType[item.type]) {
+                itemsByType[item.type] = [];
+            }
+            itemsByType[item.type].push({
+                index: index,
+                ...item
+            });
+        });
+        
+        res.json({
+            success: true,
+            data: {
+                inventory: inventory.map((item, index) => ({
+                    index: index,
+                    ...item
+                })),
+                equipment: equipment,
+                items_by_type: itemsByType,
+                total_items: inventory.length,
+                max_inventory: player.max_inventory || 30
+            }
+        });
+        
+    } catch (err) {
+        handleError(res, err, 'inventory_view');
+    }
+});
+
+/**
+ * Использование предмета из инвентаря
+ * POST /items/use → POST /api/game/items/use
+ */
+router.post('/use', async (req, res) => {
+    const client = await pool.connect();
+    
+    try {
+        const { item_index, equip = false } = req.body;
+        const playerId = req.player.id;
+        
+        if (item_index === undefined || item_index === null) {
+            return res.status(400).json({
+                success: false,
+                error: 'Укажите индекс предмета',
+                code: 'MISSING_ITEM_INDEX'
+            });
+        }
+        
+        if (!Number.isInteger(item_index)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Индекс предмета должен быть целым числом',
+                code: 'INVALID_ITEM_INDEX_TYPE'
+            });
+        }
+        
+        await client.query('BEGIN');
+        
+        try {
+            const playerResult = await client.query(`
+                SELECT * FROM players WHERE id = $1 FOR UPDATE
+            `, [playerId]);
+            
+            const player = playerResult.rows[0];
+            
+            if (!player) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({
+                    success: false,
+                    error: 'Игрок не найден',
+                    code: 'PLAYER_NOT_FOUND'
+                });
+            }
+            
+            const inventory = safeJsonParse(player.inventory, []);
+            
+            if (item_index < 0 || item_index >= inventory.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Неверный индекс предмета',
+                    code: 'INVALID_ITEM_INDEX'
+                });
+            }
+            
+            const item = inventory[item_index];
+            
+            if (!item || typeof item !== 'object' || !item.id || !item.name) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Некорректная структура предмета',
+                    code: 'INVALID_ITEM_STRUCTURE'
+                });
+            }
+            
+            if (equip) {
+                const equipment = safeJsonParse(player.equipment, {});
+                const slot = item.type === 'weapon' ? 'weapon' :
+                            item.type === 'armor' ? 'armor' :
+                            item.type === 'helmet' ? 'helmet' :
+                            item.type === 'boots' ? 'boots' :
+                            item.type === 'accessory' ? 'accessory' : null;
+                
+                if (!slot) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Этот предмет нельзя экипировать',
+                        code: 'INVALID_EQUIP_TYPE'
+                    });
+                }
+                
+                const oldItem = equipment[slot];
+                if (oldItem) {
+                    inventory.push(oldItem);
+                }
+                
+                equipment[slot] = item;
+                inventory.splice(item_index, 1);
+                
+                await client.query(`
+                    UPDATE players 
+                    SET equipment = $1, inventory = $2
+                    WHERE id = $3
+                `, [JSON.stringify(equipment), JSON.stringify(inventory), playerId]);
+                
+                await client.query('COMMIT');
+                
+                logger.info(`[items] Экипировка предмета`, {
+                    playerId,
+                    itemName: item.name,
+                    slot
+                });
+                
+                res.json({
+                    success: true,
+                    data: {
+                        message: `Экипирован ${item.name}`,
+                        equipped: slot,
+                        item: item
+                    }
+                });
+                
+            } else {
+                let message = '';
+                let updated = false;
+                
+                const newInventory = inventory.filter((_, i) => i !== item_index);
+                
+                if (item.type === 'medicine') {
+                    const healthRestored = item.heal ?? 20;
+                    await client.query(`
+                        UPDATE players 
+                        SET health = LEAST(max_health, health + $1),
+                            inventory = $2
+                        WHERE id = $3
+                    `, [healthRestored, JSON.stringify(newInventory), playerId]);
+                    
+                    message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
+                    updated = true;
+                    
+                } else if (item.type === 'antirad') {
+                    const radiationCure = item.stats?.radiation_cure || item.rad_removal || 2;
+                    
+                    let currentRadiation = { level: 0 };
+                    if (player.radiation) {
+                        if (typeof player.radiation === 'object') {
+                            currentRadiation = player.radiation;
+                        } else if (typeof player.radiation === 'number') {
+                            currentRadiation = { level: player.radiation };
+                        }
+                    }
+                    
+                    const newLevel = Math.max(0, currentRadiation.level - radiationCure);
+                    
+                    let newExpiresAt = null;
+                    if (newLevel > 0 && currentRadiation.expires_at && currentRadiation.level > 0) {
+                        const oldExpires = new Date(currentRadiation.expires_at);
+                        const now = new Date();
+                        const safeLevel = Math.max(1, currentRadiation.level);
+                        const reductionRatio = radiationCure / safeLevel;
+                        const reduction = (oldExpires - now) * reductionRatio;
+                        newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
+                    }
+                    
+                    await client.query(`
+                        UPDATE players 
+                        SET radiation = $1,
+                            inventory = $2
+                        WHERE id = $3
+                    `, [JSON.stringify({ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }), JSON.stringify(newInventory), playerId]);
+                    
+                    message = `Использовали ${item.name}. Радиация снижена с ${currentRadiation.level} до ${newLevel}`;
+                    updated = true;
+                    
+                } else if (item.type === 'bandage') {
+                    const healthRestored = item.heal || item.stats?.health_restore || 10;
+                    
+                    await client.query(`
+                        UPDATE players 
+                        SET health = LEAST(max_health, health + $1),
+                            inventory = $2
+                        WHERE id = $3
+                    `, [healthRestored, JSON.stringify(newInventory), playerId]);
+                    
+                    message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
+                    updated = true;
+                    
+                } else {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Этот предмет нельзя использовать',
+                        code: 'UNUSABLE_ITEM'
+                    });
+                }
+                
+                await client.query('COMMIT');
+                
+                if (updated) {
+                    logger.info(`[items] Использование предмета`, {
+                        playerId,
+                        itemName: item.name,
+                        itemType: item.type
+                    });
+                    
+                    res.json({
+                        success: true,
+                        data: {
+                            message: message,
+                            item: item
+                        }
+                    });
+                }
+            }
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+        
+    } catch (error) {
+        handleError(res, error, 'use_item');
+    } finally {
+        client.release();
+    }
+});
+
+
+
+// =============================================================================
+// КРАФТ
+// =============================================================================
+
+const { randomInt } = require('crypto');
+const { calculateCraftSuccess } = require('../../utils/gameConstants');
+
+/**
+ * Получение списка рецептов
+ * GET /items/recipes → GET /api/game/items/recipes
+ */
+router.get('/recipes', async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    
+    try {
+        let limit = parseInt(req.query.limit) || 20;
+        let offset = parseInt(req.query.offset) || 0;
+        
+        limit = Math.min(Math.max(1, limit), 100);
+        offset = Math.max(0, offset);
+
+        const inventory = safeJsonParse(player.inventory, []);
+
+        const recipes = await queryAll(`
+            SELECT * FROM crafting_recipes 
+            ORDER BY difficulty ASC
+            LIMIT $1 OFFSET $2
+        `, [limit, offset]);
+
+        const countResult = await queryOne(`
+            SELECT COUNT(*) as total FROM crafting_recipes
+        `);
+        const total = parseInt(countResult?.total || 0);
+
+        const recipesWithStatus = recipes.map(recipe => {
+            const requirements = safeJsonParse(recipe.requirements, []);
+            const canCraft = requirements.every(req => {
+                const count = inventory.filter(item => item.id === req.item_id).length;
+                return count >= req.quantity;
+            });
+
+            let baseRequirement = null;
+            if (recipe.building_required) {
+                const base = safeJsonParse(player.base, {});
+                baseRequirement = {
+                    building: recipe.building_required,
+                    has: base[recipe.building_required] || false
+                };
+            }
+
+            return {
+                id: recipe.id,
+                name: recipe.name,
+                description: recipe.description,
+                result_item_id: recipe.result_item_id,
+                result_item_name: recipe.result_item_name,
+                requirements: requirements,
+                difficulty: recipe.difficulty,
+                success_chance: recipe.success_chance,
+                can_craft: canCraft,
+                base_requirement: baseRequirement
+            };
+        });
+
+        const availableRecipes = recipesWithStatus.filter(r => r.can_craft);
+        const lockedRecipes = recipesWithStatus.filter(r => !r.can_craft);
+
+        logger.info(`[items] Просмотр рецептов`, {
+            playerId,
+            limit,
+            offset,
+            total,
+            available_count: availableRecipes.length
+        });
+
+        ok(res, {
+            recipes: recipesWithStatus,
+            available: availableRecipes,
+            locked: lockedRecipes,
+            crafting_level: player.crafting || 1,
+            pagination: {
+                limit,
+                offset,
+                total
+            }
+        });
+
+    } catch (err) {
+        logger.error('[items] Ошибка получения рецептов:', err);
+        error(res, 'Ошибка получения рецептов', 'RECIPES_ERROR', 500);
+    }
+});
+
+/**
+ * Крафт предмета
+ * POST /items/craft → POST /api/game/items/craft
+ */
+router.post('/craft', async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+
+    try {
+        const { recipe_id } = req.body;
+        
+        if (!Number.isInteger(recipe_id) || recipe_id <= 0) {
+            return fail(res, 'Укажите корректный ID рецепта (число > 0)', 'INVALID_RECIPE_ID');
+        }
+
+        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+            if (!lockedPlayer) {
+                throw new Error('Игрок не найден');
+            }
+
+            const recipe = await queryOne(`
+                SELECT * FROM crafting_recipes WHERE id = $1
+            `, [recipe_id]);
+
+            if (!recipe) {
+                throw new Error('Рецепт не найден');
+            }
+
+            const inventory = safeJsonParse(lockedPlayer.inventory, []);
+            const requirements = safeJsonParse(recipe.requirements, []);
+
+            for (const reqItem of requirements) {
+                const count = inventory.filter(item => item.id === reqItem.item_id).length;
+                if (count < reqItem.quantity) {
+                    throw new Error(`Недостаточно материалов для ${recipe.name}`);
+                }
+            }
+
+            if (recipe.building_required) {
+                const base = safeJsonParse(lockedPlayer.base, {});
+                if (!base[recipe.building_required]) {
+                    throw new Error(`Нужна постройка: ${recipe.building_required}`);
+                }
+            }
+
+            const currentCrafting = lockedPlayer.crafting || 1;
+            if (currentCrafting < recipe.difficulty) {
+                throw new Error(`Нужен навык крафта ${recipe.difficulty}, у вас ${currentCrafting}`);
+            }
+
+            const energyCost = recipe.difficulty * 2;
+            if (lockedPlayer.energy < energyCost) {
+                throw new Error('Недостаточно энергии. Нужно: ' + energyCost);
+            }
+            
+            const rarity = recipe.result_item_rarity || 'common';
+            const successChance = calculateCraftSuccess(currentCrafting, rarity);
+            const rolled = randomInt(0, 10000) / 100;
+            const isSuccess = rolled <= successChance;
+
+            let newInventory = [...inventory];
+            if (isSuccess) {
+                for (const reqItem of requirements) {
+                    let removeCount = reqItem.quantity;
+                    newInventory = newInventory.filter(item => {
+                        if (removeCount > 0 && item.id === reqItem.item_id) {
+                            removeCount--;
+                            return false;
+                        }
+                        return true;
+                    });
+                }
+            }
+
+            if (isSuccess) {
+                const newItem = {
+                    id: recipe.result_item_id,
+                    name: recipe.result_item_name,
+                    type: recipe.result_item_type,
+                    damage: recipe.result_item_damage,
+                    defense: recipe.result_item_defense,
+                    rarity: recipe.result_item_rarity || 'common',
+                    set_id: recipe.result_item_set_id,
+                    upgrade_level: 0,
+                    modifications: {}
+                };
+                
+                newInventory.push(newItem);
+
+                const expGained = recipe.difficulty * 10;
+                const newCraftingLevel = Math.min(100, currentCrafting + Math.floor(expGained / 100));
+
+                await query(`
+                    UPDATE players 
+                    SET inventory = $1, crafting = $2, energy = GREATEST(0, energy - $3)
+                    WHERE id = $4
+                `, [safeStringify(newInventory), newCraftingLevel, energyCost, playerId]);
+
+                await logPlayerActionSimple(query, playerId, 'craft_success', {
+                    recipe_id,
+                    recipe_name: recipe.name,
+                    result_item_id: newItem.id,
+                    result_item_name: newItem.name,
+                    exp_gained: expGained,
+                    new_crafting_level: newCraftingLevel,
+                    rolled: rolled.toFixed(2),
+                    success_chance: successChance
+                });
+
+                return {
+                    success: true,
+                    message: 'Создан предмет: ' + recipe.result_item_name,
+                    item: newItem,
+                    exp_gained: expGained,
+                    new_crafting_level: newCraftingLevel,
+                    rolled: rolled.toFixed(2),
+                    success_chance: successChance
+                };
+            } else {
+                await query(`
+                    UPDATE players 
+                    SET energy = GREATEST(0, energy - $1)
+                    WHERE id = $2
+                `, [energyCost, playerId]);
+
+                await logPlayerActionSimple(query, playerId, 'craft_failed', {
+                    recipe_id,
+                    recipe_name: recipe.name,
+                    rolled: rolled.toFixed(2),
+                    success_chance: successChance,
+                    energy_spent: energyCost,
+                    materials_lost: 0
+                });
+
+                return {
+                    success: false,
+                    message: 'Крафт не удался! Энергия потрачена, материалы сохранены.',
+                    rolled: rolled.toFixed(2),
+                    success_chance: successChance,
+                    energy_spent: energyCost
+                };
+            }
+        });
+
+        ok(res, result);
+
+    } catch (err) {
+        logger.error('[items] Ошибка крафта:', err);
+        error(res, err.message || 'Ошибка крафта', 'CRAFT_ERROR', 500);
+    }
+});
+
 module.exports = router;

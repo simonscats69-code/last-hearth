@@ -15,7 +15,7 @@
 
 
 const { query, queryOne, transaction: tx, pool } = require('../db/database');
-const playerService = require('../services/playerService');
+const playerService = require('../playerService');
 const winston = require('winston');
 const crypto = require('crypto');
 const { randomUUID } = require('crypto');

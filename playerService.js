@@ -3,9 +3,9 @@
  * Использует DB Layer и содержит правила игры
  */
 
-const db = require('../db/players');
-const { getExpForLevel } = require('../utils/gameConstants');
-const { transaction: tx } = require('../db/database');
+const db = require('./db/players');
+const { getExpForLevel } = require('./utils/gameConstants');
+const { transaction: tx } = require('./db/database');
 
 // Используем локальный логгер, чтобы не создавать циклическую зависимость
 // между сервисом игроков и серверными утилитами.

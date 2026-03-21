@@ -11,14 +11,12 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, transaction: tx } = require('../../db/database');
-const { logger, safeJsonParse } = require('../../utils/serverApi');
+const { logger, safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
 const { 
     DEBUFF_TYPES, 
     DEBUFF_CONFIG, 
-    DEBUFF_EFFECTS, 
     DEBUFF_CURES,
-    calculateDebuffModifiers,
-    calculateRadiationDefense 
+    calculateDebuffModifiers
 } = require('../../utils/gameConstants');
 
 
@@ -29,20 +27,6 @@ const {
  */
 // safeJsonParse теперь импортируется
 
-/**
- * Логирование действия игрока
- */
-async function logPlayerAction(playerId, action, metadata = {}) {
-    try {
-        await query(
-            `INSERT INTO player_logs (player_id, action, metadata, created_at) 
-             VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, JSON.stringify(metadata)]
-        );
-    } catch (err) {
-        logger.warn(`[debuffs] Логирование не удалось: ${err.message}`);
-    }
-}
 
 
 
