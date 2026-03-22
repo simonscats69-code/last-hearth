@@ -699,9 +699,12 @@ async function createTables() {
  */
 async function runMigrations() {
     // Миграция: преобразование player_id из INTEGER в BIGINT для поддержки больших Telegram ID
-    // Создаём временную функцию, т.к. DO-блоки не поддерживают параметры
+    // Сначала удаляем старую функцию (если есть), т.к. CREATE OR REPLACE не меняет имена параметров
+    await query(`DROP FUNCTION IF EXISTS convert_player_id_to_bigint(TEXT)`);
+    
+    // Создаём новую функцию
     await query(`
-        CREATE OR REPLACE FUNCTION convert_player_id_to_bigint(tbl_name TEXT) RETURNS void AS $$
+        CREATE FUNCTION convert_player_id_to_bigint(tbl_name TEXT) RETURNS void AS $
         BEGIN
             IF EXISTS (
                 SELECT 1 FROM information_schema.columns
