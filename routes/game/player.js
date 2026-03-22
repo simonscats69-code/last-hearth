@@ -47,9 +47,9 @@ function validateTelegramId(telegramId) {
 
 /**
  * Получение профиля игрока
- * GET /player/profile → GET /api/game/player/profile
+ * GET /api/game/profile (через алиас) или GET /api/game/player/profile
  */
-router.get('/profile', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const telegramId = req.player.telegram_id;
         
