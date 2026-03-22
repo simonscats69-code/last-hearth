@@ -551,7 +551,7 @@ router.post('/verify-telegram', async (req, res) => {
         }
 
         // Проверка подписи Telegram (если есть hash и bot token)
-        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        const botToken = process.env.TG_BOT_TOKEN;
         if (hash && botToken) {
             const crypto = require('crypto');
             

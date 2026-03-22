@@ -6,7 +6,14 @@ const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('./db/database');
 const { logger } = require('./utils/serverApi');
 
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
+// Проверка наличия токена бота
+const BOT_TOKEN = process.env.TG_BOT_TOKEN;
+if (!BOT_TOKEN) {
+    logger.error('TELEGRAM_BOT_TOKEN не найден в переменных окружения!');
+    logger.error('Пожалуйста, настройте переменную TELEGRAM_BOT_TOKEN на BotHost');
+}
+
+const bot = new Telegraf(BOT_TOKEN, {
     telegram: { agent: null, webhookReply: true }
 });
 
@@ -14,6 +21,12 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
  * Настройка webhook и обработчиков команд
  */
 async function setupWebhook(app) {
+    // Проверяем наличие токена перед запуском
+    if (!BOT_TOKEN) {
+        logger.error('Бот не может быть запущен: отсутствует токен TELEGRAM_BOT_TOKEN');
+        return;
+    }
+    
     // Удаляем webhook и используем polling
     await bot.telegram.deleteWebhook();
     bot.launch();

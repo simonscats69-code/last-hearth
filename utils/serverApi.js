@@ -1183,14 +1183,14 @@ function validateTelegramInitData(initData, botToken) {
  */
 function telegramAuthMiddleware(req, res, next) {
     const initData = req.headers['x-init-data'] || req.body.initData;
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const botToken = process.env.TG_BOT_TOKEN;
 
     if (!botToken) {
         if (process.env.NODE_ENV === 'production') {
-            logger.error('TELEGRAM_BOT_TOKEN не настроен в production!');
+            logger.error('TG_BOT_TOKEN не настроен в production!');
             return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
         }
-        logger.warn('TELEGRAM_BOT_TOKEN не настроен - авторизация пропущена (development mode)');
+        logger.warn('TG_BOT_TOKEN не настроен - авторизация пропущена (development mode)');
         return next();
     }
 
