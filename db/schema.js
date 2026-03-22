@@ -707,12 +707,13 @@ async function runMigrations() {
     for (const table of tablesWithPlayerId) {
         await query(`
             DO $do$
+            DECLARE t_name TEXT := $1;
             BEGIN
                 IF EXISTS (
                     SELECT 1 FROM information_schema.columns
-                    WHERE table_name = $1 AND column_name = 'player_id' AND data_type = 'integer'
+                    WHERE table_name = t_name AND column_name = 'player_id' AND data_type = 'integer'
                 ) THEN
-                    EXECUTE format('ALTER TABLE %I ALTER COLUMN player_id TYPE BIGINT', $1);
+                    EXECUTE format('ALTER TABLE %I ALTER COLUMN player_id TYPE BIGINT', t_name);
                 END IF;
             END $do$
         `, [table]);
