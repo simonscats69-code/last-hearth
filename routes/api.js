@@ -598,6 +598,7 @@ router.post('/verify-telegram', async (req, res) => {
                 RETURNING id
             `, [telegram_id]);
 
+            logger.info('[verify-telegram] Создан новый игрок', { telegram_id });
             return res.json({
                 valid: true,
                 new_player: true,
@@ -605,6 +606,7 @@ router.post('/verify-telegram', async (req, res) => {
             });
         }
 
+        logger.info('[verify-telegram] Найден существующий игрок', { telegram_id });
         res.json({
             valid: true,
             new_player: false,
