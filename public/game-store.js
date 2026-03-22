@@ -262,8 +262,30 @@ function openWheel() {
 /**
  * Бесплатное вращение колеса
  */
-function spinWheelFree() {
-    spinWheel(false);
+async function spinWheelFree() {
+    try {
+        const response = await gameApi.request('/game/wheel/spin', {
+            method: 'POST',
+            body: JSON.stringify({ is_paid: false })
+        });
+        
+        if (!response.success) {
+            if (response.code === 'COOLDOWN' && response.next_free_spin) {
+                const minutes = Math.ceil(response.next_free_spin / 60000);
+                showModal('⏳ Подождите', `Следующее бесплатное вращение через ${minutes} мин.`, 'info');
+            } else {
+                showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
+            }
+            return;
+        }
+        
+        // Анимация с призом от сервера
+        spinWheelAnimation(response.data.prize, false);
+        
+    } catch (error) {
+        console.error('Ошибка вращения колеса:', error);
+        showModal('❌ Ошибка', 'Не удалось связаться с сервером', 'error');
+    }
 }
 
 /**
@@ -276,23 +298,38 @@ async function spinWheelPaid() {
         return;
     }
     
-    // Бэкенд-эндпоинта для синхронизации колеса пока нет,
-    // поэтому списываем стоимость локально и запускаем анимацию.
-    player.stars -= 1;
-    spinWheel(true);
+    try {
+        const response = await gameApi.request('/game/wheel/spin', {
+            method: 'POST',
+            body: JSON.stringify({ is_paid: true })
+        });
+        
+        if (!response.success) {
+            showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
+            return;
+        }
+        
+        // Анимация с призом от сервера
+        spinWheelAnimation(response.data.prize, true);
+        
+    } catch (error) {
+        console.error('Ошибка вращения колеса:', error);
+        showModal('❌ Ошибка', 'Не удалось связаться с сервером', 'error');
+    }
 }
 
 /**
- * Вращение колеса
+ * Анимация колеса
+ * @param {object} prize - приз от сервера
  * @param {boolean} isPaid - платное вращение
  */
-async function spinWheel(isPaid) {
+function spinWheelAnimation(prize, isPaid) {
     const wheel = document.getElementById('wheel');
-    const prize = WHEEL_PRIZES[Math.floor(Math.random() * WHEEL_PRIZES.length)];
     
     // Анимация
     const rotations = 5 + Math.random() * 5;
-    const finalAngle = rotations * 360 + (360 / WHEEL_PRIZES.length) * WHEEL_PRIZES.indexOf(prize);
+    const prizeIndex = WHEEL_PRIZES.findIndex(p => p.type === prize.type && p.value === prize.value);
+    const finalAngle = rotations * 360 + (360 / WHEEL_PRIZES.length) * (prizeIndex >= 0 ? prizeIndex : 0);
     
     wheel.style.transition = 'transform 3s ease-out';
     wheel.style.transform = `rotate(${finalAngle}deg)`;
@@ -302,17 +339,21 @@ async function spinWheel(isPaid) {
         const player = gameState.player;
         
         if (prize.type === 'coins') {
-            player.coins = (player.coins || 0) + prize.value;
             showModal('🎉 Выигрыш!', `Выпало: ${prize.text}`, 'success');
         } else if (prize.type === 'multiplier') {
-            player.coins = (player.coins || 0) * prize.value;
             showModal('🎉 Удвоение!', `Множитель x${prize.value}!`, 'success');
         } else if (prize.type === 'energy') {
-            player.energy = Math.min(100, (player.energy || 0) + prize.value);
             showModal('⚡ Энергия!', `+${prize.value} энергии!`, 'success');
         }
         
         showConfetti(80);
+        
+        // Обновляем данные игрока после вращения
+        // Вызываем status/check для получения актуальных данных
+        gameApi.request('/game/status/check', {
+            method: 'POST',
+            body: JSON.stringify({})
+        }).catch(e => console.error('Failed to update player:', e));
         
         // Сброс колеса
         setTimeout(() => {

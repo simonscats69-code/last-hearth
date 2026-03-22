@@ -63,6 +63,7 @@ const debuffsRouter = safeRequire('./debuffs', 'debuffs');
 const marketRouter = safeRequire('./market', 'market');
 const itemsRouter = safeRequire('./items', 'items');
 const statusRouter = safeRequire('./status', 'status');
+const wheelRouter = safeRequire('./wheel', 'wheel');
 
 // Middleware для валидации Telegram данных
 async function validatePlayer(req, res, next) {
@@ -177,6 +178,7 @@ router.use('/debuffs', debuffsRouter);
 router.use('/market', marketRouter);
 router.use('/items', itemsRouter);
 router.use('/status', statusRouter);
+router.use('/wheel', wheelRouter);
 
 // Алиасы для обратной совместимости
 router.use('/locations', worldRouter);

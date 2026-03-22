@@ -31,6 +31,10 @@ const endpoints = {
     attackBoss: { endpoint: '/game/bosses/attack-boss', method: 'POST' },
     bosses: { endpoint: '/game/bosses', method: 'GET' },
     
+    // Колесо удачи
+    wheelInfo: { endpoint: '/game/wheel', method: 'GET' },
+    wheelSpin: { endpoint: '/game/wheel/spin', method: 'POST' },
+    
     // Статус и магазин
     statusCheck: { endpoint: '/game/status/check', method: 'POST' },
     purchase: { endpoint: '/game/purchase', method: 'POST' },
