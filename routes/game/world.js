@@ -649,9 +649,9 @@ router.post('/move', async (req, res) => {
 
 /**
  * Получение списка локаций
- * GET /world/locations → GET /api/game/world/locations
+ * GET /api/game/locations (через алиас) или GET /api/game/world/locations
  */
-router.get('/locations', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const player = req.player;
         
