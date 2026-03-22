@@ -704,7 +704,7 @@ async function runMigrations() {
     
     // Создаём новую функцию
     await query(`
-        CREATE FUNCTION convert_player_id_to_bigint(tbl_name TEXT) RETURNS void AS $
+        CREATE FUNCTION convert_player_id_to_bigint(tbl_name TEXT) RETURNS void AS $$
         BEGIN
             IF EXISTS (
                 SELECT 1 FROM information_schema.columns
