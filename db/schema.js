@@ -699,25 +699,31 @@ async function createTables() {
  */
 async function runMigrations() {
     // Миграция: преобразование player_id из INTEGER в BIGINT для поддержки больших Telegram ID
+    // Создаём временную функцию, т.к. DO-блоки не поддерживают параметры
+    await query(`
+        CREATE OR REPLACE FUNCTION convert_player_id_to_bigint(table_name TEXT) RETURNS void AS $
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = convert_player_id_to_bigint.table_name 
+                AND column_name = 'player_id' AND data_type = 'integer'
+            ) THEN
+                EXECUTE format('ALTER TABLE %I ALTER COLUMN player_id TYPE BIGINT', convert_player_id_to_bigint.table_name);
+            END IF;
+        END $ LANGUAGE plpgsql;
+    `);
+    
     const tablesWithPlayerId = [
         'boss_keys', 'boss_mastery', 'player_boss_progress', 'boss_sessions',
         'player_achievements', 'daily_tasks', 'pvp_cooldowns', 'player_buildings'
     ];
     
     for (const table of tablesWithPlayerId) {
-        await query(`
-            DO $do$
-            DECLARE t_name TEXT := $1;
-            BEGIN
-                IF EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_name = t_name AND column_name = 'player_id' AND data_type = 'integer'
-                ) THEN
-                    EXECUTE format('ALTER TABLE %I ALTER COLUMN player_id TYPE BIGINT', t_name);
-                END IF;
-            END $do$
-        `, [table]);
+        await query(`SELECT convert_player_id_to_bigint($1)`, [table]);
     }
+    
+    // Удаляем временную функцию
+    await query(`DROP FUNCTION IF EXISTS convert_player_id_to_bigint(TEXT)`);
 
     // Миграция: добавить active_boss_id после создания таблицы bosses
     await query(`
