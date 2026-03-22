@@ -828,14 +828,15 @@ async function runMigrations() {
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_wheel_spin TIMESTAMP`);
 
     // Миграция: исправление типов данных для больших Telegram ID
-    // Telegram ID может быть больше 2^31, поэтому меняем INTEGER на BIGINT
-    await query(`ALTER TABLE boss_keys ALTER COLUMN player_id TYPE BIGINT`);
-    await query(`ALTER TABLE player_boss_progress ALTER COLUMN player_id TYPE BIGINT`);
-    await query(`ALTER TABLE player_boss_mastery ALTER COLUMN player_id TYPE BIGINT`);
-    await query(`ALTER TABLE player_achievements ALTER COLUMN player_id TYPE BIGINT`);
-    await query(`ALTER TABLE player_tasks ALTER COLUMN player_id TYPE BIGINT`);
-    await query(`ALTER TABLE player_cooldowns ALTER COLUMN player_id TYPE BIGINT`);
-    await query(`ALTER TABLE player_base_buildings ALTER COLUMN player_id TYPE BIGINT`);
+    // В Supabase нужно отключить RLS или удалить политики перед изменением
+    // Это делается вручную через SQL:
+    // ALTER TABLE boss_keys ALTER COLUMN player_id TYPE BIGINT;
+    // ALTER TABLE player_boss_progress ALTER COLUMN player_id TYPE BIGINT;
+    // ALTER TABLE player_boss_mastery ALTER COLUMN player_id TYPE BIGINT;
+    // ALTER TABLE player_achievements ALTER COLUMN player_id TYPE BIGINT;
+    // ALTER TABLE player_tasks ALTER COLUMN player_id TYPE BIGINT;
+    // ALTER TABLE player_cooldowns ALTER COLUMN player_id TYPE BIGINT;
+    // ALTER TABLE player_base_buildings ALTER COLUMN player_id TYPE BIGINT;
 
     // Миграция: преобразование referred_by из BIGINT в INTEGER (для существующих данных)
     await query(`
