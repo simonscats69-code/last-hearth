@@ -297,7 +297,7 @@ const DebuffAPI = {
         return await tx(async () => {
             // Получаем игрока и инвентарь
             const player = await queryOne(
-                `SELECT radiation, infections, inventory FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT radiation, infections, inventory FROM players WHERE telegram_id = $1 FOR UPDATE`,
                 [playerId]
             );
             
@@ -341,7 +341,7 @@ const DebuffAPI = {
                 }
                 
                 await query(
-                    `UPDATE players SET radiation = $1 WHERE id = $2`,
+                    `UPDATE players SET radiation = $1 WHERE telegram_id = $2`,
                     [{
                         level: newLevel,
                         expires_at: newExpiresAt,
@@ -379,7 +379,7 @@ const DebuffAPI = {
                 }
                 
                 await query(
-                    `UPDATE players SET infections = $1 WHERE id = $2`,
+                    `UPDATE players SET infections = $1 WHERE telegram_id = $2`,
                     [JSON.stringify(remaining), playerId]
                 );
                 
@@ -392,7 +392,7 @@ const DebuffAPI = {
             // Удаляем использованный предмет
             inventory.splice(itemIndex, 1);
             await query(
-                `UPDATE players SET inventory = $1 WHERE id = $2`,
+                `UPDATE players SET inventory = $1 WHERE telegram_id = $2`,
                 [JSON.stringify(inventory), playerId]
             );
             

@@ -77,7 +77,10 @@ async function logPlayerAction(playerId, action, meta = {}, client = null) {
     try {
         await exec('INSERT INTO player_logs (player_id, action, metadata, created_at) VALUES ($1, $2, $3, NOW())',
             [playerId, action, serializeJSONField(meta)]);
-    } catch {}
+    } catch (err) {
+        // Логирование ошибок в консоль для диагностики, но не блокируем основной поток
+        console.error(`Ошибка логирования действия игрока ${playerId}: ${action}`, err.message);
+    }
 }
 
 async function getPlayerById(playerId, client = null) {
@@ -154,16 +157,18 @@ async function updatePlayerEnergy(playerId, energyChange, options = {}) {
     return useTransaction ? tx(process) : process(client);
 }
 
-async function updatePlayerHealth(playerId, health, options = {}) {
+async function setPlayerHealth(playerId, newHealth, options = {}) {
+    // Устанавливает абсолютное значение здоровья (не дельту)
+    // Для изменения здоровья на дельту используйте updatePlayerEnergy с отрицательным значением
     const { useReturning = false } = options;
     playerId = validateId(playerId, 'playerId');
     const returningClause = useReturning ? 'RETURNING health, max_health' : '';
     const result = await defaultQuery(
         `UPDATE players SET health = LEAST(max_health, GREATEST(0, $1)), updated_at = NOW() WHERE id = $2 ${returningClause}`,
-        [health, playerId]
+        [newHealth, playerId]
     );
     if (result.rowCount === 0) throw new Error(ERR_PLAYER_NOT_FOUND);
-    await logPlayerAction(playerId, 'health_updated', { health });
+    await logPlayerAction(playerId, 'health_updated', { health: newHealth });
     return useReturning ? { success: true, ...result.rows[0] } : { success: true };
 }
 
@@ -231,13 +236,15 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     playerId = validateId(playerId, 'playerId');
     const exec = getExecutor(client);
     
+    // Исправлено: LEAST(energy + bonus, max_energy + bonus) вместо LEAST(max_energy + bonus, max_energy + bonus)
+    // Теперь при level-up восстанавливается текущее значение + бонус, с ограничением max
     const result = levelsGained <= 1
         ? await exec(
-            `WITH updated AS (UPDATE players SET level = level + 1, experience = 0, max_energy = max_energy + 5, max_health = max_health + 10, energy = LEAST(max_energy + 5, max_energy + 5), health = LEAST(max_health + 10, max_health + 10), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + 1, experience = 0, max_energy = max_energy + 5, max_health = max_health + 10, energy = LEAST(energy + 5, max_energy + 5), health = LEAST(health + 10, max_health + 10), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
             [playerId]
         )
         : await exec(
-            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 5), max_health = max_health + ($1 * 10), energy = LEAST(max_energy + ($1 * 5), max_energy + ($1 * 5)), health = LEAST(max_health + ($1 * 10), max_health + ($1 * 10)), updated_at = NOW() WHERE id = $3 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 5), max_health = max_health + ($1 * 10), energy = LEAST(energy + ($1 * 5), max_energy + ($1 * 5)), health = LEAST(health + ($1 * 10), max_health + ($1 * 10)), updated_at = NOW() WHERE id = $3 RETURNING *) SELECT * FROM updated`,
             [levelsGained, newExperience, playerId]
         );
     
@@ -273,9 +280,12 @@ async function addExperienceWithLevelUp(client, playerId, exp, getExpForLevel) {
     }
     
     if (leveledUp) {
+        // levelUpPlayer устанавливает experience = newExperience напрямую
         await levelUpPlayer(playerId, client, totalLevelsGained, newExperience);
         await logPlayerAction(playerId, 'level_up', { old_level: lockedPlayer.level, new_level: newLevel, levels_gained: totalLevelsGained, exp_gained: exp }, client);
     } else {
+        // Упрощено: при !leveledUp цикл while не выполнился ни разу,
+        // значит newExperience = lockedPlayer.experience + exp, т.е. delta === exp
         await updatePlayerExperience(playerId, exp, { client, updateTimestamp: false });
         await logPlayerAction(playerId, 'add_experience', { exp_gained: exp, total_exp: newExperience, level: newLevel }, client);
     }
@@ -287,6 +297,8 @@ async function getPlayersByClan(clanId, limit = 50, offset = 0) {
     clanId = validateId(clanId, 'clanId');
     limit = normalizeLimit(limit, 100);
     offset = Math.max(0, Number(offset) || 0);
+    
+    // COUNT(*) OVER() — простой и эффективный способ получить total без второго запроса
     const players = await queryAll(
         'SELECT *, COUNT(*) OVER() as total FROM players WHERE clan_id = $1 ORDER BY clan_donated DESC LIMIT $2 OFFSET $3',
         [clanId, limit, offset]
@@ -314,60 +326,43 @@ async function removePlayerFromClan(playerId) {
 }
 
 module.exports = {
+    // Транзакции и утилиты
     tx,
     validateId,
     validateString,
+    logPlayerAction,
+    
+    // Игроки
     createPlayer,
     getPlayerById,
     getPlayerByTelegramId,
     getAllPlayers,
     getTopPlayers,
+    
+    // Статус игрока
     updatePlayerLocation,
     updatePlayerEnergy,
-    updatePlayerHealth,
+    setPlayerHealth,
     incrementPlayerActions,
+    
+    // Валюты
     addCurrency,
     addCoins,
     addStars,
+    
+    // Инвентарь
     updateInventory,
+    updatePlayerInventory: updateInventory,  // Alias для обратной совместимости
     updateEquipment,
+    
+    // Опыт
     updatePlayerExperience,
     addExperienceWithLevelUp,
     levelUpPlayer,
     lockPlayer,
+    
+    // Кланы
     getPlayersByClan,
     setPlayerClan,
-    removePlayerFromClan,
-    player: {
-        create: createPlayer,
-        getById: getPlayerById,
-        getByTelegram: getPlayerByTelegramId,
-        getAll: getAllPlayers,
-        getTop: getTopPlayers
-    },
-    status: {
-        updateLocation: updatePlayerLocation,
-        updateEnergy: updatePlayerEnergy,
-        updateHealth: updatePlayerHealth
-    },
-    currency: {
-        add: addCurrency,
-        addCoins,
-        addStars
-    },
-    inventory: {
-        update: updateInventory,
-        updateEquipment
-    },
-    experience: {
-        update: updatePlayerExperience,
-        addWithLevelUp: addExperienceWithLevelUp,
-        levelUp: levelUpPlayer,
-        lock: lockPlayer
-    },
-    clans: {
-        set: setPlayerClan,
-        remove: removePlayerFromClan,
-        getByClan: getPlayersByClan
-    }
+    removePlayerFromClan
 };

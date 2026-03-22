@@ -365,7 +365,7 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
     }
 
     if (granted.length) {
-        await client.query('UPDATE players SET inventory = $1 WHERE id = $2', [JSON.stringify(inventory), playerId]);
+        await client.query('UPDATE players SET inventory = $1 WHERE telegram_id = $2', [JSON.stringify(inventory), playerId]);
     }
 
     return granted;
@@ -481,7 +481,7 @@ router.post('/start', async (req, res) => {
                      active_boss_started_at = NOW(),
                      active_boss_mode = 'solo',
                      active_raid_id = NULL
-                 WHERE id = $2`,
+                 WHERE telegram_id = $2`,
                 [bossId, playerId]
             );
 
@@ -668,7 +668,7 @@ router.post('/attack-boss', async (req, res) => {
                 `UPDATE players
                  SET energy = GREATEST(0, energy - 1),
                      last_energy_update = NOW()
-                 WHERE id = $1
+                 WHERE telegram_id = $1
                  RETURNING energy`,
                 [playerId]
             );
@@ -694,7 +694,7 @@ router.post('/attack-boss', async (req, res) => {
                 };
 
                 if (boss.reward_coins > 0) {
-                    await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [boss.reward_coins, playerId]);
+                    await client.query('UPDATE players SET coins = coins + $1 WHERE telegram_id = $2', [boss.reward_coins, playerId]);
                 }
 
                 if (boss.reward_experience > 0) {
@@ -721,7 +721,7 @@ router.post('/attack-boss', async (req, res) => {
 
                 mastery += 1;
 
-                await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [playerId]);
+                await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE telegram_id = $1', [playerId]);
                 await client.query('DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2', [playerId, bossId]);
                 await clearPlayerActiveBattle(client, playerId);
             }
@@ -851,7 +851,7 @@ router.post('/raid/start', async (req, res) => {
                      active_boss_started_at = NOW(),
                      active_boss_mode = 'mass',
                      active_raid_id = $2
-                 WHERE id = $3`,
+                 WHERE telegram_id = $3`,
                 [bossId, raidId, playerId]
             );
 
@@ -940,7 +940,7 @@ router.post('/raid/:id/join', async (req, res) => {
                      active_boss_started_at = NOW(),
                      active_boss_mode = 'mass',
                      active_raid_id = $2
-                 WHERE id = $3`,
+                 WHERE telegram_id = $3`,
                 [raid.boss_id, raidId, playerId]
             );
 
@@ -1034,7 +1034,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                 `UPDATE players
                  SET energy = GREATEST(0, energy - 1),
                      last_energy_update = NOW()
-                 WHERE id = $1`,
+                 WHERE telegram_id = $1`,
                 [playerId]
             );
 
@@ -1063,7 +1063,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                     const experienceReward = Math.floor((raid.reward_experience || 0) * share);
 
                     if (coinsReward > 0) {
-                        await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [coinsReward, participant.player_id]);
+                        await client.query('UPDATE players SET coins = coins + $1 WHERE telegram_id = $2', [coinsReward, participant.player_id]);
                     }
 
                     if (experienceReward > 0) {
@@ -1090,7 +1090,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         [participant.player_id, raid.boss_id]
                     );
 
-                    await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [participant.player_id]);
+                    await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE telegram_id = $1', [participant.player_id]);
                 }
 
                 const leaderKey = await grantNextBossKey(client, raid.leader_id, raid.boss_id);
