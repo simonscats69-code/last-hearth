@@ -163,7 +163,7 @@ router.post('/build', async (req, res) => {
             const updated = await query(`
                 UPDATE players 
                 SET base = $1, coins = coins - $2
-                WHERE id = $3
+                WHERE telegram_id = $3
                 RETURNING coins
             `, [safeStringify(base), cost, playerId]);
             

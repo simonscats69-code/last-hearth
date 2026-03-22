@@ -104,7 +104,7 @@ async function getPlayerBaseState(client, playerId) {
         `SELECT id, first_name, level, health, max_health, energy, max_energy, equipment,
                 active_boss_id, active_boss_started_at, active_boss_mode, active_raid_id
          FROM players
-         WHERE id = $1
+         WHERE telegram_id = $1
          FOR UPDATE`,
         [playerId]
     );
