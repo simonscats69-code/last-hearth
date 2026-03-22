@@ -701,16 +701,16 @@ async function runMigrations() {
     // Миграция: преобразование player_id из INTEGER в BIGINT для поддержки больших Telegram ID
     // Создаём временную функцию, т.к. DO-блоки не поддерживают параметры
     await query(`
-        CREATE OR REPLACE FUNCTION convert_player_id_to_bigint(table_name TEXT) RETURNS void AS $$
+        CREATE OR REPLACE FUNCTION convert_player_id_to_bigint(tbl_name TEXT) RETURNS void AS $
         BEGIN
             IF EXISTS (
                 SELECT 1 FROM information_schema.columns
-                WHERE table_name = convert_player_id_to_bigint.table_name 
+                WHERE table_name = tbl_name
                 AND column_name = 'player_id' AND data_type = 'integer'
             ) THEN
-                EXECUTE format('ALTER TABLE %I ALTER COLUMN player_id TYPE BIGINT', convert_player_id_to_bigint.table_name);
+                EXECUTE format('ALTER TABLE %I ALTER COLUMN player_id TYPE BIGINT', tbl_name);
             END IF;
-        END $$ LANGUAGE plpgsql;
+        END $ LANGUAGE plpgsql;
     `);
     
     const tablesWithPlayerId = [
