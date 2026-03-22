@@ -347,9 +347,9 @@ router.post('/modify-item', async (req, res) => {
 
 /**
  * Получение списка предметов (справочник)
- * Путь: / (корень внутри роутера)
+ * GET /api/game/items или GET /api/game/items/
  */
-router.get('/', async (req, res) => {
+router.get('/items', async (req, res) => {
     try {
         // Валидация пагинации
         let limit = parseInt(req.query.limit) || 50;
@@ -395,9 +395,9 @@ router.get('/', async (req, res) => {
 
 /**
  * Получение инвентаря игрока
- * GET /items/inventory → GET /api/game/items/inventory
+ * GET /api/game/inventory (через алиас) или GET /api/game/items/inventory
  */
-router.get('/inventory', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const player = req.player;
         
@@ -436,9 +436,9 @@ router.get('/inventory', async (req, res) => {
 
 /**
  * Использование предмета из инвентаря
- * POST /items/use → POST /api/game/items/use
+ * POST /api/game/inventory/use-item (через алиас) или POST /api/game/items/use
  */
-router.post('/use', async (req, res) => {
+router.post('/use-item', async (req, res) => {
     const client = await pool.connect();
     
     try {

@@ -20,6 +20,18 @@ const {
 } = require('../../utils/apiHelpers');
 
 /**
+ * Покупка предмета из магазина (алиас для /shop через /purchase)
+ * POST /api/game/purchase (через алиас) или POST /api/game/market/shop
+ */
+router.post('/', async (req, res) => {
+    // Перенаправляем на /shop
+    return router.handle(req, res, () => {
+        req.url = '/shop';
+        router.handle(req, res);
+    });
+});
+
+/**
  * Получение объявлений на рынке
  * GET /market/listings → GET /api/game/market/listings
  * Путь: /listings (внутри роутера)
