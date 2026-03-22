@@ -71,11 +71,36 @@ router.get('/', async (req, res) => {
         `, [telegramId]);
 
         if (!player) {
-            return res.status(404).json({
-                success: false,
-                error: 'Игрок не найден',
-                code: 'PLAYER_NOT_FOUND'
-            });
+            // Создаём нового игрока при первом входе
+            logger.info(`[player] Создание нового игрока для telegram_id=${telegramId}`);
+            
+            const referralCode = 'LH-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+            
+            try {
+                const newPlayer = await queryOne(`
+                    INSERT INTO players (telegram_id, username, first_name, last_name, referral_code, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+                    RETURNING *
+                `, [telegramId, req.player.username || null, req.player.first_name || 'Новичок', req.player.last_name || null, referralCode]);
+                
+                if (!newPlayer) {
+                    return res.status(500).json({
+                        success: false,
+                        error: 'Не удалось создать игрока',
+                        code: 'CREATE_PLAYER_FAILED'
+                    });
+                }
+                
+                player = newPlayer;
+                logger.info(`[player] Создан новый игрок id=${player.id}, telegram_id=${telegramId}`);
+            } catch (createError) {
+                logger.error(`[player] Ошибка создания игрока: ${createError.message}`);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Ошибка при создании игрока',
+                    code: 'CREATE_PLAYER_ERROR'
+                });
+            }
         }
 
         const keys = await queryAll(`

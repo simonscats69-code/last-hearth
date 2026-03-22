@@ -1296,6 +1296,16 @@ function setElementText(id, value) {
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Нижняя навигация
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const screen = btn.dataset.screen;
+            if (screen && typeof showScreen === 'function') {
+                showScreen(screen);
+            }
+        });
+    });
+
     // Основные кнопки
     document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
     document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
