@@ -210,7 +210,7 @@ router.post('/attack', async (req, res) => {
 
             // Получаем цель с блокировкой для предотвращения race condition
             const target = await queryOne(`
-                SELECT * FROM players WHERE id = $1 FOR UPDATE
+                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
             `, [target_id]);
 
             if (!target) {
@@ -309,11 +309,11 @@ router.post('/attack-hit', async (req, res) => {
             // Получаем игроков с блокировкой для предотвращения race condition
             // Используем direct query с FOR UPDATE для обоих игроков
             const attackerResult = await queryOne(
-                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE`,
                 [attackerId]
             );
             const defenderResult = await queryOne(
-                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE`,
                 [defenderId]
             );
             
@@ -339,7 +339,7 @@ router.post('/attack-hit', async (req, res) => {
             const newHealth = Math.max(0, defender.health - damage);
 
             await query(`
-                UPDATE players SET health = $1 WHERE id = $2
+                UPDATE players SET health = $1 WHERE telegram_id = $2
             `, [newHealth, defenderId]);
 
             // Проверяем победу
@@ -358,7 +358,7 @@ router.post('/attack-hit', async (req, res) => {
                 );
 
                 await query(`
-                    UPDATE players SET coins = coins + $1 WHERE id = $2
+                    UPDATE players SET coins = coins + $1 WHERE telegram_id = $2
                 `, [coinsReward, attackerId]);
 
                 // Шанс украсть предмет (снижено с 30% до 10%)
@@ -371,7 +371,7 @@ router.post('/attack-hit', async (req, res) => {
                     attackerInventory.push(stolenItem);
 
                     await query(`
-                        UPDATE players SET inventory = $1 WHERE id = $2
+                        UPDATE players SET inventory = $1 WHERE telegram_id = $2
                     `, [safeStringify(attackerInventory), attackerId]);
 
                     reward = {
@@ -395,7 +395,7 @@ router.post('/attack-hit', async (req, res) => {
                     UPDATE players 
                     SET pvp_wins = pvp_wins + 1,
                         pvp_damage_dealt = pvp_damage_dealt + $1
-                    WHERE id = $2
+                    WHERE telegram_id = $2
                 `, [damage, attackerId]);
 
                 // Обновляем PvP статистику проигравшего
@@ -403,7 +403,7 @@ router.post('/attack-hit', async (req, res) => {
                     UPDATE players 
                     SET pvp_losses = pvp_losses + 1,
                         pvp_damage_taken = pvp_damage_taken + $1
-                    WHERE id = $2
+                    WHERE telegram_id = $2
                 `, [damage, defenderId]);
 
                 // Логируем завершение боя
@@ -452,7 +452,7 @@ router.get('/stats', async (req, res) => {
     try {
         const stats = await queryOne(`
             SELECT pvp_wins, pvp_losses, pvp_damage_dealt, pvp_damage_taken
-            FROM players WHERE id = $1
+            FROM players WHERE telegram_id = $1
         `, [playerId]);
         
         ok(res, {

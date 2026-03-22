@@ -222,7 +222,7 @@ router.get('/referral/code', async (req, res) => {
     try {
         const playerId = req.player?.id;
         const player = await queryOne(
-            'SELECT referral_code, referral_code_changed FROM players WHERE id = $1',
+            'SELECT referral_code, referral_code_changed FROM players WHERE telegram_id = $1',
             [playerId]
         );
 
@@ -370,7 +370,7 @@ router.post('/buy-energy', async (req, res) => {
         
         const result = await tx(async (client) => {
             const lockResult = await client.query(
-                `SELECT energy, stars, max_energy FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT energy, stars, max_energy FROM players WHERE telegram_id = $1 FOR UPDATE`,
                 [playerId]
             );
 
@@ -396,7 +396,7 @@ router.post('/buy-energy', async (req, res) => {
                  SET energy = LEAST(max_energy, energy + $1),
                      stars = GREATEST(0, stars - $2),
                      last_energy_update = NOW()
-                 WHERE id = $3
+                 WHERE telegram_id = $3
                  RETURNING energy, stars, max_energy, last_energy_update`,
                 [actualAmount, actualCost, playerId]
             );
@@ -456,7 +456,7 @@ const EnergyAPI = {
         
         return await tx(async (client) => {
             const lockResult = await client.query(
-                `SELECT energy, stars, max_energy FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT energy, stars, max_energy FROM players WHERE telegram_id = $1 FOR UPDATE`,
                 [playerId]
             );
 

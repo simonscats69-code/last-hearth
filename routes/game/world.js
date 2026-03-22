@@ -260,7 +260,7 @@ router.post('/upgrade', async (req, res) => {
             await query(`
                 UPDATE players 
                 SET base = $1, coins = coins - $2
-                WHERE id = $3
+                WHERE telegram_id = $3
             `, [safeStringify(base), cost, playerId]);
 
             const logPlayerAction = async (pid, action, metadata = {}) => {
@@ -324,7 +324,7 @@ router.post('/search', async (req, res) => {
         
         try {
             const playerResult = await client.query(`
-                SELECT * FROM players WHERE id = $1 FOR UPDATE
+                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
             `, [playerId]);
             
             const updatedPlayer = playerResult.rows[0];
@@ -391,7 +391,7 @@ router.post('/search', async (req, res) => {
                     await client.query(
                         `UPDATE players
                          SET radiation = $1::jsonb
-                         WHERE id = $2`,
+                         WHERE telegram_id = $2`,
                         [JSON.stringify({
                             level: resultingRadiationLevel,
                             expires_at: expiresAt.toISOString(),
@@ -452,7 +452,7 @@ router.post('/search', async (req, res) => {
                     await client.query(`
                         UPDATE players 
                         SET inventory = $1
-                        WHERE id = $2
+                        WHERE telegram_id = $2
                     `, [JSON.stringify(inventory), playerId]);
                 }
             }
@@ -462,7 +462,7 @@ router.post('/search', async (req, res) => {
                 SET energy = energy - $1,
                     last_energy_update = NOW(),
                     total_actions = total_actions + 1
-                WHERE id = $2
+                WHERE telegram_id = $2
                 RETURNING energy, max_energy, last_energy_update
             `, [energyCost, playerId]);
             
@@ -487,7 +487,7 @@ router.post('/search', async (req, res) => {
                 await client.query(`
                     UPDATE players 
                     SET health = GREATEST(0, health - $1)
-                    WHERE id = $2
+                    WHERE telegram_id = $2
                 `, [radiationDamage, playerId]);
             }
             
@@ -576,7 +576,7 @@ router.post('/move', async (req, res) => {
         
         try {
             const playerResult = await client.query(`
-                SELECT * FROM players WHERE id = $1 FOR UPDATE
+                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
             `, [playerId]);
             
             const player = playerResult.rows[0];
@@ -611,7 +611,7 @@ router.post('/move', async (req, res) => {
             await client.query(`
                 UPDATE players 
                 SET current_location_id = $1
-                WHERE id = $2
+                WHERE telegram_id = $2
             `, [location_id, playerId]);
             
             await client.query('COMMIT');

@@ -159,7 +159,7 @@ router.post('/clan/create', wrap(async (req, res) => {
         
         await query(
             `UPDATE players SET clan_id = $1, clan_role = 'leader', coins = coins - 1000 
-             WHERE id = $2`,
+             WHERE telegram_id = $2`,
             [clanId, playerId]
         );
 
@@ -279,7 +279,7 @@ router.post('/clan/leave', wrap(async (req, res) => {
         }
 
         await query(
-            `UPDATE players SET clan_id = NULL, clan_role = NULL WHERE id = $1`, 
+            `UPDATE players SET clan_id = NULL, clan_role = NULL WHERE telegram_id = $1`, 
             [playerId]
         );
 
@@ -520,7 +520,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
         // Списание с игрока и добавление в казну клана
         await query(
             `UPDATE players SET coins = coins - $1, clan_donated = clan_donated + $1 
-             WHERE id = $2`,
+             WHERE telegram_id = $2`,
             [donation, playerId]
         );
         

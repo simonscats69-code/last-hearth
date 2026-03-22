@@ -229,7 +229,7 @@ router.post('/create', async (req, res) => {
         
         // Блокируем игрока для обновления
         const playerResult = await client.query(`
-            SELECT id, inventory FROM players WHERE id = $1 FOR UPDATE
+            SELECT id, inventory FROM players WHERE telegram_id = $1 FOR UPDATE
         `, [player.id]);
         
         if (playerResult.rows.length === 0) {
@@ -258,9 +258,9 @@ router.post('/create', async (req, res) => {
         const newInventory = [...inventory];
         newInventory.splice(item_index, 1);
         
-        await client.query(`
-            UPDATE players SET inventory = $1 WHERE id = $2
-        `, [serializeJSONField(newInventory), player.id]);
+            await client.query(`
+                UPDATE players SET inventory = $1 WHERE telegram_id = $2
+            `, [serializeJSONField(newInventory), player.id]);
         
         await client.query('COMMIT');
         
@@ -337,14 +337,14 @@ router.post('/buy', async (req, res) => {
         
         // Блокируем первого игрока
         const firstResult = await client.query(`
-            SELECT id, coins, inventory FROM players WHERE id = $1 FOR UPDATE
+            SELECT id, coins, inventory FROM players WHERE telegram_id = $1 FOR UPDATE
         `, [firstId]);
         
         const firstData = firstResult.rows[0];
         
         // Блокируем второго игрока
         const secondResult = await client.query(`
-            SELECT id, coins, inventory FROM players WHERE id = $1 FOR UPDATE
+            SELECT id, coins, inventory FROM players WHERE telegram_id = $1 FOR UPDATE
         `, [secondId]);
         
         const secondData = secondResult.rows[0];
@@ -370,23 +370,23 @@ router.post('/buy', async (req, res) => {
         const sellerGets = listing.price - commission;
         
         // Переводим монеты продавцу
-        await client.query(`
-            UPDATE players SET coins = coins + $1 WHERE id = $2
-        `, [sellerGets, sellerData.id]);
-        
-        // Забираем монеты у покупателя
-        await client.query(`
-            UPDATE players SET coins = coins - $1 WHERE id = $2
-        `, [listing.price, buyerData.id]);
-        
-        // Даём предмет покупателю
-        const item = safeParse(listing.item_data);
-        const buyerInventory = safeParse(buyerData.inventory) || [];
-        buyerInventory.push(item);
-        
-        await client.query(`
-            UPDATE players SET inventory = $1 WHERE id = $2
-        `, [serializeJSONField(buyerInventory), buyerData.id]);
+                await client.query(`
+                    UPDATE players SET coins = coins + $1 WHERE telegram_id = $2
+                `, [sellerGets, sellerData.id]);
+                
+                // Забираем монеты у покупателя
+                await client.query(`
+                    UPDATE players SET coins = coins - $1 WHERE telegram_id = $2
+                `, [listing.price, buyerData.id]);
+                
+                // Даём предмет покупателю
+                const item = safeParse(listing.item_data);
+                const buyerInventory = safeParse(buyerData.inventory) || [];
+                buyerInventory.push(item);
+                
+                await client.query(`
+                    UPDATE players SET inventory = $1 WHERE telegram_id = $2
+                `, [serializeJSONField(buyerInventory), buyerData.id]);
         
         // Помечаем объявление как проданное
         await client.query(`
@@ -466,7 +466,7 @@ router.post('/cancel', async (req, res) => {
         
         // Блокируем игрока для обновления инвентаря
         const playerResult = await client.query(`
-            SELECT id, inventory FROM players WHERE id = $1 FOR UPDATE
+            SELECT id, inventory FROM players WHERE telegram_id = $1 FOR UPDATE
         `, [player.id]);
         
         const playerData = playerResult.rows[0];
@@ -476,9 +476,9 @@ router.post('/cancel', async (req, res) => {
         const inventory = safeParse(playerData.inventory) || [];
         inventory.push(item);
         
-        await client.query(`
-            UPDATE players SET inventory = $1 WHERE id = $2
-        `, [serializeJSONField(inventory), player.id]);
+            await client.query(`
+                UPDATE players SET inventory = $1 WHERE telegram_id = $2
+            `, [serializeJSONField(inventory), player.id]);
         
         // Удаляем объявление
         await client.query(`
@@ -559,7 +559,7 @@ router.post('/shop', async (req, res) => {
         
         // Блокируем игрока для проверки баланса
         const playerResult = await client.query(`
-            SELECT id, coins, stars, inventory FROM players WHERE id = $1 FOR UPDATE
+            SELECT id, coins, stars, inventory FROM players WHERE telegram_id = $1 FOR UPDATE
         `, [player.id]);
         
         const playerData = playerResult.rows[0];
@@ -594,13 +594,13 @@ router.post('/shop', async (req, res) => {
         
         // Списываем валюту
         if (currency === 'coins') {
-            await client.query(`
-                UPDATE players SET coins = coins - $1, inventory = $2 WHERE id = $3
-            `, [price, serializeJSONField(inventory), player.id]);
-        } else {
-            await client.query(`
-                UPDATE players SET stars = stars - $1, inventory = $2 WHERE id = $3
-            `, [price, serializeJSONField(inventory), player.id]);
+                await client.query(`
+                    UPDATE players SET coins = coins - $1, inventory = $2 WHERE telegram_id = $3
+                `, [price, serializeJSONField(inventory), player.id]);
+            } else {
+                await client.query(`
+                    UPDATE players SET stars = stars - $1, inventory = $2 WHERE telegram_id = $3
+                `, [price, serializeJSONField(inventory), player.id]);
         }
         
         await client.query('COMMIT');

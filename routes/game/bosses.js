@@ -119,7 +119,7 @@ async function clearPlayerActiveBattle(client, playerId) {
              active_boss_started_at = NULL,
              active_boss_mode = NULL,
              active_raid_id = NULL
-         WHERE id = $1`,
+         WHERE telegram_id = $1`,
         [playerId]
     );
 }
@@ -127,15 +127,15 @@ async function clearPlayerActiveBattle(client, playerId) {
 async function clearActiveBattleForPlayers(client, playerIds) {
     if (!playerIds.length) return;
 
-    await client.query(
-        `UPDATE players
-         SET active_boss_id = NULL,
-             active_boss_started_at = NULL,
-             active_boss_mode = NULL,
-             active_raid_id = NULL
-         WHERE id = ANY($1::int[])`,
-        [playerIds]
-    );
+            await client.query(
+                `UPDATE players
+                 SET active_boss_id = NULL,
+                     active_boss_started_at = NULL,
+                     active_boss_mode = NULL,
+                     active_raid_id = NULL
+                 WHERE telegram_id = ANY($1::int[])`,
+                [playerIds]
+            );
 }
 
 async function resolveActiveBattle(client, playerId) {
@@ -332,7 +332,7 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
     const templates = await loadItemTemplates(client, normalizedItems);
     if (!templates.length) return [];
 
-    const playerResult = await client.query('SELECT inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
+    const playerResult = await client.query('SELECT inventory FROM players WHERE telegram_id = $1 FOR UPDATE', [playerId]);
     const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
     const granted = [];
 

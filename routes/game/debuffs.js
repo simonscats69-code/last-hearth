@@ -50,7 +50,7 @@ const DebuffAPI = {
         return await tx(async () => {
             // Блокируем строку игрока
             const player = await queryOne(
-                `SELECT radiation, infections FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT radiation, infections FROM players WHERE telegram_id = $1 FOR UPDATE`,
                 [playerId]
             );
             
@@ -69,7 +69,7 @@ const DebuffAPI = {
                 const newLevel = Math.min(config.maxLevel, currentRadiation.level + level);
                 
                 await query(
-                    `UPDATE players SET radiation = $1 WHERE id = $2`,
+                    `UPDATE players SET radiation = $1 WHERE telegram_id = $2`,
                     [{
                         level: newLevel,
                         expires_at: expiresAt.toISOString(),
@@ -116,7 +116,7 @@ const DebuffAPI = {
                 }
                 
                 await query(
-                    `UPDATE players SET infections = $1 WHERE id = $2`,
+                    `UPDATE players SET infections = $1 WHERE telegram_id = $2`,
                     [JSON.stringify(newInfections), playerId]
                 );
                 
@@ -140,7 +140,7 @@ const DebuffAPI = {
     async check(playerId) {
         return await tx(async () => {
             const player = await queryOne(
-                `SELECT radiation, infections, health FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT radiation, infections, health FROM players WHERE telegram_id = $1 FOR UPDATE`,
                 [playerId]
             );
             
@@ -160,7 +160,7 @@ const DebuffAPI = {
                 if (expiresAt <= now) {
                     // Дебафф истёк
                     await query(
-                        `UPDATE players SET radiation = $1 WHERE id = $2`,
+                        `UPDATE players SET radiation = $1 WHERE telegram_id = $2`,
                         [{ level: 0, expires_at: null, applied_at: null }, playerId]
                     );
                     expired.push('radiation');
@@ -203,7 +203,7 @@ const DebuffAPI = {
             // Обновляем инфекции если есть изменения
             if (validInfections.length !== infections.length) {
                 await query(
-                    `UPDATE players SET infections = $1 WHERE id = $2`,
+                    `UPDATE players SET infections = $1 WHERE telegram_id = $2`,
                     [JSON.stringify(validInfections), playerId]
                 );
             }
@@ -212,7 +212,7 @@ const DebuffAPI = {
             const totalDamage = this.calculateDebuffDamage(active, player.health);
             if (totalDamage > 0) {
                 await query(
-                    `UPDATE players SET health = GREATEST(0, health - $1) WHERE id = $2`,
+                    `UPDATE players SET health = GREATEST(0, health - $1) WHERE telegram_id = $2`,
                     [totalDamage, playerId]
                 );
             }

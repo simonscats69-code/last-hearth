@@ -90,33 +90,33 @@ router.post('/upgrade-item', async (req, res) => {
                 }
                 
                 // Обновляем инвентарь и списываем монеты
-                await queryOne(`
-                    UPDATE players 
-                    SET inventory = $1, coins = coins - $2
-                    WHERE id = $3
-                    RETURNING *
-                `, [inventory, upgradeCost, playerId]);
+                        await queryOne(`
+                            UPDATE players 
+                            SET inventory = $1, coins = coins - $2
+                            WHERE telegram_id = $3
+                            RETURNING *
+                        `, [inventory, upgradeCost, playerId]);
                 
             } else {
                 // Неудача
                 if (use_protection) {
                     // Защита сработала - предмет не сломался
-                    await queryOne(`
-                        UPDATE players SET coins = coins - $1 WHERE id = $2
-                        RETURNING *
-                    `, [upgradeCost, playerId]);
+                        await queryOne(`
+                            UPDATE players SET coins = coins - $1 WHERE telegram_id = $2
+                            RETURNING *
+                        `, [upgradeCost, playerId]);
                     
                 } else {
                     // Предмет сломался
                     itemBroken = true;
                     inventory.splice(item_index, 1);
                     
-                    await queryOne(`
-                        UPDATE players 
-                        SET inventory = $1, coins = coins - $2
-                        WHERE id = $3
-                        RETURNING *
-                    `, [inventory, upgradeCost, playerId]);
+                        await queryOne(`
+                            UPDATE players 
+                            SET inventory = $1, coins = coins - $2
+                            WHERE telegram_id = $3
+                            RETURNING *
+                        `, [inventory, upgradeCost, playerId]);
                 }
             }
             
@@ -269,7 +269,7 @@ router.post('/modify-item', async (req, res) => {
                 await queryOne(`
                     UPDATE players 
                     SET inventory = $1, coins = coins - $2
-                    WHERE id = $3
+                    WHERE telegram_id = $3
                     RETURNING *
                 `, [inventory, modCost, playerId]);
                 
@@ -286,7 +286,7 @@ router.post('/modify-item', async (req, res) => {
             } else {
                 // Неудача - монеты все равно списываются
                 await queryOne(`
-                    UPDATE players SET coins = coins - $1 WHERE id = $2
+                    UPDATE players SET coins = coins - $1 WHERE telegram_id = $2
                     RETURNING *
                 `, [modCost, playerId]);
                 
@@ -465,7 +465,7 @@ router.post('/use-item', async (req, res) => {
         
         try {
             const playerResult = await client.query(`
-                SELECT * FROM players WHERE id = $1 FOR UPDATE
+                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
             `, [playerId]);
             
             const player = playerResult.rows[0];
@@ -529,7 +529,7 @@ router.post('/use-item', async (req, res) => {
                 await client.query(`
                     UPDATE players 
                     SET equipment = $1, inventory = $2
-                    WHERE id = $3
+                    WHERE telegram_id = $3
                 `, [JSON.stringify(equipment), JSON.stringify(inventory), playerId]);
                 
                 await client.query('COMMIT');
@@ -561,7 +561,7 @@ router.post('/use-item', async (req, res) => {
                         UPDATE players 
                         SET health = LEAST(max_health, health + $1),
                             inventory = $2
-                        WHERE id = $3
+                        WHERE telegram_id = $3
                     `, [healthRestored, JSON.stringify(newInventory), playerId]);
                     
                     message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
@@ -595,7 +595,7 @@ router.post('/use-item', async (req, res) => {
                         UPDATE players 
                         SET radiation = $1,
                             inventory = $2
-                        WHERE id = $3
+                        WHERE telegram_id = $3
                     `, [JSON.stringify({ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }), JSON.stringify(newInventory), playerId]);
                     
                     message = `Использовали ${item.name}. Радиация снижена с ${currentRadiation.level} до ${newLevel}`;
@@ -608,7 +608,7 @@ router.post('/use-item', async (req, res) => {
                         UPDATE players 
                         SET health = LEAST(max_health, health + $1),
                             inventory = $2
-                        WHERE id = $3
+                        WHERE telegram_id = $3
                     `, [healthRestored, JSON.stringify(newInventory), playerId]);
                     
                     message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
