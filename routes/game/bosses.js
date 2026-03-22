@@ -133,7 +133,7 @@ async function clearActiveBattleForPlayers(client, playerIds) {
                      active_boss_started_at = NULL,
                      active_boss_mode = NULL,
                      active_raid_id = NULL
-                 WHERE telegram_id = ANY($1::int[])`,
+                 WHERE telegram_id = ANY($1::bigint[])`,
                 [playerIds]
             );
 }
