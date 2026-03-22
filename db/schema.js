@@ -225,7 +225,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS boss_keys (
             id SERIAL PRIMARY KEY,
-            player_id INTEGER REFERENCES players(id),
+            player_id BIGINT REFERENCES players(id),
             boss_id INTEGER REFERENCES bosses(id),
             quantity INTEGER DEFAULT 1,
             obtained_at TIMESTAMP DEFAULT NOW(),
@@ -237,7 +237,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS boss_mastery (
             id SERIAL PRIMARY KEY,
-            player_id INTEGER REFERENCES players(id),
+            player_id BIGINT REFERENCES players(id),
             boss_id INTEGER REFERENCES bosses(id),
             kills INTEGER DEFAULT 0,
             last_killed_at TIMESTAMP DEFAULT NOW(),
@@ -250,7 +250,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS player_boss_progress (
             id SERIAL PRIMARY KEY,
-            player_id INTEGER REFERENCES players(id),
+            player_id BIGINT REFERENCES players(id),
             boss_id INTEGER REFERENCES bosses(id),
             current_hp INTEGER NOT NULL,
             max_hp INTEGER NOT NULL,
@@ -277,7 +277,7 @@ async function createTables() {
         CREATE TABLE IF NOT EXISTS boss_sessions (
             id SERIAL PRIMARY KEY,
             boss_id INTEGER REFERENCES bosses(id),
-            player_id INTEGER REFERENCES players(id),
+            player_id BIGINT REFERENCES players(id),
             raid_id INTEGER,
             damage_dealt INTEGER DEFAULT 0,
             rewards_earned BOOLEAN DEFAULT false,
@@ -337,7 +337,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS player_achievements (
             id SERIAL PRIMARY KEY,
-            player_id INTEGER REFERENCES players(id),
+            player_id BIGINT REFERENCES players(id),
             achievement_id INTEGER REFERENCES achievements(id),
             progress JSONB DEFAULT '{}',
             progress_value INTEGER DEFAULT 0,
@@ -407,7 +407,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS daily_tasks (
             id SERIAL PRIMARY KEY,
-            player_id INTEGER REFERENCES players(id),
+            player_id BIGINT REFERENCES players(id),
             task_type VARCHAR(50) NOT NULL,
             target_value INTEGER NOT NULL,
             current_value INTEGER DEFAULT 0,
@@ -523,7 +523,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS pvp_cooldowns (
             id SERIAL PRIMARY KEY,
-            player_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
             cooldown_type VARCHAR(50) NOT NULL,
             expires_at TIMESTAMP NOT NULL,
             reason TEXT,
@@ -554,7 +554,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS player_buildings (
             id SERIAL PRIMARY KEY,
-            player_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
             building_code VARCHAR(50) NOT NULL,
             level INTEGER DEFAULT 1,
             is_active BOOLEAN DEFAULT true,
@@ -698,6 +698,26 @@ async function createTables() {
  * Миграции - добавление колонок в существующие таблицы
  */
 async function runMigrations() {
+    // Миграция: преобразование player_id из INTEGER в BIGINT для поддержки больших Telegram ID
+    const tablesWithPlayerId = [
+        'boss_keys', 'boss_mastery', 'player_boss_progress', 'boss_sessions',
+        'player_achievements', 'daily_tasks', 'pvp_cooldowns', 'player_buildings'
+    ];
+    
+    for (const table of tablesWithPlayerId) {
+        await query(`
+            DO $do$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = $1 AND column_name = 'player_id' AND data_type = 'integer'
+                ) THEN
+                    EXECUTE format('ALTER TABLE %I ALTER COLUMN player_id TYPE BIGINT', $1);
+                END IF;
+            END $do$
+        `, [table]);
+    }
+
     // Миграция: добавить active_boss_id после создания таблицы bosses
     await query(`
         DO $do$
