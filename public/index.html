@@ -165,7 +165,7 @@
                     <span>👹</span> Боссы
                 </button>
                 <button class="extra-btn" id="shop-btn">
-                    <span>🛒</span> Магазин
+                    <span>🏪</span> Магазин
                 </button>
                 <button class="extra-btn" id="rating-btn">
                     <span>🏆</span> Рейтинг
@@ -204,8 +204,8 @@
 
             <!-- Выпадающее меню "Ещё" -->
             <div id="more-menu" class="dropdown-menu" style="display: none;">
-                <button class="dropdown-item" data-screen="market">
-                    <span>🏪</span> Барахолка
+                <button class="dropdown-item" data-screen="shop">
+                    <span>🛒</span> Магазин
                 </button>
                 <button class="dropdown-item" data-screen="achievements">
                     <span>🏆</span> Достижения
@@ -727,118 +727,31 @@
         </div>
 
 
-        <!-- Экран барахолки (основной) -->
+        <!-- Экран магазина за монеты -->
         <div id="market-screen" class="screen">
             <header class="screen-header">
                 <button class="back-btn" data-screen="main">← Назад</button>
-                <h2>🏪 Барахолка</h2>
-                <button class="action-btn small" id="market-create-btn">+ Создать</button>
+                <h2>🏪 Магазин</h2>
             </header>
-            <div class="market-filters">
-                <input type="text" id="market-search" placeholder="Поиск..." class="search-input">
-                <select id="market-type-filter" class="filter-select">
-                    <option value="">Все типы</option>
-                    <option value="weapon">Оружие</option>
-                    <option value="armor">Броня</option>
-                    <option value="food">Еда</option>
-                    <option value="medicine">Медикаменты</option>
-                    <option value="resource">Ресурсы</option>
-                </select>
-                <select id="market-sort-filter" class="filter-select">
-                    <option value="date">По дате</option>
-                    <option value="price_asc">Дешевле</option>
-                    <option value="price_desc">Дороже</option>
-                    <option value="popularity">Популярные</option>
-                </select>
+            <div class="shop-coins-balance">
+                <span>💰 Ваши монеты: <strong id="shop-coins-balance">0</strong></span>
             </div>
-            <div class="market-info-bar">
-                <span id="market-commission">Комиссия: 5%</span>
-                <button class="tab-btn active" data-tab="market-listings">Все объявления</button>
-                <button class="tab-btn" data-tab="market-my">Мои</button>
-                <button class="tab-btn" data-tab="market-history">История</button>
+            <div class="shop-categories" id="shop-categories">
+                <button class="shop-category-btn active" data-category="all">Все</button>
+                <button class="shop-category-btn" data-category="weapon">Оружие</button>
+                <button class="shop-category-btn" data-category="armor">Броня</button>
+                <button class="shop-category-btn" data-category="food">Еда</button>
+                <button class="shop-category-btn" data-category="medicine">Лекарства</button>
+                <button class="shop-category-btn" data-category="resource">Ресурсы</button>
             </div>
-            <div id="market-listings-tab" class="market-tab active">
-                <div class="market-list" id="market-listings-list">
-                    <!-- Объявления будут загружены через JS -->
-                </div>
-            </div>
-            <div id="market-my-tab" class="market-tab">
-                <div class="market-my-info" id="market-my-info">
-                    <!-- Информация о лимитах -->
-                </div>
-                <div class="market-list" id="market-my-list">
-                    <!-- Мои объявления -->
-                </div>
-            </div>
-            <div id="market-history-tab" class="market-tab">
-                <div class="market-history-stats" id="market-history-stats">
-                    <!-- Статистика -->
-                </div>
-                <div class="market-list" id="market-history-list">
-                    <!-- История -->
-                </div>
+            <div class="shop-items" id="shop-items-list">
+                <!-- Товары загружаются через JS -->
+                <div class="loading">Загрузка товаров...</div>
             </div>
         </div>
 
         <!-- Экран создания объявления -->
         <div id="market-create-screen" class="screen">
-            <header class="screen-header">
-                <button class="back-btn" data-screen="market">← Назад</button>
-                <h2>🏪 Новое объявление</h2>
-            </header>
-            <div class="market-create-form">
-                <div class="form-group">
-                    <label>Выберите предмет из инвентаря:</label>
-                    <div class="market-inventory-grid" id="market-inventory-grid">
-                        <!-- Инвентарь -->
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>Выбрано:</label>
-                    <div id="market-selected-item" class="selected-item-display">
-                        <span class="placeholder">Выберите предмет</span>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>Количество:</label>
-                    <input type="number" id="market-quantity" min="1" value="1" class="form-input">
-                </div>
-                <div class="form-group">
-                    <label>Цена за единицу (монеты):</label>
-                    <input type="number" id="market-price" min="1" value="" class="form-input" placeholder="0">
-                </div>
-                <div class="form-group">
-                    <label>Цена за единицу (звёзды):</label>
-                    <input type="number" id="market-stars-price" min="0" value="0" class="form-input" placeholder="0">
-                </div>
-                <div class="form-group">
-                    <label>Срок размещения:</label>
-                    <select id="market-duration" class="form-select">
-                        <option value="24h">24 часа</option>
-                        <option value="72h">3 дня</option>
-                        <option value="7d">7 дней</option>
-                    </select>
-                </div>
-                <div class="market-create-summary" id="market-create-summary">
-                    <span>Итого: 0 монет</span>
-                </div>
-                <button id="market-submit-btn" class="action-btn">Создать объявление</button>
-            </div>
-        </div>
-
-        <!-- Модальное окно для покупки -->
-        <div id="market-buy-modal" class="modal">
-            <div class="modal-content market-buy-modal">
-                <h3>Подтверждение покупки</h3>
-                <div id="market-buy-item-info"></div>
-                <div id="market-buy-summary"></div>
-                <div class="modal-buttons">
-                    <button id="market-buy-confirm" class="action-btn">Купить</button>
-                    <button id="market-buy-cancel" class="cancel-btn">Отмена</button>
-                </div>
-            </div>
-        </div>
-
         <!-- Модальное окно -->
         <div id="modal" class="modal">
             <div class="modal-content">

@@ -214,7 +214,7 @@ router.get('/achievements/progress', async (req, res) => {
         }
 
         const player = await queryOne(
-            'SELECT id, level, days_played, bosses_killed, pvp_wins, items_crafted, unique_items, locations_visited, clan_id, clan_role, clans_joined FROM players WHERE telegram_id = $1',
+            'SELECT id, level, days_played, bosses_killed, pvp_wins, unique_items, locations_visited, clan_id, clan_role, clans_joined FROM players WHERE telegram_id = $1',
             [telegramId]
         );
 
@@ -251,9 +251,6 @@ router.get('/achievements/progress', async (req, res) => {
                     break;
                 case 'pvp_wins':
                     currentValue = player.pvp_wins || 0;
-                    break;
-                case 'items_crafted':
-                    currentValue = player.items_crafted || 0;
                     break;
                 case 'unique_items':
                     const uniqueItems = player.unique_items || [];
@@ -416,7 +413,6 @@ router.post('/achievements/claim', async (req, res) => {
                 case 'days_played': currentValue = lockedPlayer.rows[0].days_played || 1; break;
                 case 'bosses_killed': currentValue = lockedPlayer.rows[0].bosses_killed || 0; break;
                 case 'pvp_wins': currentValue = lockedPlayer.rows[0].pvp_wins || 0; break;
-                case 'items_crafted': currentValue = lockedPlayer.rows[0].items_crafted || 0; break;
                 case 'unique_items': currentValue = (lockedPlayer.rows[0].unique_items || []).length; break;
                 case 'locations_visited': currentValue = (lockedPlayer.rows[0].locations_visited || []).length; break;
                 case 'in_clan': currentValue = lockedPlayer.rows[0].clan_id ? 1 : 0; break;

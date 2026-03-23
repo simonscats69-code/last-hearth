@@ -1966,14 +1966,6 @@ function updateBalanceDisplay(newCoins) {
 }
 
 
-/**
- * Загрузка списка заданий
- */
-async function loadQuests() {
-    // Задания теперь отдельная система, возвращаем пустой список
-    return { tasks: [] };
-}
-
 // ============================================================================
 // ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
 // ============================================================================
@@ -2186,4 +2178,3 @@ window.showLootAnimation = showLootAnimation;
 window.showDamageEffect = showDamageEffect;
 window.playSound = playSound;
 window.updateBalanceDisplay = updateBalanceDisplay;
-window.loadQuests = loadQuests;

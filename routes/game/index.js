@@ -60,7 +60,6 @@ const clansRouter = safeRequire('./clans', 'clans');
 const pvpRouter = safeRequire('./pvp', 'pvp');
 const playerRouter = safeRequire('./player', 'player');
 const debuffsRouter = safeRequire('./debuffs', 'debuffs');
-const marketRouter = safeRequire('./market', 'market');
 const itemsRouter = safeRequire('./items', 'items');
 const statusRouter = safeRequire('./status', 'status');
 const wheelRouter = safeRequire('./wheel', 'wheel');
@@ -175,7 +174,6 @@ router.use('/clans', clansRouter);
 router.use('/pvp', pvpRouter);
 router.use('/player', playerRouter);
 router.use('/debuffs', debuffsRouter);
-router.use('/market', marketRouter);
 router.use('/items', itemsRouter);
 router.use('/status', statusRouter);
 router.use('/wheel', wheelRouter);
@@ -187,7 +185,6 @@ router.use('/achievements', playerRouter);
 router.use('/referral', playerRouter);
 router.use('/energy', playerRouter);
 router.use('/inventory', itemsRouter);
-router.use('/purchase', marketRouter);
 
 // Экспорт
 module.exports = router;

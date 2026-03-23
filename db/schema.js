@@ -24,7 +24,6 @@ async function createTables() {
             agility INTEGER DEFAULT 1,
             intelligence INTEGER DEFAULT 1,
             luck INTEGER DEFAULT 1,
-            crafting INTEGER DEFAULT 1,
             health INTEGER DEFAULT 100,
             max_health INTEGER DEFAULT 100,
             radiation JSONB DEFAULT '{"level": 0}',
@@ -64,7 +63,6 @@ async function createTables() {
             broken_arm BOOLEAN DEFAULT false,
             infection_count INTEGER DEFAULT 0,
             radiation_poisoning BOOLEAN DEFAULT false,
-            items_crafted INTEGER DEFAULT 0,
             unique_items JSONB DEFAULT '[]',
             locations_visited JSONB DEFAULT '[]',
             clans_joined INTEGER DEFAULT 0,
@@ -130,8 +128,6 @@ async function createTables() {
             upgrade_level INTEGER DEFAULT 0,
             max_upgrade_level INTEGER DEFAULT 10,
             modifications JSONB DEFAULT '[]',
-            craftable BOOLEAN DEFAULT false,
-            recipe JSONB,
             price INTEGER DEFAULT 0,
             stars_price INTEGER DEFAULT 0,
             icon VARCHAR(50),
@@ -454,43 +450,6 @@ async function createTables() {
             level_10_bonus_claimed_at TIMESTAMP,
             level_20_bonus_claimed_at TIMESTAMP,
             UNIQUE(referred_id)
-        );
-    `);
-
-    // Таблица рынка/барахолки
-    await query(`
-        CREATE TABLE IF NOT EXISTS market_listings (
-            id SERIAL PRIMARY KEY,
-            seller_id BIGINT NOT NULL,
-            item_id INTEGER REFERENCES items(id),
-            item_data JSONB NOT NULL,
-            quantity INTEGER DEFAULT 1,
-            price INTEGER DEFAULT 0,
-            stars_price INTEGER DEFAULT 0,
-            status VARCHAR(20) DEFAULT 'active',
-            views INTEGER DEFAULT 0,
-            times_renewed INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT NOW(),
-            expires_at TIMESTAMP,
-            sold_at TIMESTAMP
-        );
-    `);
-
-    // Таблица истории сделок рынка
-    await query(`
-        CREATE TABLE IF NOT EXISTS market_history (
-            id SERIAL PRIMARY KEY,
-            listing_id INTEGER,
-            seller_id BIGINT NOT NULL,
-            buyer_id BIGINT NOT NULL,
-            item_id INTEGER REFERENCES items(id),
-            item_data JSONB NOT NULL,
-            quantity INTEGER DEFAULT 1,
-            price INTEGER DEFAULT 0,
-            stars_price INTEGER DEFAULT 0,
-            commission INTEGER DEFAULT 0,
-            transaction_type VARCHAR(20) NOT NULL,
-            created_at TIMESTAMP DEFAULT NOW()
         );
     `);
 
@@ -1133,11 +1092,6 @@ async function seedAchievements() {
         { name: 'Боец', description: 'Выиграй 10 PvP боёв', category: 'pvp', condition: { type: 'pvp_wins', value: 10 }, reward: { coins: 200, stars: 3 }, icon: '🥋', rarity: 'uncommon' },
         { name: 'Чемпион', description: 'Выиграй 50 PvP боёв', category: 'pvp', condition: { type: 'pvp_wins', value: 50 }, reward: { coins: 750, stars: 10 }, icon: '🏆', rarity: 'rare' },
         { name: 'Легенда арены', description: 'Выиграй 100 PvP боёв', category: 'pvp', condition: { type: 'pvp_wins', value: 100 }, reward: { coins: 2000, stars: 25 }, icon: '⚡', rarity: 'epic' },
-        
-        // Крафт
-        { name: 'Начинающий крафтер', description: 'Скрафти 10 предметов', category: 'craft', condition: { type: 'items_crafted', value: 10 }, reward: { coins: 100, stars: 1 }, icon: '🔨', rarity: 'common' },
-        { name: 'Мастер крафта', description: 'Скрафти 50 предметов', category: 'craft', condition: { type: 'items_crafted', value: 50 }, reward: { coins: 400, stars: 5 }, icon: '⚒️', rarity: 'uncommon' },
-        { name: 'Инженер', description: 'Скрафти 100 предметов', category: 'craft', condition: { type: 'items_crafted', value: 100 }, reward: { coins: 1000, stars: 10 }, icon: '🛠️', rarity: 'rare' },
         
         // Исследование
         { name: 'Путешественник', description: 'Посети 3 локации', category: 'exploration', condition: { type: 'locations_visited', value: 3 }, reward: { coins: 75, stars: 1 }, icon: '🗺️', rarity: 'common' },

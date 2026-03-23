@@ -145,8 +145,7 @@ router.get('/', async (req, res) => {
                     endurance: player.endurance,
                     agility: player.agility,
                     intelligence: player.intelligence,
-                    luck: player.luck,
-                    crafting: player.crafting || 1
+                    luck: player.luck
                 },
                 status,
                 location: {

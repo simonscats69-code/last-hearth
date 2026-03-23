@@ -1707,6 +1707,97 @@ html, body {
 .shop-item-price {
     font-weight: bold;
     color: var(--accent-yellow);
+}
+
+/* Магазин за монеты */
+.shop-coins-balance {
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+    font-size: 16px;
+}
+
+.shop-coins-balance strong {
+    color: var(--accent-yellow);
+}
+
+.shop-categories {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.shop-category-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 20px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: 13px;
+}
+
+.shop-category-btn.active {
+    background: var(--accent-green);
+    color: white;
+}
+
+.shop-item-card {
+    display: flex;
+    align-items: center;
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 12px;
+    gap: 12px;
+    border-left: 3px solid var(--rarity-common);
+}
+
+.shop-item-card.uncommon {
+    border-left-color: var(--rarity-uncommon);
+}
+
+.shop-item-card.rare {
+    border-left-color: var(--rarity-rare);
+}
+
+.shop-item-card.epic {
+    border-left-color: var(--rarity-epic);
+}
+
+.shop-item-card.legendary {
+    border-left-color: var(--rarity-legendary);
+}
+
+.shop-item-buy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.shop-item-buy .buy-btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent-green);
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.shop-item-buy .buy-btn:hover {
+    background: #45a049;
+}
+
+.shop-item-stats {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
     font-size: 13px;
     white-space: nowrap;
 }

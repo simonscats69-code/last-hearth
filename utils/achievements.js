@@ -30,10 +30,6 @@ const ACHIEVEMENTS = {
     loot_500: { name: 'Кладовщик', desc: 'Собери 500 предметов', type: 'loot', req: 500, reward: 50 },
     loot_1000: { name: 'Король добычи', desc: 'Собери 1000 предметов', type: 'loot', req: 1000, reward: 100 },
     
-    // Крафт
-    craft_10: { name: 'Новичок крафтер', desc: 'Скрафти 10 предметов', type: 'craft', req: 10, reward: 15 },
-    craft_50: { name: 'Мастер крафта', desc: 'Скрафти 50 предметов', type: 'craft', req: 50, reward: 40 },
-    
     // Играть каждый день
     streak_3: { name: 'Начинающий', desc: 'Играй 3 дня подряд', type: 'streak', req: 3, reward: 20 },
     streak_7: { name: 'Постоянный', desc: 'Играй 7 дней подряд', type: 'streak', req: 7, reward: 50 },
@@ -70,7 +66,6 @@ async function checkAchievements(playerId, stats) {
                 case 'boss': value = stats.bosses_killed || 0; break;
                 case 'pvp': value = stats.pvp_wins || 0; break;
                 case 'loot': value = stats.items_collected || 0; break;
-                case 'craft': value = stats.items_crafted || 0; break;
                 case 'streak': value = stats.daily_streak || 0; break;
                 case 'referral': value = stats.referrals || 0; break;
             }
@@ -166,7 +161,7 @@ async function getPlayerProgress(playerId) {
     try {
         const playerResult = await query(
             `SELECT level, bosses_killed, pvp_wins, items_collected, 
-                    items_crafted, daily_streak, referrals
+                    daily_streak, referrals
              FROM players WHERE id = $1`,
             [playerId]
         );
@@ -180,7 +175,6 @@ async function getPlayerProgress(playerId) {
             boss: { current: p.bosses_killed || 0, achievements: [] },
             pvp: { current: p.pvp_wins || 0, achievements: [] },
             loot: { current: p.items_collected || 0, achievements: [] },
-            craft: { current: p.items_crafted || 0, achievements: [] },
             streak: { current: p.daily_streak || 0, achievements: [] },
             referral: { current: p.referrals || 0, achievements: [] }
         };

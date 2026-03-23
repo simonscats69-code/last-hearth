@@ -654,6 +654,138 @@ router.post('/use-item', async (req, res) => {
     }
 });
 
+// =============================================================================
+// МАГАЗИН ЗА МОНЕТЫ
+// =============================================================================
+
+/**
+ * Получить список товаров магазина за монеты
+ */
+router.get('/shop', async (req, res) => {
+    try {
+        // Получаем предметы, которые можно купить за монеты (с ценой > 0)
+        const items = await queryAll(`
+            SELECT id, name, description, type, category, rarity, icon, stats, price, durability
+            FROM items 
+            WHERE price > 0 AND category IS NOT NULL
+            ORDER BY rarity, price
+        `);
+        
+        res.json({
+            success: true,
+            items: items.rows.map(item => ({
+                ...item,
+                stats: typeof item.stats === 'string' ? JSON.parse(item.stats) : item.stats
+            }))
+        });
+    } catch (error) {
+        logger.error({ type: 'shop_error', message: error.message });
+        res.status(500).json({ success: false, error: 'Ошибка загрузки магазина' });
+    }
+});
+
+/**
+ * Купить предмет за монеты
+ */
+router.post('/buy', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { item_id, currency = 'coins' } = req.body;
+        const playerId = req.player.id;
+        
+        if (!item_id) {
+            return badRequest(res, 'Требуется ID предмета', 'ITEM_REQUIRED');
+        }
+        
+        if (currency !== 'coins') {
+            return badRequest(res, 'Магазин принимает только монеты', 'INVALID_CURRENCY');
+        }
+        
+        // Получаем предмет из БД
+        const itemResult = await client.query('SELECT * FROM items WHERE id = $1', [item_id]);
+        if (itemResult.rows.length === 0) {
+            return badRequest(res, 'Предмет не найден', 'ITEM_NOT_FOUND');
+        }
+        
+        const shopItem = itemResult.rows[0];
+        const price = shopItem.price || 0;
+        
+        if (price <= 0) {
+            return badRequest(res, 'Этот предмет нельзя купить', 'NOT_FOR_SALE');
+        }
+        
+        // Начинаем транзакцию
+        await client.query('BEGIN');
+        
+        // Получаем игрока с блокировкой
+        const playerResult = await client.query(
+            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
+            [playerId]
+        );
+        
+        const player = playerResult.rows[0];
+        const playerCoins = player.coins || 0;
+        
+        if (playerCoins < price) {
+            await client.query('ROLLBACK');
+            return badRequest(res, 'Недостаточно монет', 'NOT_ENOUGH_COINS');
+        }
+        
+        // Списываем монеты
+        await client.query(
+            'UPDATE players SET coins = coins - $1 WHERE id = $2',
+            [price, playerId]
+        );
+        
+        // Добавляем предмет в инвентарь
+        let inventory = typeof player.inventory === 'string' ? JSON.parse(player.inventory) : (player.inventory || []);
+        
+        const newItem = {
+            id: shopItem.id,
+            name: shopItem.name,
+            type: shopItem.type,
+            category: shopItem.category,
+            rarity: shopItem.rarity,
+            icon: shopItem.icon,
+            stats: typeof shopItem.stats === 'string' ? JSON.parse(shopItem.stats) : (shopItem.stats || {}),
+            durability: shopItem.durability || 100,
+            max_durability: shopItem.durability || 100,
+            quantity: 1
+        };
+        
+        inventory.push(newItem);
+        
+        await client.query(
+            'UPDATE players SET inventory = $1 WHERE id = $2',
+            [JSON.stringify(inventory), playerId]
+        );
+        
+        // Логируем действие
+        await logPlayerAction(playerId, 'shop_buy', {
+            item_id: shopItem.id,
+            item_name: shopItem.name,
+            price: price,
+            currency: currency
+        });
+        
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            message: `Вы купили ${shopItem.name} за ${price} монет`,
+            purchased_item: newItem,
+            remaining_coins: playerCoins - price
+        });
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        logger.error({ type: 'shop_buy_error', playerId: req.player.id, message: error.message });
+        res.status(500).json({ success: false, error: 'Ошибка покупки' });
+    } finally {
+        client.release();
+    }
+});
+
 
 // =============================================================================
 // КРАФТ (УДАЛЁН)

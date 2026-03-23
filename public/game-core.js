@@ -35,9 +35,6 @@ const gameState = {
     // Достижения
     achievements: [],
 
-    // Задания
-    quests: [],
-
     // Данные клана
     clan: null,
 
@@ -909,7 +906,6 @@ const SCREENS = [
     'market-create',  // Создание объявления
     'achievements',   // Достижения
     'referral',       // Рефералы
-    'quests',         // Задания
     'profile'         // Профиль
 ];
 
@@ -1002,11 +998,6 @@ function onScreenOpen(screenName) {
             loadAchievements();
             break;
 
-        case 'quests':
-            // Загружаем задания
-            loadQuests();
-            break;
-
         case 'profile':
             // Профиль уже загружен, обновляем UI из кэша
             if (gameState.player) {
@@ -1015,8 +1006,8 @@ function onScreenOpen(screenName) {
             break;
 
         case 'market':
-            // Загружаем объявления рынка
-            loadMarketListings();
+            // Загружаем магазин за монеты
+            loadCoinShop();
             break;
 
         case 'pvp-players':
@@ -1107,7 +1098,6 @@ function initNavigationHandlers() {
         'btn-clan': 'clan',
         'btn-rating': 'rating',
         'btn-achievements': 'achievements',
-        'btn-quests': 'quests',
         'btn-profile': 'profile'
     };
 

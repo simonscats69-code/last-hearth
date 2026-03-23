@@ -13,10 +13,9 @@ const ITEM_ID_MAP = {
     // Баффы
     'buff_loot_1h': 1,
     'buff_energy_1h': 2,
-    'buff_craft_1h': 3,
-    'buff_radiation_1h': 4,
-    'buff_exp_1h': 5,
-    'buff_loot_daily': 6,
+    'buff_radiation_1h': 3,
+    'buff_exp_1h': 4,
+    'buff_loot_daily': 5,
     // Косметика
     'cosm_glow_gold': 101,
     'cosm_glow_blue': 102,
@@ -45,7 +44,6 @@ const SHOP_ITEMS = {
     buffs: [
         { id: 'buff_loot_1h', name: 'x2 Добыча', desc: 'Удвоенный лут на 1 час', icon: '📦', price: 5, currency: 'stars', duration: 3600, effect: 'loot_x2' },
         { id: 'buff_energy_1h', name: 'Бесплатная энергия', desc: 'Энергия не тратится 1 час', icon: '⚡', price: 3, currency: 'stars', duration: 3600, effect: 'free_energy' },
-        { id: 'buff_craft_1h', name: 'Быстрый крафт', desc: 'Крафт без энергии 1 час', icon: '🔨', price: 2, currency: 'stars', duration: 3600, effect: 'free_craft' },
         { id: 'buff_radiation_1h', name: 'Анти-rad', desc: 'Защита от радиации 1 час', icon: '☢️', price: 2, currency: 'stars', duration: 3600, effect: 'no_radiation' },
         { id: 'buff_exp_1h', name: 'x2 Опыт', desc: 'Удвоенный опыт 1 час', icon: '⬆️', price: 4, currency: 'stars', duration: 3600, effect: 'exp_x2' },
         { id: 'buff_loot_daily', name: 'x2 Добыча (24ч)', desc: 'Удвоенный лут на 24 часа', icon: '📦', price: 20, currency: 'stars', duration: 86400, effect: 'loot_x2' },
@@ -386,5 +384,135 @@ function initShopHandlers() {
     }
 }
 
+// ============================================
+// МАГАЗИН ЗА МОНЕТЫ
+// ============================================
+
+let coinShopItems = [];
+let currentCoinShopCategory = 'all';
+
+async function loadCoinShop() {
+    try {
+        const response = await gameApi.get('/game/items/shop');
+        coinShopItems = response.items || [];
+        
+        // Обновляем баланс монет
+        const balanceEl = document.getElementById('shop-coins-balance');
+        if (balanceEl && gameState.player) {
+            balanceEl.textContent = formatNumber(gameState.player.coins || 0);
+        }
+        
+        renderCoinShop();
+    } catch (error) {
+        console.error('Ошибка загрузки магазина:', error);
+        const container = document.getElementById('shop-items-list');
+        if (container) {
+            container.innerHTML = '<div class="error">Ошибка загрузки товаров</div>';
+        }
+    }
+}
+
+function renderCoinShop() {
+    const container = document.getElementById('shop-items-list');
+    if (!container) return;
+    
+    const filtered = currentCoinShopCategory === 'all' 
+        ? coinShopItems 
+        : coinShopItems.filter(item => item.category === currentCoinShopCategory);
+    
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="empty-message">Нет товаров в этой категории</div>';
+        return;
+    }
+    
+    container.innerHTML = filtered.map(item => {
+        const rarityClass = item.rarity || 'common';
+        return `
+            <div class="shop-item-card ${rarityClass}" data-item-id="${item.id}">
+                <div class="shop-item-icon">${item.icon || '📦'}</div>
+                <div class="shop-item-info">
+                    <div class="shop-item-name">${escapeHtml(item.name)}</div>
+                    <div class="shop-item-desc">${escapeHtml(item.description || '')}</div>
+                    <div class="shop-item-stats">
+                        ${renderItemStats(item.stats)}
+                    </div>
+                </div>
+                <div class="shop-item-buy">
+                    <div class="shop-item-price">💰 ${formatNumber(item.price || 0)}</div>
+                    <button class="buy-btn" onclick="buyCoinItem(${item.id})">Купить</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // Обработчики категорий
+    document.querySelectorAll('.shop-category-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.shop-category-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentCoinShopCategory = btn.dataset.category;
+            renderCoinShop();
+        });
+    });
+}
+
+function renderItemStats(stats) {
+    if (!stats) return '';
+    const statLines = [];
+    if (stats.damage) statLines.push(`⚔️ Урон: +${stats.damage}`);
+    if (stats.health) statLines.push(`❤️ Здоровье: +${stats.health}`);
+    if (stats.energy) statLines.push(`⚡ Энергия: +${stats.energy}`);
+    return statLines.join('<br>');
+}
+
+async function buyCoinItem(itemId) {
+    const item = coinShopItems.find(i => i.id === itemId);
+    if (!item) return;
+    
+    const price = item.price || 0;
+    const playerCoins = gameState.player?.coins || 0;
+    
+    if (playerCoins < price) {
+        showModal('❌ Недостаточно монет', `Нужно ${formatNumber(price)} монет, у вас ${formatNumber(playerCoins)}`);
+        return;
+    }
+    
+    if (!confirm(`Купить ${item.name} за ${formatNumber(price)} монет?`)) {
+        return;
+    }
+    
+    try {
+        const response = await gameApi.post('/game/items/buy', { 
+            item_id: itemId,
+            currency: 'coins'
+        });
+        
+        if (response.success) {
+            showModal('✅ Успешно', `Вы купили ${item.name}!`);
+            
+            // Обновляем баланс
+            if (gameState.player) {
+                gameState.player.coins = (gameState.player.coins || 0) - price;
+                const balanceEl = document.getElementById('shop-coins-balance');
+                if (balanceEl) {
+                    balanceEl.textContent = formatNumber(gameState.player.coins);
+                }
+            }
+            
+            // Перезагружаем инвентарь
+            if (typeof loadInventory === 'function') {
+                loadInventory();
+            }
+        } else {
+            showModal('❌ Ошибка', response.error || 'Не удалось купить предмет');
+        }
+    } catch (error) {
+        console.error('Ошибка покупки:', error);
+        showModal('❌ Ошибка', 'Не удалось купить предмет');
+    }
+}
+
 // Экспорт функции openShop в window для использования в других модулях
 window.openShop = openShop;
+window.loadCoinShop = loadCoinShop;
+window.buyCoinItem = buyCoinItem;

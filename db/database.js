@@ -571,9 +571,6 @@ async function updateAchievementProgress(playerId, achievementType, value = 1) {
                 case 'pvp_wins':
                     currentValue = player.pvp_wins || 0;
                     break;
-                case 'items_crafted':
-                    currentValue = player.items_crafted || 0;
-                    break;
                 case 'unique_items':
                     currentValue = (player.unique_items || []).length;
                     break;

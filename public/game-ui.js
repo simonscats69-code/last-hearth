@@ -96,7 +96,6 @@ function renderAchievementsCategories(categories) {
         survival: '🌅 Выживание',
         bosses: '👾 Боссы',
         pvp: '⚔️ PvP',
-        craft: '🔨 Крафт',
         collection: '📦 Коллекция',
         exploration: '🗺️ Исследование',
         social: '👥 Социальное'
@@ -1311,7 +1310,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
     document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
     document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
-    document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
+    document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('market'));
     document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
     document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
     

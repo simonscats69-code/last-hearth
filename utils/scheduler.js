@@ -222,7 +222,6 @@ async function processPlayerAchievements(player) {
         bosses_killed: player.bosses_killed,
         pvp_wins: player.pvp_wins,
         items_collected: player.items_collected,
-        items_crafted: player.items_crafted,
         daily_streak: player.daily_streak,
         referrals: player.referrals
     };
@@ -270,7 +269,7 @@ async function checkAllAchievements() {
             // Batch-выборка игроков
             const players = await query(`
                 SELECT id, level, bosses_killed, pvp_wins, items_collected,
-                       items_crafted, daily_streak, referrals
+                       daily_streak, referrals
                 FROM players 
                 WHERE last_active > NOW() - INTERVAL '24 hours'
                 ORDER BY id
