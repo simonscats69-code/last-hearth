@@ -264,10 +264,7 @@ function openWheel() {
  */
 async function spinWheelFree() {
     try {
-        const response = await gameApi.request('/game/wheel/spin', {
-            method: 'POST',
-            body: JSON.stringify({ is_paid: false })
-        });
+        const response = await gameApi.post('/game/wheel/spin', { is_paid: false });
         
         if (!response.success) {
             if (response.code === 'COOLDOWN' && response.next_free_spin) {
@@ -299,10 +296,7 @@ async function spinWheelPaid() {
     }
     
     try {
-        const response = await gameApi.request('/game/wheel/spin', {
-            method: 'POST',
-            body: JSON.stringify({ is_paid: true })
-        });
+        const response = await gameApi.post('/game/wheel/spin', { is_paid: true });
         
         if (!response.success) {
             showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
@@ -350,10 +344,7 @@ function spinWheelAnimation(prize, isPaid) {
         
         // Обновляем данные игрока после вращения
         // Вызываем status/check для получения актуальных данных
-        gameApi.request('/game/status/check', {
-            method: 'POST',
-            body: JSON.stringify({})
-        }).catch(e => console.error('Failed to update player:', e));
+        gameApi.post('/game/status/check', {}).catch(e => console.error('Failed to update player:', e));
         
         // Сброс колеса
         setTimeout(() => {

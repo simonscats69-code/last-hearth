@@ -893,6 +893,7 @@ const SCREENS = [
     'inventory',      // Инвентарь
     'bosses',         // Боссы
     'boss-fight',     // Бой с боссом
+    'weapon-select',  // Выбор оружия
     'clan',           // Клан
     'clans-list',     // Список кланов
     'clan-create',    // Создание клана

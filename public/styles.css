@@ -887,6 +887,10 @@ html, body {
     font-size: 12px;
 }
 
+.nav-btn[data-screen="main"] {
+    display: none;
+}
+
 .nav-btn span {
     font-size: 24px;
 }
