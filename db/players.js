@@ -240,11 +240,11 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     // Теперь при level-up восстанавливается текущее значение + бонус, с ограничением max
     const result = levelsGained <= 1
         ? await exec(
-            `WITH updated AS (UPDATE players SET level = level + 1, experience = 0, max_energy = max_energy + 5, max_health = max_health + 10, energy = LEAST(energy + 5, max_energy + 5), health = LEAST(health + 10, max_health + 10), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + 1, experience = 0, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
             [playerId]
         )
         : await exec(
-            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 5), max_health = max_health + ($1 * 10), energy = LEAST(energy + ($1 * 5), max_energy + ($1 * 5)), health = LEAST(health + ($1 * 10), max_health + ($1 * 10)), updated_at = NOW() WHERE id = $3 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $3 RETURNING *) SELECT * FROM updated`,
             [levelsGained, newExperience, playerId]
         );
     

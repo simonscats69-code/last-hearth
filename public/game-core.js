@@ -26,9 +26,6 @@ const gameState = {
     // Локации для рейтинга (map)
     locationPositions: {},
 
-    // Рецепты крафта
-    recipes: [],
-
     // Боссы
     bosses: [],
 
@@ -172,7 +169,6 @@ window.addEventListener('pagehide', clearAllIntervals);
 // ============================================================================
 
 const actionLocks = {
-    crafting: false,
     marketBuy: false,
     marketCreate: false,
     marketCancel: false,
@@ -385,7 +381,6 @@ const API = {
         inventory: '/api/game/inventory',
         locations: '/api/game/locations',
         bosses: '/api/game/bosses',
-        recipes: '/api/game/crafting/recipes',
         clan: '/api/game/clans/clan',
         market: '/api/game/market/listings',
         pvp: '/api/game/pvp/players',
@@ -655,79 +650,6 @@ function renderList(container, items, renderItem, emptyHtml = '<div class="empty
     container.innerHTML = items.map(renderItem).join('');
 }
 
-/**
- * Рассчитать статус доступной постройки
- */
-function getBuildingStatus(building) {
-    if (!building.requirements?.has_required_building) {
-        return {
-            statusClass: 'locked',
-            statusText: `Требуется: ${building.requirements?.required_building}`,
-            buttonDisabled: 'disabled'
-        };
-    }
-
-    if ((gameState?.player?.level || 1) < building.required_level) {
-        return {
-            statusClass: 'locked',
-            statusText: `Требуется уровень: ${building.required_level}`,
-            buttonDisabled: 'disabled'
-        };
-    }
-
-    if (building.current_level >= building.max_level) {
-        return {
-            statusClass: 'maxed',
-            statusText: 'Макс. уровень',
-            buttonDisabled: 'disabled'
-        };
-    }
-
-    if (building.is_built) {
-        return {
-            statusClass: 'upgradable',
-            statusText: `Уровень ${building.current_level}/${building.max_level}`,
-            buttonDisabled: ''
-        };
-    }
-
-    return {
-        statusClass: 'available',
-        statusText: 'Доступно',
-        buttonDisabled: ''
-    };
-}
-
-/**
- * Шаблон карточки доступной постройки
- */
-function renderAvailableBuildingCard(building, includeResources = true) {
-    const { statusClass, statusText, buttonDisabled } = getBuildingStatus(building);
-
-    return `
-        <div class="available-building-item ${statusClass}" style="border-left: 4px solid ${building.color}">
-            <div class="building-header">
-                <span class="building-icon">${building.icon}</span>
-                <span class="building-name">${building.name}</span>
-                ${building.current_level > 0 ? `<span class="building-level">Ур. ${building.current_level}</span>` : ''}
-            </div>
-            <div class="building-desc">${building.description || ''}</div>
-            <div class="building-cost">
-                <span class="cost-coins">💰 ${building.upgrade_cost?.coins || 0}</span>
-                ${includeResources && building.upgrade_cost?.resources
-                    ? Object.entries(building.upgrade_cost.resources).map(([k, v]) => 
-                        `<span class="cost-resource">${k}: ${v}</span>`
-                    ).join('')
-                    : ''}
-            </div>
-            <div class="building-status">${statusText}</div>
-            <button class="build-btn" onclick="buildBuilding('${building.code}')" ${buttonDisabled}>
-                ${building.is_built ? 'Улучшить' : 'Построить'}
-            </button>
-        </div>
-    `;
-}
-
 // ============================================================================
 // ПОДТВЕРЖДЕНИЕ ОПАСНЫХ ДЕЙСТВИЙ
 // ============================================================================
@@ -796,8 +718,6 @@ window.performAction = performAction;
 window.getEl = getEl;
 window.setHtml = setHtml;
 window.renderList = renderList;
-window.getBuildingStatus = getBuildingStatus;
-window.renderAvailableBuildingCard = renderAvailableBuildingCard;
 window.confirmAction = confirmAction;
 window.CONSTANTS = CONSTANTS;
 window.Loader = Loader;
@@ -971,7 +891,6 @@ const SCREENS = [
     'main',           // Главный экран
     'map',            // Карта города
     'inventory',      // Инвентарь
-    'craft',          // Крафт
     'bosses',         // Боссы
     'boss-fight',     // Бой с боссом
     'clan',           // Клан
@@ -981,7 +900,6 @@ const SCREENS = [
     'shop',           // Магазин
     'wheel',          // Колесо удачи
     'rating',         // Рейтинг
-    'base',           // База
     'pvp',            // PvP
     'pvp-players',    // PvP игроки
     'pvp-fight',      // PvP бой
@@ -1039,13 +957,8 @@ function onScreenOpen(screenName) {
             break;
 
         case 'map':
-            // Загружаем инвентарь
-            loadInventory();
-            break;
-
-        case 'craft':
-            // Загружаем рецепты
-            loadRecipes();
+            // Загружаем локации для карты
+            loadLocations();
             break;
 
         case 'bosses':
@@ -1071,11 +984,6 @@ function onScreenOpen(screenName) {
         case 'clans-list':
             // Загружаем список кланов
             loadClansList();
-            break;
-
-        case 'base':
-            // Загружаем базу
-            loadBase();
             break;
 
         case 'achievements':
@@ -1135,6 +1043,16 @@ function renderMain() {
     if (levelEl) {
         levelEl.textContent = player.level || 1;
     }
+    
+    // Обновляем прогресс опыта
+    const expBar = document.getElementById('exp-bar');
+    const expText = document.getElementById('exp-text');
+    if (expBar && expText) {
+        const expProgress = player.exp_progress || { current: player.experience || 0, needed: player.level * 500, percent: 0 };
+        const percent = Math.min(100, expProgress.percent || Math.floor((expProgress.current / expProgress.needed) * 100));
+        expBar.style.width = percent + '%';
+        expText.textContent = `${expProgress.current}/${expProgress.needed}`;
+    }
 
     // Обновляем текущую локацию
     const location = player.current_location || player.location || {};
@@ -1173,12 +1091,10 @@ function initNavigationHandlers() {
     const mainButtons = {
         'map-btn': 'map',
         'inventory-btn': 'inventory',
-        'btn-craft': 'craft',
         'btn-bosses': 'bosses',
         'btn-shop': 'shop',
         'btn-clan': 'clan',
         'btn-rating': 'rating',
-        'btn-base': 'base',
         'btn-achievements': 'achievements',
         'btn-quests': 'quests',
         'btn-profile': 'profile'
@@ -1212,18 +1128,6 @@ function initTabHandlers() {
         bindClickOnce(tab, `achievements${tab.dataset.category || ''}`, () => {
             const category = tab.dataset.category;
             filterAchievements(category);
-        });
-    });
-
-    // Табы базы
-    document.querySelectorAll('.base-tab').forEach(tab => {
-        bindClickOnce(tab, `base${tab.dataset.tab || ''}`, () => {
-            const tabName = tab.dataset.tab;
-            if (tabName === 'available') {
-                loadBuildings();
-            } else if (tabName === 'built') {
-                loadBase();
-            }
         });
     });
 

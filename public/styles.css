@@ -571,6 +571,10 @@ html, body {
     background: linear-gradient(90deg, var(--energy-color), #ffd93d);
 }
 
+.exp-bar {
+    background: linear-gradient(90deg, #9b59b6, #e74c3c);
+}
+
 .bar-text {
     position: absolute;
     top: 50%;
@@ -1355,6 +1359,111 @@ html, body {
     background: linear-gradient(135deg, #a00000, #ff2020);
 }
 
+.weapon-btn {
+    background: linear-gradient(135deg, #4a4a8a, #6a6aba);
+    color: white;
+    border: 2px solid #7a7ada;
+    border-radius: 12px;
+    padding: 12px 20px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 140px;
+}
+
+.weapon-btn:hover {
+    background: linear-gradient(135deg, #5a5a9a, #7a7aca);
+}
+
+.weapon-btn .btn-icon {
+    font-size: 20px;
+}
+
+.weapon-btn .btn-text {
+    font-weight: bold;
+}
+
+.weapon-btn .btn-cost {
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+/* Экран выбора оружия */
+.weapon-select-content {
+    padding: 16px;
+}
+
+.weapon-info {
+    color: #ff6b6b;
+    font-size: 13px;
+    margin-bottom: 16px;
+    text-align: center;
+    padding: 8px;
+    background: rgba(255, 107, 107, 0.1);
+    border-radius: 8px;
+}
+
+.weapon-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.weapon-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--card-bg);
+    border-radius: 10px;
+    border: 2px solid var(--border-color);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.weapon-item:hover {
+    border-color: var(--accent-blue);
+    background: rgba(74, 74, 164, 0.2);
+}
+
+.weapon-item .weapon-icon {
+    font-size: 28px;
+}
+
+.weapon-item .weapon-info {
+    flex: 1;
+    text-align: left;
+    background: none;
+    padding: 0;
+}
+
+.weapon-item .weapon-name {
+    font-weight: bold;
+    color: white;
+    font-size: 14px;
+}
+
+.weapon-item .weapon-damage {
+    color: #ff6b6b;
+    font-size: 13px;
+}
+
+.weapon-item .weapon-rarity {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--rarity-uncommon);
+}
+
+.weapon-rarity.common { background: #808080; }
+.weapon-rarity.uncommon { background: #1eff00; color: black; }
+.weapon-rarity.rare { background: #0070dd; }
+.weapon-rarity.epic { background: #a335ee; }
+.weapon-rarity.legendary { background: #ff8000; }
+
 /* Прогресс-бар для множественной атаки */
 .attack-progress-container {
     width: 100%;
@@ -1970,121 +2079,6 @@ html, body {
     .btn, .card {
         -webkit-font-smoothing: antialiased;
     }
-}
-
-/* Крафт */
-.craft-content {
-    padding: 16px;
-}
-
-.craft-info {
-    display: flex;
-    justify-content: space-between;
-    padding: 12px;
-    background: #2a2a2a;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    font-size: 14px;
-}
-
-.recipes-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.recipe-item {
-    background: #2a2a2a;
-    border-radius: 12px;
-    padding: 16px;
-    border: 2px solid #444;
-}
-
-.recipe-item.locked {
-    opacity: 0.6;
-}
-
-.recipe-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
-}
-
-.recipe-icon {
-    font-size: 32px;
-}
-
-.recipe-info {
-    flex: 1;
-}
-
-.recipe-name {
-    font-size: 16px;
-    font-weight: bold;
-    color: #fff;
-}
-
-.recipe-level {
-    font-size: 12px;
-    color: #888;
-}
-
-.recipe-result {
-    color: #4CAF50;
-    font-weight: bold;
-}
-
-.recipe-ingredients {
-    font-size: 13px;
-    color: #aaa;
-    margin-bottom: 12px;
-}
-
-.ingredients-label {
-    color: #666;
-    margin-right: 8px;
-}
-
-.ingredient {
-    display: inline-block;
-    margin-right: 8px;
-    padding: 2px 6px;
-    background: #333;
-    border-radius: 4px;
-}
-
-.ingredient.missing {
-    color: #f44336;
-}
-
-.craft-btn {
-    width: 100%;
-    padding: 12px;
-    background: linear-gradient(135deg, #4CAF50, #388E3C);
-    border: none;
-    border-radius: 8px;
-    color: white;
-    font-size: 14px;
-    font-weight: bold;
-    cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.craft-btn:hover:not(.disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
-}
-
-.craft-btn.disabled {
-    background: #555;
-    cursor: not-allowed;
-}
-
-.empty-message {
-    text-align: center;
-    padding: 40px;
-    color: #666;
 }
 
 /* ======================== */

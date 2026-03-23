@@ -24,8 +24,6 @@ const endpoints = {
     
     // Предметы
     useItem: { endpoint: '/game/inventory/use-item', method: 'POST' },
-    craft: { endpoint: '/game/crafting', method: 'POST' },
-    recipes: { endpoint: '/game/crafting/recipes', method: 'GET' },
     
     // Боссы
     attackBoss: { endpoint: '/game/bosses/attack-boss', method: 'POST' },
@@ -78,7 +76,6 @@ const CACHE_TTL = 30000; // 30 секунд
 const cacheInvalidationMap = {
     'purchase': ['profile', 'inventory'],
     'useItem': ['inventory', 'profile'],
-    'craft': ['inventory', 'profile'],
     'clanJoin': ['clan', 'profile'],
     'clanLeave': ['clan', 'profile'],
     'marketBuy': ['inventory', 'profile', 'marketList'],

@@ -72,6 +72,10 @@
                         <div class="bar energy-bar" id="energy-bar" style="width: 100%"></div>
                         <span class="bar-text">⚡ <span id="energy-text">100/100</span></span>
                     </div>
+                    <div class="stat-bar">
+                        <div class="bar exp-bar" id="exp-bar" style="width: 0%"></div>
+                        <span class="bar-text">⭐ <span id="exp-text">0/500</span></span>
+                    </div>
                     <div class="energy-timer" id="energy-timer" style="display: none;"></div>
                 </div>
             </header>
@@ -188,14 +192,6 @@
                     <span>🎒</span>
                     <label>Инвентарь</label>
                 </button>
-                <button class="nav-btn" data-screen="craft">
-                    <span>🔨</span>
-                    <label>Крафт</label>
-                </button>
-                <button class="nav-btn" data-screen="base">
-                    <span>🏚️</span>
-                    <label>База</label>
-                </button>
                 <button class="nav-btn" data-screen="clan">
                     <span>👥</span>
                     <label>Клан</label>
@@ -240,7 +236,6 @@
             <header class="screen-header">
                 <button class="back-btn" data-screen="main">← Назад</button>
                 <h2>🎒 Инвентарь</h2>
-                <button class="action-btn small" data-screen="craft">🔨</button>
             </header>
             <!-- Панель управления инвентарём -->
             <div class="inventory-controls">
@@ -278,22 +273,6 @@
             </div>
         </div>
 
-        <!-- Экран крафта -->
-        <div id="craft-screen" class="screen">
-            <header class="screen-header">
-                <button class="back-btn" data-screen="main">← Назад</button>
-                <h2>🔨 Крафт</h2>
-            </header>
-            <div class="craft-content">
-                <div class="craft-info">
-                    <span>⚡ Энергия: <span id="craft-energy">0</span></span>
-                </div>
-                <div class="recipes-list" id="recipes-list">
-                    <!-- Рецепты будут добавлены через JS -->
-                </div>
-            </div>
-        </div>
-
         <!-- Экран боссов -->
         <div id="bosses-screen" class="screen">
             <header class="screen-header">
@@ -318,7 +297,7 @@
         <!-- Экран боя с боссом -->
         <div id="boss-fight-screen" class="screen">
             <header class="screen-header">
-                <button class="back-btn" data-screen="bosses">← К боссам</button>
+                <button class="back-btn" data-screen="main">← Назад</button>
             </header>
             <div class="boss-fight-content">
                 <div class="boss-display" id="boss-display">
@@ -355,7 +334,24 @@
                         <span class="btn-text">Атаковать</span>
                         <span class="btn-cost">-1 ⚡</span>
                     </button>
+                    <button class="action-btn weapon-btn" id="select-weapon-btn">
+                        <span class="btn-icon">🔪</span>
+                        <span class="btn-text">Выбрать оружие</span>
+                        <span class="btn-cost">-1 оружие</span>
+                    </button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Экран выбора оружия для боя -->
+        <div id="weapon-select-screen" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" data-screen="boss-fight">← Назад</button>
+                <h2>🔪 Выбор оружия</h2>
+            </header>
+            <div class="weapon-select-content">
+                <p class="weapon-info">Выберите оружие для атаки. Оружие будет использовано и исчезнет из инвентаря!</p>
+                <div class="weapon-list" id="weapon-list"></div>
             </div>
         </div>
 
@@ -420,45 +416,6 @@
                 </div>
                 <div class="rating-list" id="rating-list">
                     <!-- Рейтинг будет добавлен через JS -->
-                </div>
-            </div>
-        </div>
-
-        <!-- Экран базы -->
-        <div id="base-screen" class="screen">
-            <header class="screen-header">
-                <button class="back-btn" data-screen="main">← Назад</button>
-                <h2>🏚️ База</h2>
-            </header>
-            <div class="base-content">
-                <!-- Бонусы базы -->
-                <div class="base-bonuses" id="base-bonuses">
-                    <h3>Бонусы базы</h3>
-                    <div class="bonuses-grid" id="bonuses-grid">
-                        <!-- Бонусы будут добавлены через JS -->
-                    </div>
-                </div>
-
-                <!-- Постройки игрока -->
-                <div class="player-buildings" id="player-buildings">
-                    <h3>Мои постройки</h3>
-                    <div class="buildings-list" id="buildings-list">
-                        <!-- Постройки будут добавлены через JS -->
-                    </div>
-                </div>
-
-                <!-- Доступные постройки -->
-                <div class="available-buildings">
-                    <h3>Строительство</h3>
-                    <div class="build-tabs">
-                        <button class="build-tab active" data-tab="all">Все</button>
-                        <button class="build-tab" data-tab="structure">Структуры</button>
-                        <button class="build-tab" data-tab="production">Производство</button>
-                        <button class="build-tab" data-tab="living">Жильё</button>
-                    </div>
-                    <div class="available-list" id="available-list">
-                        <!-- Доступные постройки будут добавлены через JS -->
-                    </div>
                 </div>
             </div>
         </div>

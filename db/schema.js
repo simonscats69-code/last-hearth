@@ -37,7 +37,6 @@ async function createTables() {
             equipment JSONB DEFAULT '{}',
             coins INTEGER DEFAULT 0,
             stars INTEGER DEFAULT 0,
-            base JSONB DEFAULT '{"level": 1, "buildings": [], "storage": {}}',
             clan_id INTEGER,
             clan_role VARCHAR(50) DEFAULT 'member',
             total_actions INTEGER DEFAULT 0,
@@ -531,56 +530,6 @@ async function createTables() {
         );
     `);
 
-    // Таблица зданий
-    await query(`
-        CREATE TABLE IF NOT EXISTS buildings (
-            id SERIAL PRIMARY KEY,
-            code VARCHAR(50) UNIQUE NOT NULL,
-            name VARCHAR(255) NOT NULL,
-            description TEXT,
-            type VARCHAR(50) NOT NULL,
-            max_level INTEGER DEFAULT 10,
-            base_cost_coins INTEGER DEFAULT 100,
-            base_cost_resources JSONB DEFAULT '{}',
-            bonuses JSONB DEFAULT '[]',
-            icon VARCHAR(50),
-            color VARCHAR(20),
-            required_level INTEGER DEFAULT 1,
-            required_building_code VARCHAR(50)
-        );
-    `);
-
-    // Таблица построек игроков
-    await query(`
-        CREATE TABLE IF NOT EXISTS player_buildings (
-            id SERIAL PRIMARY KEY,
-            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
-            building_code VARCHAR(50) NOT NULL,
-            level INTEGER DEFAULT 1,
-            is_active BOOLEAN DEFAULT true,
-            built_at TIMESTAMP DEFAULT NOW(),
-            last_upgraded_at TIMESTAMP DEFAULT NOW(),
-            UNIQUE(player_id, building_code)
-        );
-    `);
-
-    // Таблица рецептов крафта
-    await query(`
-        CREATE TABLE IF NOT EXISTS crafting_recipes (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            description TEXT,
-            result_item_id INTEGER REFERENCES items(id),
-            result_quantity INTEGER DEFAULT 1,
-            ingredients JSONB NOT NULL,
-            required_level INTEGER DEFAULT 1,
-            required_base_building VARCHAR(50),
-            craft_time INTEGER DEFAULT 5,
-            rarity VARCHAR(20) DEFAULT 'common',
-            UNIQUE(name, result_item_id)
-        );
-    `);
-
     // Создание индексов для players
     await query(`CREATE INDEX IF NOT EXISTS idx_players_telegram_id ON players(telegram_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_players_clan_id ON players(clan_id)`);
@@ -627,9 +576,6 @@ async function createTables() {
     // Индексы для pvp_cooldowns
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_player ON pvp_cooldowns(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_expires ON pvp_cooldowns(expires_at)`);
-
-    // Индексы для player_buildings
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_buildings_player ON player_buildings(player_id)`);
 
     // Индексы для player_boss_progress
     await query(`CREATE INDEX IF NOT EXISTS idx_player_boss_progress_player ON player_boss_progress(player_id)`);
@@ -718,7 +664,7 @@ async function runMigrations() {
     
     const tablesWithPlayerId = [
         'boss_keys', 'boss_mastery', 'player_boss_progress', 'boss_sessions',
-        'player_achievements', 'daily_tasks', 'pvp_cooldowns', 'player_buildings'
+        'player_achievements', 'daily_tasks', 'pvp_cooldowns'
     ];
     
     for (const table of tablesWithPlayerId) {
@@ -856,6 +802,9 @@ async function runMigrations() {
 
     // Миграции для колеса удачи
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_wheel_spin TIMESTAMP`);
+    
+    // Миграции для бонусного урона по боссам
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS boss_damage INTEGER DEFAULT 0`);
 
     // Миграция: исправление типов данных для больших Telegram ID
     // В Supabase нужно отключить RLS или удалить политики перед изменением
@@ -866,7 +815,6 @@ async function runMigrations() {
     // ALTER TABLE player_achievements ALTER COLUMN player_id TYPE BIGINT;
     // ALTER TABLE player_tasks ALTER COLUMN player_id TYPE BIGINT;
     // ALTER TABLE player_cooldowns ALTER COLUMN player_id TYPE BIGINT;
-    // ALTER TABLE player_base_buildings ALTER COLUMN player_id TYPE BIGINT;
 
     // Миграция: преобразование referred_by из BIGINT в INTEGER (для существующих данных)
     await query(`
@@ -1002,11 +950,6 @@ async function runMigrations() {
         ['clans', 'chk_clans_experience', 'CHECK (experience >= 0)', ['experience']],
         ['clans', 'chk_clans_coins', 'CHECK (coins >= 0)', ['coins']],
         ['clans', 'chk_clans_total_members', 'CHECK (total_members >= 1)', ['total_members']],
-        ['buildings', 'chk_buildings_max_level', 'CHECK (max_level >= 1)', ['max_level']],
-        ['buildings', 'chk_buildings_base_cost', 'CHECK (base_cost_coins >= 0)', ['base_cost_coins']],
-        ['crafting_recipes', 'chk_crafting_result_quantity', 'CHECK (result_quantity >= 1)', ['result_quantity']],
-        ['crafting_recipes', 'chk_crafting_required_level', 'CHECK (required_level >= 1)', ['required_level']],
-        ['crafting_recipes', 'chk_crafting_craft_time', 'CHECK (craft_time >= 1)', ['craft_time']],
         ['daily_tasks', 'chk_daily_tasks_target', 'CHECK (target_value >= 1)', ['target_value']],
         ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)', ['current_value']],
         ['market_listings', 'chk_market_price', 'CHECK (price >= 0)', ['price']],
@@ -1038,10 +981,15 @@ async function runMigrations() {
             END $do$
         `);
     }
+
+    // Миграция: удаление таблиц баз и крафта (системы удалены)
+    await query(`DROP TABLE IF EXISTS player_buildings CASCADE`);
+    await query(`DROP TABLE IF EXISTS buildings CASCADE`);
+    await query(`DROP TABLE IF EXISTS crafting_recipes CASCADE`);
 }
 
 /**
- * Заполнение базовых данных (локации, сеты, боссы, предметы, здания, рецепты)
+ * Заполнение базовых данных (локации, сеты, боссы, предметы)
  * Вызывается внутри createTables
  */
 async function seedDatabase() {
@@ -1103,16 +1051,16 @@ async function seedDatabase() {
 
     // Предметы
     const items = [
-        { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 10, icon: '🥫' },
-        { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 15, icon: '💧' },
-        { name: 'Спирт', description: 'Медицинский спирт', type: 'food', category: 'consumable', rarity: 'uncommon', price: 25, icon: '🍺' },
-        { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 8, icon: '🍪' },
-        { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 20, icon: '⚡' },
-        { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 20, icon: '🩹' },
-        { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 50, icon: '💊' },
-        { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉' },
-        { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️' },
-        { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊' },
+        { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 10, icon: '🥫', stats: { energy: 5 } },
+        { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 15, icon: '💧', stats: { energy: 3 } },
+        { name: 'Спирт', description: 'Медицинский спирт', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 25, icon: '🍺', stats: { health: 15 } },
+        { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 8, icon: '🍪', stats: { energy: 2 } },
+        { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 20, icon: '⚡', stats: { energy: 10 } },
+        { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 20, icon: '🩹', stats: { health: 10 } },
+        { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 50, icon: '💊', stats: { health: 30 } },
+        { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 1 } },
+        { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 2 } },
+        { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 15 } },
         { name: 'Нож', description: 'Простой нож выживания', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 5 }, durability: 50, max_durability: 50, price: 30, icon: '🔪' },
         { name: 'Бита', description: 'Бейсбольная бита', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 8 }, durability: 30, max_durability: 30, price: 25, icon: '🏏' },
         { name: 'Пистолет', description: 'Травматический пистолет', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', stats: { damage: 20, ammo: 8 }, durability: 100, max_durability: 100, price: 200, icon: '🔫' },
@@ -1132,16 +1080,16 @@ async function seedDatabase() {
         { name: 'Химикаты', description: 'Различные химикаты', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 30, icon: '🧪' },
         { name: 'Патроны', description: 'Патроны для оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '📦' },
         { name: 'Ключ от босса', description: 'Ключ для разблокировки босса', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️' },
-        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 500, icon: '🧠' },
-        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, icon: '💥' },
-        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 800, icon: '🏥' },
-        { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, icon: '🛡️' },
+        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 500, icon: '🧠', stats: { energy: 25 } },
+        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, icon: '💥', stats: { energy: 30 } },
+        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 800, icon: '🏥', stats: { health: 50 } },
+        { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, icon: '🛡️', stats: { radiation_cure: 5 } },
         { name: 'Плазменный пистолет', description: 'Экспериментальное оружие', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 80, ammo: 12 }, durability: 250, max_durability: 250, price: 2500, icon: '🔮' },
         { name: 'Экзо-костюм', description: 'Тяжёлая броня', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, icon: '🤖' },
         { name: 'Титан', description: 'Редкий металл для крафта', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 100, icon: '🔶' },
         { name: 'Уран', description: 'Радиоактивный материал', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 150, icon: '☢️' },
-        { name: 'Сыворотка мутанта', description: 'Даёт сверхспособности', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬' },
-        { name: 'Эликсир бессмертия', description: 'Полное воскрешение', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, icon: '⭐' },
+        { name: 'Сыворотка мутанта', description: 'Даёт сверхспособности', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬', stats: { energy: 50 } },
+        { name: 'Эликсир бессмертия', description: 'Полное воскрешение', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, icon: '⭐', stats: { health: 100 } },
         { name: 'Лазерная винтовка', description: 'Оружие из будущего', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', stats: { damage: 150, ammo: 20 }, durability: 500, max_durability: 500, price: 10000, icon: '⚡' },
         { name: 'Броня стражей', description: 'Легендарная броня', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, icon: '👑' },
         { name: 'Кристалл силы', description: 'Осколок метеорита', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 500, icon: '💎' },
@@ -1157,51 +1105,6 @@ async function seedDatabase() {
             item.stackable !== false, item.slot || null, JSON.stringify(item.stats || {}),
             item.durability || 100, item.max_durability || 100, item.price, item.icon
         ]);
-    }
-
-    // Здания
-    const buildings = [
-        { code: 'wall', name: 'Стена', description: 'Защитная стена вашей базы', type: 'structure', max_level: 10, base_cost_coins: 50, base_cost_resources: { scrap: 10 }, bonuses: [{ storage: 5 }], icon: '🧱', color: '#8B4513', required_level: 1 },
-        { code: 'floor', name: 'Пол', description: 'Укреплённый пол базы', type: 'structure', max_level: 10, base_cost_coins: 30, base_cost_resources: { scrap: 5 }, bonuses: [{ storage: 2 }], icon: '⬜', color: '#808080', required_level: 1 },
-        { code: 'storage', name: 'Склад', description: 'Увеличивает лимит инвентаря', type: 'production', max_level: 10, base_cost_coins: 100, base_cost_resources: { scrap: 20, wood: 10 }, bonuses: [{ inventory_limit: 20 }], icon: '📦', color: '#FFD700', required_level: 1 },
-        { code: 'workbench', name: 'Верстак', description: 'Позволяет крафтить сложные предметы', type: 'production', max_level: 10, base_cost_coins: 150, base_cost_resources: { scrap: 30, wood: 15 }, bonuses: [{ craft_level: 1 }], icon: '🔧', color: '#C0C0C0', required_level: 1 },
-        { code: 'forge', name: 'Кузня', description: 'Ремонт и создание оружия', type: 'production', max_level: 10, base_cost_coins: 200, base_cost_resources: { scrap: 50, iron: 20 }, bonuses: [{ repair_bonus: 10, weapon_craft: 1 }], icon: '⚒️', color: '#FF4500', required_level: 3 },
-        { code: 'lab', name: 'Химлаборатория', description: 'Создание медикаментов', type: 'production', max_level: 10, base_cost_coins: 250, base_cost_resources: { scrap: 40, chemicals: 15 }, bonuses: [{ medicine_craft: 1 }], icon: '🧪', color: '#00FF00', required_level: 5 },
-        { code: 'living_room', name: 'Жилая комната', description: 'Пассивная регенерация здоровья', type: 'living', max_level: 10, base_cost_coins: 80, base_cost_resources: { wood: 20, cloth: 10 }, bonuses: [{ health_regen: 1 }], icon: '🛏️', color: '#4169E1', required_level: 2 },
-        { code: 'farm', name: 'Ферма', description: 'Выращивание еды', type: 'production', max_level: 10, base_cost_coins: 120, base_cost_resources: { wood: 15, seeds: 5 }, bonuses: [{ food_production: 1 }], icon: '🌾', color: '#32CD32', required_level: 1 }
-    ];
-    for (const b of buildings) {
-        await query(`
-            INSERT INTO buildings (code, name, description, type, max_level, base_cost_coins, base_cost_resources, bonuses, icon, color, required_level)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            ON CONFLICT (code) DO NOTHING
-        `, [b.code, b.name, b.description, b.type, b.max_level, b.base_cost_coins, JSON.stringify(b.base_cost_resources), JSON.stringify(b.bonuses), b.icon, b.color, b.required_level]);
-    }
-
-    // Рецепты крафта
-    const recipes = [
-        { name: 'Нож', description: 'Простой нож из металлолома', result_item_id: 1, result_quantity: 1, ingredients: [{ item_id: 21, quantity: 3 }], required_level: 1, craft_time: 5, rarity: 'common' },
-        { name: 'Бита', description: 'Бейсбольная бита', result_item_id: 2, result_quantity: 1, ingredients: [{ item_id: 22, quantity: 2 }], required_level: 1, craft_time: 5, rarity: 'common' },
-        { name: 'Кожаная куртка', description: 'Простая защита', result_item_id: 17, result_quantity: 1, ingredients: [{ item_id: 23, quantity: 5 }], required_level: 1, craft_time: 10, rarity: 'common' },
-        { name: 'Бинт', description: 'Бинт из ткани', result_item_id: 6, result_quantity: 2, ingredients: [{ item_id: 23, quantity: 3 }], required_level: 1, craft_time: 3, rarity: 'common' },
-        { name: 'Пистолет', description: 'Травматический пистолет', result_item_id: 13, result_quantity: 1, ingredients: [{ item_id: 21, quantity: 5 }, { item_id: 28, quantity: 2 }], required_level: 5, craft_time: 30, rarity: 'uncommon' },
-        { name: 'Бронежилет', description: 'Военный бронежилет', result_item_id: 18, result_quantity: 1, ingredients: [{ item_id: 21, quantity: 10 }, { item_id: 23, quantity: 5 }], required_level: 10, craft_time: 45, rarity: 'rare' },
-        { name: 'Противогаз', description: 'Защита от радиации', result_item_id: 19, result_quantity: 1, ingredients: [{ item_id: 28, quantity: 3 }, { item_id: 17, quantity: 2 }], required_level: 8, craft_time: 20, rarity: 'uncommon' },
-        { name: 'Аптечка', description: 'Полная аптечка', result_item_id: 7, result_quantity: 1, ingredients: [{ item_id: 6, quantity: 3 }, { item_id: 22, quantity: 2 }], required_level: 5, craft_time: 15, rarity: 'uncommon' },
-        { name: 'Автомат', description: 'Автоматическое оружие', result_item_id: 14, result_quantity: 1, ingredients: [{ item_id: 13, quantity: 1 }, { item_id: 21, quantity: 8 }, { item_id: 28, quantity: 3 }], required_level: 15, craft_time: 60, rarity: 'rare' },
-        { name: 'Дробовик', description: 'Охотничий дробовик', result_item_id: 15, result_quantity: 1, ingredients: [{ item_id: 21, quantity: 6 }, { item_id: 17, quantity: 2 }], required_level: 12, craft_time: 45, rarity: 'rare' },
-        { name: 'Армейская каска', description: 'Защита головы', result_item_id: 20, result_quantity: 1, ingredients: [{ item_id: 21, quantity: 4 }, { item_id: 23, quantity: 2 }], required_level: 8, craft_time: 20, rarity: 'uncommon' },
-        { name: 'Антидот', description: 'Лекарство от инфекций', result_item_id: 8, result_quantity: 1, ingredients: [{ item_id: 22, quantity: 3 }, { item_id: 2, quantity: 2 }], required_level: 10, craft_time: 25, rarity: 'rare' },
-        { name: 'Антирадин', description: 'Препарат от радиации', result_item_id: 9, result_quantity: 1, ingredients: [{ item_id: 22, quantity: 5 }, { item_id: 19, quantity: 1 }], required_level: 15, craft_time: 30, rarity: 'rare' },
-        { name: 'Снайперка', description: 'Снайперская винтовка', result_item_id: 16, result_quantity: 1, ingredients: [{ item_id: 21, quantity: 15 }, { item_id: 28, quantity: 5 }, { item_id: 22, quantity: 3 }], required_level: 25, craft_time: 120, rarity: 'epic' },
-        { name: 'Патроны', description: 'Патроны для оружия', result_item_id: 28, result_quantity: 10, ingredients: [{ item_id: 21, quantity: 2 }], required_level: 3, craft_time: 10, rarity: 'uncommon' }
-    ];
-    for (const r of recipes) {
-        await query(`
-            INSERT INTO crafting_recipes (name, description, result_item_id, result_quantity, ingredients, required_level, craft_time, rarity)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (name, result_item_id) DO NOTHING
-        `, [r.name, r.description, r.result_item_id, r.result_quantity, JSON.stringify(r.ingredients), r.required_level, r.craft_time, r.rarity]);
     }
 }
 

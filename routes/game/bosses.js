@@ -81,8 +81,9 @@ function calculateDamageBonus(bossId, masteries) {
 function calculateDamage(bossId, player, masteries = []) {
     const { weaponBonus, setBonus } = getEquipmentBonuses(player);
     const killBonus = calculateDamageBonus(bossId, masteries);
-
-    return Math.floor(1 + killBonus + (player.level || 1) + weaponBonus + setBonus);
+    // Базовый урон + бонус за level (boss_damage) + урон от оружия + бонус сета
+    const levelDamage = player.boss_damage || player.level || 1;
+    return Math.floor(1 + killBonus + levelDamage + weaponBonus + setBonus);
 }
 
 function getNextBossId(bossId) {
@@ -758,6 +759,222 @@ router.post('/attack-boss', async (req, res) => {
         return handleError(res, error, 'solo_attack');
     } finally {
         client.release();
+    }
+});
+
+/**
+ * Атака босса с использованием оружия из инвентаря
+ * Оружие тратится после использования
+ * POST /bosses/attack-with-weapon
+ */
+router.post('/attack-with-weapon', async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const bossId = Number(req.body?.boss_id);
+        const itemIndex = Number(req.body?.item_index);
+        const playerId = req.player.id;
+
+        if (!validateBossId(bossId)) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
+        }
+
+        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный индекс предмета', code: 'INVALID_ITEM_INDEX' });
+        }
+
+        await client.query('BEGIN');
+
+        try {
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            if (!activeBattle || activeBattle.type !== 'solo' || activeBattle.boss_id !== bossId) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Сначала начните соло-бой с этим боссом',
+                    code: 'BOSS_NOT_STARTED'
+                });
+            }
+
+            const playerResult = await client.query(`
+                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
+            `, [playerId]);
+
+            const player = playerResult.rows[0];
+
+            if (player.energy < 1) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Недостаточно энергии',
+                    code: 'INSUFFICIENT_ENERGY',
+                    energy: player.energy,
+                    energy_required: 1
+                });
+            }
+
+            if (player.health <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Вы мертвы. Нельзя атаковать босса.',
+                    code: 'PLAYER_DEAD'
+                });
+            }
+
+            const inventory = safeJsonParse(player.inventory, []);
+            
+            if (itemIndex >= inventory.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Предмет не найден в инвентаре',
+                    code: 'ITEM_NOT_FOUND'
+                });
+            }
+
+            const weapon = inventory[itemIndex];
+            
+            if (weapon.type !== 'weapon') {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Это не оружие',
+                    code: 'NOT_WEAPON'
+                });
+            }
+
+            const weaponDamage = weapon.damage || 0;
+            const weaponName = weapon.name;
+
+            // Удаляем оружие из инвентаря
+            const newInventory = inventory.filter((_, i) => i !== itemIndex);
+
+            const masteries = await getBossMasteries(client, playerId);
+            const levelDamage = player.boss_damage || player.level || 1;
+            const baseDamage = 1 + levelDamage;
+            const damage = baseDamage + weaponDamage;
+
+            const newHp = Math.max(0, activeBattle.boss.hp - damage);
+
+            await client.query(`
+                UPDATE players
+                SET energy = GREATEST(0, energy - 1),
+                    inventory = $1,
+                    last_energy_update = NOW()
+                WHERE telegram_id = $2
+                RETURNING energy
+            `, [JSON.stringify(newInventory), playerId]);
+
+            await client.query(`
+                UPDATE player_boss_progress
+                SET current_hp = $1, last_attack = NOW()
+                WHERE player_id = $2 AND boss_id = $3
+            `, [newHp, playerId, bossId]);
+
+            let killed = false;
+            let rewards = null;
+            let mastery = masteries.find((m) => m.boss_id === bossId)?.kills || 0;
+
+            if (newHp <= 0) {
+                killed = true;
+
+                const boss = await getBossById(client, bossId);
+                rewards = {
+                    coins: boss.reward_coins || 0,
+                    experience: boss.reward_experience || 0
+                };
+
+                await client.query(`
+                    UPDATE players
+                    SET coins = coins + $1,
+                        experience = experience + $2,
+                        boss_kills = boss_kills + 1
+                    WHERE telegram_id = $3
+                `, [rewards.coins, rewards.experience, playerId]);
+
+                await client.query(`
+                    INSERT INTO player_boss_mastery (player_id, boss_id, kills, last_kill)
+                    VALUES ($1, $2, 1, NOW())
+                    ON CONFLICT (player_id, boss_id)
+                    DO UPDATE SET kills = player_boss_mastery.kills + 1, last_kill = NOW()
+                `, [playerId, bossId]);
+
+                await clearPlayerActiveBattle(client, playerId);
+            }
+
+            await client.query('COMMIT');
+
+            logger.info(`[bosses] Атака с оружием`, {
+                playerId,
+                bossId,
+                weaponName,
+                weaponDamage,
+                damage,
+                newHp,
+                killed
+            });
+
+            const playerAfter = await queryOne(`SELECT energy FROM players WHERE telegram_id = $1`, [playerId]);
+
+            res.json({
+                success: true,
+                data: {
+                    boss_hp: newHp,
+                    boss_max_hp: activeBattle.boss.max_health,
+                    damage: damage,
+                    weapon_used: weaponName,
+                    weapon_damage: weaponDamage,
+                    energy: playerAfter?.energy || 0,
+                    killed,
+                    rewards
+                }
+            });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+    } catch (error) {
+        return handleError(res, error, 'attack_with_weapon');
+    } finally {
+        client.release();
+    }
+});
+
+/**
+ * Получение списка оружия игрока для атаки на босса
+ * GET /bosses/weapons
+ */
+router.get('/weapons', async (req, res) => {
+    try {
+        const player = req.player;
+        const inventory = safeJsonParse(player.inventory, []);
+        
+        const weapons = inventory
+            .map((item, index) => {
+                if (item.type === 'weapon') {
+                    return {
+                        index,
+                        id: item.id,
+                        name: item.name,
+                        damage: item.damage || 0,
+                        rarity: item.rarity || 'common',
+                        icon: item.icon || '🔪'
+                    };
+                }
+                return null;
+            })
+            .filter(Boolean);
+
+        res.json({
+            success: true,
+            weapons,
+            count: weapons.length
+        });
+
+    } catch (error) {
+        return handleError(res, error, 'list_weapons');
     }
 });
 

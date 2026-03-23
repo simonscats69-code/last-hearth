@@ -182,13 +182,11 @@ router.use('/wheel', wheelRouter);
 
 // Алиасы для обратной совместимости
 router.use('/locations', worldRouter);
-router.use('/base', worldRouter);
 router.use('/profile', playerRouter);
 router.use('/achievements', playerRouter);
 router.use('/referral', playerRouter);
 router.use('/energy', playerRouter);
 router.use('/inventory', itemsRouter);
-router.use('/crafting', itemsRouter);
 router.use('/purchase', marketRouter);
 
 // Экспорт

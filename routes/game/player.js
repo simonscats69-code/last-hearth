@@ -116,7 +116,6 @@ router.get('/', async (req, res) => {
 
         const inventory = normalizeInventory(player.inventory);
         const equipment = safeJsonParse(player.equipment, {});
-        const base = safeJsonParse(player.base, {});
         const status = buildPlayerStatus(player);
 
         logger.info(`[player] Просмотр профиля`, {
@@ -162,7 +161,6 @@ router.get('/', async (req, res) => {
                 equipment: equipment,
                 coins: player.coins,
                 stars: player.stars,
-                base: base,
                 boss_keys: keys,
                 stats_ext: {
                     total_actions: player.total_actions,

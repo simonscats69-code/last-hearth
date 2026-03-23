@@ -428,6 +428,11 @@ async function searchLoot() {
                 refreshPlayerEnergyUI();
             }
             
+            // Обновляем профиль после получения XP
+            if (result.exp_gained !== undefined) {
+                await loadProfile();
+            }
+            
             // Обновляем радиацию после поиска (всегда, не только при увеличении)
             if (result.radiation) {
                 if (!gameState.player.status) gameState.player.status = {};
@@ -530,124 +535,8 @@ async function checkPlayerStatus() {
 }
 
 // ============================================================================
-// СИСТЕМА КРАФТА
+// ИСПОЛЬЗОВАНИЕ ПРЕДМЕТОВ
 // ============================================================================
-
-/**
- * Загрузка рецептов крафта
- */
-async function loadRecipes() {
-    try {
-        const data = await apiRequest('/api/game/crafting/recipes');
-        
-        // Обрабатываем разные форматы ответа
-        const recipes = data?.data?.recipes || data?.recipes || [];
-        gameState.recipes = recipes;
-        
-        // Обновляем энергию
-        const craftEnergy = document.getElementById('craft-energy');
-        if (craftEnergy && gameState.player) {
-            craftEnergy.textContent = gameState.player.status?.energy || 0;
-        }
-        
-        renderRecipes(recipes);
-    } catch (error) {
-        console.error('Recipes error:', error);
-        
-        // При ошибке показываем пустой список
-        gameState.recipes = [];
-        const list = document.getElementById('recipes-list');
-        if (list) {
-            list.innerHTML = '<div class="empty-message">Не удалось загрузить рецепты</div>';
-        }
-        
-        // Показываем уведомление об ошибке
-        showNotification('Ошибка загрузки рецептов', 'error');
-    }
-}
-
-/**
- * Отрисовка рецептов крафта
- */
-function renderRecipes(recipes) {
-    const list = document.getElementById('recipes-list');
-    if (!list) return;
-    list.innerHTML = '';
-    
-    if (!recipes || recipes.length === 0) {
-        list.innerHTML = '<div class="empty-message">Нет доступных рецептов</div>';
-        return;
-    }
-    
-    for (const recipe of recipes) {
-        const item = document.createElement('div');
-        item.className = `recipe-item ${recipe.can_craft ? '' : 'locked'}`;
-        
-        // Формируем строку ингредиентов
-        const ingredientsHtml = recipe.ingredients.map(ing => {
-            const have = ing.have || 0;
-            const need = ing.quantity;
-            const hasEnough = have >= need;
-            return `<span class="ingredient ${hasEnough ? '' : 'missing'}">${ing.icon || ''} ${have}/${need}</span>`;
-        }).join('');
-        
-        item.innerHTML = `
-            <div class="recipe-header">
-                <span class="recipe-icon">${recipe.icon}</span>
-                <div class="recipe-info">
-                    <div class="recipe-name">${recipe.name}</div>
-                    <div class="recipe-level">⬆️ Требуется уровень: ${recipe.required_level}</div>
-                </div>
-                <div class="recipe-result">
-                    <span>→ ${recipe.icon} x${recipe.result_quantity}</span>
-                </div>
-            </div>
-            <div class="recipe-ingredients">
-                <span class="ingredients-label">Ингредиенты:</span>
-                ${ingredientsHtml}
-            </div>
-            <button class="craft-btn ${recipe.can_craft ? '' : 'disabled'}" 
-                    data-recipe-id="${recipe.id}" ${!recipe.can_craft ? 'disabled' : ''}>
-                ${recipe.can_craft ? '🔨 Скрафтить (1 ⚡)' : '❌ Недостаточно материалов'}
-            </button>
-        `;
-        
-        // Обработчик крафта
-        const btn = item.querySelector('.craft-btn');
-        btn.addEventListener('click', () => craftItem(recipe.id));
-        
-        list.appendChild(item);
-    }
-}
-
-/**
- * Крафт предмета
- */
-async function craftItem(recipeId) {
-    if (!lockAction('crafting')) return;
-    try {
-        const data = await apiRequest('/api/game/crafting/', {
-            method: 'POST',
-            body: { recipe_id: recipeId }
-        });
-        
-        if (data.success) {
-            showModal('✅ Успех', data.message);
-            // Обновляем данные
-            if (gameState.player && data.new_energy !== undefined) {
-                gameState.player.energy = data.new_energy;
-            }
-            loadRecipes(); // Перезагружаем рецепты
-        } else {
-            showModal('❌ Ошибка', data.message);
-        }
-    } catch (error) {
-        console.error('Craft error:', error);
-        showModal('❌ Ошибка', 'Не удалось выполнить крафт');
-    } finally {
-        unlockAction('crafting');
-    }
-}
 
 /**
  * Использование предмета
@@ -1038,8 +927,138 @@ function startBossFight(boss) {
         attackSingleBtn.addEventListener('click', attackBoss);
     }
     
+    // Кнопка выбора оружия
+    const selectWeaponBtn = document.getElementById('select-weapon-btn');
+    if (selectWeaponBtn && !selectWeaponBtn.hasAttribute('data-handler')) {
+        selectWeaponBtn.setAttribute('data-handler', 'true');
+        selectWeaponBtn.addEventListener('click', openWeaponSelect);
+    }
+    
     // Показываем экран боя
     showScreen('boss-fight');
+}
+
+/**
+ * Загрузка списка оружия игрока
+ */
+async function loadWeapons() {
+    try {
+        const result = await apiRequest('/api/game/bosses/weapons');
+        
+        if (result.success) {
+            renderWeapons(result.weapons);
+        } else {
+            showNotification('Ошибка загрузки оружия', 'error');
+        }
+    } catch (error) {
+        console.error('Load weapons error:', error);
+        showNotification('Ошибка загрузки оружия', 'error');
+    }
+}
+
+/**
+ * Отрисовка списка оружия
+ */
+function renderWeapons(weapons) {
+    const list = document.getElementById('weapon-list');
+    if (!list) return;
+    
+    list.innerHTML = '';
+    
+    if (!weapons || weapons.length === 0) {
+        list.innerHTML = '<div class="empty-message">У вас нет оружия в инвентаре</div>';
+        return;
+    }
+    
+    for (const weapon of weapons) {
+        const item = document.createElement('div');
+        item.className = 'weapon-item';
+        item.dataset.index = weapon.index;
+        
+        item.innerHTML = `
+            <span class="weapon-icon">${weapon.icon}</span>
+            <div class="weapon-info">
+                <div class="weapon-name">${weapon.name}</div>
+                <div class="weapon-damage">Урон: +${weapon.damage}</div>
+            </div>
+            <span class="weapon-rarity ${weapon.rarity}">${weapon.rarity}</span>
+        `;
+        
+        item.addEventListener('click', () => attackWithWeapon(weapon.index));
+        list.appendChild(item);
+    }
+}
+
+/**
+ * Атака босса с использованием оружия из инвентаря
+ */
+async function attackWithWeapon(itemIndex) {
+    if (!gameState.currentBoss) return;
+    
+    if (actionLocks.attackBoss) return;
+    actionLocks.attackBoss = true;
+    
+    const status = gameState.player?.status;
+    if (!status || status.energy < 1) {
+        showModal('⚠️ Нет энергии', 'Подожди пока восстановится или купи за звёзды');
+        actionLocks.attackBoss = false;
+        return;
+    }
+    
+    try {
+        const result = await apiRequest('/api/game/bosses/attack-with-weapon', {
+            method: 'POST',
+            body: { 
+                boss_id: gameState.currentBoss.id,
+                item_index: itemIndex
+            }
+        });
+        
+        const log = document.getElementById('fight-log');
+        
+        if (result.success) {
+            showDamageAnimation();
+            
+            if (log) {
+                const damageText = document.createElement('p');
+                damageText.className = 'damage';
+                damageText.innerHTML = `<span class="hit">⚔️</span> Использовал <strong>${result.data.weapon_used}</strong>! Нанёс <strong>${result.data.damage}</strong> урона!`;
+                log.appendChild(damageText);
+                log.scrollTop = log.scrollHeight;
+            }
+            
+            const hpPercent = Math.max(0, Math.min(100, (result.data.boss_hp / result.data.boss_max_hp) * 100));
+            const bossHealthBar = document.getElementById('boss-health-bar');
+            const bossHealthText = document.getElementById('boss-health-text');
+            if (bossHealthBar) bossHealthBar.style.width = `${hpPercent}%`;
+            if (bossHealthText) bossHealthText.textContent = `${result.data.boss_hp}/${result.data.boss_max_hp}`;
+            
+            syncPlayerEnergyState(result.data.energy, gameState.player?.status?.max_energy);
+            refreshPlayerEnergyUI();
+            
+            if (result.data.killed) {
+                showModal('🎉 Победа!', `Босс повержён! Награда: ${result.data.rewards.coins} монет, ${result.data.rewards.experience} опыта`);
+                await loadBosses();
+                showScreen('bosses');
+            }
+        } else {
+            showNotification(result.error || 'Ошибка атаки', 'error');
+        }
+        
+    } catch (error) {
+        console.error('Attack with weapon error:', error);
+        showNotification('Ошибка атаки', 'error');
+    } finally {
+        actionLocks.attackBoss = false;
+    }
+}
+
+/**
+ * Открытие экрана выбора оружия
+ */
+async function openWeaponSelect() {
+    await loadWeapons();
+    showScreen('weapon-select');
 }
 
 /**
@@ -1696,177 +1715,6 @@ async function sendClanMessage() {
 }
 
 // ============================================================================
-// СИСТЕМА БАЗЫ
-// ============================================================================
-
-/**
- * Загрузка базы игрока
- */
-async function loadBase() {
-    try {
-        const baseData = await apiRequest('/api/game/base');
-        const buildingsData = await apiRequest('/api/game/base/buildings');
-        
-        renderBaseBonuses(baseData);
-        renderPlayerBuildings(baseData.buildings);
-        renderAvailableBuildings(buildingsData.buildings);
-        
-    } catch (error) {
-        console.error('Ошибка загрузки базы:', error);
-    }
-}
-
-/**
- * Отображение бонусов базы
- */
-function renderBaseBonuses(baseData) {
-    const bonusesGrid = document.getElementById('bonuses-grid');
-    if (!bonusesGrid) return;
-    const bonuses = baseData.total_bonuses || {};
-    
-    if (Object.keys(bonuses).length === 0) {
-        bonusesGrid.innerHTML = '<p class="no-bonuses">Постройте здания для получения бонусов</p>';
-        return;
-    }
-    
-    const bonusLabels = {
-        inventory_limit: 'Лимит инвентаря',
-        health_regen: 'Регенерация HP',
-        storage: 'Хранилище',
-        craft_level: 'Уровень крафта',
-        repair_bonus: 'Бонус ремонта',
-        weapon_craft: 'Крафт оружия',
-        medicine_craft: 'Крафт медикаментов',
-        food_production: 'Производство еды'
-    };
-    
-    const bonusIcons = {
-        inventory_limit: '🎒',
-        health_regen: '❤️+',
-        storage: '📦',
-        craft_level: '🔨',
-        repair_bonus: '🔧',
-        weapon_craft: '⚔️',
-        medicine_craft: '💊',
-        food_production: '🍞'
-    };
-    
-    bonusesGrid.innerHTML = Object.entries(bonuses).map(([key, value]) => `
-        <div class="bonus-item">
-            <span class="bonus-icon">${bonusIcons[key] || '✨'}</span>
-            <span class="bonus-name">${bonusLabels[key] || key}</span>
-            <span class="bonus-value">+${value}</span>
-        </div>
-    `).join('');
-}
-
-/**
- * Отображение построек игрока
- */
-function renderPlayerBuildings(buildings) {
-    const buildingsList = document.getElementById('buildings-list');
-    if (!buildingsList) return;
-    
-    if (!buildings || buildings.length === 0) {
-        buildingsList.innerHTML = '<p class="no-buildings">У вас пока нет построек</p>';
-        return;
-    }
-    
-    buildingsList.innerHTML = buildings.map(b => `
-        <div class="player-building-item" style="border-left: 4px solid ${b.color}">
-            <div class="building-header">
-                <span class="building-icon">${b.icon}</span>
-                <span class="building-name">${b.name}</span>
-                <span class="building-level">Уровень ${b.level}</span>
-            </div>
-            <div class="building-bonuses">
-                ${Object.entries(b.bonuses || {}).map(([key, value]) => 
-                    `<span class="bonus">+${value} ${key}</span>`
-                ).join('')}
-            </div>
-            ${b.level < b.max_level ? `
-                <button class="upgrade-btn" onclick="upgradeBuilding('${b.code}')">
-                    Улучшить (${b.upgrade_cost?.coins || 0}💰)
-                </button>
-            ` : '<span class="max-level">Макс. уровень</span>'}
-        </div>
-    `).join('');
-}
-
-/**
- * Отображение доступных построек
- */
-function renderAvailableBuildings(buildings) {
-    const availableList = getEl('available-list');
-    if (!availableList) return;
-    
-    if (!buildings || buildings.length === 0) {
-        availableList.innerHTML = '<p>Нет доступных построек</p>';
-        return;
-    }
-    
-    availableList.innerHTML = buildings.map((b) => renderAvailableBuildingCard(b, true)).join('');
-    
-    // Добавляем обработчики для табов
-    document.querySelectorAll('.build-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.build-tab').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-            filterBuildings(tab.dataset.tab, buildings);
-        });
-    });
-}
-
-/**
- * Фильтрация построек по типу
- */
-function filterBuildings(type, buildings) {
-    const availableList = getEl('available-list');
-    if (!availableList) return;
-    
-    const filtered = type === 'all' 
-        ? buildings 
-        : buildings.filter(b => b.type === type);
-    
-    if (filtered.length === 0) {
-        availableList.innerHTML = '<p>Нет построек этого типа</p>';
-        return;
-    }
-    
-    availableList.innerHTML = filtered.map((b) => renderAvailableBuildingCard(b, false)).join('');
-}
-
-/**
- * Постройка или улучшение здания
- */
-async function buildBuilding(buildingCode) {
-    try {
-        const result = await apiRequest('/api/game/base/build', {
-            method: 'POST',
-            body: { building_code: buildingCode }
-        });
-        
-        if (result.success) {
-            showModal('✅ Успех', result.message);
-            playSound('loot');
-            loadBase();
-            loadProfile();
-        } else {
-            showModal('❌ Ошибка', result.message);
-        }
-    } catch (error) {
-        console.error('Ошибка постройки:', error);
-    }
-}
-
-/**
- * Улучшение здания (алиас)
- */
-async function upgradeBuilding(buildingCode) {
-    return buildBuilding(buildingCode);
-}
-
-// ============================================================================
 // ВОССТАНОВЛЕНИЕ ЭНЕРГИИ
 // ============================================================================
 
@@ -2146,9 +1994,6 @@ window.searchLoot = searchLoot;
 window.moveToLocation = moveToLocation;
 window.updateEnergyDisplay = updateEnergyDisplay;
 window.checkPlayerStatus = checkPlayerStatus;
-window.loadRecipes = loadRecipes;
-window.renderRecipes = renderRecipes;
-window.craftItem = craftItem;
 window.useItem = useItem;
 window.loadInventory = loadInventory;
 window.renderInventory = renderInventory;
@@ -2157,6 +2002,10 @@ window.loadBosses = loadBosses;
 window.renderBosses = renderBosses;
 window.startBossFight = startBossFight;
 window.attackBoss = attackBoss;
+window.openWeaponSelect = openWeaponSelect;
+window.loadWeapons = loadWeapons;
+window.renderWeapons = renderWeapons;
+window.attackWithWeapon = attackWithWeapon;
 
 // =============================================================================
 // РЕЙДЫ БОССОВ (МУЛЬТИПЛЕЕР)
@@ -2335,13 +2184,6 @@ window.showClanSettings = showClanSettings;
 window.loadClanChat = loadClanChat;
 window.renderClanChat = renderClanChat;
 window.sendClanMessage = sendClanMessage;
-window.loadBase = loadBase;
-window.renderBaseBonuses = renderBaseBonuses;
-window.renderPlayerBuildings = renderPlayerBuildings;
-window.renderAvailableBuildings = renderAvailableBuildings;
-window.filterBuildings = filterBuildings;
-window.buildBuilding = buildBuilding;
-window.upgradeBuilding = upgradeBuilding;
 window.restoreEnergy = restoreEnergy;
 window.loadRating = loadRating;
 window.renderRating = renderRating;

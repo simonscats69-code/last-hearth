@@ -390,13 +390,15 @@ router.post('/attack-hit', async (req, res) => {
                     WHERE id = $2
                 `, [attackerId, battle_id]);
 
-                // Обновляем PvP статистику победителя
+                // Обновляем PvP статистику победителя и даём опыт
+                const pvpExpReward = 50; // 50 XP за победу в PvP
                 await query(`
                     UPDATE players 
                     SET pvp_wins = pvp_wins + 1,
-                        pvp_damage_dealt = pvp_damage_dealt + $1
-                    WHERE telegram_id = $2
-                `, [damage, attackerId]);
+                        pvp_damage_dealt = pvp_damage_dealt + $1,
+                        experience = experience + $2
+                    WHERE telegram_id = $3
+                `, [damage, pvpExpReward, attackerId]);
 
                 // Обновляем PvP статистику проигравшего
                 await query(`
