@@ -56,6 +56,10 @@ function safeRequire(path, name) {
 // Импорт роутеров (объединённые модули)
 const worldRouter = safeRequire('./world', 'world');
 const bossesRouter = safeRequire('./bosses', 'bosses');
+logger.info('[game] bossesRouter загружен:', bossesRouter ? 'OK' : 'NULL');
+if (bossesRouter?.stack) {
+    logger.info('[game] bosses routes:', bossesRouter.stack.map(r => r.route?.path).filter(Boolean));
+}
 const clansRouter = safeRequire('./clans', 'clans');
 const pvpRouter = safeRequire('./pvp', 'pvp');
 const playerRouter = safeRequire('./player', 'player');
