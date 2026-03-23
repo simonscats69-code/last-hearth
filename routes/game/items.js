@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { withPlayerLock, validateId, validateIndex, validateBoolean, validatePositiveInt, ok, fail, error, badRequest, guard, wrap, logPlayerAction, serializeJSONField, logger } = require('../../utils/serverApi');
+const { withPlayerLock, validateId, validateIndex, validateBoolean, validatePositiveInt, ok, fail, error, badRequest, guard, wrap, logPlayerAction, serializeJSONField, logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 
 /**
  * Улучшение предмета
@@ -673,7 +673,7 @@ router.get('/shop', async (req, res) => {
         
         res.json({
             success: true,
-            items: items.rows.map(item => {
+            items: items.map(item => {
                 let parsedStats = {};
                 if (item.stats) {
                     try {
