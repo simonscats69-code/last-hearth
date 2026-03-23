@@ -1401,34 +1401,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         startGame();
     }
-    
-    // Обработчик меню "Ещё"
-    const moreMenuBtn = document.getElementById('more-menu-btn');
-    const moreMenu = document.getElementById('more-menu');
-    if (moreMenuBtn && moreMenu) {
-        moreMenuBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            moreMenu.style.display = moreMenu.style.display === 'none' ? 'block' : 'none';
-        });
-        
-        // Закрыть меню при клике вне его
-        document.addEventListener('click', (e) => {
-            if (!moreMenuBtn.contains(e.target) && !moreMenu.contains(e.target)) {
-                moreMenu.style.display = 'none';
-            }
-        });
-        
-        // Обработчики для пунктов меню
-        moreMenu.querySelectorAll('.dropdown-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const screen = item.dataset.screen;
-                if (screen && typeof showScreen === 'function') {
-                    showScreen(screen);
-                }
-                moreMenu.style.display = 'none';
-            });
-        });
-    }
 });
 
 // ============================================================================

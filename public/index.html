@@ -184,10 +184,6 @@
 
             <!-- Нижняя навигация -->
             <nav class="bottom-nav">
-                <button class="nav-btn active" data-screen="main">
-                    <span>🏠</span>
-                    <label>Главная</label>
-                </button>
                 <button class="nav-btn" data-screen="inventory">
                     <span>🎒</span>
                     <label>Инвентарь</label>
@@ -196,25 +192,18 @@
                     <span>👥</span>
                     <label>Клан</label>
                 </button>
-                <button class="nav-btn" id="more-menu-btn" data-screen="main">
-                    <span>☰</span>
-                    <label>Ещё</label>
+                <button class="nav-btn" data-screen="shop">
+                    <span>🛒</span>
+                    <label>Магазин</label>
                 </button>
-            </nav>
-
-            <!-- Выпадающее меню "Ещё" -->
-            <div id="more-menu" class="dropdown-menu" style="display: none;">
-                <button class="dropdown-item" data-screen="shop">
-                    <span>🛒</span> Магазин
+                <button class="nav-btn" data-screen="achievements">
+                    <span>🏆</span>
+                    <label>Достижения</label>
                 </button>
-                <button class="dropdown-item" data-screen="achievements">
-                    <span>🏆</span> Достижения
+                <button class="nav-btn" data-screen="referral">
+                    <span>🎁</span>
+                    <label>Рефералы</label>
                 </button>
-
-                <button class="dropdown-item" data-screen="referral">
-                    <span>🎁</span> Рефералы
-                </button>
-            </div>
         </div>
 
         <!-- Экран карты -->
@@ -307,6 +296,12 @@
                         <div class="bar" id="boss-health-bar" style="width: 100%"></div>
                         <span id="boss-health-text">1000/1000</span>
                     </div>
+                </div>
+                
+                <!-- Таймер боя -->
+                <div class="boss-fight-timer" id="boss-fight-timer" style="display: none;">
+                    <span class="timer-label">⏱️ Осталось:</span>
+                    <span id="boss-timer-text">00:00:00</span>
                 </div>
                 
                 <div class="fight-log" id="fight-log">

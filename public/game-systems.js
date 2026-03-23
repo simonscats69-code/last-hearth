@@ -139,10 +139,15 @@ async function loadProfile() {
     
     // API возвращает { success: true, data: { ... } }
     // Нужно распаковать данные для удобного доступа
-    const data = response.data || response;
+    const data = response?.data || response;
+    
+    if (!data || typeof data !== 'object') {
+        console.error('Неверный формат ответа профиля:', response);
+        return;
+    }
     
     // Гарантируем наличие объекта статуса
-    if (!data.status) {
+    if (!data.status || typeof data.status !== 'object') {
         data.status = {};
     }
     
@@ -398,10 +403,12 @@ async function searchLoot() {
     }
     
     try {
-        const result = await apiRequest('/api/game/locations/search', {
+        const response = await apiRequest('/api/game/world/search', {
             method: 'POST',
             body: {}
         });
+        
+        const result = response?.data || response;
         
         if (result.success) {
             // Анимация лута если предмет найден
@@ -472,20 +479,21 @@ async function searchLoot() {
  */
 async function moveToLocation(locationId) {
     try {
-        const response = await apiRequest('/api/game/locations/move', {
+        const response = await apiRequest('/api/game/world/move', {
             method: 'POST',
             body: { location_id: locationId }
         });
         const result = response.data || response;
         
         if (result.success) {
-            gameState.player.current_location_id = result.location?.id || locationId;
-            gameState.player.location = result.location;
+            const locationData = result.location || result.data?.location;
+            gameState.player.current_location_id = locationData?.id || locationId;
+            gameState.player.location = locationData;
             updateProfileUI(gameState.player);
             showScreen('main');
-            showModal('✅ Успех', result.message);
+            showModal('✅ Успех', result.message || result.data?.message);
         } else {
-            showModal('⚠️ Внимание', result.message);
+            showModal('⚠️ Внимание', result.error || result.message);
         }
     } catch (error) {
         console.error('Move error:', error);
@@ -694,7 +702,11 @@ async function loadBosses() {
         renderBossesInfo(gameState.bossesInfo);
 
         if (gameState.activeBattle?.type === 'solo' && gameState.activeBattle?.boss) {
-            startBossFight(gameState.activeBattle.boss);
+            const timeRemaining = gameState.activeBattle?.time_remaining_ms;
+            startBossFight(
+                gameState.activeBattle.boss, 
+                typeof timeRemaining === 'number' && timeRemaining > 0 ? timeRemaining : null
+            );
             return;
         }
 
@@ -843,14 +855,13 @@ async function startSoloBossFight(bossId) {
             method: 'POST',
             body: { boss_id: bossId }
         });
+        
+        const bossData = result?.data || result;
 
-        if (result.success) {
-            const boss = result?.data?.boss;
-            if (boss) {
-                startBossFight(boss);
-            }
+        if (result.success && bossData.boss) {
+            startBossFight(bossData.boss, bossData.time_remaining_ms);
         } else {
-            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось начать бой');
+            showModal('⚠️ Внимание', bossData.error || result.error || result.message || 'Не удалось начать бой');
         }
     } catch (error) {
         console.error('Start solo boss fight error:', error);
@@ -880,14 +891,17 @@ async function startMassBossFight(bossId) {
 /**
  * Начало боя с боссом - обновлённый UI с кнопками атаки
  */
-function startBossFight(boss) {
+function startBossFight(boss, timeRemainingMs = null) {
     gameState.currentBoss = boss;
+    gameState.bossFightEndTime = timeRemainingMs ? Date.now() + timeRemainingMs : null;
     
     const bossName = document.getElementById('boss-name');
     const bossIcon = document.getElementById('boss-icon');
     const bossHealthText = document.getElementById('boss-health-text');
     const bossHealthBar = document.getElementById('boss-health-bar');
     const fightLog = document.getElementById('fight-log');
+    const bossTimer = document.getElementById('boss-fight-timer');
+    const bossTimerText = document.getElementById('boss-timer-text');
     
     if (bossName) bossName.textContent = boss.name;
     if (bossIcon) {
@@ -905,6 +919,16 @@ function startBossFight(boss) {
             <p class="fight-start">🎯 Бой с <strong>${escapeHtml(boss.name)}</strong> начался!</p>
             <p>1 удар = 1 энергия. Бой длится 8 часов.</p>
         `;
+    }
+    
+    // Показываем/скрываем таймер
+    if (bossTimer && bossTimerText) {
+        if (gameState.bossFightEndTime) {
+            bossTimer.style.display = 'flex';
+            updateBossFightTimer();
+        } else {
+            bossTimer.style.display = 'none';
+        }
     }
     
     // Показываем кнопку атаки
@@ -929,6 +953,35 @@ function startBossFight(boss) {
     
     // Показываем экран боя
     showScreen('boss-fight');
+}
+
+/**
+ * Обновление таймера боя с боссом
+ */
+function updateBossFightTimer() {
+    const timerText = document.getElementById('boss-timer-text');
+    if (!timerText || !gameState.bossFightEndTime) return;
+    
+    const updateTimer = () => {
+        const now = Date.now();
+        const remaining = gameState.bossFightEndTime - now;
+        
+        if (remaining <= 0) {
+            timerText.textContent = 'Время вышло!';
+            timerText.style.color = 'var(--accent-red)';
+            return;
+        }
+        
+        const hours = Math.floor(remaining / 3600000);
+        const minutes = Math.floor((remaining % 3600000) / 60000);
+        const seconds = Math.floor((remaining % 60000) / 1000);
+        
+        timerText.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    };
+    
+    updateTimer();
+    if (window.bossFightTimerId) clearInterval(window.bossFightTimerId);
+    window.bossFightTimerId = setInterval(updateTimer, 1000);
 }
 
 /**
@@ -1729,7 +1782,7 @@ async function restoreEnergy() {
     }
     
     try {
-        const result = await apiRequest('/api/game/energy/buy-energy', {
+        const result = await apiRequest('/api/game/player/buy-energy', {
             method: 'POST',
             body: { amount: 10 }
         });
@@ -1986,6 +2039,7 @@ window.renderInventoryWithFilters = renderInventoryWithFilters;
 window.loadBosses = loadBosses;
 window.renderBosses = renderBosses;
 window.startBossFight = startBossFight;
+window.updateBossFightTimer = updateBossFightTimer;
 window.attackBoss = attackBoss;
 window.openWeaponSelect = openWeaponSelect;
 window.loadWeapons = loadWeapons;

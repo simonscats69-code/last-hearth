@@ -947,9 +947,17 @@ router.post('/attack-with-weapon', async (req, res) => {
  * GET /bosses/weapons
  */
 router.get('/weapons', async (req, res) => {
+    const client = await pool.connect();
+    
     try {
-        const player = req.player;
-        const inventory = safeJsonParse(player.inventory, []);
+        const playerId = req.player.id;
+        
+        const playerResult = await client.query(
+            'SELECT inventory FROM players WHERE telegram_id = $1',
+            [playerId]
+        );
+        
+        const inventory = safeJsonParse(playerResult.rows[0]?.inventory, []);
         
         const weapons = inventory
             .map((item, index) => {
@@ -975,6 +983,8 @@ router.get('/weapons', async (req, res) => {
 
     } catch (error) {
         return handleError(res, error, 'list_weapons');
+    } finally {
+        client.release();
     }
 });
 

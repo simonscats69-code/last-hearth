@@ -56,6 +56,7 @@ function safeRequire(path, name) {
 // Импорт роутеров (объединённые модули)
 const worldRouter = safeRequire('./world', 'world');
 const bossesRouter = safeRequire('./bosses', 'bosses');
+const purchaseRouter = safeRequire('./purchase', 'purchase');
 logger.info('[game] bossesRouter загружен:', bossesRouter ? 'OK' : 'NULL');
 if (bossesRouter?.stack) {
     logger.info('[game] bosses routes:', bossesRouter.stack.map(r => r.route?.path).filter(Boolean));
@@ -174,6 +175,7 @@ router.use(validatePlayer);
 // Подключение роутеров (объединённые модули)
 router.use('/world', worldRouter);
 router.use('/bosses', bossesRouter);
+router.use('/purchase', purchaseRouter);
 router.use('/clans', clansRouter);
 router.use('/pvp', pvpRouter);
 router.use('/player', playerRouter);

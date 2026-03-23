@@ -887,14 +887,6 @@ html, body {
     font-size: 12px;
 }
 
-.nav-btn[data-screen="main"] {
-    display: none;
-}
-
-.nav-btn span {
-    font-size: 24px;
-}
-
 .nav-btn.active {
     color: var(--accent-green);
 }
@@ -1315,6 +1307,26 @@ html, body {
     font-size: 14px;
     font-weight: bold;
     text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+.boss-fight-timer {
+    background: var(--bg-card);
+    border: 1px solid var(--accent-orange);
+    border-radius: 8px;
+    padding: 8px 16px;
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--accent-orange);
+}
+
+.boss-fight-timer .timer-label {
+    color: var(--text-secondary);
+    font-size: 14px;
 }
 
 .fight-log {
