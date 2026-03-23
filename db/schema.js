@@ -515,17 +515,6 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_clan ON clan_applications(clan_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_player ON clan_applications(player_id)`);
 
-    // Индексы для market_listings
-    await query(`CREATE INDEX IF NOT EXISTS idx_market_listings_seller ON market_listings(seller_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_market_listings_status ON market_listings(status)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_market_listings_expires ON market_listings(expires_at)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_market_listings_item_type ON market_listings((item_data->>'type'))`);
-
-    // Индексы для market_history
-    await query(`CREATE INDEX IF NOT EXISTS idx_market_history_buyer ON market_history(buyer_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_market_history_seller ON market_history(seller_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_market_history_created ON market_history(created_at DESC)`);
-
     // Индексы для pvp_matches
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_matches_attacker ON pvp_matches(attacker_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_matches_defender ON pvp_matches(defender_id)`);
@@ -910,9 +899,7 @@ async function runMigrations() {
         ['clans', 'chk_clans_coins', 'CHECK (coins >= 0)', ['coins']],
         ['clans', 'chk_clans_total_members', 'CHECK (total_members >= 1)', ['total_members']],
         ['daily_tasks', 'chk_daily_tasks_target', 'CHECK (target_value >= 1)', ['target_value']],
-        ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)', ['current_value']],
-        ['market_listings', 'chk_market_price', 'CHECK (price >= 0)', ['price']],
-        ['market_listings', 'chk_market_quantity', 'CHECK (quantity >= 1)', ['quantity']]
+        ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)', ['current_value']]
     ];
 
     for (const [tableName, constraintName, definition, requiredColumns] of checkConstraints) {
