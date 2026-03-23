@@ -955,7 +955,12 @@ function onScreenOpen(screenName) {
 
         case 'map':
             // Загружаем локации для карты
-            loadLocations();
+            loadLocations().then(() => {
+                // Рисуем карту после загрузки данных
+                if (typeof renderLocations === 'function') {
+                    setTimeout(renderLocations, 100);
+                }
+            });
             break;
 
         case 'inventory':

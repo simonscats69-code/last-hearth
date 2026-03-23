@@ -667,19 +667,29 @@ router.get('/shop', async (req, res) => {
         const items = await queryAll(`
             SELECT id, name, description, type, category, rarity, icon, stats, price, durability
             FROM items 
-            WHERE price > 0 AND category IS NOT NULL
+            WHERE price > 0
             ORDER BY rarity, price
         `);
         
         res.json({
             success: true,
-            items: items.rows.map(item => ({
-                ...item,
-                stats: typeof item.stats === 'string' ? JSON.parse(item.stats) : item.stats
-            }))
+            items: items.rows.map(item => {
+                let parsedStats = {};
+                if (item.stats) {
+                    try {
+                        parsedStats = typeof item.stats === 'string' ? JSON.parse(item.stats) : item.stats;
+                    } catch (e) {
+                        parsedStats = {};
+                    }
+                }
+                return {
+                    ...item,
+                    stats: parsedStats
+                };
+            })
         });
     } catch (error) {
-        logger.error({ type: 'shop_error', message: error.message });
+        logger.error({ type: 'shop_error', message: error.message, stack: error.stack });
         res.status(500).json({ success: false, error: 'Ошибка загрузки магазина' });
     }
 });
