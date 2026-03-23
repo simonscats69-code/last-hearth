@@ -962,6 +962,16 @@ function onScreenOpen(screenName) {
             loadLocations();
             break;
 
+        case 'inventory':
+            // Загружаем инвентарь
+            loadInventory();
+            break;
+
+        case 'weapon-select':
+            // Загружаем оружие для выбора
+            loadWeapons();
+            break;
+
         case 'bosses':
             // Загружаем боссов
             loadBosses();

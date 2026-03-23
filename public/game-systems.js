@@ -927,13 +927,6 @@ function startBossFight(boss) {
         attackSingleBtn.addEventListener('click', attackBoss);
     }
     
-    // Кнопка выбора оружия
-    const selectWeaponBtn = document.getElementById('select-weapon-btn');
-    if (selectWeaponBtn && !selectWeaponBtn.hasAttribute('data-handler')) {
-        selectWeaponBtn.setAttribute('data-handler', 'true');
-        selectWeaponBtn.addEventListener('click', openWeaponSelect);
-    }
-    
     // Показываем экран боя
     showScreen('boss-fight');
 }
