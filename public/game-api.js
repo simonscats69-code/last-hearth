@@ -42,11 +42,6 @@ const endpoints = {
     ratingsPlayers: { endpoint: '/rating/players', method: 'GET' },
     ratingsClans: { endpoint: '/rating/clans', method: 'GET' },
     
-    // Рынок
-    marketList: { endpoint: '/game/market/listings-v2', method: 'GET' },
-    marketCreate: { endpoint: '/game/market/create', method: 'POST' },
-    marketBuy: { endpoint: '/game/market/buy', method: 'POST' },
-    
     // Клан
     clan: { endpoint: '/game/clans/clan', method: 'GET' },
     clanCreate: { endpoint: '/game/clans/clan/create', method: 'POST' },
@@ -76,10 +71,19 @@ const CACHE_TTL = 30000; // 30 секунд
 const cacheInvalidationMap = {
     'purchase': ['profile', 'inventory'],
     'useItem': ['inventory', 'profile'],
+    'search': ['inventory', 'profile'],
+    'move': ['locations', 'profile'],
+    'attackBoss': ['bosses', 'profile'],
+    'wheelSpin': ['profile', 'inventory'],
+    'statusCheck': ['profile'],
+    'achievements': ['achievements'],
+    'clanCreate': ['clan', 'profile'],
     'clanJoin': ['clan', 'profile'],
     'clanLeave': ['clan', 'profile'],
-    'marketBuy': ['inventory', 'profile', 'marketList'],
-    'marketCreate': ['marketList']
+    'pvpAttack': ['profile'],
+    'referralUse': ['profile'],
+    'clanBossSpawn': ['clanBoss', 'profile'],
+    'clanBossAttack': ['clanBoss', 'profile']
 };
 
 function getCached(key) {

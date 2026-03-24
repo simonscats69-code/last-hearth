@@ -45,15 +45,6 @@ const GAME_CONFIG = {
 };
 
 /**
- * Получить штраф за редкость предмета при крафте
- * @param {string} rarity - Редкость предмета
- * @returns {number} Множитель (0-1)
- */
-function getRarityPenalty(rarity) {
-    return GAME_CONFIG.RARITY_CRAFT_PENALTIES[rarity] || 1.0;
-}
-
-/**
  * Рассчитать шанс дропа (монотонно растущий)
  * @param {number} luck - Удача игрока
  * @returns {number} Шанс дропа в процентах
@@ -395,7 +386,6 @@ module.exports = {
     // Экспорт функций
     getExpForLevel,
     getTotalExpForLevel,
-    getRarityPenalty,
     calculateDropChance,
     // УДАЛЕНО: calculateCraftSuccess - система крафта удалена
     getLootTable,

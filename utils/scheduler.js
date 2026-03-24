@@ -88,8 +88,10 @@ async function regenerateEnergy() {
     } finally {
         isRunning.energy = false;
         
-        // Запускаем следующую итерацию через 1 минуту
-        setTimeout(regenerateEnergy, 60 * 1000);
+        // Запускаем следующую итерацию через 1 минуту (если планировщик не остановлен)
+        if (schedulerEnabled) {
+            setTimeout(regenerateEnergy, 60 * 1000);
+        }
     }
 }
 
@@ -142,8 +144,10 @@ async function checkDailyActivity() {
     } finally {
         isRunning.dailyActivity = false;
         
-        // Запускаем следующую итерацию через 1 час
-        setTimeout(checkDailyActivity, 60 * 60 * 1000);
+        // Запускаем следующую итерацию через 1 час (если планировщик не остановлен)
+        if (schedulerEnabled) {
+            setTimeout(checkDailyActivity, 60 * 60 * 1000);
+        }
     }
 }
 
@@ -200,8 +204,10 @@ async function cleanupOldLogs() {
     } finally {
         isRunning.cleanup = false;
         
-        // Запускаем следующую итерацию через 6 часов
-        setTimeout(cleanupOldLogs, 6 * 60 * 60 * 1000);
+        // Запускаем следующую итерацию через 6 часов (если планировщик не остановлен)
+        if (schedulerEnabled) {
+            setTimeout(cleanupOldLogs, 6 * 60 * 60 * 1000);
+        }
     }
 }
 
@@ -313,8 +319,10 @@ async function checkAllAchievements() {
     } finally {
         isRunning.achievements = false;
         
-        // Запускаем следующую итерацию через 1 час
-        setTimeout(checkAllAchievements, 60 * 60 * 1000);
+        // Запускаем следующую итерацию через 1 час (если планировщик не остановлен)
+        if (schedulerEnabled) {
+            setTimeout(checkAllAchievements, 60 * 60 * 1000);
+        }
     }
 }
 

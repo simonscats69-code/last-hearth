@@ -150,6 +150,18 @@ function safeSetInterval(callback, delay) {
 }
 
 /**
+ * Безопасная очистка интервала с удалением из массива
+ * @param {number} id - id интервала
+ */
+function safeClearInterval(id) {
+    clearInterval(id);
+    const index = activeIntervals.indexOf(id);
+    if (index > -1) {
+        activeIntervals.splice(index, 1);
+    }
+}
+
+/**
  * Очистка всех интервалов при выходе
  */
 function clearAllIntervals() {
@@ -166,10 +178,6 @@ window.addEventListener('pagehide', clearAllIntervals);
 // ============================================================================
 
 const actionLocks = {
-    marketBuy: false,
-    marketCreate: false,
-    marketCancel: false,
-    marketRenew: false,
     healing: false,
     clanCreate: false,
     clanJoin: false,
@@ -386,6 +394,18 @@ const API = {
         energy: '/api/game/energy'
     },
     
+    // Активные контроллеры для отмены запросов
+    _activeControllers: new Map(),
+    
+    // Отмена запроса по типу
+    cancelRequest(type) {
+        const controller = this._activeControllers.get(type);
+        if (controller) {
+            controller.abort();
+            this._activeControllers.delete(type);
+        }
+    },
+    
     // GET запрос
     async get(endpoint) {
         return apiRequest(endpoint);
@@ -406,34 +426,45 @@ const API = {
         return apiRequest(endpoint, { method: 'DELETE' });
     },
     
-    // Универсальная загрузка
+    // Универсальная загрузка с поддержкой отмены
     async load(type, id = null) {
         const endpoint = this.endpoints[type];
         if (!endpoint) {
             throw new Error(`Неизвестный тип: ${type}`);
         }
         
+        // Отменяем предыдущий запрос того же типа
+        this.cancelRequest(type);
+        
+        // Создаём новый контроллер
+        const controller = new AbortController();
+        this._activeControllers.set(type, controller);
+        
         let url = endpoint;
         if (id) url += `/${id}`;
         
-        const response = await this.get(url);
-        const data = response?.data || response;
-        
-        // Автоматическое обновление gameState
-        if (type === 'profile' && typeof gameState !== 'undefined') {
-            gameState.player = data;
+        try {
+            const response = await this.get(url);
+            const data = response?.data || response;
+            
+            // Автоматическое обновление gameState
+            if (type === 'profile' && typeof gameState !== 'undefined') {
+                gameState.player = data;
+            }
+            if (type === 'inventory' && typeof gameState !== 'undefined') {
+                gameState.inventory = data.inventory || [];
+            }
+            if (type === 'locations' && typeof gameState !== 'undefined') {
+                gameState.locations = data.locations || [];
+            }
+            if (type === 'bosses' && typeof gameState !== 'undefined') {
+                gameState.bosses = data.bosses || [];
+            }
+            
+            return data;
+        } finally {
+            this._activeControllers.delete(type);
         }
-        if (type === 'inventory' && typeof gameState !== 'undefined') {
-            gameState.inventory = data.inventory || [];
-        }
-        if (type === 'locations' && typeof gameState !== 'undefined') {
-            gameState.locations = data.locations || [];
-        }
-        if (type === 'bosses' && typeof gameState !== 'undefined') {
-            gameState.bosses = data.bosses || [];
-        }
-        
-        return data;
     }
 };
 
@@ -902,8 +933,6 @@ const SCREENS = [
     'pvp-players',    // PvP игроки
     'pvp-fight',      // PvP бой
     'pvp-stats',      // PvP статистика
-    'market',         // Рынок
-    'market-create',  // Создание объявления
     'achievements',   // Достижения
     'referral',       // Рефералы
     'profile'         // Профиль

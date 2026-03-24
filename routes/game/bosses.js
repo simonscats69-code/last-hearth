@@ -81,8 +81,8 @@ function calculateDamageBonus(bossId, masteries) {
 function calculateDamage(bossId, player, masteries = []) {
     const { weaponBonus, setBonus } = getEquipmentBonuses(player);
     const killBonus = calculateDamageBonus(bossId, masteries);
-    // Базовый урон + бонус за level (boss_damage) + урон от оружия + бонус сета
-    const levelDamage = player.boss_damage || player.level || 1;
+    // Базовый урон + бонус за level + урон от оружия + бонус сета
+    const levelDamage = player.level || 1;
     return Math.floor(1 + killBonus + levelDamage + weaponBonus + setBonus);
 }
 

@@ -1,6 +1,6 @@
 /**
  * game-ui.js - Интерфейс и обработчики событий
- * Обработчики DOM, фильтры, модальные окна, PvP, рынок, достижения, рефералы
+ * Обработчики DOM, фильтры, модальные окна, PvP, достижения, рефералы
  * 
  * Подключение: после game-systems.js
  * Зависимости: все функции из game-core.js и game-systems.js
@@ -121,7 +121,20 @@ function renderAchievementsCategories(categories) {
  */
 async function filterAchievements(category) {
     currentAchievementCategory = category;
-    await loadAchievements();
+    
+    // Фильтруем уже загруженные данные вместо перезагрузки
+    const data = await apiRequest('/api/game/achievements/progress');
+    
+    if (data && data.progress) {
+        renderAchievementsStats(data.stats);
+        renderAchievementsCategories(data.categories);
+        
+        if (currentAchievementCategory) {
+            renderAchievementsList(data.progress.filter(a => a.category === currentAchievementCategory));
+        } else {
+            renderAchievementsList(data.progress);
+        }
+    }
 }
 
 /**
@@ -204,568 +217,6 @@ async function claimAchievement(achievementId) {
 }
 
 // ============================================================================
-// РЫНОК (БАРАХОЛКА)
-// ============================================================================
-
-// Выбранный предмет для создания объявления
-let marketSelectedItem = null;
-let currentBuyListingId = null;
-
-/**
- * Загрузка списка объявлений рынка
- */
-async function loadMarketListings() {
-    try {
-        const search = document.getElementById('market-search')?.value || '';
-        const type = document.getElementById('market-type-filter')?.value || '';
-        const sort = document.getElementById('market-sort-filter')?.value || 'date';
-
-        let url = '/api/game/market/listings?';
-        if (search) url += `search=${encodeURIComponent(search)}&`;
-        if (type) url += `type=${encodeURIComponent(type)}&`;
-        url += `sort=${encodeURIComponent(sort)}`;
-
-        const data = await apiRequest(url);
-        
-        // Обрабатываем разные форматы ответа
-        const listings = data?.data?.listings || data?.listings || [];
-        renderMarketListings(listings);
-    } catch (error) {
-        console.error('Ошибка загрузки объявлений:', error);
-        
-        // При ошибке показываем пустой список
-        const container = getEl('market-listings-list');
-        if (container) {
-            container.innerHTML = '<div class="empty-message">Не удалось загрузить объявления</div>';
-        }
-        
-        // Показываем уведомление
-        if (typeof showNotification === 'function') {
-            showNotification('Ошибка загрузки рынка', 'error');
-        }
-    }
-}
-
-/**
- * Отображение списка объявлений
- */
-function renderMarketListings(listings) {
-    const container = getEl('market-listings-list');
-    if (!container) return;
-
-    renderList(
-        container,
-        listings,
-        (listing) => {
-            const item = listing.item;
-            const rarityClass = `rarity-${item.rarity || 'common'}`;
-            const expiresAt = new Date(listing.expires_at);
-            const now = new Date();
-            const hoursLeft = Math.max(0, Math.floor((expiresAt - now) / 3600000));
-
-            return `
-                <div class="market-listing-card ${rarityClass}" data-listing-id="${listing.id}">
-                    <div class="listing-item-icon">${item.icon || '📦'}</div>
-                    <div class="listing-item-info">
-                        <div class="listing-item-name">${item.name}</div>
-                        <div class="listing-item-meta">
-                            <span class="quantity">x${listing.quantity}</span>
-                            <span class="seller">Продавец: ${escapeHtml(listing.seller?.name) || 'Неизвестный'} (ур. ${listing.seller?.level || 1})</span>
-                        </div>
-                        <div class="listing-expiry">Осталось: ${hoursLeft}ч</div>
-                    </div>
-                    <div class="listing-price">
-                        <div class="price-coins">${listing.total_price} 🪙</div>
-                        ${listing.stars_price > 0 ? `<div class="price-stars">${listing.stars_price * listing.quantity} ⭐</div>` : ''}
-                        <button class="buy-btn" data-listing-id="${listing.id}">Купить</button>
-                    </div>
-                </div>
-            `;
-        },
-        '<div class="empty-message">На рынке пока нет объявлений</div>'
-    );
-
-    container.querySelectorAll('.buy-btn').forEach(btn => {
-        btn.addEventListener('click', () => openBuyModal(parseInt(btn.dataset.listingId)));
-    });
-}
-
-/**
- * Открытие модального окна покупки
- */
-async function openBuyModal(listingId) {
-    try {
-        const data = await apiRequest('/api/game/market/listings');
-        const listing = data.listings?.find(l => l.id === listingId);
-
-        if (!listing) {
-            showModal('Ошибка', 'Объявление не найдено');
-            return;
-        }
-
-        currentBuyListingId = listingId;
-
-        const item = listing.item;
-        const modal = document.getElementById('market-buy-modal');
-        const infoDiv = document.getElementById('market-buy-item-info');
-        const summaryDiv = document.getElementById('market-buy-summary');
-
-        if (!modal || !infoDiv || !summaryDiv) return;
-
-        infoDiv.innerHTML = `
-            <div class="buy-item-display">
-                <span class="item-icon">${item.icon || '📦'}</span>
-                <span class="item-name">${item.name}</span>
-                <span class="item-quantity">x${listing.quantity}</span>
-            </div>
-            <div class="seller-info">Продавец: ${escapeHtml(listing.seller?.name)} (ур. ${listing.seller?.level})</div>
-        `;
-
-        summaryDiv.innerHTML = `
-            <div class="buy-summary-row">
-                <span>Цена:</span>
-                <span class="price">${listing.total_price} 🪙</span>
-            </div>
-            ${listing.stars_price > 0 ? `
-            <div class="buy-summary-row">
-                <span>Звёзды:</span>
-                <span class="price">${listing.stars_price * listing.quantity} ⭐</span>
-            </div>
-            ` : ''}
-            <div class="buy-summary-row commission">
-                <span>Комиссия (5%):</span>
-                <span>${Math.floor(listing.total_price * 0.05)} 🪙</span>
-            </div>
-        `;
-
-        modal.classList.add('active');
-    } catch (error) {
-        console.error('Ошибка открытия модального окна:', error);
-        showModal('Ошибка', 'Не удалось загрузить информацию об объявлении');
-    }
-}
-
-/**
- * Подтверждение покупки
- */
-async function confirmBuyFromMarket() {
-    if (!currentBuyListingId) return;
-
-    try {
-        const result = await apiRequest('/api/game/market/buy', {
-            method: 'POST',
-            body: { listing_id: currentBuyListingId }
-        });
-
-        const modal = document.getElementById('market-buy-modal');
-        if (modal) modal.classList.remove('active');
-
-        if (result.success) {
-            showModal('✅ Успех', result.message);
-            playSound('loot');
-            await loadProfile();
-            loadMarketListings();
-        } else {
-            showModal('❌ Ошибка', result.message);
-        }
-    } catch (error) {
-        console.error('Ошибка покупки:', error);
-        showModal('Ошибка', 'Не удалось совершить покупку');
-    } finally {
-        currentBuyListingId = null;
-    }
-}
-
-/**
- * Загрузка своих объявлений
- */
-async function loadMyListings() {
-    try {
-        const data = await apiRequest('/api/game/market/my');
-        
-        const infoDiv = document.getElementById('market-my-info');
-        if (infoDiv) {
-            infoDiv.innerHTML = `
-                <div class="market-limits">
-                    <span>Лимит: ${data.limit}</span>
-                    <span>Активных: ${data.active_count}</span>
-                    <span>Свободно: ${data.remaining_slots}</span>
-                </div>
-            `;
-        }
-
-        renderMyListings(data.listings);
-    } catch (error) {
-        console.error('Ошибка загрузки своих объявлений:', error);
-    }
-}
-
-/**
- * Отображение своих объявлений
- */
-function renderMyListings(listings) {
-    const container = getEl('market-my-list');
-    if (!container) return;
-
-    renderList(
-        container,
-        listings,
-        (listing) => {
-            const item = listing.item;
-            const rarityClass = `rarity-${item.rarity || 'common'}`;
-            const statusColors = {
-                'active': '#4CAF50',
-                'sold': '#2196F3',
-                'cancelled': '#FF9800',
-                'expired': '#9E9E9E'
-            };
-            const statusText = {
-                'active': 'Активно',
-                'sold': 'Продано',
-                'cancelled': 'Отменено',
-                'expired': 'Истекло'
-            };
-
-            return `
-                <div class="market-listing-card my-listing ${rarityClass}">
-                    <div class="listing-status" style="background: ${statusColors[listing.status]}">${statusText[listing.status]}</div>
-                    <div class="listing-item-icon">${item.icon || '📦'}</div>
-                    <div class="listing-item-info">
-                        <div class="listing-item-name">${item.name}</div>
-                        <div class="listing-item-meta">
-                            <span class="quantity">x${listing.quantity}</span>
-                            <span class="price">${listing.total_price} 🪙</span>
-                        </div>
-                        <div class="listing-stats">
-                            <span>Просмотров: ${listing.views}</span>
-                            <span>Продлений: ${listing.times_renewed}/3</span>
-                        </div>
-                    </div>
-                    ${listing.status === 'active' ? `
-                    <div class="listing-actions">
-                        <button class="renew-btn" data-listing-id="${listing.id}">Продлить</button>
-                        <button class="cancel-btn" data-listing-id="${listing.id}">Отменить</button>
-                    </div>
-                    ` : ''}
-                </div>
-            `;
-        },
-        '<div class="empty-message">У вас пока нет объявлений</div>'
-    );
-
-    container.querySelectorAll('.renew-btn').forEach(btn => {
-        btn.addEventListener('click', () => renewListing(parseInt(btn.dataset.listingId)));
-    });
-
-    container.querySelectorAll('.cancel-listing-btn, .cancel-btn').forEach(btn => {
-        btn.addEventListener('click', () => cancelListing(parseInt(btn.dataset.listingId)));
-    });
-}
-
-/**
- * Продление объявления
- */
-async function renewListing(listingId) {
-    const hours = prompt('На сколько часов продлить? (24, 72, 168)', '24');
-    if (!hours) return;
-
-    const durationMap = { '24': '24h', '72': '72h', '168': '7d' };
-    const duration = durationMap[hours];
-
-    if (!duration) {
-        showModal('Ошибка', 'Неверный срок. Введите 24, 72 или 168');
-        return;
-    }
-
-    try {
-        // TODO: нужен бэкенд эндпоинт /api/game/market/renew
-        // Пока возвращаем заглушку
-        showModal('⏳ В разработке', 'Функция продления объявлений временно недоступна');
-        return { success: false, message: 'Функция в разработке' };
-        /*
-        const result = await apiRequest('/api/game/market/renew', {
-            method: 'POST',
-            body: { listing_id: listingId, duration }
-        });
-
-        if (result.success) {
-            showModal('✅ Успех', result.message);
-            loadMyListings();
-        } else {
-            showModal('❌ Ошибка', result.message);
-        }
-        */
-    } catch (error) {
-        console.error('Ошибка продления:', error);
-    }
-}
-
-/**
- * Отмена объявления
- */
-async function cancelListing(listingId) {
-    if (!confirm('Вы уверены, что хотите отменить объявление? Предметы будут возвращены в инвентарь.')) {
-        return;
-    }
-
-    try {
-        const result = await apiRequest('/api/game/market/cancel', {
-            method: 'POST',
-            body: { listing_id: listingId }
-        });
-
-        if (result.success) {
-            showModal('✅ Успех', result.message);
-            loadMyListings();
-            loadProfile();
-        } else {
-            showModal('❌ Ошибка', result.message);
-        }
-    } catch (error) {
-        console.error('Ошибка отмены:', error);
-    }
-}
-
-/**
- * Загрузка истории сделок
- */
-async function loadMarketHistory() {
-    // TODO: нужен бэкенд эндпоинт /api/game/market/history
-    try {
-        // Пока возвращаем пустые данные
-        const data = { total_sales: 0, total_purchases: 0, history: [] };
-        /*
-        const data = await apiRequest('/api/game/market/history');
-        */
-        
-        const statsDiv = document.getElementById('market-history-stats');
-        if (statsDiv) {
-            statsDiv.innerHTML = `
-                <div class="history-stats-grid">
-                    <div class="stat-box">
-                        <span class="stat-label">Всего продано</span>
-                        <span class="stat-value">${data.total_sales} 🪙</span>
-                    </div>
-                    <div class="stat-box">
-                        <span class="stat-label">Всего куплено</span>
-                        <span class="stat-value">${data.total_purchases} 🪙</span>
-                    </div>
-                    <div class="stat-box">
-                        <span class="stat-label">Комиссия</span>
-                        <span class="stat-value">${data.total_commission} 🪙</span>
-                    </div>
-                </div>
-            `;
-        }
-
-        renderMarketHistory(data.all);
-    } catch (error) {
-        console.error('Ошибка загрузки истории:', error);
-    }
-}
-
-/**
- * Отображение истории сделок
- */
-function renderMarketHistory(history) {
-    const container = getEl('market-history-list');
-    if (!container) return;
-
-    renderList(
-        container,
-        history,
-        (item) => {
-            const itemData = item.item;
-            const isSale = item.transaction_type === 'sale';
-            const date = new Date(item.created_at).toLocaleDateString('ru-RU');
-
-            return `
-                <div class="market-history-item ${isSale ? 'sale' : 'purchase'}">
-                    <div class="history-icon">${isSale ? '📤' : '📥'}</div>
-                    <div class="history-info">
-                        <div class="history-item-name">${itemData.name} x${item.quantity}</div>
-                        <div class="history-meta">
-                            <span>${isSale ? 'Продано' : 'Куплено у'}: ${item.other_party.name}</span>
-                            <span>${date}</span>
-                        </div>
-                    </div>
-                    <div class="history-price ${isSale ? 'positive' : 'negative'}">
-                        ${isSale ? '+' : '-'}${item.total_price} 🪙
-                        ${isSale && item.commission ? `<span class="commission">(-${item.commission})</span>` : ''}
-                    </div>
-                </div>
-            `;
-        },
-        '<div class="empty-message">История пуста</div>'
-    );
-}
-
-/**
- * Загрузка формы создания объявления
- */
-async function loadMarketCreateForm() {
-    try {
-        const response = await apiRequest('/api/game/inventory');
-        const data = response.data || response;
-        const items = Array.isArray(data.inventory) ? data.inventory : [];
-        
-        const grid = document.getElementById('market-inventory-grid');
-        if (!grid) return;
-        
-        if (items.length === 0) {
-            grid.innerHTML = '<div class="empty-message">Инвентарь пуст</div>';
-            return;
-        }
-
-        const itemsInfo = await apiRequest('/api/game/items');
-        const itemsMap = {};
-        itemsInfo.items?.forEach(item => {
-            itemsMap[item.id] = item;
-        });
-
-        grid.innerHTML = items.map((item) => {
-            const itemId = item.id;
-            const quantity = item.count || 1;
-            const itemInfo = itemsMap[itemId] || item || { id: itemId, name: 'Неизвестно', icon: '📦', rarity: 'common', type: 'resource' };
-            const rarityClass = `rarity-${itemInfo.rarity || 'common'}`;
-
-            return `
-                <div class="market-inventory-slot ${rarityClass} ${marketSelectedItem?.id == itemId ? 'selected' : ''}" 
-                     data-item-id="${itemId}" data-quantity="${quantity}">
-                    <span class="item-icon">${itemInfo.icon || '📦'}</span>
-                    <span class="item-quantity">x${quantity}</span>
-                    <span class="item-name">${itemInfo.name}</span>
-                </div>
-            `;
-        }).join('');
-
-        grid.querySelectorAll('.market-inventory-slot').forEach(slot => {
-            slot.addEventListener('click', () => {
-                const itemId = parseInt(slot.dataset.itemId);
-                const quantity = parseInt(slot.dataset.quantity);
-                const itemInfo = itemsMap[itemId];
-
-                marketSelectedItem = {
-                    id: itemId,
-                    quantity: quantity,
-                    info: itemInfo
-                };
-
-                grid.querySelectorAll('.market-inventory-slot').forEach(s => s.classList.remove('selected'));
-                slot.classList.add('selected');
-
-                const display = document.getElementById('market-selected-item');
-                if (display) {
-                    display.innerHTML = `
-                        <span class="selected-icon">${itemInfo.icon || '📦'}</span>
-                        <span class="selected-name">${itemInfo.name}</span>
-                        <span class="selected-qty">x${quantity} в наличии</span>
-                    `;
-                }
-
-                const qtyInput = document.getElementById('market-quantity');
-                if (qtyInput) {
-                    qtyInput.max = quantity;
-                    qtyInput.value = Math.min(quantity, 1);
-                }
-
-                updateMarketSummary();
-            });
-        });
-    } catch (error) {
-        console.error('Ошибка загрузки формы:', error);
-    }
-}
-
-/**
- * Обновление итоговой суммы
- */
-function updateMarketSummary() {
-    const quantity = parseInt(document.getElementById('market-quantity')?.value || 0);
-    const price = parseInt(document.getElementById('market-price')?.value || 0);
-    const total = quantity * price;
-
-    const summary = document.getElementById('market-create-summary');
-    if (summary) {
-        summary.innerHTML = `<span>Итого: ${total} монет</span>`;
-    }
-}
-
-/**
- * Создание объявления
- */
-async function createMarketListing() {
-    if (!marketSelectedItem) {
-        showModal('Ошибка', 'Выберите предмет из инвентаря');
-        return;
-    }
-
-    const MAX_PRICE = 1000000000;
-    const MAX_QUANTITY = 1000;
-    
-    const quantity = parseInt(document.getElementById('market-quantity')?.value || 1);
-    const price = parseInt(document.getElementById('market-price')?.value || 0);
-    const starsPrice = parseInt(document.getElementById('market-stars-price')?.value || 0);
-    const duration = document.getElementById('market-duration')?.value || '24h';
-
-    if (isNaN(quantity) || quantity < 1 || quantity > Math.min(MAX_QUANTITY, marketSelectedItem?.quantity || 0)) {
-        showModal('Ошибка', `Количество должно быть от 1 до ${Math.min(MAX_QUANTITY, marketSelectedItem?.quantity || 0)}`);
-        return;
-    }
-
-    if (isNaN(price) || price < 1 || price > MAX_PRICE) {
-        showModal('Ошибка', `Цена должна быть от 1 до ${MAX_PRICE.toLocaleString()}`);
-        return;
-    }
-
-    if (!isNaN(starsPrice) && starsPrice < 0 || starsPrice > 10000) {
-        showModal('Ошибка', 'Цена в звёздах должна быть от 0 до 10000');
-        return;
-    }
-
-    if (!lockAction('marketCreate')) return;
-    try {
-        const result = await apiRequest('/api/game/market/create', {
-            method: 'POST',
-            body: {
-                item_id: marketSelectedItem.id,
-                quantity: quantity,
-                price: price,
-                stars_price: starsPrice,
-                duration: duration
-            }
-        });
-
-        if (result.success) {
-            showModal('✅ Успех', result.message);
-            
-            marketSelectedItem = null;
-            const marketSelectedItemEl = document.getElementById('market-selected-item');
-            if (marketSelectedItemEl) {
-                marketSelectedItemEl.innerHTML = '<span class="placeholder">Выберите предмет</span>';
-            }
-            const marketQuantityEl = document.getElementById('market-quantity');
-            if (marketQuantityEl) marketQuantityEl.value = 1;
-            const marketPriceEl = document.getElementById('market-price');
-            if (marketPriceEl) marketPriceEl.value = '';
-            const marketStarsPriceEl = document.getElementById('market-stars-price');
-            if (marketStarsPriceEl) marketStarsPriceEl.value = 0;
-            
-            showScreen('market');
-            loadMarketListings();
-            loadProfile();
-        } else {
-            showModal('❌ Ошибка', result.message);
-        }
-    } catch (error) {
-        console.error('Ошибка создания объявления:', error);
-        showModal('Ошибка', 'Не удалось создать объявление');
-    } finally {
-        unlockAction('marketCreate');
-    }
-}
-
-// ============================================================================
 // PVP СИСТЕМА
 // ============================================================================
 
@@ -838,7 +289,7 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
             
             const defenderName = document.getElementById('pvp-defender-name');
             const defenderLevel = document.getElementById('pvp-defender-level');
-            const attackerName = document.getElementById('pvp-attender-name');
+            const attackerName = document.getElementById('pvp-attacker-name');
             const attackerLevel = document.getElementById('pvp-attacker-level');
             
             if (defenderName) defenderName.textContent = targetName;
@@ -1310,7 +761,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
     document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
     document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
-    document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('market'));
+    document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
     document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
     document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
     
@@ -1341,40 +792,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('clan-send-btn')?.addEventListener('click', sendClanMessage);
     document.getElementById('clan-message-input')?.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') sendClanMessage();
-    });
-    
-    // Рынок
-    document.getElementById('market-create-btn')?.addEventListener('click', () => showScreen('market-create'));
-    document.getElementById('market-submit-btn')?.addEventListener('click', createMarketListing);
-    document.getElementById('market-buy-confirm')?.addEventListener('click', confirmBuyFromMarket);
-    document.getElementById('market-buy-cancel')?.addEventListener('click', () => {
-        document.getElementById('market-buy-modal')?.classList.remove('active');
-    });
-    document.getElementById('market-quantity')?.addEventListener('input', updateMarketSummary);
-    document.getElementById('market-price')?.addEventListener('input', updateMarketSummary);
-    
-    // Поиск на рынке с debounce
-    let marketSearchTimeout;
-    document.getElementById('market-search')?.addEventListener('input', (e) => {
-        clearTimeout(marketSearchTimeout);
-        marketSearchTimeout = setTimeout(() => loadMarketListings(), 500);
-    });
-    document.getElementById('market-type-filter')?.addEventListener('change', loadMarketListings);
-    document.getElementById('market-sort-filter')?.addEventListener('change', loadMarketListings);
-    
-    // Табы
-    document.querySelectorAll('.market-info-bar .tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.market-info-bar .tab-btn').forEach(t => t.classList.remove('active'));
-            btn.classList.add('active');
-            
-            const tabId = btn.dataset.tab;
-            document.querySelectorAll('.market-tab').forEach(tab => tab.classList.remove('active'));
-            document.getElementById(`${tabId}-tab`)?.classList.add('active');
-            
-            if (tabId === 'market-my') loadMyListings();
-            if (tabId === 'market-history') loadMarketHistory();
-        });
     });
     
     // Инициализация - ждём загрузки всех модулей
@@ -1412,27 +829,12 @@ window.currentInventorySort = currentInventorySort;
 window.inventoryControlsInitialized = inventoryControlsInitialized;
 window.initInventoryControls = initInventoryControls;
 window.currentAchievementCategory = currentAchievementCategory;
-window.marketSelectedItem = marketSelectedItem;
-window.currentBuyListingId = currentBuyListingId;
 window.loadAchievements = loadAchievements;
 window.renderAchievementsStats = renderAchievementsStats;
 window.renderAchievementsCategories = renderAchievementsCategories;
 window.filterAchievements = filterAchievements;
 window.renderAchievementsList = renderAchievementsList;
 window.claimAchievement = claimAchievement;
-window.loadMarketListings = loadMarketListings;
-window.renderMarketListings = renderMarketListings;
-window.openBuyModal = openBuyModal;
-window.confirmBuyFromMarket = confirmBuyFromMarket;
-window.loadMyListings = loadMyListings;
-window.renderMyListings = renderMyListings;
-window.renewListing = renewListing;
-window.cancelListing = cancelListing;
-window.loadMarketHistory = loadMarketHistory;
-window.renderMarketHistory = renderMarketHistory;
-window.loadMarketCreateForm = loadMarketCreateForm;
-window.updateMarketSummary = updateMarketSummary;
-window.createMarketListing = createMarketListing;
 window.loadPVPGamePlayers = loadPVPGamePlayers;
 window.startPVPFight = startPVPFight;
 window.attackPVPTarget = attackPVPTarget;

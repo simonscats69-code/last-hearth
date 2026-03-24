@@ -84,11 +84,21 @@ async function initGame() {
             body: { telegram_id: telegramId }
         });
         
-        // Загружаем профиль
-        await loadProfile();
+        // Загружаем профиль с обработкой ошибок
+        try {
+            await loadProfile();
+        } catch (profileError) {
+            console.error('[initGame] Ошибка загрузки профиля:', profileError);
+            // Продолжаем - профиль может быть загружен позже
+        }
         
-        // Загружаем локации
-        await loadLocations();
+        // Загружаем локации с обработкой ошибок
+        try {
+            await loadLocations();
+        } catch (locationsError) {
+            console.error('[initGame] Ошибка загрузки локаций:', locationsError);
+            // Продолжаем - локации могут быть загружены позже
+        }
 
         // Показываем главный экран
         showScreen('main');
@@ -115,7 +125,7 @@ async function initGame() {
             errorMessage = 'Ошибка авторизации. Обновите игру';
         } else if (error.message && error.message.includes('Игрок не найден')) {
             errorMessage = 'Напиши /start боту';
-        } else if (error.message && error.message.includes('network') || error.message?.includes('fetch')) {
+        } else if (error.message && (error.message.includes('network') || error.message.includes('fetch'))) {
             errorMessage = 'Нет соединения. Проверь интернет';
         }
         

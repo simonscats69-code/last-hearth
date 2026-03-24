@@ -36,7 +36,7 @@ const {
  */
 function validateTelegramId(telegramId) {
     const num = Number(telegramId);
-    return !isNaN(num) && num > 0 && Number.isFinite(num);
+    return Number.isInteger(num) && num > 0;
 }
 
 
@@ -244,7 +244,7 @@ router.get('/referral/code', async (req, res) => {
     try {
         const playerId = req.player?.id;
         const player = await queryOne(
-            'SELECT referral_code, referral_code_changed FROM players WHERE telegram_id = $1',
+            'SELECT referral_code, referral_code_changed FROM players WHERE id = $1',
             [playerId]
         );
 

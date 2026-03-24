@@ -232,6 +232,7 @@ function verifyToken(playerId, token, timestamp) {
 function removeClient(playerId) {
     const ws = clients.get(playerId);
     if (ws) {
+        // Очищаем комнаты
         for (const [roomId, roomClients] of rooms) {
             roomClients.delete(playerId);
             if (roomClients.size === 0) {
@@ -239,6 +240,12 @@ function removeClient(playerId) {
             }
         }
         
+        // Очищаем комнаты из ws объекта
+        if (ws.rooms && ws.rooms.size > 0) {
+            ws.rooms.clear();
+        }
+        
+        // Очищаем таймер пинга
         const pingTimer = pingTimers.get(playerId);
         if (pingTimer) {
             clearTimeout(pingTimer);
@@ -247,6 +254,7 @@ function removeClient(playerId) {
         
         clients.delete(playerId);
         metrics.websocket.connectionsActive = clients.size;
+        metrics.websocket.roomsCount = rooms.size;
         logger.info({ type: 'ws_removed', playerId, reason: 'cleanup' });
     }
 }
@@ -480,7 +488,7 @@ function leaveRoom(playerId, roomId) {
     }
     
     const ws = clients.get(playerId);
-    if (ws) {
+    if (ws && ws.rooms) {
         ws.rooms.delete(roomId);
     }
     metrics.websocket.roomsCount = rooms.size;

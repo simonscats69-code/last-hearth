@@ -54,7 +54,7 @@ router.post('/search', async (req, res) => {
     const client = await pool.connect();
     
     try {
-        const playerId = req.player.telegram_id;
+        const playerId = req.player.id;
         
         await client.query('BEGIN');
         
@@ -75,13 +75,13 @@ router.post('/search', async (req, res) => {
             }
             
             const energyCost = 1;
-            if (updatedPlayer.energy < energyCost) {
+            if (updatedPlayer.energy < energyCost || updatedPlayer.energy < 0) {
                 await client.query('ROLLBACK');
                 return res.json({
                     success: false,
                     error: 'Недостаточно энергии',
                     code: 'INSUFFICIENT_ENERGY',
-                    energy: updatedPlayer.energy,
+                    energy: Math.max(0, updatedPlayer.energy),
                     max_energy: updatedPlayer.max_energy
                 });
             }

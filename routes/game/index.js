@@ -17,17 +17,12 @@ const criticalActionLimiter = rateLimit({
     keyGenerator: (req) => req.player?.id || req.ip
 });
 
-const bossActionLimiter = (req, res, next) => next();
-const bossClickLimiter = (req, res, next) => next();
-
 const generalActionLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 50,
     message: { error: 'Слишком много запросов.', code: 'ACTION_LIMIT' },
     keyGenerator: (req) => req.player?.id || req.ip
 });
-
-const getLimiter = (req, res, next) => next();
 
 const purchaseLimiter = rateLimit({
     windowMs: 60 * 1000,

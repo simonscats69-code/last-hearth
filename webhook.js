@@ -13,24 +13,29 @@ if (!BOT_TOKEN) {
     logger.error('Пожалуйста, настройте переменную TELEGRAM_BOT_TOKEN на BotHost');
 }
 
-const bot = new Telegraf(BOT_TOKEN, {
+// Создаём бота только если токен существует
+const bot = BOT_TOKEN ? new Telegraf(BOT_TOKEN, {
     telegram: { agent: null, webhookReply: true }
-});
+}) : null;
 
 /**
  * Настройка webhook и обработчиков команд
  */
 async function setupWebhook(app) {
-    // Проверяем наличие токена перед запуском
-    if (!BOT_TOKEN) {
+    // Проверяем наличие токена и бота перед запуском
+    if (!BOT_TOKEN || !bot) {
         logger.error('Бот не может быть запущен: отсутствует токен TELEGRAM_BOT_TOKEN');
         return;
     }
     
     // Удаляем webhook и используем polling
-    await bot.telegram.deleteWebhook();
-    bot.launch();
-    logger.info('Бот запущен в режиме polling');
+    try {
+        await bot.telegram.deleteWebhook();
+        bot.launch();
+        logger.info('Бот запущен в режиме polling');
+    } catch (error) {
+        logger.error('Ошибка запуска бота:', error);
+    }
 
     // Команда /start - начало игры
     bot.command('start', async (ctx) => {
@@ -242,6 +247,10 @@ async function setupWebhook(app) {
  */
 async function sendNotification(telegramId, message, keyboard = null) {
     try {
+        if (!bot) {
+            logger.error('[bot] Бот не инициализирован, невозможно отправить уведомление');
+            return false;
+        }
         await bot.telegram.sendMessage(telegramId, message, {
             parse_mode: 'HTML',
             reply_markup: keyboard

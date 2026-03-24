@@ -196,6 +196,32 @@ function getClanRoleEmoji(role) {
     return emojis[role] || emojis.member;
 }
 
+/**
+ * Получить CSS класс редкости по уровню игрока
+ * @param {number} level - Уровень игрока
+ * @returns {string}
+ */
+function getRarityClassByLevel(level) {
+    if (level >= 50) return 'rarity-legendary';
+    if (level >= 30) return 'rarity-epic';
+    if (level >= 15) return 'rarity-rare';
+    if (level >= 5) return 'rarity-uncommon';
+    return 'rarity-common';
+}
+
+/**
+ * Получить emoji для отображения игрока по уровню
+ * @param {number} level - Уровень игрока
+ * @returns {string}
+ */
+function getPlayerEmoji(level) {
+    if (level >= 50) return '🦸';
+    if (level >= 30) return '⚔️';
+    if (level >= 15) return '🛡️';
+    if (level >= 5) return '🗡️';
+    return '👤';
+}
+
 
 
 
@@ -217,3 +243,5 @@ window.formatTime = formatTime;
 window.getItemCategory = getItemCategory;
 window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;
+window.getRarityClassByLevel = getRarityClassByLevel;
+window.getPlayerEmoji = getPlayerEmoji;
