@@ -941,7 +941,7 @@ const DAILY_TASK_TEMPLATES = [
     { type: 'kill_enemies', target: 10, reward: { coins: 100, exp: 50 }, event_bonus: {} },
     { type: 'kill_enemies', target: 25, reward: { coins: 250, exp: 100 }, event_bonus: {} },
     { type: 'collect_resources', target: 15, reward: { coins: 150, exp: 75 }, event_bonus: {} },
-    { type: 'craft_items', target: 5, reward: { coins: 200, exp: 100 }, event_bonus: {} },
+    // УДАЛЕНО: craft_items задание (система крафта удалена)
     { type: 'pvp_battles', target: 3, reward: { coins: 300, exp: 150 }, event_bonus: {} },
     { type: 'explore_locations', target: 5, reward: { coins: 100, exp: 50 }, event_bonus: {} },
     { type: 'trade_items', target: 10, reward: { coins: 150, exp: 50 }, event_bonus: {} },

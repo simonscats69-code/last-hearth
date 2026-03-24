@@ -665,11 +665,12 @@ router.post('/use-item', async (req, res) => {
  */
 router.get('/shop', async (req, res) => {
     try {
-        // Получаем предметы, которые можно купить за монеты (с ценой > 0)
+        // Получаем предметы для продажи - только оружие!
+        // (ключи не продаются, еда/броня/лекарства - только в поиске)
         const items = await queryAll(`
             SELECT id, name, description, type, category, rarity, icon, stats, price, durability
             FROM items 
-            WHERE price > 0
+            WHERE price > 0 AND type = 'weapon'
             ORDER BY rarity, price
         `);
         

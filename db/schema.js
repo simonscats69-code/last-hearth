@@ -708,9 +708,8 @@ async function runMigrations() {
     // Миграции для дебаффов
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS infections JSONB DEFAULT '[]'`);
 
-    // Миграции для крафта и исследования
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_crafted INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS unique_items JSONB DEFAULT '[]'`);
+    // УДАЛЕНО: миграции для крафта (items_crafted, unique_items)
+    // Миграции для исследования
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS locations_visited JSONB DEFAULT '[]'`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS clans_joined INTEGER DEFAULT 0`);
 
@@ -856,7 +855,7 @@ async function runMigrations() {
         ['players', 'chk_players_agility', 'CHECK (agility >= 1)', ['agility']],
         ['players', 'chk_players_intelligence', 'CHECK (intelligence >= 1)', ['intelligence']],
         ['players', 'chk_players_luck', 'CHECK (luck >= 1)', ['luck']],
-        ['players', 'chk_players_crafting', 'CHECK (crafting >= 1)', ['crafting']],
+        // УДАЛЕНО: chk_players_crafting - система крафта удалена
         ['players', 'chk_players_pvp_rating', 'CHECK (pvp_rating >= 0)', ['pvp_rating']],
         ['locations', 'chk_locations_danger_level', 'CHECK (danger_level >= 1 AND danger_level <= 10)', ['danger_level']],
         ['locations', 'chk_locations_radiation', 'CHECK (radiation >= 0)', ['radiation']],
@@ -976,29 +975,30 @@ async function seedDatabase() {
         { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', stats: { defense: 25 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
         { name: 'Противогаз', description: 'Защита от радиации', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { radiation_resist: 15 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
         { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { defense: 10 }, durability: 80, max_durability: 80, price: 80, icon: '⛑️' },
-        { name: 'Металлолом', description: 'Металлолом для крафта', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 5, icon: '🔩' },
-        { name: 'Древесина', description: 'Дерево для крафта', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 3, icon: '🪵' },
-        { name: 'Ткань', description: 'Ткань для крафта', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 4, icon: '🧵' },
-        { name: 'Пластик', description: 'Пластик для крафта', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 10, icon: '💳' },
-        { name: 'Электроника', description: 'Электронные компоненты', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 25, icon: '📟' },
-        { name: 'Провода', description: 'Медные провода', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 15, icon: '〰️' },
-        { name: 'Химикаты', description: 'Различные химикаты', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 30, icon: '🧪' },
+        // УДАЛЕНО: материалы для крафта (Металлолом, Древесина, Ткань, Пластик, Электроника, Провода, Химикаты, Титан, Уран, Кристалл силы, Ядерный элемент)
         { name: 'Патроны', description: 'Патроны для оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '📦' },
-        { name: 'Ключ от босса', description: 'Ключ для разблокировки босса', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️' },
+        // Ключи для боссов (1 = не требуется, 2-10 = нужны ключи)
+        { name: 'Ключ от Бездомного психа', description: 'Ключ для разблокировки босса 2', type: 'key', category: 'key', rarity: 'uncommon', stackable: true, price: 0, icon: '🗝️', boss_level: 2 },
+        { name: 'Ключ от Медведя-мутанта', description: 'Ключ для разблокировки босса 3', type: 'key', category: 'key', rarity: 'rare', stackable: true, price: 0, icon: '🗝️', boss_level: 3 },
+        { name: 'Ключ от Военного дрона', description: 'Ключ для разблокировки босса 4', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️', boss_level: 4 },
+        { name: 'Ключ от Главаря мародёров', description: 'Ключ для разблокировки босса 5', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️', boss_level: 5 },
+        { name: 'Клюш от Биологического ужаса', description: 'Ключ для разблокировки босса 6', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 6 },
+        { name: 'Ключ от Офицера-нежить', description: 'Ключ для разблокировки босса 7', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 7 },
+        { name: 'Ключ от Гигантского монстра', description: 'Ключ для разблокировки босса 8', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 8 },
+        { name: 'Ключ от Профессора безумия', description: 'Ключ для разблокировки босса 9', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 9 },
+        { name: 'Ключ от Последнего стража', description: 'Ключ для разблокировки финального босса 10', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 10 },
         { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 500, icon: '🧠', stats: { energy: 25 } },
         { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, icon: '💥', stats: { energy: 30 } },
         { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 800, icon: '🏥', stats: { health: 50 } },
         { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, icon: '🛡️', stats: { radiation_cure: 5 } },
         { name: 'Плазменный пистолет', description: 'Экспериментальное оружие', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 80, ammo: 12 }, durability: 250, max_durability: 250, price: 2500, icon: '🔮' },
         { name: 'Экзо-костюм', description: 'Тяжёлая броня', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, icon: '🤖' },
-        { name: 'Титан', description: 'Редкий металл для крафта', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 100, icon: '🔶' },
-        { name: 'Уран', description: 'Радиоактивный материал', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 150, icon: '☢️' },
+        // УДАЛЕНО: материалы для крафта (Титан, Уран)
         { name: 'Сыворотка мутанта', description: 'Даёт сверхспособности', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬', stats: { energy: 50 } },
         { name: 'Эликсир бессмертия', description: 'Полное воскрешение', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, icon: '⭐', stats: { health: 100 } },
         { name: 'Лазерная винтовка', description: 'Оружие из будущего', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', stats: { damage: 150, ammo: 20 }, durability: 500, max_durability: 500, price: 10000, icon: '⚡' },
-        { name: 'Броня стражей', description: 'Легендарная броня', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, icon: '👑' },
-        { name: 'Кристалл силы', description: 'Осколок метеорита', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 500, icon: '💎' },
-        { name: 'Ядерный элемент', description: 'Сильнейшая энергия', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 1000, icon: '🔥' }
+        { name: 'Броня стражей', description: 'Легендарная броня', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, icon: '👑' }
+        // УДАЛЕНО: материалы для крафта (Кристалл силы, Ядерный элемент)
     ];
     for (const item of items) {
         await query(`

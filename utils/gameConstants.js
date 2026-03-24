@@ -38,20 +38,10 @@ function getTotalExpForLevel(level) {
 
 const GAME_CONFIG = {
     // Базовые настройки
-    BASE_DROP_CHANCE: 8,        // Базовый шанс дропа (%) - снижено для доната
+    BASE_DROP_CHANCE: 8,        // Базовый шанс дропа (%)
     MAX_DROP_CHANCE: 60,         // Максимальный шанс дропа (%)
     MAX_LUCK: 150,               // Максимальная удача игрока
-    BASE_CRAFT_SUCCESS: 50,      // Базовый шанс успешного крафта (%)
-    MAX_CRAFT_SUCCESS: 95,       // Максимальный шанс крафта (%)
-
-    // Штраф за редкость при крафте
-    RARITY_CRAFT_PENALTIES: {
-        common: 1.0,
-        uncommon: 0.9,
-        rare: 0.75,
-        epic: 0.6,
-        legendary: 0.4
-    }
+    // УДАЛЕНО: константы крафта (BASE_CRAFT_SUCCESS, MAX_CRAFT_SUCCESS, RARITY_CRAFT_PENALTIES)
 };
 
 /**
@@ -78,43 +68,7 @@ function calculateDropChance(luck) {
     return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
 }
 
-/**
- * Рассчитать шанс успешного крафта
- * @param {number} crafting - Мастерство крафта
- * @param {string} rarity - Редкость предмета
- * @returns {number} Шанс в процентах
- */
-function calculateCraftSuccess(crafting, rarity) {
-    // Защита от отрицательного мастерства
-    if (crafting <= 0) crafting = 1;
-    
-    // Базовый шанс по редкости (чем выше редкость, тем ниже базовый шанс)
-    const rarityBaseChance = {
-        common: 80,
-        uncommon: 65,
-        rare: 50,
-        epic: 35,
-        legendary: 20
-    };
-    
-    const baseChance = rarityBaseChance[rarity] || 60;
-    
-    // Бонус мастерства: каждый 10 единиц мастерства дает +5% к шансу
-    // Но с ограничением: чем выше редкость, тем меньше бонус
-    const raritySkillBonus = {
-        common: 0.8,
-        uncommon: 0.6,
-        rare: 0.45,
-        epic: 0.3,
-        legendary: 0.2
-    };
-    const skillBonus = (crafting / 10) * 5 * (raritySkillBonus[rarity] || 0.5);
-    
-    // Итоговый шанс
-    const finalChance = baseChance + skillBonus;
-    
-    return Math.min(GAME_CONFIG.MAX_CRAFT_SUCCESS, Math.max(5, Math.round(finalChance)));
-}
+// УДАЛЕНО: функция calculateCraftSuccess() - система крафта удалена
 
 // Таблицы лута по локациям
 const LOOT_TABLES = {
@@ -443,7 +397,7 @@ module.exports = {
     getTotalExpForLevel,
     getRarityPenalty,
     calculateDropChance,
-    calculateCraftSuccess,
+    // УДАЛЕНО: calculateCraftSuccess - система крафта удалена
     getLootTable,
     rollItemRarity,
     rollLootDrop,

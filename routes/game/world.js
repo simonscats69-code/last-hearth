@@ -183,26 +183,95 @@ router.post('/search', async (req, res) => {
             let expGained = 0;
             
             if (rolled <= dropChance) {
-                itemRarity = rollItemRarity(locationData.id, effectiveLuck);
+                // Новая система дропа: только оружие (80%) или ключи (20%)
+                const dropTypeRoll = Math.random() * 100;
+                
+                if (dropTypeRoll < 80) {
+                    // Дроп оружия
+                    itemRarity = rollItemRarity(locationData.id, effectiveLuck);
 
-                const itemResult = await client.query(`
-                    SELECT
-                        id,
-                        name,
-                        type,
-                        rarity,
-                        icon,
-                        COALESCE((stats->>'damage')::integer, 0) AS damage,
-                        COALESCE((stats->>'defense')::integer, 0) AS defense
-                    FROM items
-                    WHERE rarity = $1
-                      AND type != 'key'
-                    LIMIT 1 OFFSET floor(random() * (
-                        SELECT COUNT(*) FROM items WHERE rarity = $1 AND type != 'key'
-                    ))::integer
-                `, [itemRarity]);
+                    const itemResult = await client.query(`
+                        SELECT
+                            id,
+                            name,
+                            type,
+                            rarity,
+                            icon,
+                            COALESCE((stats->>'damage')::integer, 0) AS damage,
+                            COALESCE((stats->>'defense')::integer, 0) AS defense
+                        FROM items
+                        WHERE rarity = $1
+                          AND type = 'weapon'
+                        LIMIT 1 OFFSET floor(random() * (
+                            SELECT COUNT(*) FROM items WHERE rarity = $1 AND type = 'weapon'
+                        ))::integer
+                    `, [itemRarity]);
 
-                foundItem = itemResult.rows[0] || null;
+                    foundItem = itemResult.rows[0] || null;
+                } else {
+                    // Дроп ключей для боссов (от 2 до 10)
+                    // Определяем уровень босса (2-10) с уменьшающимся шансом
+                    // Босс 2: 50%, Босс 3: 25%, Босс 4: 12.5%...
+                    const bossRoll = Math.random() * 100;
+                    let targetBossLevel = 2;
+                    let cumulative = 0;
+                    
+                    for (let lvl = 2; lvl <= 10; lvl++) {
+                        const chance = 100 / Math.pow(2, lvl - 1); // 50%, 25%, 12.5%...
+                        if (bossRoll < cumulative + chance) {
+                            targetBossLevel = lvl;
+                            break;
+                        }
+                        cumulative += chance;
+                    }
+                    
+                    // Находим ключ для этого босса по имени
+                    const keyNames = {
+                        2: 'Бездомного психа',
+                        3: 'Медведя-мутанта',
+                        4: 'Военного дрона',
+                        5: 'Главаря мародёров',
+                        6: 'Биологического ужаса',
+                        7: 'Офицера-нежить',
+                        8: 'Гигантского монстра',
+                        9: 'Профессора безумия',
+                        10: 'Последнего стража'
+                    };
+                    
+                    const keyBossName = keyNames[targetBossLevel] || 'Бездомного психа';
+                    const keyResult = await client.query(`
+                        SELECT id, name, type, rarity, icon
+                        FROM items 
+                        WHERE type = 'key' AND name LIKE '%' || $1 || '%'
+                        LIMIT 1
+                    `, [keyBossName]);
+                    
+                    // Fallback: если ключ не найден, пробуем получить любой ключ
+                    if (!keyResult.rows[0]) {
+                        const fallbackKey = await client.query(`
+                            SELECT id, name, type, rarity, icon
+                            FROM items 
+                            WHERE type = 'key'
+                            ORDER BY id
+                            LIMIT 1
+                        `);
+                        if (fallbackKey.rows[0]) {
+                            foundItem = {
+                                ...fallbackKey.rows[0],
+                                damage: 0,
+                                defense: 0
+                            };
+                            itemRarity = foundItem.rarity || 'epic';
+                        }
+                    }
+                    
+                    foundItem = keyResult.rows[0] ? {
+                        ...keyResult.rows[0],
+                        damage: 0,
+                        defense: 0
+                    } : null;
+                    itemRarity = foundItem?.rarity || 'epic';
+                }
                 
                 if (foundItem) {
                     const inventory = normalizeInventory(updatedPlayer.inventory);
