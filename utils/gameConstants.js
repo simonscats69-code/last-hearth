@@ -40,6 +40,7 @@ const GAME_CONFIG = {
     // Базовые настройки
     BASE_DROP_CHANCE: 8,        // Базовый шанс дропа (%) - снижено для доната
     MAX_DROP_CHANCE: 60,         // Максимальный шанс дропа (%)
+    MAX_LUCK: 150,               // Максимальная удача игрока
     BASE_CRAFT_SUCCESS: 50,      // Базовый шанс успешного крафта (%)
     MAX_CRAFT_SUCCESS: 95,       // Максимальный шанс крафта (%)
 
@@ -138,14 +139,37 @@ function getLootTable(locationId) {
 /**
  * Определить редкость выпавшего предмета
  * @param {number} locationId - ID локации
+ * @param {number} luck - Удача игрока (влияет на шанс редкости)
  * @returns {string} Редкость предмета
  */
-function rollItemRarity(locationId) {
+function rollItemRarity(locationId, luck = 1) {
     const table = getLootTable(locationId);
     const roll = Math.random() * 100;
-    let cumulative = 0;
     
-    for (const [rarity, chance] of Object.entries(table)) {
+    // Бонус удачи к редкости: каждый пункт удачи даёт +0.1% к редким предметам
+    // max бонус = 15% (при luck = 150)
+    const luckBonus = Math.min(15, luck * 0.1);
+    
+    // Модифицируем таблицу с учётом удачи
+    const modifiedTable = { ...table };
+    
+    // Распределяем бонус удачи: чем выше редкость, тем больший бонус
+    if (luck > 10) {
+        // legendary: полный бонус
+        modifiedTable.legendary = Math.min(25, (modifiedTable.legendary || 0) + luckBonus);
+        // epic: 80% от бонуса
+        modifiedTable.epic = Math.min(40, (modifiedTable.epic || 0) + (luckBonus * 0.8));
+        // rare: 50% от бонуса
+        modifiedTable.rare = Math.min(50, (modifiedTable.rare || 0) + (luckBonus * 0.5));
+        // uncommon: 20% от бонуса
+        modifiedTable.uncommon = Math.min(50, (modifiedTable.uncommon || 0) + (luckBonus * 0.2));
+        // common: уменьшаем на сумму добавленного
+        const addedBonus = (luckBonus * 0.1) + (luckBonus * 0.08) + (luckBonus * 0.05) + (luckBonus * 0.02);
+        modifiedTable.common = Math.max(0, (modifiedTable.common || 0) - addedBonus);
+    }
+    
+    let cumulative = 0;
+    for (const [rarity, chance] of Object.entries(modifiedTable)) {
         cumulative += chance;
         if (roll <= cumulative) {
             return rarity;
@@ -244,18 +268,16 @@ const DEBUFF_CONFIG = {
 
 // Множители влияния на статы (за каждый уровень дебаффа)
 const DEBUFF_EFFECTS = {
-    // Радиация: сильно бьёт по удаче и поиску
+    // Радиация: сильно бьёт по удаче и дропу
     radiation: {
         strength: -0.03,      // -3% к урону за уровень
         luck: -0.05,          // -5% к удаче за уровень
-        searchTime: 0.10,    // +10% ко времени поиска за уровень
         dropChance: -0.03    // -3% к шансу дропа за уровень
     },
     // Инфекция: сильно бьёт по силе и выносливости
     infection: {
         strength: -0.05,      // -5% к урону за уровень
         endurance: -0.03,    // -3% к выносливости за уровень
-        searchTime: 0.05,    // +5% ко времени поиска за уровень
         dropChance: -0.02    // -2% к шансу дропа за уровень
     }
 };
@@ -295,7 +317,6 @@ function getDebuffEffect(type) {
     return DEBUFF_EFFECTS[type] || {
         strength: 0,
         luck: 0,
-        searchTime: 0,
         dropChance: 0,
         endurance: 0
     };
@@ -342,7 +363,6 @@ function calculateDebuffModifiers(player) {
     const modifiers = {
         damage: 1.0,
         luck: 1.0,
-        searchTime: 1.0,
         dropChance: 1.0,
         endurance: 1.0
     };
@@ -352,7 +372,6 @@ function calculateDebuffModifiers(player) {
         const effect = DEBUFF_EFFECTS.radiation;
         modifiers.damage += radLevel * effect.strength;
         modifiers.luck += radLevel * effect.luck;
-        modifiers.searchTime += radLevel * effect.searchTime;
         modifiers.dropChance += radLevel * effect.dropChance;
     }
     
@@ -361,7 +380,6 @@ function calculateDebuffModifiers(player) {
         const effect = DEBUFF_EFFECTS.infection;
         modifiers.damage += infLevel * effect.strength;
         modifiers.endurance += infLevel * effect.endurance;
-        modifiers.searchTime += infLevel * effect.searchTime;
         modifiers.dropChance += infLevel * effect.dropChance;
     }
     
@@ -369,7 +387,6 @@ function calculateDebuffModifiers(player) {
     modifiers.damage = Math.max(0.1, modifiers.damage);
     modifiers.luck = Math.max(0.1, modifiers.luck);
     modifiers.dropChance = Math.max(0.01, modifiers.dropChance);
-    modifiers.searchTime = Math.min(3.0, modifiers.searchTime);
     modifiers.endurance = Math.max(0.1, modifiers.endurance);
     
     return modifiers;
@@ -393,12 +410,18 @@ function calculateRadiationDefense(equipment) {
         defense += equipment.helmet.stats.radiation_resistance;
     }
     
-    // Поддержка нового формата (body/head -> radiationDefense)
+    // Поддержка нового формата (body/head/hands/legs -> radiationDefense)
     if (equipment.body?.stats?.radiationDefense) {
         defense += equipment.body.stats.radiationDefense;
     }
     if (equipment.head?.stats?.radiationDefense) {
         defense += equipment.head.stats.radiationDefense;
+    }
+    if (equipment.hands?.stats?.radiationDefense) {
+        defense += equipment.hands.stats.radiationDefense;
+    }
+    if (equipment.legs?.stats?.radiationDefense) {
+        defense += equipment.legs.stats.radiationDefense;
     }
     // Примечание: equipment.helmet не дублируется здесь, т.к. он уже учтён выше в старом формате
     

@@ -324,7 +324,15 @@ router.post('/attack-hit', async (req, res) => {
                 throw new Error('Игрок не найден');
             }
 
-            // Вычисляем урон
+            // Проверяем, что игрок жив перед атакой
+            if (attacker.health <= 0) {
+                throw new Error('Вы мертвы и не можете атаковать');
+            }
+            if (defender.health <= 0) {
+                throw new Error('Противник уже мертв');
+            }
+
+            // Вычисляем урон атакующего
             let damage = (attacker.strength * 2) + (attacker.agility * 0.5);
 
             // Бонус от оружия
@@ -333,7 +341,26 @@ router.post('/attack-hit', async (req, res) => {
                 damage += equipment.weapon.damage;
             }
 
-            damage = Math.floor(damage);
+            // Проверка на уклонение (agility)
+            // Шанс уклонения = min(25%, agility * 0.5%)
+            const dodgeChance = Math.min(25, defender.agility * 0.5);
+            const isDodged = Math.random() * 100 < dodgeChance;
+            
+            if (isDodged) {
+                return res.json({
+                    success: true,
+                    message: 'Противник уклонился от атаки!',
+                    dodged: true,
+                    attackerHealth: attacker.health,
+                    defenderHealth: defender.health
+                });
+            }
+
+            // Защита от выносливости (endurance)
+            // Уменьшаем урон: min(75%, endurance * 0.5%)
+            const defenseReduction = Math.min(75, defender.endurance * 0.5);
+            damage = Math.floor(damage * (1 - defenseReduction / 100));
+            damage = Math.max(1, damage); // Минимальный урон 1
 
             // Применяем урон
             const newHealth = Math.max(0, defender.health - damage);

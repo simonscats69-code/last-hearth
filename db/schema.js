@@ -27,7 +27,6 @@ async function createTables() {
             health INTEGER DEFAULT 100,
             max_health INTEGER DEFAULT 100,
             radiation JSONB DEFAULT '{"level": 0}',
-            fatigue INTEGER DEFAULT 0,
             energy INTEGER DEFAULT 50,
             max_energy INTEGER DEFAULT 50,
             infections JSONB DEFAULT '[]',
@@ -59,10 +58,6 @@ async function createTables() {
             pvp_total_damage_taken INTEGER DEFAULT 0,
             coins_stolen_from_me INTEGER DEFAULT 0,
             items_stolen_from_me INTEGER DEFAULT 0,
-            broken_leg BOOLEAN DEFAULT false,
-            broken_arm BOOLEAN DEFAULT false,
-            infection_count INTEGER DEFAULT 0,
-            radiation_poisoning BOOLEAN DEFAULT false,
             unique_items JSONB DEFAULT '[]',
             locations_visited JSONB DEFAULT '[]',
             clans_joined INTEGER DEFAULT 0,
@@ -85,6 +80,7 @@ async function createTables() {
             name VARCHAR(255) NOT NULL UNIQUE,
             description TEXT,
             radiation INTEGER DEFAULT 0,
+            infection INTEGER DEFAULT 0,
             min_luck INTEGER DEFAULT 0,
             danger_level INTEGER DEFAULT 1,
             loot_table JSONB DEFAULT '[]',
@@ -93,19 +89,12 @@ async function createTables() {
             color VARCHAR(20)
         );
     `);
+    
+    // Миграция: добавить колонку infection если не существует
+    await query(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS infection INTEGER DEFAULT 0`);
 
-    // Таблица сетов предметов
-    await query(`
-        CREATE TABLE IF NOT EXISTS item_sets (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL UNIQUE,
-            description TEXT,
-            icon VARCHAR(50),
-            bonus_2 JSONB DEFAULT '{"health": 10, "damage": 2}',
-            bonus_3 JSONB DEFAULT '{"health": 25, "damage": 5, "crit_chance": 2}',
-            bonus_4 JSONB DEFAULT '{"health": 50, "damage": 10, "crit_chance": 5, "crit_damage": 10}'
-        );
-    `);
+    // УДАЛЕНО: Таблица сетов предметов (не используется)
+    // УДАЛЕНО: Таблица связи предметов с сетами (не используется)
 
     // Таблица предметов
     await query(`
@@ -123,8 +112,6 @@ async function createTables() {
             stats JSONB DEFAULT '{}',
             durability INTEGER DEFAULT 100,
             max_durability INTEGER DEFAULT 100,
-            set_id INTEGER REFERENCES item_sets(id),
-            piece_number INTEGER DEFAULT 0,
             upgrade_level INTEGER DEFAULT 0,
             max_upgrade_level INTEGER DEFAULT 10,
             modifications JSONB DEFAULT '[]',
@@ -133,17 +120,6 @@ async function createTables() {
             icon VARCHAR(50),
             image_url VARCHAR(500),
             UNIQUE(name, type)
-        );
-    `);
-
-    // Связь предметов с сетами
-    await query(`
-        CREATE TABLE IF NOT EXISTS item_set_items (
-            id SERIAL PRIMARY KEY,
-            set_id INTEGER REFERENCES item_sets(id),
-            item_id INTEGER REFERENCES items(id),
-            piece_number INTEGER DEFAULT 1,
-            UNIQUE(set_id, item_id)
         );
     `);
 
@@ -730,11 +706,7 @@ async function runMigrations() {
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_stolen_from_me INTEGER DEFAULT 0`);
 
     // Миграции для дебаффов
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS broken_leg BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS broken_arm BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS infection_count INTEGER DEFAULT 0`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS infections JSONB DEFAULT '[]'`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS radiation_poisoning BOOLEAN DEFAULT false`);
 
     // Миграции для крафта и исследования
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_crafted INTEGER DEFAULT 0`);
@@ -941,36 +913,23 @@ async function runMigrations() {
 async function seedDatabase() {
     // Локации
     const locations = [
-        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, min_luck: 1, danger_level: 1, icon: '🏠', color: '#4CAF50' },
-        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, min_luck: 10, danger_level: 2, icon: '🛒', color: '#FF9800' },
-        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, min_luck: 20, danger_level: 3, icon: '🏥', color: '#E91E63' },
-        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, min_luck: 35, danger_level: 4, icon: '🏭', color: '#9C27B0' },
-        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, min_luck: 50, danger_level: 5, icon: '🌆', color: '#F44336' },
-        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, min_luck: 65, danger_level: 6, icon: '🎖️', color: '#607D8B' },
-        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, min_luck: 90, danger_level: 7, icon: '🔒', color: '#000000' }
+        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, infection: 0, min_luck: 1, danger_level: 1, icon: '🏠', color: '#4CAF50' },
+        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, infection: 5, min_luck: 10, danger_level: 2, icon: '🛒', color: '#FF9800' },
+        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, infection: 25, min_luck: 20, danger_level: 3, icon: '🏥', color: '#E91E63' },
+        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, infection: 35, min_luck: 35, danger_level: 4, icon: '🏭', color: '#9C27B0' },
+        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, infection: 50, min_luck: 50, danger_level: 5, icon: '🌆', color: '#F44336' },
+        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, infection: 65, min_luck: 65, danger_level: 6, icon: '🎖️', color: '#607D8B' },
+        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, infection: 80, min_luck: 90, danger_level: 7, icon: '🔒', color: '#000000' }
     ];
     for (const loc of locations) {
         await query(`
-            INSERT INTO locations (name, description, radiation, min_luck, danger_level, icon, color)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO locations (name, description, radiation, infection, min_luck, danger_level, icon, color)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (name) DO NOTHING
-        `, [loc.name, loc.description, loc.radiation, loc.min_luck, loc.danger_level, loc.icon, loc.color]);
+        `, [loc.name, loc.description, loc.radiation, loc.infection, loc.min_luck, loc.danger_level, loc.icon, loc.color]);
     }
 
-    // Сеты предметов
-    const itemSets = [
-        { name: 'Военный сет', description: 'Армейская экипировка выжившего', icon: '🎖️', bonus_2: { damage: 3, defense: 2 }, bonus_3: { damage: 7, defense: 5, health: 20 }, bonus_4: { damage: 15, defense: 10, health: 50, crit_chance: 3 } },
-        { name: 'Медицинский сет', description: 'Оборудование для выживания', icon: '🏥', bonus_2: { health: 15, medicine_effect: 5 }, bonus_3: { health: 35, medicine_effect: 10, radiation_resist: 5 }, bonus_4: { health: 75, medicine_effect: 20, radiation_resist: 15, infection_resist: 10 } },
-        { name: 'Сталкерский сет', description: 'Экипировка для исследования зоны', icon: '🎒', bonus_2: { luck: 3, agility: 2 }, bonus_3: { luck: 7, agility: 5, energy: 10 }, bonus_4: { luck: 15, agility: 10, energy: 25, radiation_resist: 10 } },
-        { name: 'Бандитский сет', description: 'Оружие и защита мародёра', icon: '💣', bonus_2: { damage: 4, crit_chance: 2 }, bonus_3: { damage: 9, crit_chance: 5, crit_damage: 10 }, bonus_4: { damage: 18, crit_chance: 10, crit_damage: 25, pvp_damage: 5 } }
-    ];
-    for (const set of itemSets) {
-        await query(`
-            INSERT INTO item_sets (name, description, icon, bonus_2, bonus_3, bonus_4)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (name) DO NOTHING
-        `, [set.name, set.description, set.icon, JSON.stringify(set.bonus_2), JSON.stringify(set.bonus_3), JSON.stringify(set.bonus_4)]);
-    }
+    // УДАЛЕНО: Сеты предметов (не используются)
 
     // Боссы
     const bosses = [

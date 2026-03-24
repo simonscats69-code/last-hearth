@@ -26,7 +26,7 @@ function getPlayerStatus(player) {
 
 async function runStatusCheck(client, playerId) {
     const lockResult = await client.query(
-        `SELECT health, fatigue, radiation, infections
+        `SELECT health, radiation, infections
          FROM players WHERE telegram_id = $1 FOR UPDATE`,
         [playerId]
     );
@@ -36,11 +36,6 @@ async function runStatusCheck(client, playerId) {
     }
 
     const p = lockResult.rows[0];
-
-    let fatigueDamage = 0;
-    if (p.fatigue >= 100) {
-        fatigueDamage = 3;
-    }
 
     let radDamage = 0;
     const radConfig = DEBUFF_CONFIG.radiation;
@@ -69,13 +64,12 @@ async function runStatusCheck(client, playerId) {
         ? totalInfectionLevel * infConfig.damagePerLevel
         : 0;
 
-    const totalDamage = fatigueDamage + radDamage + infectionDamage;
+    const totalDamage = radDamage + infectionDamage;
 
     if (totalDamage > 0) {
         await client.query(
             `UPDATE players
-             SET health = GREATEST(0, health - $1),
-                 fatigue = GREATEST(0, fatigue - 20)
+             SET health = GREATEST(0, health - $1)
              WHERE id = $2`,
             [totalDamage, playerId]
         );
@@ -84,7 +78,6 @@ async function runStatusCheck(client, playerId) {
     return {
         totalDamage,
         effects: {
-            fatigue: fatigueDamage,
             radiation: radDamage,
             infections: infectionDamage
         }

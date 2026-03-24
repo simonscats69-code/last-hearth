@@ -953,6 +953,10 @@ async function createDailyTasks(playerId) {
     const expiresAt = new Date(now);
     expiresAt.setDate(expiresAt.getDate() + 1);
     
+    // Получаем текущий сезон и множитель наград
+    const season = await getCurrentSeason();
+    const rewardMultiplier = 1; // Базовый множитель, можно расширить логикой
+    
     const shuffled = [...DAILY_TASK_TEMPLATES].sort(() => Math.random() - 0.5);
     const selectedTasks = shuffled.slice(0, 3);
     const createdTasks = [];

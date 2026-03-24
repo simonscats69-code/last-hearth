@@ -269,12 +269,36 @@ function refreshPlayerEnergyUI() {
 }
 
 function updateLuckDisplay() {
-    const luck = gameState.player?.stats?.luck || 1;
-    const luckEl = document.getElementById('player-luck');
-    if (luckEl) {
-        luckEl.textContent = luck;
-    }
+    const stats = gameState.player?.stats || {};
+    
+    // Обновляем все статы
+    const strength = stats.strength || 1;
+    const endurance = stats.endurance || 1;
+    const agility = stats.agility || 1;
+    const intelligence = stats.intelligence || 1;
+    const luck = stats.luck || 1;
 
+    // Сила
+    const strengthEl = document.getElementById('player-strength');
+    if (strengthEl) strengthEl.textContent = strength;
+
+    // Выносливость
+    const enduranceEl = document.getElementById('player-endurance');
+    if (enduranceEl) enduranceEl.textContent = endurance;
+
+    // Ловкость
+    const agilityEl = document.getElementById('player-agility');
+    if (agilityEl) agilityEl.textContent = agility;
+
+    // Интеллект
+    const intEl = document.getElementById('player-intelligence');
+    if (intEl) intEl.textContent = intelligence;
+
+    // Удача
+    const luckEl = document.getElementById('player-luck');
+    if (luckEl) luckEl.textContent = luck;
+
+    // Шанс дропа
     const dropChanceEl = document.getElementById('player-drop-chance');
     if (dropChanceEl && typeof calculateDropChance === 'function') {
         dropChanceEl.textContent = `${calculateDropChance(luck)}%`;

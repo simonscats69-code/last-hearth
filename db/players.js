@@ -236,16 +236,22 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     playerId = validateId(playerId, 'playerId');
     const exec = getExecutor(client);
     
+    // Формула прокачки удачи: каждый уровень даёт +1 к удаче
+    // С ограничением MAX_LUCK = 150
+    const luckBonusPerLevel = 1;
+    const luckBonus = levelsGained * luckBonusPerLevel;
+    
     // Исправлено: LEAST(energy + bonus, max_energy + bonus) вместо LEAST(max_energy + bonus, max_energy + bonus)
     // Теперь при level-up восстанавливается текущее значение + бонус, с ограничением max
+    // Также добавлена прокачка удачи с ограничением MAX_LUCK = 150
     const result = levelsGained <= 1
         ? await exec(
-            `WITH updated AS (UPDATE players SET level = level + 1, experience = 0, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + 1, experience = 0, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, luck = LEAST(149, luck + 1), energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
             [playerId]
         )
         : await exec(
-            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $3 RETURNING *) SELECT * FROM updated`,
-            [levelsGained, newExperience, playerId]
+            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST(149, luck + $3), energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
+            [levelsGained, newExperience, luckBonus, playerId]
         );
     
     if (!result.rows[0]) throw new Error(ERR_PLAYER_NOT_FOUND);

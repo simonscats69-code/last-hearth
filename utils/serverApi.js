@@ -563,8 +563,11 @@ const safeParse = safeJsonParse;
 
 /**
  * Выполнить функцию в транзакции с блокировкой игрока
+ * @param {number} playerId - ID игрока
+ * @param {function} fn - Функция для выполнения
+ * @param {number} timeoutMs - Таймаут в миллисекундах (по умолчанию 10000мс)
  */
-async function withPlayerLock(playerId, fn) {
+async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
     if (!Number.isInteger(playerId) || playerId <= 0) {
         throw { 
             message: 'Некорректный ID игрока', 
@@ -573,7 +576,17 @@ async function withPlayerLock(playerId, fn) {
         };
     }
     
-    return await tx(async () => {
+    const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+            reject({ 
+                message: 'Превышен таймаут ожидания блокировки игрока', 
+                code: 'LOCK_TIMEOUT',
+                statusCode: 504 
+            });
+        }, timeoutMs);
+    });
+    
+    const lockPromise = tx(async () => {
         const lockedPlayer = await queryOne(
             'SELECT * FROM players WHERE id = $1 FOR UPDATE',
             [playerId]
@@ -589,6 +602,8 @@ async function withPlayerLock(playerId, fn) {
         
         return await fn(lockedPlayer);
     });
+    
+    return await Promise.race([lockPromise, timeoutPromise]);
 }
 
 /**

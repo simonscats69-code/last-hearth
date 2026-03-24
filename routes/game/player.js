@@ -460,7 +460,7 @@ router.post('/buy-energy', async (req, res) => {
                 code: 'ENERGY_FULL'
             });
         }
-        handleError(error, 'BUY_ENERGY', res, req.player);
+        handleError(res, error, 'BUY_ENERGY');
     }
 });
 

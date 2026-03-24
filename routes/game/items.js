@@ -556,7 +556,9 @@ router.post('/use-item', async (req, res) => {
                 const newInventory = inventory.filter((_, i) => i !== item_index);
                 
                 if (item.type === 'medicine') {
-                    const healthRestored = item.heal ?? 20;
+                    // Бонус к лечению от intelligence: +10% за каждую единицу
+                    const intBonus = 1 + (player.intelligence || 1 - 1) * 0.1;
+                    const healthRestored = Math.floor((item.heal ?? 20) * intBonus);
                     await client.query(`
                         UPDATE players 
                         SET health = LEAST(max_health, health + $1),
@@ -564,7 +566,7 @@ router.post('/use-item', async (req, res) => {
                         WHERE telegram_id = $3
                     `, [healthRestored, JSON.stringify(newInventory), playerId]);
                     
-                    message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
+                    message = `Использовали ${item.name}. Здоровье +${healthRestored}${player.intelligence > 1 ? ' (бонус интеллекта +' + Math.round((intBonus - 1) * 100) + '%)' : ''}`;
                     updated = true;
                     
                 } else if (item.type === 'antirad') {

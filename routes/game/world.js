@@ -9,6 +9,7 @@ const { pool, query, queryOne, queryAll } = require('../../db/database');
 const { DEBUFF_CONFIG, calculateDropChance, rollItemRarity, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
 const { logger, withPlayerLock, safeJsonParse, handleError } = require('../../utils/serverApi');
 const { normalizeInventory, normalizeRadiation } = require('../../utils/playerState');
+const { DebuffAPI } = require('./debuffs');
 
 
 
@@ -53,7 +54,7 @@ router.post('/search', async (req, res) => {
     const client = await pool.connect();
     
     try {
-        const playerId = req.player.id;
+        const playerId = req.player.telegram_id;
         
         await client.query('BEGIN');
         
@@ -136,6 +137,40 @@ router.post('/search', async (req, res) => {
                 }
             }
             
+            // Применяем инфекцию
+            let infectionGain = 0;
+            let infectionDefense = 0;
+            
+            if (locationData.infection && locationData.infection > 0) {
+                const baseInfection = Math.ceil(locationData.infection / 10);
+                
+                // Защита от инфекции - вычисляем из экипировки
+                const equipment = safeJsonParse(updatedPlayer.equipment, {});
+                const infConfig = DEBUFF_CONFIG.infection || { defensePerLevel: 0.5 };
+                
+                // Считаем защиту от инфекции (аналогично радиации)
+                const slots = ['helmet', 'armor', 'boots', 'accessory', 'weapon', 'hands', 'legs'];
+                for (const slot of slots) {
+                    if (equipment[slot] && equipment[slot].infection_resist) {
+                        infectionDefense += equipment[slot].infection_resist;
+                    }
+                }
+                
+                const randomFactor = 0.7 + Math.random() * 0.6;
+                infectionGain = Math.max(0, Math.ceil((baseInfection - infectionDefense) * randomFactor));
+                
+                if (infectionGain > 0) {
+                    try {
+                        await DebuffAPI.apply(playerId, 'zombie_infection', infectionGain, {
+                            source: locationData.name,
+                            locationId: locationData.id
+                        });
+                    } catch (err) {
+                        logger.error('Ошибка применения инфекции', { playerId, error: err.message });
+                    }
+                }
+            }
+            
             const modifiers = calculateDebuffModifiers(updatedPlayer);
             const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck) * 10) / 10);
             
@@ -148,7 +183,7 @@ router.post('/search', async (req, res) => {
             let expGained = 0;
             
             if (rolled <= dropChance) {
-                itemRarity = rollItemRarity(locationData.id);
+                itemRarity = rollItemRarity(locationData.id, effectiveLuck);
 
                 const itemResult = await client.query(`
                     SELECT
@@ -269,9 +304,14 @@ router.post('/search', async (req, res) => {
                     defense: radiationDefense,
                     effect: radiationEffect
                 },
+                infection: {
+                    gained: infectionGain,
+                    defense: infectionDefense
+                },
                 location: {
                     name: locationData.name,
-                    radiation: locationData.radiation
+                    radiation: locationData.radiation,
+                    infection: locationData.infection || 0
                 },
                 effective_luck: effectiveLuck,
                 drop_chance: dropChance,
