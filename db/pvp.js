@@ -51,19 +51,24 @@ async function getPVPCooldown(playerId) {
  * @param {number} minutes - Длительность в минутах
  * @param {string} type - Тип кулдауна
  * @param {string} reason - Причина
+ * @param {object} client - Опциональный клиент БД для использования внутри транзакции
  */
-async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя') {
+async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя', client = null) {
     // Валидация minutes для предотвращения SQL-инъекции
     const validatedMinutes = parseInt(minutes);
     if (!Number.isInteger(validatedMinutes) || validatedMinutes <= 0 || validatedMinutes > 10080) {
         throw new Error('Недопустимое значение minutes (должно быть 1-10080)');
     }
     
-    await query(
+    const executeQuery = client 
+        ? (sql, params) => client.query(sql, params)
+        : query;
+    
+    await executeQuery(
         `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at, reason)
-         VALUES ($1, $2, NOW() + INTERVAL '1 minute' * $3, $4)
+         VALUES ($1, $2, NOW() + make_interval(mins => $3), $4)
          ON CONFLICT (player_id, cooldown_type) 
-         DO UPDATE SET expires_at = NOW() + INTERVAL '1 minute' * $3, reason = $4`,
+         DO UPDATE SET expires_at = NOW() + make_interval(mins => $3), reason = $4`,
         [playerId, type, validatedMinutes, reason]
     );
 }
@@ -151,10 +156,15 @@ async function getPVPStats(playerId) {
  * @param {number} attackerId - ID атакующего
  * @param {number} defenderId - ID защищающегося
  * @param {number} locationId - ID локации
+ * @param {object} client - Опциональный клиент БД для использования внутри транзакции
  * @returns {Promise<object>} Созданный матч
  */
-async function createPVPMatch(attackerId, defenderId, locationId) {
-    const match = await queryOne(
+async function createPVPMatch(attackerId, defenderId, locationId, client = null) {
+    const executeQuery = client
+        ? (sql, params) => client.query(sql, params).then(r => r.rows[0])
+        : (sql, params) => queryOne(sql, params);
+    
+    const match = await executeQuery(
         `INSERT INTO pvp_matches (attacker_id, defender_id, location_id, started_at)
          VALUES ($1, $2, $3, NOW())
          RETURNING *`,
@@ -162,8 +172,8 @@ async function createPVPMatch(attackerId, defenderId, locationId) {
     );
     
     // Устанавливаем кулдаун обоим игрокам
-    await setPVPCooldown(attackerId, 5, 'pvp_battle', 'Участие в PvP бое');
-    await setPVPCooldown(defenderId, 5, 'pvp_battle', 'Участие в PvP бое');
+    await setPVPCooldown(attackerId, 5, 'pvp_battle', 'Участие в PvP бое', client);
+    await setPVPCooldown(defenderId, 5, 'pvp_battle', 'Участие в PvP бое', client);
     
     return match;
 }
@@ -216,10 +226,11 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
         
         // Логирование для отладки (только в dev режиме)
         if (process.env.NODE_ENV !== 'production') {
-            logger.debug(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
+            console.debug(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
         }
         
-        // Формируем правильный запрос для обновления инвентаря
+        // Формируем правильный запрос для обновления
+        // ВНИМАНИЕ: инвентарь обновляется ниже отдельным запросом
         let winnerUpdateQuery = `
             UPDATE players SET 
                 pvp_wins = pvp_wins + 1,
@@ -233,19 +244,15 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
         
         const winnerParams = [winnerDamageDealt, experienceGained, coinsStolen, winnerId];
         
-        // Добавляем обновление инвентаря только если есть украденные предметы
-        if (itemsStolen && itemsStolen.length > 0) {
-            winnerUpdateQuery += `, inventory = COALESCE(inventory, '{}'::jsonb) || $4::jsonb`;
-            winnerParams.splice(3, 0, JSON.stringify(itemsStolen));
-        }
-        
-        winnerUpdateQuery += ` WHERE id = ${winnerParams.length} RETURNING *`;
+        // Явный параметр вместо интерполяции длины массива
+        const winnerIdParamIndex = winnerParams.length;
+        winnerUpdateQuery += ` WHERE id = ${winnerIdParamIndex} RETURNING *`;
         
         const winner = await client.query(winnerUpdateQuery, winnerParams);
 
-        // Обновляем прогресс достижений для победителя
-        await updateAchievementProgress(winnerId, 'pvp_wins');
-        
+        // Вычисляем урон, полученный проигравшим (только урон от атакующего)
+        const loserDamageTaken = winnerWasAttacker ? attackerDamageDealt : defenderDamageDealt;
+
         // Обновляем статистику проигравшего
         // Телепортируем в первую безопасную локацию (не красную зону)
         const loser = await client.query(
@@ -262,7 +269,7 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
                 )
              WHERE id = $3
              RETURNING *`,
-            [attackerDamageTaken + defenderDamageTaken, coinsStolen, loserId]
+            [loserDamageTaken, coinsStolen, loserId]
         );
         
         // Забираем предмет у проигравшего

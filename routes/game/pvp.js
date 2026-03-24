@@ -13,9 +13,9 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, queryAll } = require('../../db/database');
+const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
-const { logger, logPlayerError, safeParse, safeJsonParse, safeStringify, withPlayerLock, PlayerHelper: playerHelper } = require('../../utils/serverApi');
+const { logger, logPlayerError, safeParse, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 
 
 
@@ -23,16 +23,6 @@ const { logger, logPlayerError, safeParse, safeJsonParse, safeStringify, withPla
  * Валидация ID (Number.isInteger и > 0)
  */
 const isValidId = (id) => Number.isInteger(id) && id > 0;
-
-/**
- * Безопасная сериализация JSON с fallback
- * Теперь импортируется из utils/jsonHelper.js
- */
-
-/**
- * Парсинг JSON с fallback
- * Теперь импортируется из utils/jsonHelper.js
- */
 
 /**
  * Централизованный обработчик ошибок
@@ -84,15 +74,24 @@ const ok = (res, data = {}) => res.json({ success: true, ...data });
 /**
  * Унифицированный формат ошибки
  */
-const fail = (res, message, code = 400, statusCode = 400) => 
+const fail = (res, message, code = 'ERROR', statusCode = 400) => 
     res.status(statusCode).json({ success: false, error: message, code });
 
 /**
  * Логирование действия в player_logs
+ * @param {number} playerId - ID игрока
+ * @param {string} action - Название действия
+ * @param {object} metadata - Дополнительные данные
+ * @param {object} client - Опциональный клиент БД для использования внутри транзакции
  */
-const logPlayerAction = async (playerId, action, metadata = {}) => {
+const logPlayerAction = async (playerId, action, metadata = {}, client = null) => {
     try {
-        await query(
+        // Используем переданный client или глобальную функцию query
+        const executeQuery = client 
+            ? (sql, params) => client.query(sql, params)
+            : query;
+        
+        await executeQuery(
             `INSERT INTO player_logs (player_id, action, metadata, created_at) 
              VALUES ($1, $2, $3, NOW())`,
             [playerId, action, safeStringify(metadata)]
@@ -193,52 +192,63 @@ router.post('/attack', async (req, res) => {
             return fail(res, 'Укажите корректный ID цели (число > 0)', 'INVALID_TARGET_ID');
         }
 
-        // Выполняем атаку в транзакции
-        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
-            if (!lockedPlayer) {
+        // Выполняем атаку в транзакции с блокировкой обоих игроков
+        const result = await transaction(async (client) => {
+            // Блокируем обоих игроков в порядке возрастания ID для предотвращения deadlock
+            const [firstId, secondId] = playerId < target_id
+                ? [playerId, target_id]
+                : [target_id, playerId];
+            
+            const firstResult = await client.query(
+                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                [firstId]
+            );
+            const secondResult = await client.query(
+                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                [secondId]
+            );
+            
+            if (!firstResult.rows[0] || !secondResult.rows[0]) {
                 throw new Error('Игрок не найден');
             }
+            
+            const lockedPlayer = firstId === playerId ? firstResult.rows[0] : secondResult.rows[0];
+            const targetPlayer = firstId === target_id ? firstResult.rows[0] : secondResult.rows[0];
 
             // Проверяем красную зону
-            const location = await queryOne(`
+            const location = await client.query(`
                 SELECT is_red_zone FROM locations WHERE id = $1
             `, [lockedPlayer.current_location_id]);
 
-            if (!location || !location.is_red_zone) {
+            if (!location.rows[0] || !location.rows[0].is_red_zone) {
                 throw new Error('PvP доступно только на красных зонах');
             }
 
-            // Получаем цель с блокировкой для предотвращения race condition
-            const target = await queryOne(`
-                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
-            `, [target_id]);
-
-            if (!target) {
-                throw new Error('Игрок не найден');
-            }
-
-            if (target.current_location_id !== lockedPlayer.current_location_id) {
+            if (targetPlayer.current_location_id !== lockedPlayer.current_location_id) {
                 throw new Error('Игрок не на этой локации');
             }
 
-            // Проверяем наличие энергии - используем lockedPlayer вместо повторного запроса
+            // Проверяем наличие энергии ДО списания
             if (!lockedPlayer || lockedPlayer.energy < 1) {
                 throw new Error('Нужна энергия для атаки');
             }
 
             // Обновляем энергию (вычитаем 1 за атаку)
-            await playerHelper.updateEnergy(playerId, -1);
+            await client.query(
+                `UPDATE players SET energy = energy - 1 WHERE id = $1`,
+                [playerId]
+            );
 
-            // Создаём сессию боя
-            const battle = await pvp.createPVPMatch(playerId, target_id, lockedPlayer.current_location_id);
+            // Создаём сессию боя с передачей client для работы внутри транзакции
+            const battle = await pvp.createPVPMatch(playerId, target_id, lockedPlayer.current_location_id, client);
 
             // Логируем начало боя
             await logPlayerAction(playerId, 'pvp_attack_start', {
                 target_id,
-                target_name: target.username || target.first_name || 'Unknown',
+                target_name: targetPlayer.username || targetPlayer.first_name || 'Unknown',
                 location_id: lockedPlayer.current_location_id,
                 battle_id: battle.id
-            });
+            }, client);
 
             return {
                 battle_id: battle.id,
@@ -249,11 +259,11 @@ router.post('/attack', async (req, res) => {
                     strength: lockedPlayer.strength
                 },
                 target: {
-                    id: target.id,
-                    username: target.username,
-                    health: target.health,
-                    max_health: target.max_health,
-                    strength: target.strength
+                    id: targetPlayer.id,
+                    username: targetPlayer.username,
+                    health: targetPlayer.health,
+                    max_health: targetPlayer.max_health,
+                    strength: targetPlayer.strength
                 }
             };
         });
@@ -283,54 +293,48 @@ router.post('/attack-hit', async (req, res) => {
         }
 
         // Выполняем удар в транзакции
-        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
-            if (!lockedPlayer) {
-                throw new Error('Игрок не найден');
-            }
-
+        const battleResult = await transaction(async (client) => {
             // Получаем бой
-            const battle = await queryOne(`
+            const battle = await client.query(`
                 SELECT * FROM pvp_battles WHERE id = $1
             `, [battle_id]);
 
-            if (!battle) {
+            if (!battle.rows[0]) {
                 throw new Error('Бой не найден');
             }
 
-            if (battle.attacker_id !== playerId && battle.target_id !== playerId) {
+            const battleData = battle.rows[0];
+
+            if (battleData.attacker_id !== playerId && battleData.target_id !== playerId) {
                 throw new Error('Вы не участник этого боя');
             }
 
             // Определяем атакующего и защитника
-            const isAttacker = battle.attacker_id === playerId;
-            const attackerId = isAttacker ? battle.attacker_id : battle.target_id;
-            const defenderId = isAttacker ? battle.target_id : battle.attacker_id;
+            const isAttacker = battleData.attacker_id === playerId;
+            const attackerId = isAttacker ? battleData.attacker_id : battleData.target_id;
+            const defenderId = isAttacker ? battleData.target_id : battleData.attacker_id;
 
-            // Получаем игроков с блокировкой для предотвращения race condition
-            // Используем транзакцию с SELECT FOR UPDATE для обоих игроков
-            const { transaction } = require('../../db/database');
+            // Блокируем обоих игроков в определённом порядке для предотвращения deadlock
+            const [firstId, secondId] = attackerId < defenderId
+                ? [attackerId, defenderId]
+                : [defenderId, attackerId];
             
-            const battleResult = await transaction(async (client) => {
-                // Блокируем обоих игроков в определённом порядке для предотвращения deadlock
-                const [firstId, secondId] = attackerId < defenderId
-                    ? [attackerId, defenderId]
-                    : [defenderId, attackerId];
-                
-                const attackerResult = await client.query(
-                    `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
-                    [firstId]
-                );
-                const defenderResult = await client.query(
-                    `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
-                    [secondId]
-                );
-                
-                const attacker = attackerId === firstId ? attackerResult.rows[0] : defenderResult.rows[0];
-                const defender = defenderId === secondId ? defenderResult.rows[0] : attackerResult.rows[0];
+            const attackerResult = await client.query(
+                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                [firstId]
+            );
+            const defenderResult = await client.query(
+                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
+                [secondId]
+            );
+            
+            const [firstRow, secondRow] = [attackerResult.rows[0], defenderResult.rows[0]];
+            const attacker = attackerId === firstId ? firstRow : secondRow;
+            const defender = defenderId === firstId ? firstRow : secondRow;
 
-                if (!attacker || !defender) {
-                    throw new Error('Игрок не найден');
-                }
+            if (!attacker || !defender) {
+                throw new Error('Игрок не найден');
+            }
 
             // Проверяем, что игрок жив перед атакой
             if (attacker.health <= 0) {
@@ -355,13 +359,8 @@ router.post('/attack-hit', async (req, res) => {
             const isDodged = Math.random() * 100 < dodgeChance;
             
             if (isDodged) {
-                return res.json({
-                    success: true,
-                    message: 'Противник уклонился от атаки!',
-                    dodged: true,
-                    attackerHealth: attacker.health,
-                    defenderHealth: defender.health
-                });
+                // Возвращаем специальный объект для обработки вне транзакции
+                return { dodged: true, attackerHealth: attacker.health, defenderHealth: defender.health };
             }
 
             // Защита от выносливости (endurance)
@@ -450,7 +449,7 @@ router.post('/attack-hit', async (req, res) => {
                     damage_dealt: damage,
                     coins_reward: coinsReward,
                     item_stolen: !!reward?.item
-                });
+                }, client);
             } else {
                 // Логируем удар
                 await logPlayerAction(playerId, 'pvp_attack_hit', {
@@ -458,7 +457,7 @@ router.post('/attack-hit', async (req, res) => {
                     opponent_id: defenderId,
                     damage_dealt: damage,
                     opponent_health_after: newHealth
-                });
+                }, client);
             }
 
             return {
@@ -469,6 +468,17 @@ router.post('/attack-hit', async (req, res) => {
                 message: ended ? 'Победа!' : 'Удар нанесён'
             };
         });
+
+        // Обработка уклонения
+        if (battleResult?.dodged) {
+            return res.json({
+                success: true,
+                message: 'Противник уклонился от атаки!',
+                dodged: true,
+                attackerHealth: battleResult.attackerHealth,
+                defenderHealth: battleResult.defenderHealth
+            });
+        }
 
         return ok(res, battleResult);
 
@@ -501,8 +511,6 @@ router.get('/stats', async (req, res) => {
             rating: stats?.pvp_rating || 1000,
             streak: stats?.pvp_streak || 0,
             maxStreak: stats?.pvp_max_streak || 0,
-            totalDamageDealt: stats?.pvp_damage_dealt || 0,
-            totalDamageTaken: stats?.pvp_damage_taken || 0,
             coinsStolenFromMe: stats?.pvp_coins_stolen || 0,
             itemsStolenFromMe: stats?.pvp_items_stolen || 0,
             recentMatches: [],
@@ -520,10 +528,7 @@ const GamePVP = {
     router,
     utils: {
         isValidId,
-        safeStringify,
-        safeParse,
         handleError,
-        withPlayerLock,
         logPlayerAction
     }
 };

@@ -59,8 +59,9 @@ router.post('/search', async (req, res) => {
         await client.query('BEGIN');
         
         try {
+            // Используем внутренний id игрока, а не telegram_id
             const playerResult = await client.query(`
-                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
+                SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
             
             const updatedPlayer = playerResult.rows[0];
@@ -127,7 +128,7 @@ router.post('/search', async (req, res) => {
                     await client.query(
                         `UPDATE players
                          SET radiation = $1::jsonb
-                         WHERE telegram_id = $2`,
+                         WHERE id = $2`,
                         [JSON.stringify({
                             level: resultingRadiationLevel,
                             expires_at: expiresAt.toISOString(),
@@ -200,13 +201,17 @@ router.post('/search', async (req, res) => {
                     { bossLevel: 10, chance: 0.0078125, name: 'Последнего стража' }
                 ];
                 
+                // Отдельный бросок для определения типа предмета (ключ или оружие)
+                const keyRoll = Math.random() * 100;
+                const totalKeyChance = keyChances.reduce((sum, k) => sum + k.chance, 0);
+                
                 // Проверяем, выпал ли ключ
                 let foundKey = null;
                 let cumulativeKeyChance = 0;
                 
                 for (const key of keyChances) {
                     cumulativeKeyChance += key.chance;
-                    if (rolled < cumulativeKeyChance) {
+                    if (keyRoll < cumulativeKeyChance) {
                         foundKey = key;
                         break;
                     }
@@ -270,14 +275,14 @@ router.post('/search', async (req, res) => {
                     await client.query(`
                         UPDATE players 
                         SET inventory = $1
-                        WHERE telegram_id = $2
+                        WHERE id = $2
                     `, [JSON.stringify(inventory), playerId]);
                     
                     const expReward = Math.floor(5 + (itemRarity === 'common' ? 0 : itemRarity === 'uncommon' ? 2 : itemRarity === 'rare' ? 5 : itemRarity === 'epic' ? 8 : 10));
                     await client.query(`
                         UPDATE players 
                         SET experience = experience + $1
-                        WHERE telegram_id = $2
+                        WHERE id = $2
                     `, [expReward, playerId]);
                     
                     expGained = expReward;
@@ -289,7 +294,7 @@ router.post('/search', async (req, res) => {
                 SET energy = energy - $1,
                     last_energy_update = NOW(),
                     total_actions = total_actions + 1
-                WHERE telegram_id = $2
+                WHERE id = $2
                 RETURNING energy, max_energy, last_energy_update
             `, [energyCost, playerId]);
             
@@ -314,7 +319,7 @@ router.post('/search', async (req, res) => {
                 await client.query(`
                     UPDATE players 
                     SET health = GREATEST(0, health - $1)
-                    WHERE telegram_id = $2
+                    WHERE id = $2
                 `, [radiationDamage, playerId]);
             }
             
@@ -409,7 +414,7 @@ router.post('/move', async (req, res) => {
         
         try {
             const playerResult = await client.query(`
-                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
+                SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
             
             const player = playerResult.rows[0];
@@ -444,7 +449,7 @@ router.post('/move', async (req, res) => {
             await client.query(`
                 UPDATE players 
                 SET current_location_id = $1
-                WHERE telegram_id = $2
+                WHERE id = $2
             `, [location_id, playerId]);
             
             await client.query('COMMIT');

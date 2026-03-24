@@ -30,7 +30,7 @@ function getItemConfig(itemId) {
 
 async function grantPlayerBuff(client, playerId, effect, expiresAt) {
     const playerBuffs = await client.query(
-        'SELECT buffs FROM players WHERE telegram_id = $1',
+        'SELECT buffs FROM players WHERE id = $1',
         [playerId]
     );
     
@@ -48,14 +48,14 @@ async function grantPlayerBuff(client, playerId, effect, expiresAt) {
     buffs[effect] = { expires_at: expiresAt.toISOString() };
     
     await client.query(
-        'UPDATE players SET buffs = $1 WHERE telegram_id = $2',
+        'UPDATE players SET buffs = $1 WHERE id = $2',
         [JSON.stringify(buffs), playerId]
     );
 }
 
 async function grantPlayerCosmetic(client, playerId, effect) {
     const playerCosmetics = await client.query(
-        'SELECT cosmetics FROM players WHERE telegram_id = $1',
+        'SELECT cosmetics FROM players WHERE id = $1',
         [playerId]
     );
     
@@ -113,7 +113,7 @@ router.post('/', async (req, res) => {
         
         try {
             const playerResult = await client.query(
-                'SELECT stars FROM players WHERE telegram_id = $1 FOR UPDATE',
+                'SELECT stars FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
             );
             

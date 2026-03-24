@@ -465,6 +465,41 @@ async function createTables() {
         );
     `);
 
+    // Таблица сессий игроков
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_sessions (
+            id SERIAL PRIMARY KEY,
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            session_token VARCHAR(255) NOT NULL,
+            ip_address VARCHAR(45),
+            user_agent TEXT,
+            created_at TIMESTAMP DEFAULT NOW(),
+            expires_at TIMESTAMP NOT NULL,
+            last_activity TIMESTAMP DEFAULT NOW(),
+            UNIQUE(player_id)
+        );
+    `);
+
+    // Таблица PvP сражений
+    await query(`
+        CREATE TABLE IF NOT EXISTS pvp_battles (
+            id SERIAL PRIMARY KEY,
+            attacker_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            defender_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            winner_id BIGINT REFERENCES players(id),
+            loser_id BIGINT REFERENCES players(id),
+            attacker_damage INTEGER DEFAULT 0,
+            defender_damage INTEGER DEFAULT 0,
+            attacker_reward INTEGER DEFAULT 0,
+            defender_reward INTEGER DEFAULT 0,
+            location_id INTEGER DEFAULT 0,
+            battle_duration INTEGER DEFAULT 0,
+            started_at TIMESTAMP DEFAULT NOW(),
+            ended_at TIMESTAMP,
+            status VARCHAR(20) DEFAULT 'active'
+        );
+    `);
+
     // Создание индексов для players
     await query(`CREATE INDEX IF NOT EXISTS idx_players_telegram_id ON players(telegram_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_players_clan_id ON players(clan_id)`);
@@ -500,6 +535,17 @@ async function createTables() {
     // Индексы для pvp_cooldowns
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_player ON pvp_cooldowns(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_expires ON pvp_cooldowns(expires_at)`);
+
+    // Индексы для player_sessions
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_sessions_player ON player_sessions(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_sessions_token ON player_sessions(session_token)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_sessions_expires ON player_sessions(expires_at)`);
+
+    // Индексы для pvp_battles
+    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_battles_attacker ON pvp_battles(attacker_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_battles_defender ON pvp_battles(defender_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_battles_winner ON pvp_battles(winner_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_battles_status ON pvp_battles(status)`);
 
     // Индексы для player_boss_progress
     await query(`CREATE INDEX IF NOT EXISTS idx_player_boss_progress_player ON player_boss_progress(player_id)`);
