@@ -1159,7 +1159,7 @@ function initTabHandlers() {
     });
 
     // Табы достижений
-    document.querySelectorAll('.achievements-tab').forEach(tab => {
+    document.querySelectorAll('.achievement-category-btn').forEach(tab => {
         bindClickOnce(tab, `achievements${tab.dataset.category || ''}`, () => {
             const category = tab.dataset.category;
             filterAchievements(category);
@@ -1167,7 +1167,7 @@ function initTabHandlers() {
     });
 
     // Табы PvP статистики (если есть)
-    document.querySelectorAll('.pvp-tab').forEach(tab => {
+    document.querySelectorAll('.pvp-stats-grid .stat-card').forEach(tab => {
         bindClickOnce(tab, `pvp${tab.dataset.tab || ''}`, () => {
             const tabName = tab.dataset.tab;
             loadPVPStats(tabName);

@@ -528,15 +528,6 @@ html, body {
     font-weight: bold;
 }
 
-.player-rank {
-    background: linear-gradient(135deg, #ff9800, #ff5722);
-    padding: 4px 12px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: bold;
-    margin-left: 8px;
-}
-
 .player-name {
     font-size: 16px;
     font-weight: 500;
@@ -684,20 +675,6 @@ html, body {
 .search-btn {
     background: linear-gradient(135deg, var(--accent-green), #2E7D32);
     flex: 2;
-}
-
-.lucky-search-btn {
-    background: linear-gradient(135deg, #FFD700, #FFA000);
-    flex: 2;
-    color: #000;
-}
-
-.lucky-search-btn .btn-cost {
-    color: rgba(0,0,0,0.7);
-}
-
-.lucky-search-btn:active {
-    background: linear-gradient(135deg, #FFA000, #FF8F00);
 }
 
 .btn-icon {

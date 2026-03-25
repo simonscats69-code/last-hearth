@@ -92,6 +92,25 @@ async function createTables() {
     
     // Миграция: добавить колонку infection если не существует
     await query(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS infection INTEGER DEFAULT 0`);
+    
+    // Миграция: добавить колонку min_level если не существует (вместо min_luck для входа на локации)
+    await query(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS min_level INTEGER DEFAULT 1`);
+    
+    // Обновляем min_level на основе min_luck для существующих локаций, если min_level ещё не установлен
+    await query(`
+        UPDATE locations 
+        SET min_level = 
+            CASE 
+                WHEN min_luck >= 90 THEN 25
+                WHEN min_luck >= 65 THEN 18
+                WHEN min_luck >= 50 THEN 12
+                WHEN min_luck >= 35 THEN 8
+                WHEN min_luck >= 20 THEN 5
+                WHEN min_luck >= 10 THEN 3
+                ELSE 1
+            END
+        WHERE min_level IS NULL OR min_level = 1
+    `);
 
     // УДАЛЕНО: Таблица сетов предметов (не используется)
     // УДАЛЕНО: Таблица связи предметов с сетами (не используется)
@@ -958,20 +977,20 @@ async function runMigrations() {
 async function seedDatabase() {
     // Локации
     const locations = [
-        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, infection: 0, min_luck: 1, danger_level: 1, icon: '🏠', color: '#4CAF50' },
-        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, infection: 5, min_luck: 10, danger_level: 2, icon: '🛒', color: '#FF9800' },
-        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, infection: 25, min_luck: 20, danger_level: 3, icon: '🏥', color: '#E91E63' },
-        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, infection: 35, min_luck: 35, danger_level: 4, icon: '🏭', color: '#9C27B0' },
-        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, infection: 50, min_luck: 50, danger_level: 5, icon: '🌆', color: '#F44336' },
-        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, infection: 65, min_luck: 65, danger_level: 6, icon: '🎖️', color: '#607D8B' },
-        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, infection: 80, min_luck: 90, danger_level: 7, icon: '🔒', color: '#000000' }
+        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, infection: 0, min_level: 1, danger_level: 1, icon: '🏠', color: '#4CAF50' },
+        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, infection: 5, min_level: 3, danger_level: 2, icon: '🛒', color: '#FF9800' },
+        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, infection: 25, min_level: 5, danger_level: 3, icon: '🏥', color: '#E91E63' },
+        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, infection: 35, min_level: 8, danger_level: 4, icon: '🏭', color: '#9C27B0' },
+        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, infection: 50, min_level: 12, danger_level: 5, icon: '🌆', color: '#F44336' },
+        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, infection: 65, min_level: 18, danger_level: 6, icon: '🎖️', color: '#607D8B' },
+        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, infection: 80, min_level: 25, danger_level: 7, icon: '🔒', color: '#000000' }
     ];
     for (const loc of locations) {
         await query(`
-            INSERT INTO locations (name, description, radiation, infection, min_luck, danger_level, icon, color)
+            INSERT INTO locations (name, description, radiation, infection, min_level, danger_level, icon, color)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (name) DO NOTHING
-        `, [loc.name, loc.description, loc.radiation, loc.infection, loc.min_luck, loc.danger_level, loc.icon, loc.color]);
+        `, [loc.name, loc.description, loc.radiation, loc.infection, loc.min_level, loc.danger_level, loc.icon, loc.color]);
     }
 
     // УДАЛЕНО: Сеты предметов (не используются)

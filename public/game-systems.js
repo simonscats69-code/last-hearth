@@ -170,7 +170,6 @@ async function loadProfile() {
     // Обновляем UI
     updateProfileUI(data);
     refreshPlayerEnergyUI();
-    updateLuckDisplay();
 }
 
 // Ссылка на константу интервала энергии из game-core.js
@@ -278,40 +277,14 @@ function refreshPlayerEnergyUI() {
     }
 }
 
-function updateLuckDisplay() {
-    const stats = gameState.player?.stats || {};
-    
-    // Обновляем все статы
-    const strength = stats.strength || 1;
-    const endurance = stats.endurance || 1;
-    const agility = stats.agility || 1;
-    const intelligence = stats.intelligence || 1;
-    const luck = stats.luck || 1;
-
-    // Сила
-    const strengthEl = document.getElementById('player-strength');
-    if (strengthEl) strengthEl.textContent = strength;
-
-    // Выносливость
-    const enduranceEl = document.getElementById('player-endurance');
-    if (enduranceEl) enduranceEl.textContent = endurance;
-
-    // Ловкость
-    const agilityEl = document.getElementById('player-agility');
-    if (agilityEl) agilityEl.textContent = agility;
-
-    // Интеллект
-    const intEl = document.getElementById('player-intelligence');
-    if (intEl) intEl.textContent = intelligence;
-
-    // Удача
-    const luckEl = document.getElementById('player-luck');
-    if (luckEl) luckEl.textContent = luck;
-
-    // Шанс дропа
+// Исправленная функция - теперь только уровень влияет на дроп
+function updateDropChanceDisplay() {
+    // Шанс дропа теперь зависит только от уровня
+    const level = gameState.player?.level || 1;
+    const dropChance = 10 + (level * 0.5);
     const dropChanceEl = document.getElementById('player-drop-chance');
-    if (dropChanceEl && typeof calculateDropChance === 'function') {
-        dropChanceEl.textContent = `${calculateDropChance(luck)}%`;
+    if (dropChanceEl) {
+        dropChanceEl.textContent = `${Math.min(60, Math.round(dropChance))}%`;
     }
 }
 
@@ -366,7 +339,6 @@ async function updateProfileUI(player) {
     
     // Обновляем отображение переломов и инфекций
     updateConditionsUI(status);
-    updateLuckDisplay();
 }
 
 /**

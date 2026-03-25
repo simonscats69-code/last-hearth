@@ -203,6 +203,10 @@ app.use((req, res, next) => {
 });
 
 // Роутеры
+logger.info('[index] gameRouter загружен:', gameRouter ? 'OK' : 'NULL');
+if (gameRouter?.stack) {
+    logger.info('[index] gameRouter routes:', gameRouter.stack.filter(l => l.route).map(l => l.route?.path));
+}
 app.use('/api/game', gameRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/leaderboard', leaderboardRouter);

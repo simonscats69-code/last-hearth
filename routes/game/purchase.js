@@ -75,7 +75,7 @@ async function grantPlayerCosmetic(client, playerId, effect) {
     }
     
     await client.query(
-        'UPDATE players SET cosmetics = $1 WHERE telegram_id = $2',
+        'UPDATE players SET cosmetics = $1 WHERE id = $2',
         [JSON.stringify(cosmetics), playerId]
     );
 }
@@ -132,7 +132,7 @@ router.post('/', async (req, res) => {
             }
             
             await client.query(
-                'UPDATE players SET stars = stars - $1 WHERE telegram_id = $2',
+                'UPDATE players SET stars = stars - $1 WHERE id = $2',
                 [price, playerId]
             );
             

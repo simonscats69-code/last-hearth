@@ -34,14 +34,18 @@ const purchaseLimiter = rateLimit({
 // Safe require - не падает если модуль не найден
 function safeRequire(path, name) {
     try {
+        logger.info(`[game] Попытка загрузить ${name} из ${path}`);
         const module = require(path);
+        logger.info(`[game] Модуль ${name} загружен, тип:`, typeof module);
         // Если модуль экспортирует объект с полем router, извлекаем его
         if (module && typeof module === 'object' && module.router) {
+            logger.info(`[game] ${name} имеет .router, возвращаем его`);
             return module.router;
         }
+        logger.info(`[game] ${name} возвращаем как есть`);
         return module;
     } catch (error) {
-        logger.warn(`[game] Не удалось загрузить роутер ${name}: ${error.message}`);
+        logger.error(`[game] Ошибка загрузки ${name}:`, error.message, error.stack);
         const mockRouter = express.Router();
         mockRouter.use((req, res) => res.status(500).json({ error: `Модуль ${name} недоступен` }));
         return mockRouter;
@@ -52,10 +56,17 @@ function safeRequire(path, name) {
 const worldRouter = safeRequire('./world', 'world');
 const bossesRouter = safeRequire('./bosses', 'bosses');
 const purchaseRouter = safeRequire('./purchase', 'purchase');
+
+logger.info('[game] worldRouter загружен:', worldRouter ? 'OK' : 'NULL');
+if (worldRouter?.stack) {
+    logger.info('[game] world routes:', worldRouter.stack.map(r => r.route?.path).filter(Boolean));
+}
+
 logger.info('[game] bossesRouter загружен:', bossesRouter ? 'OK' : 'NULL');
 if (bossesRouter?.stack) {
     logger.info('[game] bosses routes:', bossesRouter.stack.map(r => r.route?.path).filter(Boolean));
 }
+
 const clansRouter = safeRequire('./clans', 'clans');
 const pvpRouter = safeRequire('./pvp', 'pvp');
 const playerRouter = safeRequire('./player', 'player');
@@ -66,6 +77,7 @@ const wheelRouter = safeRequire('./wheel', 'wheel');
 
 // Middleware для валидации Telegram данных
 async function validatePlayer(req, res, next) {
+    logger.info('[validatePlayer] Начало валидации', { path: req.path, method: req.method, headers: Object.keys(req.headers) });
     try {
         // Поддерживаем оба варианта заголовков для совместимости
         const initData = req.headers['x-telegram-init-data'] || req.headers['x-init-data'];
@@ -167,6 +179,12 @@ async function validatePlayer(req, res, next) {
 // Применяем валидацию ко всем роутерам
 router.use(validatePlayer);
 
+// Логируем все входящие запросы к game роутеру
+router.use((req, res, next) => {
+    logger.info('[game] Входящий запрос:', { method: req.method, path: req.path, originalUrl: req.originalUrl, playerId: req.player?.id });
+    next();
+});
+
 // Подключение роутеров (объединённые модули)
 router.use('/world', worldRouter);
 router.use('/bosses', bossesRouter);
@@ -180,12 +198,9 @@ router.use('/status', statusRouter);
 router.use('/wheel', wheelRouter);
 
 // Алиасы для обратной совместимости
-router.use('/locations', worldRouter);
-router.use('/profile', playerRouter);
-router.use('/achievements', playerRouter);
-router.use('/referral', playerRouter);
-router.use('/energy', playerRouter);
-router.use('/inventory', itemsRouter);
+router.use('/locations', worldRouter); // /api/game/world/locations + /api/game/world/locations
+router.use('/profile', playerRouter);    // /api/game/profile + /api/game/player
+router.use('/inventory', itemsRouter);   // /api/game/inventory + /api/game/items
 
 // Экспорт
 module.exports = router;

@@ -92,7 +92,8 @@ router.get('/', async (req, res) => {
  */
 router.post('/spin', async (req, res) => {
     const playerId = req.player?.id;
-    const { is_paid } = req.body;
+    // Валидация: преобразуем к boolean
+    const is_paid = req.body?.is_paid === true || req.body?.is_paid === 'true';
     
     if (!playerId) {
         return res.status(401).json({ success: false, error: 'Не авторизован' });

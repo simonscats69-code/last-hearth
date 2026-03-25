@@ -51,6 +51,7 @@ function validateLocationId(locationId) {
  * POST /world/search → POST /api/game/world/search
  */
 router.post('/search', async (req, res) => {
+    logger.info('[world] POST /search вызван', { playerId: req.player?.id, body: req.body, headers: Object.keys(req.headers) });
     const client = await pool.connect();
     
     try {
@@ -434,15 +435,15 @@ router.post('/move', async (req, res) => {
             
             const locationData = targetLocation.rows[0];
             
-            const requiredLuck = locationData.min_luck || locationData.required_luck || 0;
-            if (player.luck < requiredLuck) {
+            const requiredLevel = locationData.min_level || locationData.required_level || 1;
+            if (player.level < requiredLevel) {
                 await client.query('ROLLBACK');
                 return res.json({
                     success: false,
-                    error: `Нужно больше удачи (${requiredLuck}+)`,
-                    code: 'INSUFFICIENT_LUCK',
-                    required_luck: requiredLuck,
-                    current_luck: player.luck
+                    error: `Нужен уровень ${requiredLevel}+`,
+                    code: 'INSUFFICIENT_LEVEL',
+                    required_level: requiredLevel,
+                    current_level: player.level
                 });
             }
             
@@ -487,9 +488,10 @@ router.post('/move', async (req, res) => {
 
 /**
  * Получение списка локаций
- * GET /api/game/locations (через алиас) или GET /api/game/world/locations
+ * GET /api/game/locations (через алиас из index.js)
+ * GET /api/game/world/locations
  */
-router.get('/', async (req, res) => {
+router.get('/locations', async (req, res) => {
     try {
         const player = req.player;
         
@@ -503,9 +505,9 @@ router.get('/', async (req, res) => {
         
         const locations = await queryAll(`
             SELECT id, name, icon, color, radiation, danger_level,
-                   min_luck as required_luck, description
+                   min_level as required_level, description
             FROM locations
-            ORDER BY min_luck ASC
+            ORDER BY min_level ASC
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
         
@@ -516,10 +518,10 @@ router.get('/', async (req, res) => {
             color: loc.color,
             radiation: loc.radiation,
             danger_level: loc.danger_level,
-            required_luck: loc.required_luck,
-            min_luck: loc.required_luck,
+            required_level: loc.required_level,
+            min_level: loc.required_level,
             description: loc.description,
-            unlocked: player.luck >= loc.required_luck,
+            unlocked: player.level >= loc.required_level,
             current: loc.id === player.current_location_id
         }));
         

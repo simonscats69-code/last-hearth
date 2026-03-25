@@ -8,6 +8,62 @@ const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, validateIndex, validateBoolean, validatePositiveInt, ok, fail, error, badRequest, guard, wrap, logPlayerAction, serializeJSONField, logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 
+// =============================================================================
+// ИНВЕНТАРЬ
+// =============================================================================
+
+/**
+ * Получение инвентаря игрока (объединённый маршрут)
+ * GET /api/game/inventory (через алиас)
+ * 
+ * Возвращает:
+ * - inventory: массив предметов
+ * - coins/stars: валюта игрока
+ * - data: расширенная информация (equipment, items_by_type)
+ */
+router.get('/', async (req, res) => {
+    try {
+        const player = req.player;
+        
+        const inventory = safeJsonParse(player.inventory, []);
+        const equipment = safeJsonParse(player.equipment, {});
+        
+        const itemsByType = {};
+        inventory.forEach((item, index) => {
+            if (!itemsByType[item.type]) {
+                itemsByType[item.type] = [];
+            }
+            itemsByType[item.type].push({
+                index: index,
+                ...item
+            });
+        });
+        
+        res.json({
+            success: true,
+            inventory: inventory.map((item, index) => ({
+                index: index,
+                ...item
+            })),
+            coins: player.coins || 0,
+            stars: player.stars || 0,
+            data: {
+                inventory: inventory.map((item, index) => ({
+                    index: index,
+                    ...item
+                })),
+                equipment: equipment,
+                items_by_type: itemsByType,
+                total_items: inventory.length,
+                max_inventory: player.max_inventory || 30
+            }
+        });
+        
+    } catch (err) {
+        handleError(res, err, 'inventory_view');
+    }
+});
+
 /**
  * Улучшение предмета
  * Использует withPlayerLock для автоматического управления транзакцией
@@ -394,47 +450,6 @@ router.get('/items', async (req, res) => {
 // =============================================================================
 
 /**
- * Получение инвентаря игрока
- * GET /api/game/inventory (через алиас) или GET /api/game/items/inventory
- */
-router.get('/', async (req, res) => {
-    try {
-        const player = req.player;
-        
-        const inventory = safeJsonParse(player.inventory, []);
-        const equipment = safeJsonParse(player.equipment, {});
-        
-        const itemsByType = {};
-        inventory.forEach((item, index) => {
-            if (!itemsByType[item.type]) {
-                itemsByType[item.type] = [];
-            }
-            itemsByType[item.type].push({
-                index: index,
-                ...item
-            });
-        });
-        
-        res.json({
-            success: true,
-            data: {
-                inventory: inventory.map((item, index) => ({
-                    index: index,
-                    ...item
-                })),
-                equipment: equipment,
-                items_by_type: itemsByType,
-                total_items: inventory.length,
-                max_inventory: player.max_inventory || 30
-            }
-        });
-        
-    } catch (err) {
-        handleError(res, err, 'inventory_view');
-    }
-});
-
-/**
  * Использование предмета из инвентаря
  * POST /api/game/inventory/use-item (через алиас) или POST /api/game/items/use
  */
@@ -721,6 +736,9 @@ router.post('/buy', async (req, res) => {
         }
         
         const shopItem = itemResult.rows[0];
+        if (!shopItem) {
+            return res.status(404).json({ success: false, error: 'Товар не найден' });
+        }
         const price = shopItem.price || 0;
         
         if (price <= 0) {

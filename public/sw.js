@@ -14,9 +14,8 @@ const STATIC_ASSETS = [
     '/game-api.js',
     '/game-utils.js',
     '/game-store.js',
-    '/game-map.js',
     '/game-animations.js',
-    '/game-particles.js'
+    '/game-visualEffects.js'
 ];
 
 // Установка Service Worker

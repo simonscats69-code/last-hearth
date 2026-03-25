@@ -250,7 +250,7 @@ function renderLocations() {
                 if (loc.unlocked) {
                     moveToLocation(loc.id);
                 } else {
-                    showModal('🔒 Заблокировано', `Нужно ${loc.min_luck} удачи для входа`);
+                    showModal('🔒 Заблокировано', `Нужен уровень ${loc.min_level} для входа`);
                 }
                 return;
             }
@@ -285,7 +285,7 @@ function renderLocations() {
             if (infoContainer && !infoContainer.querySelector('.map-location-info')) {
                 const info = document.createElement('div');
                 info.className = 'map-location-info';
-                info.innerHTML = `☢️ Радиация: ${hoveredLoc.radiation} | ${hoveredLoc.unlocked ? '✅ Доступно' : '🔒 Требуется ' + hoveredLoc.min_luck + ' удачи'}`;
+                info.innerHTML = `☢️ Радиация: ${hoveredLoc.radiation} | ${hoveredLoc.unlocked ? '✅ Доступно' : '🔒 Требуется уровень ' + hoveredLoc.min_level}`;
                 infoContainer.appendChild(info);
             }
         }
