@@ -563,8 +563,8 @@ const safeParse = safeJsonParse;
 
 /**
  * Выполнить функцию в транзакции с блокировкой игрока
- * @param {number} playerId - ID игрока
- * @param {function} fn - Функция для выполнения
+ * @param {number} playerId - ID игрока (внутренний id из БД)
+ * @param {function} fn - Функция для выполнения (получает client и lockedPlayer)
  * @param {number} timeoutMs - Таймаут в миллисекундах (по умолчанию 10000мс)
  */
 async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
@@ -586,13 +586,13 @@ async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
         }, timeoutMs);
     });
     
-    const lockPromise = tx(async () => {
-        const lockedPlayer = await queryOne(
+    const lockPromise = tx(async (client) => {
+        const lockedPlayer = await client.query(
             'SELECT * FROM players WHERE id = $1 FOR UPDATE',
             [playerId]
         );
         
-        if (!lockedPlayer) {
+        if (!lockedPlayer.rows[0]) {
             throw { 
                 message: 'Игрок не найден', 
                 code: 'PLAYER_NOT_FOUND',
@@ -600,7 +600,8 @@ async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
             };
         }
         
-        return await fn(lockedPlayer);
+        // Передаём client и lockedPlayer в callback для использования внутри транзакции
+        return await fn(client, lockedPlayer.rows[0]);
     });
     
     return await Promise.race([lockPromise, timeoutPromise]);

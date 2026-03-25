@@ -106,7 +106,7 @@ router.post('/spin', async (req, res) => {
         
         // Получаем игрока
         const playerResult = await client.query(
-            'SELECT coins, stars, energy, max_energy, last_wheel_spin FROM players WHERE telegram_id = $1 FOR UPDATE',
+            'SELECT id, coins, stars, energy, max_energy, last_wheel_spin FROM players WHERE id = $1 FOR UPDATE',
             [playerId]
         );
         
@@ -137,7 +137,7 @@ router.post('/spin', async (req, res) => {
             }
             // Списываем Stars
             await client.query(
-                'UPDATE players SET stars = stars - 1 WHERE telegram_id = $1',
+                'UPDATE players SET stars = stars - 1 WHERE id = $1',
                 [playerId]
             );
         } else {
@@ -161,13 +161,13 @@ router.post('/spin', async (req, res) => {
         // Применяем приз
         if (prize.type === 'coins') {
             await client.query(
-                'UPDATE players SET coins = coins + $1, last_wheel_spin = NOW() WHERE telegram_id = $2',
+                'UPDATE players SET coins = coins + $1, last_wheel_spin = NOW() WHERE id = $2',
                 [prize.value, playerId]
             );
         } else if (prize.type === 'energy') {
             const newEnergy = Math.min(player.max_energy || 100, (player.energy || 0) + prize.value);
             await client.query(
-                'UPDATE players SET energy = $1, last_wheel_spin = NOW() WHERE telegram_id = $2',
+                'UPDATE players SET energy = $1, last_wheel_spin = NOW() WHERE id = $2',
                 [newEnergy, playerId]
             );
         } else if (prize.type === 'multiplier') {
@@ -176,12 +176,12 @@ router.post('/spin', async (req, res) => {
             const bonus = newCoins - (player.coins || 0);
             if (bonus > 0) {
                 await client.query(
-                    'UPDATE players SET coins = coins + $1, last_wheel_spin = NOW() WHERE telegram_id = $2',
+                    'UPDATE players SET coins = coins + $1, last_wheel_spin = NOW() WHERE id = $2',
                     [bonus, playerId]
                 );
             } else {
                 await client.query(
-                    'UPDATE players SET last_wheel_spin = NOW() WHERE telegram_id = $1',
+                    'UPDATE players SET last_wheel_spin = NOW() WHERE id = $1',
                     [playerId]
                 );
             }

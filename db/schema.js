@@ -31,7 +31,7 @@ async function createTables() {
             max_energy INTEGER DEFAULT 50,
             infections JSONB DEFAULT '[]',
             current_location_id INTEGER DEFAULT 1,
-            inventory JSONB DEFAULT '{}',
+            inventory JSONB DEFAULT '[]',
             equipment JSONB DEFAULT '{}',
             coins INTEGER DEFAULT 0,
             stars INTEGER DEFAULT 0,

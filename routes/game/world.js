@@ -77,7 +77,7 @@ router.post('/search', async (req, res) => {
             }
             
             const energyCost = 1;
-            if (updatedPlayer.energy < energyCost || updatedPlayer.energy < 0) {
+            if (updatedPlayer.energy < energyCost) {
                 await client.query('ROLLBACK');
                 return res.json({
                     success: false,

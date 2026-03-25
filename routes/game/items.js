@@ -72,25 +72,24 @@ router.post('/upgrade-item', async (req, res) => {
     try {
         const { item_index, use_protection = false } = req.body;
         const playerId = req.player.id;
+        const telegramId = req.player.telegram_id;
         
         // Валидация входных данных
-        const playerInventory = req.player.inventory || [];
-        const indexValidation = validateIndex(item_index, playerInventory.length, 'индекс предмета');
-        if (!indexValidation.valid) {
-            return badRequest(res, indexValidation.error, indexValidation.code);
-        }
-        
+        // Примечание: валидация индекса перенесена внутрь транзакции для избежания race condition
         const booleanValidation = validateBoolean(use_protection, 'use_protection');
         if (!booleanValidation.valid) {
             return badRequest(res, booleanValidation.error, booleanValidation.code);
         }
         
         // Используем withPlayerLock для автоматического управления транзакцией
-        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+        // Передаём client для выполнения запросов внутри транзакции
+        const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
             const inventory = serializeJSONField(lockedPlayer.inventory) || [];
             
-            if (item_index < 0 || item_index >= inventory.length) {
-                throw { message: 'Неверный индекс предмета', code: 'INVALID_INDEX', statusCode: 400 };
+            // Валидация индекса внутри транзакции на актуальных данных
+            const indexValidation = validateIndex(item_index, inventory.length, 'индекс предмета');
+            if (!indexValidation.valid) {
+                throw { message: indexValidation.error, code: indexValidation.code, statusCode: 400 };
             }
             
             const item = inventory[item_index];
@@ -145,34 +144,34 @@ router.post('/upgrade-item', async (req, res) => {
                     item.defense = Math.floor(item.defense * 1.2);
                 }
                 
-                // Обновляем инвентарь и списываем монеты
-                        await queryOne(`
-                            UPDATE players 
-                            SET inventory = $1, coins = coins - $2
-                            WHERE telegram_id = $3
-                            RETURNING *
-                        `, [inventory, upgradeCost, playerId]);
+                // Обновляем инвентарь и списываем монеты внутри транзакции
+                await client.query(`
+                    UPDATE players 
+                    SET inventory = $1, coins = coins - $2
+                    WHERE id = $3
+                    RETURNING *
+                `, [inventory, upgradeCost, lockedPlayer.id]);
                 
             } else {
                 // Неудача
                 if (use_protection) {
                     // Защита сработала - предмет не сломался
-                        await queryOne(`
-                            UPDATE players SET coins = coins - $1 WHERE telegram_id = $2
-                            RETURNING *
-                        `, [upgradeCost, playerId]);
+                    await client.query(`
+                        UPDATE players SET coins = coins - $1 WHERE id = $2
+                        RETURNING *
+                    `, [upgradeCost, lockedPlayer.id]);
                     
                 } else {
                     // Предмет сломался
                     itemBroken = true;
                     inventory.splice(item_index, 1);
                     
-                        await queryOne(`
-                            UPDATE players 
-                            SET inventory = $1, coins = coins - $2
-                            WHERE telegram_id = $3
-                            RETURNING *
-                        `, [inventory, upgradeCost, playerId]);
+                    await client.query(`
+                        UPDATE players 
+                        SET inventory = $1, coins = coins - $2
+                        WHERE id = $3
+                        RETURNING *
+                    `, [inventory, upgradeCost, lockedPlayer.id]);
                 }
             }
             
@@ -248,12 +247,7 @@ router.post('/modify-item', async (req, res) => {
         const playerId = req.player.id;
         
         // Валидация входных данных
-        const playerInventory = req.player.inventory || [];
-        const indexValidation = validateIndex(item_index, playerInventory.length, 'индекс предмета');
-        if (!indexValidation.valid) {
-            return badRequest(res, indexValidation.error, indexValidation.code);
-        }
-        
+        // Примечание: валидация индекса перенесена внутрь транзакции
         if (!modification_type || typeof modification_type !== 'string') {
             return badRequest(res, 'Укажите тип модификации', 'INVALID_MODIFICATION_TYPE');
         }
@@ -264,11 +258,14 @@ router.post('/modify-item', async (req, res) => {
         }
         
         // Используем withPlayerLock для автоматического управления транзакцией
-        const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+        // Передаём client для выполнения запросов внутри транзакции
+        const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
             const inventory = serializeJSONField(lockedPlayer.inventory) || [];
             
-            if (item_index < 0 || item_index >= inventory.length) {
-                throw { message: 'Неверный индекс предмета', code: 'INVALID_INDEX', statusCode: 400 };
+            // Валидация индекса внутри транзакции
+            const indexValidation = validateIndex(item_index, inventory.length, 'индекс предмета');
+            if (!indexValidation.valid) {
+                throw { message: indexValidation.error, code: indexValidation.code, statusCode: 400 };
             }
             
             const item = inventory[item_index];
@@ -322,12 +319,13 @@ router.post('/modify-item', async (req, res) => {
                     item.defense = (item.defense || 0) + 5;
                 }
                 
-                await queryOne(`
+                // Выполняем запрос внутри транзакции
+                await client.query(`
                     UPDATE players 
                     SET inventory = $1, coins = coins - $2
-                    WHERE telegram_id = $3
+                    WHERE id = $3
                     RETURNING *
-                `, [inventory, modCost, playerId]);
+                `, [inventory, modCost, lockedPlayer.id]);
                 
                 // Возвращаем результат успеха
                 return {
@@ -341,10 +339,10 @@ router.post('/modify-item', async (req, res) => {
                 
             } else {
                 // Неудача - монеты все равно списываются
-                await queryOne(`
-                    UPDATE players SET coins = coins - $1 WHERE telegram_id = $2
+                await client.query(`
+                    UPDATE players SET coins = coins - $1 WHERE id = $2
                     RETURNING *
-                `, [modCost, playerId]);
+                `, [modCost, lockedPlayer.id]);
                 
                 // Возвращаем результат неудачи
                 return {

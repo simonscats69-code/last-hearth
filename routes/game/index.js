@@ -84,7 +84,9 @@ async function validatePlayer(req, res, next) {
         const botToken = process.env.TG_BOT_TOKEN;
         
         // Development mode: пропускаем валидацию если токен не настроен
-        if (!botToken || botToken === 'YOUR_BOT_TOKEN_HERE') {
+        // ВАЖНО: Разрешаем только в режиме разработки!
+        const isDevelopment = process.env.NODE_ENV !== 'production';
+        if (isDevelopment && (!botToken || botToken === 'YOUR_BOT_TOKEN_HERE')) {
             logger.warn('[validatePlayer] TG_BOT_TOKEN не настроен - режим разработки');
             
             // Пытаемся извлечь user_id из initData без валидации подписи
