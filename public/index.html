@@ -124,6 +124,31 @@
                 </div>
             </section>
 
+            <section class="journey-progress-section">
+                <div class="journey-progress-grid">
+                    <div class="journey-card">
+                        <span class="journey-label">Боссов убито</span>
+                        <strong class="journey-value" id="journey-bosses-killed">0</strong>
+                        <span class="journey-desc">Твой путь через всех боссов</span>
+                    </div>
+                    <div class="journey-card">
+                        <span class="journey-label">Текущий босс</span>
+                        <strong class="journey-value" id="journey-main-boss">—</strong>
+                        <span class="journey-desc" id="journey-main-boss-desc">Главная цель сейчас</span>
+                    </div>
+                    <div class="journey-card">
+                        <span class="journey-label">Следующая зона</span>
+                        <strong class="journey-value" id="journey-next-zone">—</strong>
+                        <span class="journey-desc" id="journey-next-zone-desc">Следующий шаг по карте</span>
+                    </div>
+                    <div class="journey-card">
+                        <span class="journey-label">Освоенный риск</span>
+                        <strong class="journey-value" id="journey-risk-label">Стабильный</strong>
+                        <span class="journey-desc" id="journey-risk-desc">Максимальный пройденный уровень опасности</span>
+                    </div>
+                </div>
+            </section>
+
             <!-- Текущая локация -->
             <section class="location-section">
                 <div class="location-card" id="current-location">
@@ -133,8 +158,15 @@
                         <p id="location-desc">Тихий жилой комплекс</p>
                         <div class="location-stats">
                             <span class="radiation">☢️ <span id="location-radiation">0</span></span>
+                            <span class="infection">🦠 <span id="location-infection">0</span></span>
                             <span class="danger">⚠️ Опасность: <span id="location-danger">1</span>/7</span>
                         </div>
+                        <div class="location-preparation" id="location-preparation-panel">
+                            <span class="prep-pill risk">Риск: <span id="location-risk-label">Стабильно</span></span>
+                            <span class="prep-pill rad-def">Антирад: <span id="location-rad-defense">0</span></span>
+                            <span class="prep-pill inf-def">Антиинф.: <span id="location-inf-defense">0</span></span>
+                        </div>
+                        <p class="location-risk-hint" id="location-risk-hint">Зона безопасна для стабильного фарма.</p>
                     </div>
                 </div>
             </section>

@@ -687,6 +687,47 @@ html, body {
     gap: 10px;
 }
 
+.journey-progress-section {
+    padding-left: 16px;
+    padding-right: 16px;
+    margin-bottom: 16px;
+}
+
+.journey-progress-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.journey-card {
+    background: linear-gradient(160deg, rgba(33, 28, 25, 0.96), rgba(24, 21, 19, 0.96));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 112px;
+}
+
+.journey-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+}
+
+.journey-value {
+    font-size: 18px;
+    line-height: 1.2;
+}
+
+.journey-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+
 .progress-card {
     background: var(--bg-card);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -796,14 +837,56 @@ html, body {
     display: flex;
     gap: 16px;
     font-size: 14px;
+    flex-wrap: wrap;
 }
 
 .radiation {
     color: var(--radiation-color);
 }
 
+.infection {
+    color: #ff8aa8;
+}
+
 .danger {
     color: var(--accent-orange);
+}
+
+.location-preparation {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.prep-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 12px;
+}
+
+.prep-pill.risk {
+    color: #ffd166;
+}
+
+.prep-pill.rad-def {
+    color: var(--radiation-color);
+}
+
+.prep-pill.inf-def {
+    color: #ff8aa8;
+}
+
+.location-risk-hint {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
 }
 
 /* Кнопки действий */
@@ -2056,6 +2139,103 @@ html, body {
 
 .shop-buy-btn:active {
     transform: scale(0.95);
+}
+
+.shop-item-role {
+    display: inline-flex;
+    margin-top: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(255, 209, 102, 0.12);
+    border: 1px solid rgba(255, 209, 102, 0.25);
+    color: #ffd166;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.reward-celebration-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(5, 8, 14, 0.72);
+    backdrop-filter: blur(6px);
+    animation: fadeIn 0.25s ease-out;
+}
+
+.reward-celebration-overlay.fade-out {
+    animation: fadeOut 0.3s ease-out forwards;
+}
+
+.reward-celebration-card {
+    width: min(100%, 420px);
+    background: linear-gradient(180deg, rgba(34, 31, 28, 0.98), rgba(23, 20, 18, 0.98));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    padding: 22px 18px 18px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+    text-align: center;
+}
+
+.reward-celebration-overlay.tone-gold .reward-celebration-card {
+    border-color: rgba(255, 215, 0, 0.35);
+    box-shadow: 0 18px 60px rgba(255, 170, 0, 0.18);
+}
+
+.reward-celebration-overlay.tone-key .reward-celebration-card {
+    border-color: rgba(255, 209, 102, 0.35);
+    box-shadow: 0 18px 60px rgba(255, 209, 102, 0.16);
+}
+
+.reward-celebration-overlay.tone-unlock .reward-celebration-card {
+    border-color: rgba(106, 176, 255, 0.35);
+    box-shadow: 0 18px 60px rgba(106, 176, 255, 0.18);
+}
+
+.reward-celebration-icon {
+    font-size: 46px;
+    margin-bottom: 10px;
+}
+
+.reward-celebration-title {
+    font-size: 24px;
+    margin-bottom: 8px;
+    color: #fff;
+}
+
+.reward-celebration-subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    line-height: 1.45;
+}
+
+.reward-celebration-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.reward-celebration-line {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    font-size: 14px;
+}
+
+.reward-celebration-close {
+    width: 100%;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 16px;
+    font-weight: bold;
+    cursor: pointer;
+    background: linear-gradient(135deg, var(--accent-green), #2E7D32);
+    color: white;
 }
 
 .shop-buy-btn:disabled {

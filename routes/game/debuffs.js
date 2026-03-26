@@ -16,7 +16,8 @@ const {
     DEBUFF_TYPES, 
     DEBUFF_CONFIG, 
     DEBUFF_CURES,
-    calculateDebuffModifiers
+    calculateDebuffModifiers,
+    getDebuffTier
 } = require('../../utils/gameConstants');
 
 
@@ -266,6 +267,7 @@ const DebuffAPI = {
                 type: 'radiation',
                 level: radiation.level,
                 expiresAt: radiation.expires_at,
+                severity: getDebuffTier(radiation.level),
                 name: 'Радиация',
                 icon: '☢'
             });
@@ -281,6 +283,7 @@ const DebuffAPI = {
                     const exp = new Date(i.expires_at);
                     return exp > max ? exp : max;
                 }, new Date(0)).toISOString(),
+                severity: getDebuffTier(totalInfection),
                 name: 'Инфекция',
                 icon: '🦠'
             });

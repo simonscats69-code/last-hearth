@@ -972,6 +972,15 @@ async function runMigrations() {
     await query(`DROP TABLE IF EXISTS player_buildings CASCADE`);
     await query(`DROP TABLE IF EXISTS buildings CASCADE`);
     await query(`DROP TABLE IF EXISTS crafting_recipes CASCADE`);
+
+    // Миграция: полное удаление достижений крафта
+    await query(`
+        DELETE FROM player_achievements
+        WHERE achievement_id IN (
+            SELECT id FROM achievements WHERE category = 'craft'
+        )
+    `);
+    await query(`DELETE FROM achievements WHERE category = 'craft'`);
 }
 
 /**
@@ -1031,8 +1040,8 @@ async function seedDatabase() {
         { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 20, icon: '⚡', stats: { energy: 10 } },
         { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 20, icon: '🩹', stats: { health: 10 } },
         { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 50, icon: '💊', stats: { health: 30 } },
-        { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 1 } },
-        { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 2 } },
+        { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 2 } },
+        { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 3 } },
         { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 15 } },
         { name: 'Нож', description: 'Простой нож выживания', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 5 }, durability: 50, max_durability: 50, price: 30, icon: '🔪' },
         { name: 'Бита', description: 'Бейсбольная бита', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 8 }, durability: 30, max_durability: 30, price: 25, icon: '🏏' },
@@ -1040,10 +1049,10 @@ async function seedDatabase() {
         { name: 'Автомат', description: 'Автоматическое оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 40, ammo: 30 }, durability: 200, max_durability: 200, price: 500, icon: '⚔️' },
         { name: 'Дробовик', description: 'Охотничий дробовик', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 60, ammo: 5 }, durability: 150, max_durability: 150, price: 750, icon: '🔫' },
         { name: 'Снайперка', description: 'Снайперская винтовка', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 100, ammo: 5 }, durability: 300, max_durability: 300, price: 1500, icon: '🔭' },
-        { name: 'Кожаная куртка', description: 'Простая защита', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5 }, durability: 50, max_durability: 50, price: 40, icon: '🧥' },
-        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', stats: { defense: 25 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
-        { name: 'Противогаз', description: 'Защита от радиации', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { radiation_resist: 15 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
-        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { defense: 10 }, durability: 80, max_durability: 80, price: 80, icon: '⛑️' },
+        { name: 'Кожаная куртка', description: 'Простая защита', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, infection_resist: 3 }, durability: 50, max_durability: 50, price: 40, icon: '🧥' },
+        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', stats: { defense: 25, radiation_resist: 6, infection_resist: 4 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
+        { name: 'Противогаз', description: 'Защита от радиации', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { radiation_resist: 20, infection_resist: 12 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
+        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { defense: 10, infection_resist: 5 }, durability: 80, max_durability: 80, price: 80, icon: '⛑️' },
         // УДАЛЕНО: материалы для крафта (Металлолом, Древесина, Ткань, Пластик, Электроника, Провода, Химикаты, Титан, Уран, Кристалл силы, Ядерный элемент)
         { name: 'Патроны', description: 'Патроны для оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '📦' },
         // Ключи для боссов (1 = не требуется, 2-10 = нужны ключи)

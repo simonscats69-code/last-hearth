@@ -6,7 +6,13 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { DEBUFF_CONFIG, calculateDropChance, rollItemRarity, calculateDebuffModifiers, calculateRadiationDefense } = require('../../utils/gameConstants');
+const {
+    DEBUFF_CONFIG,
+    calculateDropChance,
+    rollItemRarity,
+    calculateDebuffModifiers,
+    calculateLocationRiskProfile
+} = require('../../utils/gameConstants');
 const { logger, withPlayerLock, safeJsonParse, handleError } = require('../../utils/serverApi');
 const { normalizeInventory, normalizeRadiation } = require('../../utils/playerState');
 const { DebuffAPI } = require('./debuffs');
@@ -102,17 +108,16 @@ router.post('/search', async (req, res) => {
             }
             
             const locationData = location.rows[0];
+            const equipment = safeJsonParse(updatedPlayer.equipment, {});
+            const riskProfile = calculateLocationRiskProfile(locationData, equipment);
             
             let radiationGain = 0;
-            let radiationDefense = 0;
+            const radiationDefense = riskProfile.radiationDefense;
             let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             
             if (locationData.radiation > 0) {
                 const baseRadiation = Math.ceil(locationData.radiation / 10);
-                
-                const equipment = safeJsonParse(updatedPlayer.equipment, {});
-                radiationDefense = calculateRadiationDefense(equipment);
-                
+
                 const randomFactor = 0.7 + Math.random() * 0.6;
                 radiationGain = Math.max(0, Math.ceil((baseRadiation - radiationDefense) * randomFactor));
                 
@@ -141,23 +146,11 @@ router.post('/search', async (req, res) => {
             
             // Применяем инфекцию
             let infectionGain = 0;
-            let infectionDefense = 0;
+            const infectionDefense = riskProfile.infectionDefense;
             
             if (locationData.infection && locationData.infection > 0) {
                 const baseInfection = Math.ceil(locationData.infection / 10);
-                
-                // Защита от инфекции - вычисляем из экипировки
-                const equipment = safeJsonParse(updatedPlayer.equipment, {});
-                const infConfig = DEBUFF_CONFIG.infection || { defensePerLevel: 0.5 };
-                
-                // Считаем защиту от инфекции (аналогично радиации)
-                const slots = ['helmet', 'armor', 'boots', 'accessory', 'weapon', 'hands', 'legs'];
-                for (const slot of slots) {
-                    if (equipment[slot] && equipment[slot].infection_resist) {
-                        infectionDefense += equipment[slot].infection_resist;
-                    }
-                }
-                
+
                 const randomFactor = 0.7 + Math.random() * 0.6;
                 infectionGain = Math.max(0, Math.ceil((baseInfection - infectionDefense) * randomFactor));
                 
@@ -175,9 +168,9 @@ router.post('/search', async (req, res) => {
             
             const modifiers = calculateDebuffModifiers(updatedPlayer);
             const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck) * 10) / 10);
-            
+            const riskAdjustedLuck = Math.max(1, Math.round((effectiveLuck + riskProfile.rarityLuckBonus) * 10) / 10);
             const baseDropChance = calculateDropChance(effectiveLuck);
-            const dropChance = Math.max(0.01, baseDropChance * modifiers.dropChance);
+            const dropChance = Math.min(95, Math.max(0.01, baseDropChance * modifiers.dropChance * riskProfile.rewardMultiplier));
             const rolled = Math.random() * 100;
             
             let foundItem = null;
@@ -191,16 +184,19 @@ router.post('/search', async (req, res) => {
                 
                 // Ключевые шансы от общего дропа
                 const keyChances = [
-                    { bossLevel: 2, chance: 2.0, name: 'Бездомного психа' },
-                    { bossLevel: 3, chance: 1.0, name: 'Медведя-мутанта' },
-                    { bossLevel: 4, chance: 0.5, name: 'Военного дрона' },
-                    { bossLevel: 5, chance: 0.25, name: 'Главаря мародёров' },
-                    { bossLevel: 6, chance: 0.125, name: 'Биологического ужаса' },
-                    { bossLevel: 7, chance: 0.0625, name: 'Офицера-нежить' },
-                    { bossLevel: 8, chance: 0.03125, name: 'Гигантского монстра' },
-                    { bossLevel: 9, chance: 0.015625, name: 'Профессора безумия' },
-                    { bossLevel: 10, chance: 0.0078125, name: 'Последнего стража' }
-                ];
+                    { bossLevel: 2, chance: 2.5, name: 'Бездомного психа' },
+                    { bossLevel: 3, chance: 1.25, name: 'Медведя-мутанта' },
+                    { bossLevel: 4, chance: 0.625, name: 'Военного дрона' },
+                    { bossLevel: 5, chance: 0.3125, name: 'Главаря мародёров' },
+                    { bossLevel: 6, chance: 0.15625, name: 'Биологического ужаса' },
+                    { bossLevel: 7, chance: 0.078125, name: 'Офицера-нежить' },
+                    { bossLevel: 8, chance: 0.0390625, name: 'Гигантского монстра' },
+                    { bossLevel: 9, chance: 0.01953125, name: 'Профессора безумия' },
+                    { bossLevel: 10, chance: 0.009765625, name: 'Последнего стража' }
+                ].map((key) => ({
+                    ...key,
+                    chance: Math.round((key.chance * riskProfile.keyChanceMultiplier) * 100000) / 100000
+                }));
                 
                 // Отдельный бросок для определения типа предмета (ключ или оружие)
                 const keyRoll = Math.random() * 100;
@@ -235,7 +231,7 @@ router.post('/search', async (req, res) => {
                     itemRarity = foundItem?.rarity || 'epic';
                 } else {
                     // Дроп оружия (всё остальное от дропа)
-                    itemRarity = rollItemRarity(locationData.id, effectiveLuck);
+                    itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck);
 
                     const itemResult = await client.query(`
                         SELECT
@@ -279,7 +275,8 @@ router.post('/search', async (req, res) => {
                         WHERE id = $2
                     `, [JSON.stringify(inventory), playerId]);
                     
-                    const expReward = Math.floor(5 + (itemRarity === 'common' ? 0 : itemRarity === 'uncommon' ? 2 : itemRarity === 'rare' ? 5 : itemRarity === 'epic' ? 8 : 10));
+                    const baseExpReward = Math.floor(6 + (itemRarity === 'common' ? 0 : itemRarity === 'uncommon' ? 3 : itemRarity === 'rare' ? 7 : itemRarity === 'epic' ? 11 : 15));
+                    const expReward = Math.max(1, Math.floor(baseExpReward * riskProfile.expMultiplier));
                     await client.query(`
                         UPDATE players 
                         SET experience = experience + $1
@@ -361,12 +358,22 @@ router.post('/search', async (req, res) => {
                     gained: infectionGain,
                     defense: infectionDefense
                 },
+                risk_profile: {
+                    tier: riskProfile.tier,
+                    label: riskProfile.label,
+                    score: riskProfile.riskScore,
+                    reward_multiplier: riskProfile.rewardMultiplier,
+                    key_chance_multiplier: riskProfile.keyChanceMultiplier,
+                    rarity_luck_bonus: riskProfile.rarityLuckBonus,
+                    is_prepared: riskProfile.isPrepared
+                },
                 location: {
                     name: locationData.name,
                     radiation: locationData.radiation,
                     infection: locationData.infection || 0
                 },
                 effective_luck: effectiveLuck,
+                risk_adjusted_luck: riskAdjustedLuck,
                 drop_chance: dropChance,
                 rolled: rolled.toFixed(2),
                 exp_gained: expGained

@@ -44,6 +44,45 @@ const GAME_CONFIG = {
     // УДАЛЕНО: константы крафта (BASE_CRAFT_SUCCESS, MAX_CRAFT_SUCCESS, RARITY_CRAFT_PENALTIES)
 };
 
+const RISK_TIERS = [
+    {
+        key: 'safe',
+        label: 'Стабильно',
+        maxScore: 1,
+        rewardMultiplier: 1,
+        keyChanceMultiplier: 1,
+        rarityLuckBonus: 0,
+        expMultiplier: 1
+    },
+    {
+        key: 'warning',
+        label: 'Риск',
+        maxScore: 4,
+        rewardMultiplier: 1.12,
+        keyChanceMultiplier: 1.35,
+        rarityLuckBonus: 6,
+        expMultiplier: 1.18
+    },
+    {
+        key: 'danger',
+        label: 'Опасно',
+        maxScore: 7,
+        rewardMultiplier: 1.28,
+        keyChanceMultiplier: 1.75,
+        rarityLuckBonus: 12,
+        expMultiplier: 1.4
+    },
+    {
+        key: 'deadly',
+        label: 'Смертельно',
+        maxScore: Number.POSITIVE_INFINITY,
+        rewardMultiplier: 1.5,
+        keyChanceMultiplier: 2.25,
+        rarityLuckBonus: 18,
+        expMultiplier: 1.7
+    }
+];
+
 /**
  * Рассчитать шанс дропа (монотонно растущий)
  * @param {number} luck - Удача игрока
@@ -193,20 +232,20 @@ const DEBUFF_TYPES = {
 const DEBUFF_CONFIG = {
     // Радиация
     radiation: {
-        baseDurationMs: 6 * 60 * 60 * 1000,  // 6 часов в мс
-        durationPerLevelMs: 2 * 60 * 60 * 1000,  // +2 часа за уровень
+        baseDurationMs: 4 * 60 * 60 * 1000,  // 4 часа в мс
+        durationPerLevelMs: 90 * 60 * 1000,  // +1.5 часа за уровень
         maxLevel: 10,
         minLevel: 1,
-        damagePerLevel: 2,  // урон здоровью в час при level >= 5
+        damagePerLevel: 1,  // урон здоровью в час при level >= 5
         regenRateMs: 30 * 60 * 1000  // естественное снижение каждые 30 мин
     },
     // Инфекция
     infection: {
-        baseDurationMs: 12 * 60 * 60 * 1000,  // 12 часов
-        durationPerLevelMs: 4 * 60 * 60 * 1000,  // +4 часа за уровень
+        baseDurationMs: 8 * 60 * 60 * 1000,  // 8 часов
+        durationPerLevelMs: 3 * 60 * 60 * 1000,  // +3 часа за уровень
         maxLevel: 10,
         minLevel: 1,
-        damagePerLevel: 3,  // урон здоровью в час
+        damagePerLevel: 2,  // урон здоровью в час
         regenRateMs: 60 * 60 * 1000  // естественное снижение каждый час
     }
 };
@@ -215,13 +254,13 @@ const DEBUFF_CONFIG = {
 const DEBUFF_EFFECTS = {
     // Радиация: сильно бьёт по удаче и дропу
     radiation: {
-        strength: -0.03,      // -3% к урону за уровень
-        luck: -0.05,          // -5% к удаче за уровень
-        dropChance: -0.03    // -3% к шансу дропа за уровень
+        strength: -0.02,      // -2% к урону за уровень
+        luck: -0.04,          // -4% к удаче за уровень
+        dropChance: -0.04    // -4% к шансу дропа за уровень
     },
     // Инфекция: сильно бьёт по силе и выносливости
     infection: {
-        strength: -0.05,      // -5% к урону за уровень
+        strength: -0.04,      // -4% к урону за уровень
         endurance: -0.03,    // -3% к выносливости за уровень
         dropChance: -0.02    // -2% к шансу дропа за уровень
     }
@@ -337,6 +376,41 @@ function calculateDebuffModifiers(player) {
     return modifiers;
 }
 
+function getDebuffTier(level) {
+    if (level >= 8) return 'critical';
+    if (level >= 5) return 'danger';
+    if (level >= 3) return 'warning';
+    if (level > 0) return 'active';
+    return 'safe';
+}
+
+function getEquipmentResistanceValue(item, keys) {
+    if (!item || typeof item !== 'object') return 0;
+
+    for (const key of keys) {
+        const directValue = Number(item[key]);
+        if (Number.isFinite(directValue) && directValue > 0) {
+            return directValue;
+        }
+    }
+
+    const stats = item.stats && typeof item.stats === 'object' ? item.stats : null;
+    if (!stats) return 0;
+
+    for (const key of keys) {
+        const statValue = Number(stats[key]);
+        if (Number.isFinite(statValue) && statValue > 0) {
+            return statValue;
+        }
+    }
+
+    return 0;
+}
+
+function normalizeResistanceToThreatPoints(totalResistance) {
+    return Math.max(0, Math.round(Number(totalResistance || 0) / 10));
+}
+
 /**
  * Рассчитать защиту от радиации из экипировки
  * @param {object} equipment - экипировка игрока
@@ -344,37 +418,68 @@ function calculateDebuffModifiers(player) {
  */
 function calculateRadiationDefense(equipment) {
     if (!equipment) return 0;
-    
+
     let defense = 0;
-    
-    // Поддержка старого формата (armor/helmet -> radiation_resistance)
-    if (equipment.armor?.stats?.radiation_resistance) {
-        defense += equipment.armor.stats.radiation_resistance;
+    const slots = ['armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
+    const keys = ['radiation_resist', 'radiation_resistance', 'radiationDefense'];
+
+    for (const slot of slots) {
+        defense += getEquipmentResistanceValue(equipment[slot], keys);
     }
-    if (equipment.helmet?.stats?.radiation_resistance) {
-        defense += equipment.helmet.stats.radiation_resistance;
+
+    return normalizeResistanceToThreatPoints(defense);
+}
+
+function calculateInfectionDefense(equipment) {
+    if (!equipment) return 0;
+
+    let defense = 0;
+    const slots = ['armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
+    const keys = ['infection_resist', 'infection_resistance', 'infectionDefense'];
+
+    for (const slot of slots) {
+        defense += getEquipmentResistanceValue(equipment[slot], keys);
     }
-    
-    // Поддержка нового формата (body/head/hands/legs -> radiationDefense)
-    if (equipment.body?.stats?.radiationDefense) {
-        defense += equipment.body.stats.radiationDefense;
-    }
-    if (equipment.head?.stats?.radiationDefense) {
-        defense += equipment.head.stats.radiationDefense;
-    }
-    if (equipment.hands?.stats?.radiationDefense) {
-        defense += equipment.hands.stats.radiationDefense;
-    }
-    if (equipment.legs?.stats?.radiationDefense) {
-        defense += equipment.legs.stats.radiationDefense;
-    }
-    // Примечание: equipment.helmet не дублируется здесь, т.к. он уже учтён выше в старом формате
-    
-    return defense;
+
+    return normalizeResistanceToThreatPoints(defense);
+}
+
+function getRiskTierByScore(score) {
+    return RISK_TIERS.find((tier) => score <= tier.maxScore) || RISK_TIERS[RISK_TIERS.length - 1];
+}
+
+function calculateLocationRiskProfile(location = {}, equipment = {}) {
+    const radiationThreat = Math.max(0, Math.ceil(Number(location.radiation || 0) / 10));
+    const infectionThreat = Math.max(0, Math.ceil(Number(location.infection || 0) / 10));
+    const radiationDefense = calculateRadiationDefense(equipment);
+    const infectionDefense = calculateInfectionDefense(equipment);
+
+    const radiationPressure = Math.max(0, radiationThreat - radiationDefense);
+    const infectionPressure = Math.max(0, infectionThreat - infectionDefense);
+    const riskScore = radiationPressure + infectionPressure;
+    const tier = getRiskTierByScore(riskScore);
+
+    return {
+        tier: tier.key,
+        label: tier.label,
+        riskScore,
+        radiationThreat,
+        infectionThreat,
+        radiationDefense,
+        infectionDefense,
+        radiationPressure,
+        infectionPressure,
+        rewardMultiplier: tier.rewardMultiplier,
+        keyChanceMultiplier: tier.keyChanceMultiplier,
+        rarityLuckBonus: tier.rarityLuckBonus,
+        expMultiplier: tier.expMultiplier,
+        isPrepared: riskScore <= 2
+    };
 }
 
 module.exports = {
     GAME_CONFIG,
+    RISK_TIERS,
     LOOT_TABLES,
     EXP_FORMULA,
     ITEM_CATEGORIES,
@@ -394,6 +499,9 @@ module.exports = {
     getItemCategory,
     // Дебаффы
     getDebuffEffect,
+    getDebuffTier,
     calculateDebuffModifiers,
-    calculateRadiationDefense
+    calculateRadiationDefense,
+    calculateInfectionDefense,
+    calculateLocationRiskProfile
 };

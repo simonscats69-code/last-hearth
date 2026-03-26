@@ -64,6 +64,9 @@ const gameState = {
     // Последний вход
     lastLogin: null,
 
+    // Уже показанные анлоки локаций
+    seenUnlockedLocations: [],
+
     // Инсайты для главного экрана
     mainInsights: {
         loadedAt: 0,
@@ -583,7 +586,7 @@ function render(containerIdOrEl, data, template, options = {}) {
 
 /**
  * Универсальное выполнение действия с подтверждением и обработкой
- * @param {string} type - тип действия (craft, market/buy, pvp/attack и т.д.)
+ * @param {string} type - тип действия (market/buy, pvp/attack и т.д.)
  * @param {Object} data - данные для отправки
  * @param {Object} options - опции
  */

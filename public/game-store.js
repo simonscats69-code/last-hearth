@@ -416,9 +416,10 @@ function renderCoinShop() {
     const container = document.getElementById('shop-items-list');
     if (!container) return;
     
+    const getCategory = (item) => item.shop_category || item.type || item.category;
     const filtered = currentCoinShopCategory === 'all' 
         ? coinShopItems 
-        : coinShopItems.filter(item => item.category === currentCoinShopCategory);
+        : coinShopItems.filter(item => getCategory(item) === currentCoinShopCategory);
     
     if (filtered.length === 0) {
         container.innerHTML = '<div class="empty-message">Нет товаров в этой категории</div>';
@@ -427,12 +428,16 @@ function renderCoinShop() {
     
     container.innerHTML = filtered.map(item => {
         const rarityClass = item.rarity || 'common';
+        const prepTag = item.stats?.radiation_cure || item.stats?.infection_cure || item.stats?.radiation_resist || item.stats?.infection_resist
+            ? '<div class="shop-item-role">Подготовка к опасной зоне</div>'
+            : '';
         return `
             <div class="shop-item-card ${rarityClass}" data-item-id="${item.id}">
                 <div class="shop-item-icon">${item.icon || '📦'}</div>
                 <div class="shop-item-info">
                     <div class="shop-item-name">${escapeHtml(item.name)}</div>
                     <div class="shop-item-desc">${escapeHtml(item.description || '')}</div>
+                    ${prepTag}
                     <div class="shop-item-stats">
                         ${renderItemStats(item.stats)}
                     </div>
@@ -466,6 +471,7 @@ function renderItemStats(stats) {
     if (stats.radiation_cure) statLines.push(`☢️ Лечение радиации: ${stats.radiation_cure}`);
     if (stats.infection_cure) statLines.push(`🦠 Лечение инфекции: ${stats.infection_cure}`);
     if (stats.radiation_resist) statLines.push(`🛡️ Защита от радиации: ${stats.radiation_resist}`);
+    if (stats.infection_resist) statLines.push(`🧪 Защита от инфекции: ${stats.infection_resist}`);
     return statLines.join('<br>');
 }
 

@@ -563,6 +563,52 @@ function updateMainProgressCards(player) {
     if (nextRewardDesc) nextRewardDesc.textContent = rewardInsight.desc;
 }
 
+function updateJourneyProgress(player) {
+    const journey = player.journey || {};
+    const bossesKilledEl = document.getElementById('journey-bosses-killed');
+    const mainBossEl = document.getElementById('journey-main-boss');
+    const mainBossDescEl = document.getElementById('journey-main-boss-desc');
+    const nextZoneEl = document.getElementById('journey-next-zone');
+    const nextZoneDescEl = document.getElementById('journey-next-zone-desc');
+    const riskLabelEl = document.getElementById('journey-risk-label');
+    const riskDescEl = document.getElementById('journey-risk-desc');
+
+    if (bossesKilledEl) {
+        bossesKilledEl.textContent = String(journey.bosses_killed || player.stats_ext?.bosses_killed || 0);
+    }
+
+    if (mainBossEl) {
+        mainBossEl.textContent = journey.current_main_boss?.name || 'Нет цели';
+    }
+    if (mainBossDescEl) {
+        if (journey.current_main_boss) {
+            mainBossDescEl.textContent = journey.current_main_boss.defeated
+                ? `Уже побеждён ${journey.current_main_boss.kills} раз`
+                : 'Следующая главная цель';
+        } else {
+            mainBossDescEl.textContent = 'Боссы ещё не определены';
+        }
+    }
+
+    if (nextZoneEl) {
+        nextZoneEl.textContent = journey.next_zone?.name || 'Все зоны открыты';
+    }
+    if (nextZoneDescEl) {
+        nextZoneDescEl.textContent = journey.next_zone
+            ? `Нужен уровень ${journey.next_zone.required_level}, риск ${journey.next_zone.danger_level}/7`
+            : 'Дальше только освоение самых опасных мест';
+    }
+
+    if (riskLabelEl) {
+        riskLabelEl.textContent = journey.mastered_risk?.label || 'Стабильный риск';
+    }
+    if (riskDescEl) {
+        riskDescEl.textContent = journey.mastered_risk
+            ? `Освоен уровень опасности ${journey.mastered_risk.danger_level}/7`
+            : 'Пока открыт только стартовый риск';
+    }
+}
+
 function updateMainBonuses(player) {
     updateDropChanceDisplay();
 
@@ -586,6 +632,103 @@ function updateMainBonuses(player) {
     }
 }
 
+function getEquipmentStatValue(item, keys) {
+    if (!item || typeof item !== 'object') return 0;
+
+    for (const key of keys) {
+        const directValue = Number(item[key]);
+        if (Number.isFinite(directValue) && directValue > 0) {
+            return directValue;
+        }
+    }
+
+    const stats = item.stats && typeof item.stats === 'object' ? item.stats : null;
+    if (!stats) return 0;
+
+    for (const key of keys) {
+        const statValue = Number(stats[key]);
+        if (Number.isFinite(statValue) && statValue > 0) {
+            return statValue;
+        }
+    }
+
+    return 0;
+}
+
+function calculatePlayerPreparation(player) {
+    const equipment = player?.equipment || {};
+    const slots = ['armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
+
+    let radiationResistance = 0;
+    let infectionResistance = 0;
+
+    for (const slot of slots) {
+        const equippedItem = equipment[slot];
+        radiationResistance += getEquipmentStatValue(equippedItem, ['radiation_resist', 'radiation_resistance', 'radiationDefense']);
+        infectionResistance += getEquipmentStatValue(equippedItem, ['infection_resist', 'infection_resistance', 'infectionDefense']);
+    }
+
+    return {
+        radiationDefense: Math.max(0, Math.round(radiationResistance / 10)),
+        infectionDefense: Math.max(0, Math.round(infectionResistance / 10))
+    };
+}
+
+function getCurrentZoneRiskProfile(player) {
+    const location = player?.location || player?.current_location || {};
+    const preparation = calculatePlayerPreparation(player || {});
+    const radiationThreat = Math.max(0, Math.ceil(Number(location.radiation || 0) / 10));
+    const infectionThreat = Math.max(0, Math.ceil(Number(location.infection || 0) / 10));
+    const radiationPressure = Math.max(0, radiationThreat - preparation.radiationDefense);
+    const infectionPressure = Math.max(0, infectionThreat - preparation.infectionDefense);
+    const score = radiationPressure + infectionPressure;
+
+    let tier = 'safe';
+    let label = 'Стабильно';
+    let hint = 'Зона безопасна для стабильного фарма.';
+
+    if (score >= 9) {
+        tier = 'deadly';
+        label = 'Смертельно';
+        hint = 'Очень высокий риск, но и самые выгодные находки для подготовки к сильным боссам.';
+    } else if (score >= 6) {
+        tier = 'danger';
+        label = 'Опасно';
+        hint = 'Шанс на лучший лут выше, но без подготовки дебаффы быстро накопятся.';
+    } else if (score >= 3) {
+        tier = 'warning';
+        label = 'Риск';
+        hint = 'Хорошая зона для рывка вперёд, если заранее подготовить защиту и расходники.';
+    }
+
+    return {
+        tier,
+        label,
+        hint,
+        score,
+        radiationDefense: preparation.radiationDefense,
+        infectionDefense: preparation.infectionDefense,
+        isPrepared: score <= 2
+    };
+}
+
+function updateZonePreparationUI(player) {
+    const zoneRisk = getCurrentZoneRiskProfile(player || {});
+    const riskLabel = document.getElementById('location-risk-label');
+    const radDefense = document.getElementById('location-rad-defense');
+    const infDefense = document.getElementById('location-inf-defense');
+    const riskHint = document.getElementById('location-risk-hint');
+    const prepPanel = document.getElementById('location-preparation-panel');
+
+    if (riskLabel) riskLabel.textContent = zoneRisk.label;
+    if (radDefense) radDefense.textContent = zoneRisk.radiationDefense;
+    if (infDefense) infDefense.textContent = zoneRisk.infectionDefense;
+    if (riskHint) riskHint.textContent = zoneRisk.hint;
+    if (prepPanel) prepPanel.dataset.risk = zoneRisk.tier;
+
+    return zoneRisk;
+}
+
 function updateRiskSummary(player) {
     const status = player.status || {};
     const health = Number(status.health || 0);
@@ -598,6 +741,7 @@ function updateRiskSummary(player) {
     const levelEl = document.getElementById('risk-summary-level');
     const textEl = document.getElementById('risk-summary-text');
     const actionEl = document.getElementById('risk-summary-action');
+    const zoneRisk = getCurrentZoneRiskProfile(player);
 
     let risk = 'safe';
     let level = 'Стабильно';
@@ -609,6 +753,16 @@ function updateRiskSummary(player) {
         level = 'Критическое состояние';
         text = 'Есть высокий шанс сорвать прогресс. Сначала стабилизируй персонажа.';
         action = 'Срочно лечиться';
+    } else if (!zoneRisk.isPrepared && zoneRisk.score >= 6) {
+        risk = 'danger';
+        level = `Зона: ${zoneRisk.label}`;
+        text = 'Текущая локация слишком опасна для твоей подготовки. Сначала усили защиту или возьми расходники.';
+        action = 'Сначала подготовиться';
+    } else if (!zoneRisk.isPrepared) {
+        risk = 'warning';
+        level = `Зона: ${zoneRisk.label}`;
+        text = 'Локация уже выгоднее, но без подготовки дебаффы будут копиться слишком быстро.';
+        action = 'Купить подготовку';
     } else if (healthPercent <= 50 || radiation >= 5 || infections > 0) {
         risk = 'warning';
         level = 'Повышенный риск';
@@ -636,14 +790,46 @@ function setQuickEntryBadge(id, text) {
     badge.textContent = text;
 }
 
+function syncUnlockedLocations(announce = false) {
+    if (!Array.isArray(gameState.locations) || !gameState.locations.length || !gameState.player) {
+        return;
+    }
+
+    const currentUnlocked = gameState.locations
+        .filter((location) => gameState.player.level >= (location.required_level || location.min_level || 1))
+        .map((location) => location.id);
+
+    if (!Array.isArray(gameState.seenUnlockedLocations) || !gameState.seenUnlockedLocations.length) {
+        gameState.seenUnlockedLocations = [...currentUnlocked];
+        return;
+    }
+
+    if (!announce) {
+        gameState.seenUnlockedLocations = [...currentUnlocked];
+        return;
+    }
+
+    const unlockedNow = gameState.locations.filter(
+        (location) => currentUnlocked.includes(location.id) && !gameState.seenUnlockedLocations.includes(location.id)
+    );
+
+    gameState.seenUnlockedLocations = [...currentUnlocked];
+
+    unlockedNow.forEach((location) => {
+        showLocationUnlockCelebration?.(location.name);
+        showConfetti?.(90);
+    });
+}
+
 function updateQuickEntryBadges(player) {
     const bossInsight = getBossInsight();
     const rewardInsight = getAchievementInsight();
     const locationDanger = Number(player.location?.danger_level || 1);
     const status = player.status || {};
+    const zoneRisk = getCurrentZoneRiskProfile(player);
 
     setQuickEntryBadge('bosses-badge', bossInsight.available ? 'доступно' : 'цель');
-    setQuickEntryBadge('shop-badge', ((status.radiation || 0) >= 5 || (status.infections || 0) > 0 || (status.health || 0) <= ((status.max_health || 100) * 0.5)) ? 'нужно' : 'запасы');
+    setQuickEntryBadge('shop-badge', (!zoneRisk.isPrepared || (status.radiation || 0) >= 5 || (status.infections || 0) > 0 || (status.health || 0) <= ((status.max_health || 100) * 0.5)) ? 'нужно' : 'запасы');
     setQuickEntryBadge('rating-badge', rewardInsight.desc.includes('готова') ? 'награда' : 'топы');
     setQuickEntryBadge('pvp-badge', locationDanger >= 6 ? 'опасно' : 'закрыто');
 }
@@ -653,9 +839,11 @@ function updateMainScreenInsights(player) {
 
     updateMainRecommendationUI(player);
     updateMainProgressCards(player);
+    updateJourneyProgress(player);
     updateMainBonuses(player);
     updateRiskSummary(player);
     updateQuickEntryBadges(player);
+    updateZonePreparationUI(player);
 }
 
 function handleMainGuidanceAction(action) {
@@ -717,8 +905,10 @@ async function updateProfileUI(player) {
     if (player.location) {
         const locationName = document.getElementById('location-name');
         const locationRadiation = document.getElementById('location-radiation');
+        const locationInfection = document.getElementById('location-infection');
         if (locationName) locationName.textContent = player.location.name;
         if (locationRadiation) locationRadiation.textContent = player.location.radiation;
+        if (locationInfection) locationInfection.textContent = player.location.infection || 0;
     }
     
     // Звёзды
@@ -734,6 +924,7 @@ async function updateProfileUI(player) {
     // Обновляем отображение переломов и инфекций
     updateConditionsUI(status);
     updateMainScreenInsights(player);
+    syncUnlockedLocations(true);
     refreshMainScreenInsights().catch(error => {
         console.debug('Не удалось обновить инсайты главного экрана:', error);
     });
@@ -789,6 +980,7 @@ async function loadLocations() {
     const response = await apiRequest('/api/game/locations');
     const data = response.data || response;
     gameState.locations = data.locations || [];
+    syncUnlockedLocations(false);
 }
 
 /**
@@ -797,6 +989,15 @@ async function loadLocations() {
 async function searchLoot() {
     // Блокировка двойного нажатия
     if (actionLocks.searchLoot) return;
+
+    const zoneRisk = getCurrentZoneRiskProfile(gameState.player || {});
+    if (!zoneRisk.isPrepared && zoneRisk.score >= 3) {
+        const shouldProceed = confirm(`Текущая зона: ${zoneRisk.label}. Защита может быть недостаточной. Продолжить вылазку?`);
+        if (!shouldProceed) {
+            return;
+        }
+    }
+
     actionLocks.searchLoot = true;
     
     const searchBtn = document.getElementById('search-btn');
@@ -818,10 +1019,16 @@ async function searchLoot() {
             // Анимация лута если предмет найден
             if (result.found_item) {
                 showLootAnimation(result.found_item);
-                showModal(
-                    '🎉 Предмет найден!',
-                    `Вы нашли: ${result.found_item.name} (${result.found_item.rarity})`
-                );
+                if (result.found_item.type === 'key') {
+                    showKeyAnimation?.();
+                    showConfetti?.(80);
+                    showKeyRewardCelebration?.(result.found_item.name);
+                } else {
+                    showModal(
+                        '🎉 Предмет найден!',
+                        `Вы нашли: ${result.found_item.name} (${result.found_item.rarity})`
+                    );
+                }
             } else {
                 showModal(
                     '🔍 Поиск',
@@ -850,6 +1057,23 @@ async function searchLoot() {
                 gameState.player.status.radiation = result.radiation.level || 0;
                 updateConditionsUI(gameState.player.status);
             }
+
+            if (result.infection) {
+                if (!gameState.player.status) gameState.player.status = {};
+                const currentInfections = Number(gameState.player.status.infections || 0);
+                gameState.player.status.infections = Math.max(0, currentInfections + Number(result.infection.gained || 0));
+            }
+
+            if (result.risk_profile) {
+                const riskHint = document.getElementById('location-risk-hint');
+                if (riskHint) {
+                    riskHint.textContent = result.risk_profile.is_prepared
+                        ? 'Подготовка достаточная — можно стабильно фармить эту зону.'
+                        : `Зона ${result.risk_profile.label}: шанс на лучший лут выше, но подготовка пока недостаточна.`;
+                }
+            }
+
+            updateMainScreenInsights(gameState.player);
             
             // Анимация
             playSound('loot');
@@ -1487,7 +1711,13 @@ async function attackWithWeapon(itemIndex) {
             refreshPlayerEnergyUI();
             
             if (result.data.killed) {
-                showModal('🎉 Победа!', `Босс повержён! Награда: ${result.data.rewards.coins} монет, ${result.data.rewards.experience} опыта`);
+                showVictoryFlash?.();
+                showBossDeathParticles?.();
+                showConfetti?.(120);
+                if (result.data.rewards?.key?.boss_name) {
+                    showKeyAnimation?.();
+                }
+                showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', result.data.rewards || {}, result.data.mastery ?? null);
                 await loadBosses();
                 showScreen('bosses');
             }
@@ -1583,24 +1813,13 @@ async function attackBoss() {
             // Проверка на победу
             if (result.boss_defeated) {
                 playSound('victory');
-                
-                // Показываем награды
-                let rewardText = '';
-                if (result.rewards) {
-                    if (result.rewards.coins) rewardText += `💰 +${result.rewards.coins} монет\n`;
-                    if (result.rewards.experience) rewardText += `✨ +${result.rewards.experience} XP\n`;
-                    if (result.rewards.key) rewardText += `🔑 Получен ключ от ${result.rewards.key.boss_name}!\n`;
-                    if (result.rewards.items && result.rewards.items.length > 0) {
-                        result.rewards.items.forEach(item => {
-                            rewardText += `${item.icon} +${item.quantity} ${item.name}\n`;
-                        });
-                    }
+                showVictoryFlash?.();
+                showBossDeathParticles?.();
+                showConfetti?.(140);
+                if (result.rewards?.key?.boss_name) {
+                    showKeyAnimation?.();
                 }
-                
-                showModal('🏆 ПОБЕДА!', 
-                    `Ты победил ${gameState.currentBoss.name}!\n\n` +
-                    `Награда:\n${rewardText || 'Без награды'}`
-                );
+                showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', result.rewards || {}, result.mastery ?? null);
                 
                 // Обновляем мастерство
                 if (result.mastery !== undefined) {
@@ -2573,7 +2792,13 @@ async function attackRaid(raidId) {
             
             // Если босс убит
             if (data.killed) {
-                showVictoryModal(data.rewards);
+                showVictoryFlash?.();
+                showBossDeathParticles?.();
+                showConfetti?.(160);
+                if (data.rewards?.key?.boss_name) {
+                    showKeyAnimation?.();
+                }
+                showBossVictorySummary?.('Рейдовый босс', data.rewards || {}, null);
             }
         } else {
             showNotification(result.error || 'Ошибка атаки', 'error');

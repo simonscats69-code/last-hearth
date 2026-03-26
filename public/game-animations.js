@@ -390,8 +390,106 @@ function showKeyAnimation(bossId) {
     setTimeout(() => key.remove(), 1500);
 }
 
+function showRewardCelebration({ icon = '🏆', title = 'Награда!', subtitle = '', lines = [], tone = 'gold' } = {}) {
+    const overlay = document.createElement('div');
+    overlay.className = `reward-celebration-overlay tone-${tone}`;
+
+    const card = document.createElement('div');
+    card.className = 'reward-celebration-card';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'reward-celebration-icon';
+    iconEl.textContent = icon;
+
+    const titleEl = document.createElement('h3');
+    titleEl.className = 'reward-celebration-title';
+    titleEl.textContent = title;
+
+    const subtitleEl = document.createElement('p');
+    subtitleEl.className = 'reward-celebration-subtitle';
+    subtitleEl.textContent = subtitle;
+
+    const list = document.createElement('div');
+    list.className = 'reward-celebration-lines';
+
+    lines.filter(Boolean).forEach((line) => {
+        const lineEl = document.createElement('div');
+        lineEl.className = 'reward-celebration-line';
+        lineEl.textContent = line;
+        list.appendChild(lineEl);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'reward-celebration-close';
+    closeBtn.textContent = 'Забрать';
+    closeBtn.onclick = () => overlay.remove();
+
+    card.appendChild(iconEl);
+    card.appendChild(titleEl);
+    if (subtitle) card.appendChild(subtitleEl);
+    if (list.childElementCount > 0) card.appendChild(list);
+    card.appendChild(closeBtn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    setTimeout(() => {
+        if (overlay.isConnected) {
+            overlay.classList.add('fade-out');
+            setTimeout(() => overlay.remove(), 300);
+        }
+    }, 4500);
+}
+
+function showBossVictorySummary(bossName, rewards = {}, mastery = null) {
+    const lines = [];
+
+    if (rewards.coins) lines.push(`💰 Монеты: +${rewards.coins}`);
+    if (rewards.experience) lines.push(`✨ Опыт: +${rewards.experience}`);
+    if (rewards.key?.boss_name) lines.push(`🔑 Новый ключ: ${rewards.key.boss_name}`);
+    if (Array.isArray(rewards.items)) {
+        rewards.items.forEach((item) => {
+            lines.push(`${item.icon || '📦'} ${item.name} ×${item.quantity || 1}`);
+        });
+    }
+    if (mastery !== null && mastery !== undefined) {
+        lines.push(`⭐ Мастерство босса: ${mastery}`);
+    }
+
+    showRewardCelebration({
+        icon: '👑',
+        title: 'Босс повержён!',
+        subtitle: `Победа над ${bossName}`,
+        lines,
+        tone: 'gold'
+    });
+}
+
+function showKeyRewardCelebration(keyName) {
+    showRewardCelebration({
+        icon: '🔑',
+        title: 'Ключ найден!',
+        subtitle: 'Ты сделал шаг к следующему боссу.',
+        lines: [keyName],
+        tone: 'key'
+    });
+}
+
+function showLocationUnlockCelebration(locationName) {
+    showRewardCelebration({
+        icon: '🗺️',
+        title: 'Открыта новая зона!',
+        subtitle: 'Теперь можно идти дальше.',
+        lines: [locationName],
+        tone: 'unlock'
+    });
+}
+
 // Экспорт функций для глобального доступа
 window.showBossDeathParticles = showBossDeathParticles;
 window.animateMasteryBar = animateMasteryBar;
 window.showVictoryFlash = showVictoryFlash;
 window.showKeyAnimation = showKeyAnimation;
+window.showRewardCelebration = showRewardCelebration;
+window.showBossVictorySummary = showBossVictorySummary;
+window.showKeyRewardCelebration = showKeyRewardCelebration;
+window.showLocationUnlockCelebration = showLocationUnlockCelebration;

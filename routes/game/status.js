@@ -5,7 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, transaction: tx } = require('../../db/database');
-const { DEBUFF_CONFIG } = require('../../utils/gameConstants');
+const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
 const { DebuffAPI } = require('./debuffs');
 const { buildPlayerStatus, normalizeInventory } = require('../../utils/playerState');
@@ -80,6 +80,11 @@ async function runStatusCheck(client, playerId) {
         effects: {
             radiation: radDamage,
             infections: infectionDamage
+        },
+        states: {
+            radiation: getDebuffTier(radiationLevel),
+            infections: getDebuffTier(totalInfectionLevel),
+            overall: getDebuffTier(Math.max(radiationLevel, totalInfectionLevel))
         }
     };
 }
@@ -147,6 +152,7 @@ router.post('/check', async (req, res) => {
             checked: true,
             damage: result.totalDamage,
             effects: result.effects,
+            states: result.states,
             message: result.totalDamage > 0 ? 'Получено урона от дебаффов!' : 'Всё в порядке'
         });
         
@@ -329,7 +335,8 @@ const StatusAPI = {
             success: true,
             checked: true,
             damage: result.totalDamage,
-            effects: result.effects
+            effects: result.effects,
+            states: result.states
         };
     },
     

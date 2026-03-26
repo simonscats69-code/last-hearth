@@ -39,6 +39,57 @@ function validateTelegramId(telegramId) {
     return Number.isInteger(num) && num > 0;
 }
 
+function getRiskLabelByDanger(dangerLevel) {
+    if (dangerLevel >= 7) return 'Смертельный риск';
+    if (dangerLevel >= 5) return 'Опасный риск';
+    if (dangerLevel >= 3) return 'Повышенный риск';
+    return 'Стабильный риск';
+}
+
+async function buildPlayerJourney(playerId, playerLevel) {
+    const [bossMasteries, bosses, locations] = await Promise.all([
+        queryAll('SELECT boss_id, kills FROM boss_mastery WHERE player_id = $1 ORDER BY boss_id ASC', [playerId]),
+        queryAll('SELECT id, name FROM bosses ORDER BY id ASC'),
+        queryAll('SELECT id, name, min_level, danger_level FROM locations ORDER BY min_level ASC, id ASC')
+    ]);
+
+    const masteryMap = new Map(bossMasteries.map((mastery) => [Number(mastery.boss_id), Number(mastery.kills || 0)]));
+    const defeatedBossIds = bosses.filter((boss) => (masteryMap.get(Number(boss.id)) || 0) > 0).map((boss) => Number(boss.id));
+    const lastDefeatedBossId = defeatedBossIds.length ? Math.max(...defeatedBossIds) : 0;
+
+    const currentMainBoss = bosses.find((boss) => Number(boss.id) === lastDefeatedBossId + 1)
+        || bosses.find((boss) => Number(boss.id) === lastDefeatedBossId)
+        || bosses[0]
+        || null;
+
+    const nextZone = locations.find((location) => Number(location.min_level || 1) > Number(playerLevel || 1))
+        || locations[locations.length - 1]
+        || null;
+
+    const unlockedLocations = locations.filter((location) => Number(playerLevel || 1) >= Number(location.min_level || 1));
+    const masteredDangerLevel = unlockedLocations.reduce((max, location) => Math.max(max, Number(location.danger_level || 1)), 1);
+
+    return {
+        bosses_killed: bossMasteries.reduce((sum, mastery) => sum + Number(mastery.kills || 0), 0),
+        current_main_boss: currentMainBoss ? {
+            id: Number(currentMainBoss.id),
+            name: currentMainBoss.name,
+            defeated: (masteryMap.get(Number(currentMainBoss.id)) || 0) > 0,
+            kills: masteryMap.get(Number(currentMainBoss.id)) || 0
+        } : null,
+        next_zone: nextZone ? {
+            id: Number(nextZone.id),
+            name: nextZone.name,
+            required_level: Number(nextZone.min_level || 1),
+            danger_level: Number(nextZone.danger_level || 1)
+        } : null,
+        mastered_risk: {
+            danger_level: masteredDangerLevel,
+            label: getRiskLabelByDanger(masteredDangerLevel)
+        }
+    };
+}
+
 
 
 // =============================================================================
@@ -67,7 +118,7 @@ router.get('/', async (req, res) => {
         
         let player = await queryOne(`
             SELECT p.*, l.name as location_name, l.description as location_description,
-                   l.radiation as location_radiation, l.danger_level as location_danger_level,
+                   l.radiation as location_radiation, l.infection as location_infection, l.danger_level as location_danger_level,
                    l.icon as location_icon, p.last_energy_update as last_energy_update
             FROM players p
             LEFT JOIN locations l ON p.current_location_id = l.id
@@ -113,6 +164,7 @@ router.get('/', async (req, res) => {
             JOIN bosses b ON bk.boss_id = b.id
             WHERE bk.player_id = $1
         `, [player.id]);
+        const journey = await buildPlayerJourney(player.id, player.level);
         
         const expNeeded = getExpForLevel(player.level) || 1;
         const expPercent = Math.min(100, Math.floor((player.experience / expNeeded) * 100));
@@ -157,6 +209,7 @@ router.get('/', async (req, res) => {
                     name: player.location_name,
                     description: player.location_description,
                     radiation: player.location_radiation,
+                    infection: player.location_infection || 0,
                     danger_level: player.location_danger_level,
                     icon: player.location_icon || '🏠'
                 },
@@ -165,6 +218,7 @@ router.get('/', async (req, res) => {
                 coins: player.coins,
                 stars: player.stars,
                 boss_keys: keys,
+                journey,
                 stats_ext: {
                     total_actions: player.total_actions,
                     bosses_killed: player.bosses_killed,

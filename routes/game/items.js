@@ -8,6 +8,55 @@ const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, validateIndex, validateBoolean, validatePositiveInt, ok, fail, error, badRequest, guard, wrap, logPlayerAction, serializeJSONField, logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 
+function getShopCategory(item) {
+    if (!item) return 'misc';
+
+    if (item.type === 'weapon') return 'weapon';
+    if (item.type === 'armor') return 'armor';
+    if (item.type === 'food') return 'food';
+    if (item.type === 'medicine') return 'medicine';
+    if (item.type === 'resource') return 'resource';
+    return item.type || 'misc';
+}
+
+function resolveEquipSlot(item) {
+    const rawSlot = String(item?.slot || item?.category || item?.type || '').toLowerCase();
+
+    if (rawSlot === 'weapon') return 'weapon';
+    if (['body', 'armor', 'chest'].includes(rawSlot)) return 'armor';
+    if (['head', 'helmet'].includes(rawSlot)) return 'helmet';
+    if (['boots', 'feet', 'legs'].includes(rawSlot)) return 'boots';
+    if (['accessory', 'ring', 'neck'].includes(rawSlot)) return 'accessory';
+
+    return null;
+}
+
+function normalizeItemStats(item) {
+    if (!item) return {};
+    return safeJsonParse(item.stats, item.stats && typeof item.stats === 'object' ? item.stats : {}) || {};
+}
+
+function reduceInfections(infections, cureAmount) {
+    const normalized = Array.isArray(infections) ? [...infections] : [];
+    let remainingCure = Math.max(0, Number(cureAmount || 0));
+
+    return normalized
+        .map((infection) => {
+            const level = Math.max(0, Number(infection.level || 0));
+            if (remainingCure <= 0 || level <= 0) {
+                return infection;
+            }
+
+            const reducedBy = Math.min(level, remainingCure);
+            remainingCure -= reducedBy;
+            return {
+                ...infection,
+                level: level - reducedBy
+            };
+        })
+        .filter((infection) => Number(infection.level || 0) > 0);
+}
+
 // =============================================================================
 // ИНВЕНТАРЬ
 // =============================================================================
@@ -517,11 +566,7 @@ router.post('/use-item', async (req, res) => {
             
             if (equip) {
                 const equipment = safeJsonParse(player.equipment, {});
-                const slot = item.type === 'weapon' ? 'weapon' :
-                            item.type === 'armor' ? 'armor' :
-                            item.type === 'helmet' ? 'helmet' :
-                            item.type === 'boots' ? 'boots' :
-                            item.type === 'accessory' ? 'accessory' : null;
+                const slot = resolveEquipSlot(item);
                 
                 if (!slot) {
                     await client.query('ROLLBACK');
@@ -569,24 +614,28 @@ router.post('/use-item', async (req, res) => {
                 let updated = false;
                 
                 const newInventory = inventory.filter((_, i) => i !== normalizedItemIndex);
+                const stats = normalizeItemStats(item);
                 
-                if (item.type === 'medicine') {
-                    // Бонус к лечению от intelligence: +10% за каждую единицу
-                    const intBonus = 1 + (((player.intelligence || 1) - 1) * 0.1);
-                    const healthRestored = Math.floor((item.heal ?? 20) * intBonus);
+                if (stats.infection_cure) {
+                    const cureAmount = Number(stats.infection_cure || 0);
+                    const currentInfections = safeJsonParse(player.infections, []);
+                    const updatedInfections = reduceInfections(currentInfections, cureAmount);
+                    const oldLevel = currentInfections.reduce((sum, infection) => sum + Number(infection.level || 0), 0);
+                    const newLevel = updatedInfections.reduce((sum, infection) => sum + Number(infection.level || 0), 0);
+
                     await client.query(`
-                        UPDATE players 
-                        SET health = LEAST(max_health, health + $1),
+                        UPDATE players
+                        SET infections = $1,
                             inventory = $2
                         WHERE id = $3
-                    `, [healthRestored, JSON.stringify(newInventory), playerId]);
-                    
-                    message = `Использовали ${item.name}. Здоровье +${healthRestored}${player.intelligence > 1 ? ' (бонус интеллекта +' + Math.round((intBonus - 1) * 100) + '%)' : ''}`;
+                    `, [JSON.stringify(updatedInfections), JSON.stringify(newInventory), playerId]);
+
+                    message = `Использовали ${item.name}. Инфекция снижена с ${oldLevel} до ${newLevel}`;
                     updated = true;
-                    
-                } else if (item.type === 'antirad') {
-                    const radiationCure = item.stats?.radiation_cure || item.rad_removal || 2;
-                    
+
+                } else if (stats.radiation_cure || item.type === 'antirad') {
+                    const radiationCure = Number(stats.radiation_cure || item.rad_removal || 2);
+
                     let currentRadiation = { level: 0 };
                     if (player.radiation) {
                         if (typeof player.radiation === 'object') {
@@ -595,9 +644,9 @@ router.post('/use-item', async (req, res) => {
                             currentRadiation = { level: player.radiation };
                         }
                     }
-                    
+
                     const newLevel = Math.max(0, currentRadiation.level - radiationCure);
-                    
+
                     let newExpiresAt = null;
                     if (newLevel > 0 && currentRadiation.expires_at && currentRadiation.level > 0) {
                         const oldExpires = new Date(currentRadiation.expires_at);
@@ -607,15 +656,41 @@ router.post('/use-item', async (req, res) => {
                         const reduction = (oldExpires - now) * reductionRatio;
                         newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
                     }
-                    
+
                     await client.query(`
                         UPDATE players 
                         SET radiation = $1,
                             inventory = $2
                         WHERE id = $3
                     `, [JSON.stringify({ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }), JSON.stringify(newInventory), playerId]);
-                    
+
                     message = `Использовали ${item.name}. Радиация снижена с ${currentRadiation.level} до ${newLevel}`;
+                    updated = true;
+
+                } else if (item.type === 'food' && stats.energy) {
+                    const energyRestored = Number(stats.energy || 0);
+                    await client.query(`
+                        UPDATE players
+                        SET energy = LEAST(max_energy, energy + $1),
+                            inventory = $2
+                        WHERE id = $3
+                    `, [energyRestored, JSON.stringify(newInventory), playerId]);
+
+                    message = `Использовали ${item.name}. Энергия +${energyRestored}`;
+                    updated = true;
+
+                } else if (item.type === 'medicine') {
+                    // Бонус к лечению от intelligence: +10% за каждую единицу
+                    const intBonus = 1 + (((player.intelligence || 1) - 1) * 0.1);
+                    const healthRestored = Math.floor(((item.heal ?? stats.health ?? 20)) * intBonus);
+                    await client.query(`
+                        UPDATE players 
+                        SET health = LEAST(max_health, health + $1),
+                            inventory = $2
+                        WHERE id = $3
+                    `, [healthRestored, JSON.stringify(newInventory), playerId]);
+                    
+                    message = `Использовали ${item.name}. Здоровье +${healthRestored}${player.intelligence > 1 ? ' (бонус интеллекта +' + Math.round((intBonus - 1) * 100) + '%)' : ''}`;
                     updated = true;
                     
                 } else if (item.type === 'bandage') {
@@ -720,7 +795,8 @@ router.get('/shop', async (req, res) => {
                 }
                 return {
                     ...item,
-                    stats: parsedStats
+                    stats: parsedStats,
+                    shop_category: getShopCategory(item)
                 };
             })
         });

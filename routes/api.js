@@ -104,7 +104,16 @@ function getAchievementTargetValue(condition, runtimeContext) {
         return Math.max(1, runtimeContext.totalBosses);
     }
 
-    return Number(condition.value || 0);
+    if (condition.type === 'first_boss_kill') {
+        return 1;
+    }
+
+    if (condition.type === 'in_clan' || condition.type === 'clan_leader') {
+        return 1;
+    }
+
+    const rawTarget = condition.value ?? condition.count ?? 0;
+    return Number(rawTarget || 0);
 }
 router.get('/shop/items', async (req, res) => {
     try {
@@ -555,7 +564,6 @@ function getCategoryName(category) {
         survival: 'Выживание',
         bosses: 'Боссы',
         pvp: 'PvP',
-        craft: 'Крафт',
         collection: 'Коллекция',
         exploration: 'Исследование',
         social: 'Социальное'
