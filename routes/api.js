@@ -5,13 +5,106 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../db/database');
-const { logger, safeJsonParse } = require('../utils/serverApi');
+const { logger, safeJsonParse, validateTelegramInitData } = require('../utils/serverApi');
 
 /**
  * Безопасный парсинг JSON условия достижения
  */
 function parseAchievementCondition(condition) {
     return safeJsonParse(condition, {});
+}
+
+function extractTelegramIdFromInitData(initData) {
+    if (!initData) return null;
+
+    const botToken = process.env.TG_BOT_TOKEN;
+    const isDevelopment = process.env.NODE_ENV !== 'production';
+
+    if (botToken) {
+        const validated = validateTelegramInitData(initData, botToken);
+        return validated?.user?.id ? Number(validated.user.id) : null;
+    }
+
+    if (!isDevelopment) {
+        return null;
+    }
+
+    try {
+        const params = new URLSearchParams(initData);
+        const user = JSON.parse(params.get('user') || '{}');
+        return user?.id ? Number(user.id) : null;
+    } catch {
+        return null;
+    }
+}
+
+function resolveTelegramId(req) {
+    const headerTelegramId = req.headers['x-telegram-id'];
+    if (headerTelegramId) {
+        return Number(headerTelegramId);
+    }
+
+    const queryTelegramId = req.query.telegram_id;
+    if (queryTelegramId) {
+        return Number(queryTelegramId);
+    }
+
+    return extractTelegramIdFromInitData(req.headers['x-init-data']);
+}
+
+async function getAchievementRuntimeContext(playerId, client = null) {
+    const queryOneFn = client
+        ? (sql, params = []) => client.query(sql, params).then(result => result.rows[0] || null)
+        : queryOne;
+
+    const bossCount = await queryOneFn('SELECT COUNT(*) as total FROM bosses');
+    const defeatedBosses = await queryOneFn(
+        'SELECT COUNT(DISTINCT boss_id) as total FROM boss_mastery WHERE player_id = $1 AND kills > 0',
+        [playerId]
+    );
+
+    return {
+        totalBosses: Number(bossCount?.total || 0),
+        defeatedBosses: Number(defeatedBosses?.total || 0)
+    };
+}
+
+function getAchievementCurrentValue(condition, player, runtimeContext) {
+    switch (condition.type) {
+        case 'level':
+            return player.level || 1;
+        case 'days_played':
+            return player.days_played || 1;
+        case 'bosses_killed':
+        case 'boss_kills':
+        case 'first_boss_kill':
+        case 'single_boss_kills':
+            return player.bosses_killed || 0;
+        case 'all_bosses_killed':
+            return runtimeContext.defeatedBosses;
+        case 'pvp_wins':
+            return player.pvp_wins || 0;
+        case 'unique_items':
+            return Array.isArray(player.unique_items) ? player.unique_items.length : 0;
+        case 'locations_visited':
+            return Array.isArray(player.locations_visited) ? player.locations_visited.length : 0;
+        case 'in_clan':
+            return player.clan_id ? 1 : 0;
+        case 'clan_leader':
+            return player.clan_role === 'leader' ? 1 : 0;
+        case 'clans_joined':
+            return player.clans_joined || 0;
+        default:
+            return 0;
+    }
+}
+
+function getAchievementTargetValue(condition, runtimeContext) {
+    if (condition.type === 'all_bosses_killed') {
+        return Math.max(1, runtimeContext.totalBosses);
+    }
+
+    return Number(condition.value || 0);
 }
 router.get('/shop/items', async (req, res) => {
     try {
@@ -80,7 +173,7 @@ router.get('/rating/clans', async (req, res) => {
  */
 router.get('/daily-tasks', async (req, res) => {
     try {
-        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
+        const telegramId = resolveTelegramId(req);
         
         if (!telegramId) {
             return res.status(401).json({ error: 'Требуется авторизация' });
@@ -148,7 +241,7 @@ router.get('/daily-tasks', async (req, res) => {
  */
 router.get('/achievements', async (req, res) => {
     try {
-        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
+        const telegramId = resolveTelegramId(req);
         const category = req.query.category; // Опциональная фильтрация по категории
         
         if (!telegramId) {
@@ -188,6 +281,7 @@ router.get('/achievements', async (req, res) => {
 
         const achievements = allAchievements.map(ach => ({
             ...ach,
+            reward: safeJsonParse(ach.reward, {}),
             progress: progressMap[ach.id]?.progress || {},
             progress_value: progressMap[ach.id]?.progress_value || 0,
             completed: progressMap[ach.id]?.completed || false,
@@ -207,7 +301,7 @@ router.get('/achievements', async (req, res) => {
  */
 router.get('/achievements/progress', async (req, res) => {
     try {
-        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
+        const telegramId = resolveTelegramId(req);
         
         if (!telegramId) {
             return res.status(401).json({ error: 'Требуется авторизация' });
@@ -221,6 +315,8 @@ router.get('/achievements/progress', async (req, res) => {
         if (!player) {
             return res.status(404).json({ error: 'Игрок не найден' });
         }
+
+        const achievementRuntimeContext = await getAchievementRuntimeContext(player.id);
 
         // Получаем все достижения
         const allAchievements = await queryAll('SELECT * FROM achievements');
@@ -238,45 +334,15 @@ router.get('/achievements/progress', async (req, res) => {
         // Вычисляем прогресс для каждого достижения
         const progress = allAchievements.map(ach => {
             const condition = parseAchievementCondition(ach.condition);
-            let currentValue = 0;
             let isCompleted = progressMap[ach.id]?.completed || false;
-
-            // Вычисляем текущее значение на основе типа условия
-            switch (condition.type) {
-                case 'days_played':
-                    currentValue = player.days_played || 1;
-                    break;
-                case 'bosses_killed':
-                    currentValue = player.bosses_killed || 0;
-                    break;
-                case 'pvp_wins':
-                    currentValue = player.pvp_wins || 0;
-                    break;
-                case 'unique_items':
-                    const uniqueItems = player.unique_items || [];
-                    currentValue = Array.isArray(uniqueItems) ? uniqueItems.length : 0;
-                    break;
-                case 'locations_visited':
-                    const locations = player.locations_visited || [];
-                    currentValue = Array.isArray(locations) ? locations.length : 0;
-                    break;
-                case 'in_clan':
-                    currentValue = player.clan_id ? 1 : 0;
-                    break;
-                case 'clan_leader':
-                    currentValue = player.clan_role === 'leader' ? 1 : 0;
-                    break;
-                case 'clans_joined':
-                    currentValue = player.clans_joined || 0;
-                    break;
-            }
+            const currentValue = getAchievementCurrentValue(condition, player, achievementRuntimeContext);
 
             // Проверяем, выполнено ли достижение
-            if (!isCompleted && currentValue >= condition.value) {
+            const targetValue = getAchievementTargetValue(condition, achievementRuntimeContext);
+            if (!isCompleted && currentValue >= targetValue) {
                 isCompleted = true;
             }
 
-            const targetValue = condition.value;
             const percent = targetValue > 0 ? Math.min(100, Math.round((currentValue / targetValue) * 100)) : 0;
 
             return {
@@ -286,6 +352,7 @@ router.get('/achievements/progress', async (req, res) => {
                 category: ach.category,
                 icon: ach.icon,
                 rarity: ach.rarity,
+                reward: safeJsonParse(ach.reward, {}),
                 current: currentValue,
                 target: targetValue,
                 percent: percent,
@@ -329,7 +396,7 @@ router.get('/achievements/progress', async (req, res) => {
  */
 router.post('/achievements/claim', async (req, res) => {
     try {
-        const telegramId = req.headers['x-telegram-id'] || req.query.telegram_id;
+        const telegramId = resolveTelegramId(req);
         const { achievement_id } = req.body;
         
         if (!telegramId) {
@@ -407,20 +474,11 @@ router.post('/achievements/claim', async (req, res) => {
 
             const achievementData = playerAchievement.rows[0];
             
-            // Проверяем, выполнено ли достижение
-            let currentValue = 0;
-            switch (condition.type) {
-                case 'days_played': currentValue = lockedPlayer.rows[0].days_played || 1; break;
-                case 'bosses_killed': currentValue = lockedPlayer.rows[0].bosses_killed || 0; break;
-                case 'pvp_wins': currentValue = lockedPlayer.rows[0].pvp_wins || 0; break;
-                case 'unique_items': currentValue = (lockedPlayer.rows[0].unique_items || []).length; break;
-                case 'locations_visited': currentValue = (lockedPlayer.rows[0].locations_visited || []).length; break;
-                case 'in_clan': currentValue = lockedPlayer.rows[0].clan_id ? 1 : 0; break;
-                case 'clan_leader': currentValue = lockedPlayer.rows[0].clan_role === 'leader' ? 1 : 0; break;
-                case 'clans_joined': currentValue = lockedPlayer.rows[0].clans_joined || 0; break;
-            }
+            const achievementRuntimeContext = await getAchievementRuntimeContext(player.id, client);
+            const currentValue = getAchievementCurrentValue(condition, lockedPlayer.rows[0], achievementRuntimeContext);
+            const targetValue = getAchievementTargetValue(condition, achievementRuntimeContext);
 
-            if (currentValue < condition.value) {
+            if (currentValue < targetValue) {
                 throw { statusCode: 400, message: 'Достижение ещё не выполнено' };
             }
 

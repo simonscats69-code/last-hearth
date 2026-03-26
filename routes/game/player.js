@@ -65,7 +65,7 @@ router.get('/', async (req, res) => {
             });
         }
         
-        const player = await queryOne(`
+        let player = await queryOne(`
             SELECT p.*, l.name as location_name, l.description as location_description,
                    l.radiation as location_radiation, l.danger_level as location_danger_level,
                    l.icon as location_icon, p.last_energy_update as last_energy_update
@@ -396,7 +396,7 @@ router.post('/buy-energy', async (req, res) => {
         
         const result = await tx(async (client) => {
             const lockResult = await client.query(
-                `SELECT energy, stars, max_energy FROM players WHERE telegram_id = $1 FOR UPDATE`,
+                `SELECT energy, stars, max_energy FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
 
@@ -422,7 +422,7 @@ router.post('/buy-energy', async (req, res) => {
                  SET energy = LEAST(max_energy, energy + $1),
                      stars = GREATEST(0, stars - $2),
                      last_energy_update = NOW()
-                 WHERE telegram_id = $3
+                 WHERE id = $3
                  RETURNING energy, stars, max_energy, last_energy_update`,
                 [actualAmount, actualCost, playerId]
             );
@@ -482,7 +482,7 @@ const EnergyAPI = {
         
         return await tx(async (client) => {
             const lockResult = await client.query(
-                `SELECT energy, stars, max_energy FROM players WHERE telegram_id = $1 FOR UPDATE`,
+                `SELECT energy, stars, max_energy FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
 

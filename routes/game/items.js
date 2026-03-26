@@ -72,11 +72,11 @@ router.post('/upgrade-item', async (req, res) => {
     try {
         const { item_index, use_protection = false } = req.body;
         const playerId = req.player.id;
-        const telegramId = req.player.telegram_id;
         
         // Валидация входных данных
         // Примечание: валидация индекса перенесена внутрь транзакции для избежания race condition
-        const booleanValidation = validateBoolean(use_protection, 'use_protection');
+        const normalizedUseProtection = use_protection === 'true' ? true : use_protection === 'false' ? false : use_protection;
+        const booleanValidation = validateBoolean(normalizedUseProtection, 'use_protection');
         if (!booleanValidation.valid) {
             return badRequest(res, booleanValidation.error, booleanValidation.code);
         }
@@ -84,7 +84,7 @@ router.post('/upgrade-item', async (req, res) => {
         // Используем withPlayerLock для автоматического управления транзакцией
         // Передаём client для выполнения запросов внутри транзакции
         const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
-            const inventory = serializeJSONField(lockedPlayer.inventory) || [];
+            const inventory = safeJsonParse(lockedPlayer.inventory, []);
             
             // Валидация индекса внутри транзакции на актуальных данных
             const indexValidation = validateIndex(item_index, inventory.length, 'индекс предмета');
@@ -123,7 +123,7 @@ router.post('/upgrade-item', async (req, res) => {
             
             // Шанс успеха (уменьшается с каждым уровнем)
             let successChance = 100 - (currentLevel * 8);
-            if (use_protection) {
+            if (normalizedUseProtection) {
                 successChance += 20;
             }
             
@@ -154,7 +154,7 @@ router.post('/upgrade-item', async (req, res) => {
                 
             } else {
                 // Неудача
-                if (use_protection) {
+                if (normalizedUseProtection) {
                     // Защита сработала - предмет не сломался
                     await client.query(`
                         UPDATE players SET coins = coins - $1 WHERE id = $2
@@ -182,7 +182,7 @@ router.post('/upgrade-item', async (req, res) => {
                 itemBroken,
                 successChance,
                 rolled: rolled.toFixed(2),
-                use_protection
+                use_protection: normalizedUseProtection
             };
         });
         
@@ -260,7 +260,7 @@ router.post('/modify-item', async (req, res) => {
         // Используем withPlayerLock для автоматического управления транзакцией
         // Передаём client для выполнения запросов внутри транзакции
         const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
-            const inventory = serializeJSONField(lockedPlayer.inventory) || [];
+            const inventory = safeJsonParse(lockedPlayer.inventory, []);
             
             // Валидация индекса внутри транзакции
             const indexValidation = validateIndex(item_index, inventory.length, 'индекс предмета');
@@ -455,10 +455,11 @@ router.post('/use-item', async (req, res) => {
     const client = await pool.connect();
     
     try {
-        const { item_index, equip = false } = req.body;
+        const { item_index, item_id, equip = false } = req.body;
         const playerId = req.player.id;
+        const normalizedItemIndex = Number(item_index ?? item_id);
         
-        if (item_index === undefined || item_index === null) {
+        if (item_index === undefined && item_id === undefined) {
             return res.status(400).json({
                 success: false,
                 error: 'Укажите индекс предмета',
@@ -466,7 +467,7 @@ router.post('/use-item', async (req, res) => {
             });
         }
         
-        if (!Number.isInteger(item_index)) {
+        if (!Number.isInteger(normalizedItemIndex)) {
             return res.status(400).json({
                 success: false,
                 error: 'Индекс предмета должен быть целым числом',
@@ -478,7 +479,7 @@ router.post('/use-item', async (req, res) => {
         
         try {
             const playerResult = await client.query(`
-                SELECT * FROM players WHERE telegram_id = $1 FOR UPDATE
+                SELECT * FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
             
             const player = playerResult.rows[0];
@@ -494,7 +495,7 @@ router.post('/use-item', async (req, res) => {
             
             const inventory = safeJsonParse(player.inventory, []);
             
-            if (item_index < 0 || item_index >= inventory.length) {
+            if (normalizedItemIndex < 0 || normalizedItemIndex >= inventory.length) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
@@ -503,7 +504,7 @@ router.post('/use-item', async (req, res) => {
                 });
             }
             
-            const item = inventory[item_index];
+            const item = inventory[normalizedItemIndex];
             
             if (!item || typeof item !== 'object' || !item.id || !item.name) {
                 await client.query('ROLLBACK');
@@ -537,12 +538,12 @@ router.post('/use-item', async (req, res) => {
                 }
                 
                 equipment[slot] = item;
-                inventory.splice(item_index, 1);
+                inventory.splice(normalizedItemIndex, 1);
                 
                 await client.query(`
                     UPDATE players 
                     SET equipment = $1, inventory = $2
-                    WHERE telegram_id = $3
+                    WHERE id = $3
                 `, [JSON.stringify(equipment), JSON.stringify(inventory), playerId]);
                 
                 await client.query('COMMIT');
@@ -555,6 +556,7 @@ router.post('/use-item', async (req, res) => {
                 
                 res.json({
                     success: true,
+                    message: `Экипирован ${item.name}`,
                     data: {
                         message: `Экипирован ${item.name}`,
                         equipped: slot,
@@ -566,17 +568,17 @@ router.post('/use-item', async (req, res) => {
                 let message = '';
                 let updated = false;
                 
-                const newInventory = inventory.filter((_, i) => i !== item_index);
+                const newInventory = inventory.filter((_, i) => i !== normalizedItemIndex);
                 
                 if (item.type === 'medicine') {
                     // Бонус к лечению от intelligence: +10% за каждую единицу
-                    const intBonus = 1 + (player.intelligence || 1 - 1) * 0.1;
+                    const intBonus = 1 + (((player.intelligence || 1) - 1) * 0.1);
                     const healthRestored = Math.floor((item.heal ?? 20) * intBonus);
                     await client.query(`
                         UPDATE players 
                         SET health = LEAST(max_health, health + $1),
                             inventory = $2
-                        WHERE telegram_id = $3
+                        WHERE id = $3
                     `, [healthRestored, JSON.stringify(newInventory), playerId]);
                     
                     message = `Использовали ${item.name}. Здоровье +${healthRestored}${player.intelligence > 1 ? ' (бонус интеллекта +' + Math.round((intBonus - 1) * 100) + '%)' : ''}`;
@@ -610,7 +612,7 @@ router.post('/use-item', async (req, res) => {
                         UPDATE players 
                         SET radiation = $1,
                             inventory = $2
-                        WHERE telegram_id = $3
+                        WHERE id = $3
                     `, [JSON.stringify({ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }), JSON.stringify(newInventory), playerId]);
                     
                     message = `Использовали ${item.name}. Радиация снижена с ${currentRadiation.level} до ${newLevel}`;
@@ -623,7 +625,7 @@ router.post('/use-item', async (req, res) => {
                         UPDATE players 
                         SET health = LEAST(max_health, health + $1),
                             inventory = $2
-                        WHERE telegram_id = $3
+                        WHERE id = $3
                     `, [healthRestored, JSON.stringify(newInventory), playerId]);
                     
                     message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
@@ -649,6 +651,7 @@ router.post('/use-item', async (req, res) => {
                     
                     res.json({
                         success: true,
+                        message,
                         data: {
                             message: message,
                             item: item
@@ -678,13 +681,30 @@ router.post('/use-item', async (req, res) => {
  */
 router.get('/shop', async (req, res) => {
     try {
-        // Получаем предметы для продажи - только оружие!
-        // (ключи не продаются, еда/броня/лекарства - только в поиске)
+        // Получаем все предметы, которые можно купить за монеты.
+        // Ключи по-прежнему не продаются, но еда, медицина, броня и ресурсы доступны.
         const items = await queryAll(`
-            SELECT id, name, description, type, category, rarity, icon, stats, price, durability
+            SELECT id, name, description, type, category, rarity, icon, stats, price, durability, slot
             FROM items 
-            WHERE price > 0 AND type = 'weapon'
-            ORDER BY rarity, price
+            WHERE price > 0 AND type != 'key'
+            ORDER BY 
+                CASE type
+                    WHEN 'food' THEN 1
+                    WHEN 'medicine' THEN 2
+                    WHEN 'weapon' THEN 3
+                    WHEN 'armor' THEN 4
+                    WHEN 'resource' THEN 5
+                    ELSE 6
+                END,
+                CASE rarity
+                    WHEN 'common' THEN 1
+                    WHEN 'uncommon' THEN 2
+                    WHEN 'rare' THEN 3
+                    WHEN 'epic' THEN 4
+                    WHEN 'legendary' THEN 5
+                    ELSE 6
+                END,
+                price ASC
         `);
         
         res.json({
@@ -767,7 +787,8 @@ router.post('/buy', async (req, res) => {
         );
         
         // Добавляем предмет в инвентарь
-        let inventory = typeof player.inventory === 'string' ? JSON.parse(player.inventory) : (player.inventory || []);
+        let inventory = safeJsonParse(player.inventory, []);
+        const parsedStats = safeJsonParse(shopItem.stats, {});
         
         const newItem = {
             id: shopItem.id,
@@ -776,7 +797,14 @@ router.post('/buy', async (req, res) => {
             category: shopItem.category,
             rarity: shopItem.rarity,
             icon: shopItem.icon,
-            stats: typeof shopItem.stats === 'string' ? JSON.parse(shopItem.stats) : (shopItem.stats || {}),
+            slot: shopItem.slot || null,
+            stats: parsedStats,
+            damage: parsedStats.damage || 0,
+            defense: parsedStats.defense || 0,
+            heal: parsedStats.health || 0,
+            rad_removal: parsedStats.radiation_cure || 0,
+            radiation_resist: parsedStats.radiation_resist || 0,
+            infection_resist: parsedStats.infection_resist || 0,
             durability: shopItem.durability || 100,
             max_durability: shopItem.durability || 100,
             quantity: 1

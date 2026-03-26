@@ -279,12 +279,402 @@ function refreshPlayerEnergyUI() {
 
 // Исправленная функция - теперь только уровень влияет на дроп
 function updateDropChanceDisplay() {
-    // Шанс дропа теперь зависит только от уровня
-    const level = gameState.player?.level || 1;
-    const dropChance = 10 + (level * 0.5);
+    const luck = gameState.player?.stats?.luck || gameState.player?.luck || 1;
+    const dropChance = Math.min(60, 10 + (luck * 0.4));
     const dropChanceEl = document.getElementById('player-drop-chance');
     if (dropChanceEl) {
-        dropChanceEl.textContent = `${Math.min(60, Math.round(dropChance))}%`;
+        dropChanceEl.textContent = `${Math.round(dropChance * 10) / 10}%`;
+    }
+}
+
+const MAIN_INSIGHTS_TTL_MS = 60 * 1000;
+
+function getMainInsightsStore() {
+    if (!gameState.mainInsights) {
+        gameState.mainInsights = {
+            loadedAt: 0,
+            bosses: [],
+            achievements: [],
+            achievementStats: null
+        };
+    }
+
+    return gameState.mainInsights;
+}
+
+async function refreshMainScreenInsights(force = false) {
+    const store = getMainInsightsStore();
+    const isFresh = (Date.now() - (store.loadedAt || 0)) < MAIN_INSIGHTS_TTL_MS;
+
+    if (!force && isFresh) {
+        if (gameState.player) {
+            updateMainScreenInsights(gameState.player);
+        }
+        return store;
+    }
+
+    const [bossesResult, achievementsResult] = await Promise.allSettled([
+        gameApi.bosses(),
+        gameApi.achievements()
+    ]);
+
+    if (bossesResult.status === 'fulfilled') {
+        const bossesPayload = bossesResult.value?.data || bossesResult.value || {};
+        store.bosses = Array.isArray(bossesPayload.bosses) ? bossesPayload.bosses : [];
+    }
+
+    if (achievementsResult.status === 'fulfilled') {
+        store.achievements = Array.isArray(achievementsResult.value?.progress)
+            ? achievementsResult.value.progress
+            : [];
+        store.achievementStats = achievementsResult.value?.stats || null;
+    }
+
+    store.loadedAt = Date.now();
+
+    if (gameState.player) {
+        updateMainScreenInsights(gameState.player);
+    }
+
+    return store;
+}
+
+function getAchievementInsight() {
+    const store = getMainInsightsStore();
+    const achievements = Array.isArray(store.achievements) ? store.achievements : [];
+
+    const claimable = achievements.find(achievement => achievement.completed && !achievement.reward_claimed);
+    if (claimable) {
+        return {
+            value: claimable.name,
+            desc: 'Награда уже готова к получению',
+            action: 'achievements'
+        };
+    }
+
+    const nextAchievement = achievements
+        .filter(achievement => !achievement.reward_claimed)
+        .sort((first, second) => (second.percent || 0) - (first.percent || 0))[0];
+
+    if (nextAchievement) {
+        return {
+            value: `${nextAchievement.percent || 0}%`,
+            desc: nextAchievement.name,
+            action: 'achievements'
+        };
+    }
+
+    return {
+        value: 'Нет задач',
+        desc: 'Все ближайшие награды уже закрыты',
+        action: 'achievements'
+    };
+}
+
+function getBossInsight() {
+    const store = getMainInsightsStore();
+    const bosses = Array.isArray(store.bosses) ? store.bosses : [];
+
+    const availableBoss = bosses.find(boss => boss.can_start_solo);
+    if (availableBoss) {
+        return {
+            value: availableBoss.name,
+            desc: 'Босс уже доступен для соло-боя',
+            available: true,
+            action: 'bosses'
+        };
+    }
+
+    const nextLockedBoss = bosses.find(boss => !boss.is_unlocked);
+    if (nextLockedBoss) {
+        const keysMissing = Math.max(0, (nextLockedBoss.required_keys || 0) - (nextLockedBoss.owned_keys || 0));
+        return {
+            value: nextLockedBoss.name,
+            desc: keysMissing > 0 ? `Нужно ещё ключей: ${keysMissing}` : 'Условия почти выполнены',
+            available: false,
+            action: 'bosses'
+        };
+    }
+
+    return {
+        value: 'Все открыты',
+        desc: 'Можно идти на сильнейшего босса',
+        available: true,
+        action: 'bosses'
+    };
+}
+
+function getMainRecommendation(player) {
+    const status = player.status || {};
+    const health = Number(status.health || 0);
+    const maxHealth = Math.max(1, Number(status.max_health || 100));
+    const energy = Number(status.energy || player.energy || 0);
+    const radiation = Number(status.radiation || 0);
+    const infections = Number(status.infections || 0);
+    const healthPercent = Math.round((health / maxHealth) * 100);
+    const achievementInsight = getAchievementInsight();
+    const bossInsight = getBossInsight();
+
+    if (health <= 0) {
+        return {
+            tone: 'danger',
+            state: 'Критично',
+            title: 'Нужно восстановиться',
+            text: 'У персонажа нет здоровья. Сначала лечение, потом вылазки.',
+            primary: '❤️ Здоровье на нуле',
+            secondary: '🎒 Открой инвентарь и используй лечение',
+            actionLabel: 'Открыть инвентарь',
+            action: 'inventory'
+        };
+    }
+
+    if (radiation >= 5) {
+        return {
+            tone: 'danger',
+            state: 'Опасно',
+            title: 'Сними радиацию',
+            text: 'Высокая радиация уже мешает безопасно фармить. Лучше сначала стабилизировать состояние.',
+            primary: `☢️ Радиация: ${radiation}`,
+            secondary: '🏪 В магазине уже есть антирад и лекарства',
+            actionLabel: 'Открыть магазин',
+            action: 'market'
+        };
+    }
+
+    if (infections > 0) {
+        return {
+            tone: 'warning',
+            state: 'Риск',
+            title: 'Вылечи инфекцию',
+            text: 'Инфекция будет тормозить прогресс. Лучше снять дебафф до долгой сессии.',
+            primary: `🦠 Инфекция: ${infections}`,
+            secondary: '💊 Лекарства уже доступны в магазине и инвентаре',
+            actionLabel: 'Открыть магазин',
+            action: 'market'
+        };
+    }
+
+    if (achievementInsight.value !== 'Нет задач' && achievementInsight.desc.includes('готова')) {
+        return {
+            tone: 'ready',
+            state: 'Награда',
+            title: 'Можно забрать достижение',
+            text: 'У тебя уже есть готовая награда. Забери её перед следующей вылазкой.',
+            primary: `🏆 ${achievementInsight.value}`,
+            secondary: '⭐ Бонус усилит ближайший прогресс',
+            actionLabel: 'Открыть достижения',
+            action: 'achievements'
+        };
+    }
+
+    if (energy < 1) {
+        return {
+            tone: 'warning',
+            state: 'Пауза',
+            title: 'Подожди энергию или подготовься',
+            text: 'Энергия закончилась. Можно купить расходники, проверить цели или зайти в боссы.',
+            primary: '⚡ Энергия на нуле',
+            secondary: '🛒 Подготовь инвентарь к следующей сессии',
+            actionLabel: 'Открыть магазин',
+            action: 'market'
+        };
+    }
+
+    if (healthPercent <= 50) {
+        return {
+            tone: 'warning',
+            state: 'Осторожно',
+            title: 'Сначала подлечись',
+            text: 'Энергия ещё есть, но по здоровью ты уже в опасной зоне для длинной вылазки.',
+            primary: `❤️ ${health}/${maxHealth}`,
+            secondary: '💊 Запасись лечением перед поиском',
+            actionLabel: 'Открыть магазин',
+            action: 'market'
+        };
+    }
+
+    if (bossInsight.available) {
+        return {
+            tone: 'ready',
+            state: 'Прорыв',
+            title: `Можно идти на ${bossInsight.value}`,
+            text: 'У тебя уже есть доступ к следующему боссу. Это лучший шанс быстро продвинуться по прогрессии.',
+            primary: '👹 Босс доступен',
+            secondary: '⚔️ Проверь урон и ключи перед стартом',
+            actionLabel: 'Открыть боссов',
+            action: 'bosses'
+        };
+    }
+
+    return {
+        tone: 'ready',
+        state: 'Фарм',
+        title: 'Лучший ход — искать припасы',
+        text: 'Состояние стабильное. Сейчас выгодно тратить энергию на поиск, лут и подготовку к следующему боссу.',
+        primary: `⚡ Энергии хватит ещё на ${energy} действий`,
+        secondary: '🎯 Подходящий момент для фарма и прогресса',
+        actionLabel: 'Начать поиск',
+        action: 'search'
+    };
+}
+
+function updateMainRecommendationUI(player) {
+    const recommendation = getMainRecommendation(player);
+    const card = document.getElementById('main-guidance-card');
+    const stateEl = document.getElementById('guidance-state');
+    const titleEl = document.getElementById('guidance-title');
+    const textEl = document.getElementById('guidance-text');
+    const primaryEl = document.getElementById('guidance-meta-primary');
+    const secondaryEl = document.getElementById('guidance-meta-secondary');
+    const actionBtn = document.getElementById('guidance-action-btn');
+
+    if (card) {
+        card.dataset.tone = recommendation.tone;
+    }
+    if (stateEl) stateEl.textContent = recommendation.state;
+    if (titleEl) titleEl.textContent = recommendation.title;
+    if (textEl) textEl.textContent = recommendation.text;
+    if (primaryEl) primaryEl.textContent = recommendation.primary;
+    if (secondaryEl) secondaryEl.textContent = recommendation.secondary;
+    if (actionBtn) {
+        actionBtn.textContent = recommendation.actionLabel;
+        actionBtn.onclick = () => handleMainGuidanceAction(recommendation.action);
+    }
+}
+
+function updateMainProgressCards(player) {
+    const expProgress = player.exp_progress || { current: 0, needed: 0 };
+    const remainingXp = Math.max(0, Number(expProgress.needed || 0) - Number(expProgress.current || 0));
+    const nextLevelValue = document.getElementById('next-level-value');
+    const nextLevelDesc = document.getElementById('next-level-desc');
+    if (nextLevelValue) nextLevelValue.textContent = `${remainingXp} XP`;
+    if (nextLevelDesc) nextLevelDesc.textContent = `До уровня ${(player.level || 1) + 1}`;
+
+    const bossInsight = getBossInsight();
+    const nextBossValue = document.getElementById('next-boss-value');
+    const nextBossDesc = document.getElementById('next-boss-desc');
+    if (nextBossValue) nextBossValue.textContent = bossInsight.value;
+    if (nextBossDesc) nextBossDesc.textContent = bossInsight.desc;
+
+    const rewardInsight = getAchievementInsight();
+    const nextRewardValue = document.getElementById('next-reward-value');
+    const nextRewardDesc = document.getElementById('next-reward-desc');
+    if (nextRewardValue) nextRewardValue.textContent = rewardInsight.value;
+    if (nextRewardDesc) nextRewardDesc.textContent = rewardInsight.desc;
+}
+
+function updateMainBonuses(player) {
+    updateDropChanceDisplay();
+
+    const strength = Number(player.stats?.strength || player.strength || 1);
+    const weaponDamage = Number(player.equipment?.weapon?.damage || 0);
+    const damagePreviewEl = document.getElementById('player-damage-preview');
+    if (damagePreviewEl) {
+        damagePreviewEl.textContent = `+${strength + weaponDamage}`;
+    }
+
+    const status = player.status || {};
+    const survivalPreviewEl = document.getElementById('player-survival-preview');
+    if (survivalPreviewEl) {
+        if ((status.radiation || 0) >= 5 || (status.infections || 0) > 0) {
+            survivalPreviewEl.textContent = 'Риск';
+        } else if ((status.health || 0) <= ((status.max_health || 100) * 0.5)) {
+            survivalPreviewEl.textContent = 'Низкое HP';
+        } else {
+            survivalPreviewEl.textContent = 'Стабильно';
+        }
+    }
+}
+
+function updateRiskSummary(player) {
+    const status = player.status || {};
+    const health = Number(status.health || 0);
+    const maxHealth = Math.max(1, Number(status.max_health || 100));
+    const healthPercent = Math.round((health / maxHealth) * 100);
+    const radiation = Number(status.radiation || 0);
+    const infections = Number(status.infections || 0);
+
+    const card = document.getElementById('risk-summary-card');
+    const levelEl = document.getElementById('risk-summary-level');
+    const textEl = document.getElementById('risk-summary-text');
+    const actionEl = document.getElementById('risk-summary-action');
+
+    let risk = 'safe';
+    let level = 'Стабильно';
+    let text = 'Пока всё под контролем — можно безопасно продолжать вылазку.';
+    let action = 'Ищи лут';
+
+    if (health <= 0 || radiation >= 8 || infections >= 3) {
+        risk = 'danger';
+        level = 'Критическое состояние';
+        text = 'Есть высокий шанс сорвать прогресс. Сначала стабилизируй персонажа.';
+        action = 'Срочно лечиться';
+    } else if (healthPercent <= 50 || radiation >= 5 || infections > 0) {
+        risk = 'warning';
+        level = 'Повышенный риск';
+        text = 'Можно играть дальше, но дебаффы и низкое здоровье уже заметно мешают.';
+        action = 'Купить расходники';
+    }
+
+    if (card) card.dataset.risk = risk;
+    if (levelEl) levelEl.textContent = level;
+    if (textEl) textEl.textContent = text;
+    if (actionEl) actionEl.textContent = action;
+}
+
+function setQuickEntryBadge(id, text) {
+    const badge = document.getElementById(id);
+    if (!badge) return;
+
+    if (!text) {
+        badge.style.display = 'none';
+        badge.textContent = '';
+        return;
+    }
+
+    badge.style.display = 'inline-flex';
+    badge.textContent = text;
+}
+
+function updateQuickEntryBadges(player) {
+    const bossInsight = getBossInsight();
+    const rewardInsight = getAchievementInsight();
+    const locationDanger = Number(player.location?.danger_level || 1);
+    const status = player.status || {};
+
+    setQuickEntryBadge('bosses-badge', bossInsight.available ? 'доступно' : 'цель');
+    setQuickEntryBadge('shop-badge', ((status.radiation || 0) >= 5 || (status.infections || 0) > 0 || (status.health || 0) <= ((status.max_health || 100) * 0.5)) ? 'нужно' : 'запасы');
+    setQuickEntryBadge('rating-badge', rewardInsight.desc.includes('готова') ? 'награда' : 'топы');
+    setQuickEntryBadge('pvp-badge', locationDanger >= 6 ? 'опасно' : 'закрыто');
+}
+
+function updateMainScreenInsights(player) {
+    if (!player) return;
+
+    updateMainRecommendationUI(player);
+    updateMainProgressCards(player);
+    updateMainBonuses(player);
+    updateRiskSummary(player);
+    updateQuickEntryBadges(player);
+}
+
+function handleMainGuidanceAction(action) {
+    switch (action) {
+        case 'search':
+            document.getElementById('search-btn')?.click();
+            break;
+        case 'bosses':
+            showScreen('bosses');
+            break;
+        case 'market':
+            showScreen('market');
+            break;
+        case 'achievements':
+            showScreen('achievements');
+            break;
+        case 'inventory':
+            showScreen('inventory');
+            break;
     }
 }
 
@@ -334,11 +724,19 @@ async function updateProfileUI(player) {
     // Звёзды
     const invStars = document.getElementById('inv-stars');
     const invCoins = document.getElementById('inv-coins');
+    const mainStars = document.getElementById('main-stars-value');
+    const mainCoins = document.getElementById('main-coins-value');
     if (invStars) invStars.textContent = player.stars || 0;
     if (invCoins) invCoins.textContent = player.coins || 0;
+    if (mainStars) mainStars.textContent = player.stars || 0;
+    if (mainCoins) mainCoins.textContent = player.coins || 0;
     
     // Обновляем отображение переломов и инфекций
     updateConditionsUI(status);
+    updateMainScreenInsights(player);
+    refreshMainScreenInsights().catch(error => {
+        console.debug('Не удалось обновить инсайты главного экрана:', error);
+    });
 }
 
 /**

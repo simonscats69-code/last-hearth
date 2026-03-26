@@ -460,8 +460,12 @@ function renderItemStats(stats) {
     if (!stats) return '';
     const statLines = [];
     if (stats.damage) statLines.push(`⚔️ Урон: +${stats.damage}`);
+    if (stats.defense) statLines.push(`🛡️ Защита: +${stats.defense}`);
     if (stats.health) statLines.push(`❤️ Здоровье: +${stats.health}`);
     if (stats.energy) statLines.push(`⚡ Энергия: +${stats.energy}`);
+    if (stats.radiation_cure) statLines.push(`☢️ Лечение радиации: ${stats.radiation_cure}`);
+    if (stats.infection_cure) statLines.push(`🦠 Лечение инфекции: ${stats.infection_cure}`);
+    if (stats.radiation_resist) statLines.push(`🛡️ Защита от радиации: ${stats.radiation_resist}`);
     return statLines.join('<br>');
 }
 

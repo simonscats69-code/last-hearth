@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
     try {
         // Получаем время последнего вращения
         const result = await query(
-            'SELECT last_wheel_spin FROM players WHERE telegram_id = $1',
+            'SELECT last_wheel_spin FROM players WHERE id = $1',
             [playerId]
         );
         

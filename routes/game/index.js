@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { query } = require('../../db/database');
+const { queryOne } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger } = require('../../utils/serverApi');
 
@@ -37,12 +37,26 @@ function safeRequire(path, name) {
         logger.info(`[game] Попытка загрузить ${name} из ${path}`);
         const module = require(path);
         logger.info(`[game] Модуль ${name} загружен, тип:`, typeof module);
+        
         // Если модуль экспортирует объект с полем router, извлекаем его
         if (module && typeof module === 'object' && module.router) {
             logger.info(`[game] ${name} имеет .router, возвращаем его`);
             return module.router;
         }
-        logger.info(`[game] ${name} возвращаем как есть`);
+        
+        // Если модуль является Express роутером (имеет методы маршрутизации), возвращаем как есть
+        if (module && typeof module === 'object' && (module.get || module.post || module.put || module.delete || module.patch || module.handle)) {
+            logger.info(`[game] ${name} является Express router, возвращаем как есть`);
+            return module;
+        }
+        
+        // Fallback: проверяем через stack (для роутеров с middleware)
+        if (module && typeof module === 'object' && Array.isArray(module.stack)) {
+            logger.info(`[game] ${name} имеет stack (Express router), возвращаем как есть`);
+            return module;
+        }
+        
+        logger.info(`[game] ${name} возвращаем как есть (${typeof module})`);
         return module;
     } catch (error) {
         logger.error(`[game] Ошибка загрузки ${name}:`, error.message, error.stack);
@@ -75,6 +89,59 @@ const itemsRouter = safeRequire('./items', 'items');
 const statusRouter = safeRequire('./status', 'status');
 const wheelRouter = safeRequire('./wheel', 'wheel');
 
+function buildReferralCode(telegramId) {
+    try {
+        return `LH-${BigInt(String(telegramId)).toString(36).toUpperCase()}`.slice(0, 20);
+    } catch {
+        return `LH-${String(telegramId).slice(-10)}`;
+    }
+}
+
+async function upsertPlayerFromTelegramUser(user) {
+    const telegramId = Number(user.id);
+
+    return await queryOne(`
+        INSERT INTO players (
+            telegram_id,
+            username,
+            first_name,
+            last_name,
+            referral_code,
+            created_at,
+            updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        ON CONFLICT (telegram_id)
+        DO UPDATE SET
+            username = COALESCE(EXCLUDED.username, players.username),
+            first_name = COALESCE(EXCLUDED.first_name, players.first_name),
+            last_name = COALESCE(EXCLUDED.last_name, players.last_name),
+            updated_at = NOW()
+        RETURNING *
+    `, [
+        telegramId,
+        user.username || null,
+        user.first_name || 'Player',
+        user.last_name || null,
+        buildReferralCode(telegramId)
+    ]);
+}
+
+function buildRequestPlayer(user, dbPlayer) {
+    return {
+        ...dbPlayer,
+        id: Number(dbPlayer.id),
+        player_id: Number(dbPlayer.id),
+        telegram_id: Number(dbPlayer.telegram_id),
+        username: dbPlayer.username || user.username || null,
+        first_name: dbPlayer.first_name || user.first_name || 'Player',
+        last_name: dbPlayer.last_name || user.last_name || null,
+        language_code: user.language_code || 'ru',
+        is_premium: Boolean(user.is_premium),
+        telegram_user: user
+    };
+}
+
 // Middleware для валидации Telegram данных
 async function validatePlayer(req, res, next) {
     logger.info('[validatePlayer] Начало валидации', { path: req.path, method: req.method, headers: Object.keys(req.headers) });
@@ -96,15 +163,8 @@ async function validatePlayer(req, res, next) {
                     const userStr = params.get('user');
                     if (userStr) {
                         const user = JSON.parse(userStr);
-                        req.player = {
-                            id: user.id,
-                            telegram_id: user.id,
-                            username: user.username || null,
-                            first_name: user.first_name || 'DevPlayer',
-                            last_name: user.last_name || null,
-                            language_code: user.language_code || 'ru',
-                            is_premium: user.is_premium || false
-                        };
+                        const dbPlayer = await upsertPlayerFromTelegramUser(user);
+                        req.player = buildRequestPlayer(user, dbPlayer);
                         req.telegramAuth = { user, raw: Object.fromEntries(params) };
                         
                         logger.info('[validatePlayer] Dev mode авторизация', {
@@ -120,16 +180,17 @@ async function validatePlayer(req, res, next) {
             }
             
             // Fallback: используем тестовый аккаунт для разработки
-            req.player = {
+            const devUser = {
                 id: 123456789,
-                telegram_id: 123456789,
                 username: 'dev_user',
                 first_name: 'Dev',
                 last_name: 'Player',
                 language_code: 'ru',
                 is_premium: false
             };
-            req.telegramAuth = { user: req.player, raw: {} };
+            const dbPlayer = await upsertPlayerFromTelegramUser(devUser);
+            req.player = buildRequestPlayer(devUser, dbPlayer);
+            req.telegramAuth = { user: devUser, raw: {} };
             
             logger.info('[validatePlayer] Dev mode fallback авторизация');
             return next();
@@ -154,19 +215,13 @@ async function validatePlayer(req, res, next) {
 
         // Устанавливаем данные пользователя из валидированных данных
         // Преобразуем объект Telegram user в формат, ожидаемый роутерами
-        req.player = {
-            id: validated.user.id,           // ID для внутреннего использования (совпадает с telegram_id)
-            telegram_id: validated.user.id,  // Telegram ID для запросов к БД
-            username: validated.user.username || null,
-            first_name: validated.user.first_name || 'Player',
-            last_name: validated.user.last_name || null,
-            language_code: validated.user.language_code || 'ru',
-            is_premium: validated.user.is_premium || false
-        };
+        const dbPlayer = await upsertPlayerFromTelegramUser(validated.user);
+        req.player = buildRequestPlayer(validated.user, dbPlayer);
         req.telegramAuth = validated;
         
         logger.info('[validatePlayer] Авторизация успешна', {
             telegramId: validated.user.id,
+            playerId: dbPlayer.id,
             firstName: validated.user.first_name,
             username: validated.user.username
         });
@@ -180,6 +235,19 @@ async function validatePlayer(req, res, next) {
 
 // Применяем валидацию ко всем роутерам
 router.use(validatePlayer);
+
+// Применяем rate limiters к критическим маршрутам
+// Критические действия: атаки боссов, PvP атаки, спин колеса
+router.use('/bosses', criticalActionLimiter);
+router.use('/pvp', criticalActionLimiter);
+router.use('/wheel/spin', criticalActionLimiter);
+
+// Покупки: отдельный лимитер
+router.use('/purchase', purchaseLimiter);
+router.use('/items/buy', purchaseLimiter);
+
+// Общие действия: все остальные маршруты
+router.use(generalActionLimiter);
 
 // Логируем все входящие запросы к game роутеру
 router.use((req, res, next) => {

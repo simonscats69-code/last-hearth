@@ -50,10 +50,11 @@ const DebuffAPI = {
         // playerId здесь - это внутренний id игрока (не telegram_id)
         return await tx(async (client) => {
             // Блокируем строку игрока по внутреннему id
-            const player = await client.query(
+            const playerResult = await client.query(
                 `SELECT radiation, infections FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
+            const player = playerResult.rows[0];
             
             if (!player) {
                 throw new Error('Игрок не найден');
@@ -66,19 +67,19 @@ const DebuffAPI = {
             
             if (type === DEBUFF_TYPES.RADIATION) {
                 // Применяем/увеличиваем радиацию
-                const currentRadiation = safeJsonParse(player.rows[0].radiation, { level: 0 });
+                const currentRadiation = safeJsonParse(player.radiation, { level: 0 });
                 const newLevel = Math.min(config.maxLevel, currentRadiation.level + level);
                 
                 await client.query(
                     `UPDATE players SET radiation = $1 WHERE id = $2`,
-                    [{
+                    [JSON.stringify({
                         level: newLevel,
                         expires_at: expiresAt.toISOString(),
                         applied_at: now.toISOString()
-                    }, playerId]
+                    }), playerId]
                 );
                 
-                await logPlayerAction(playerId, 'debuff_radiation_apply', {
+                await logPlayerAction(client, playerId, 'debuff_radiation_apply', {
                     oldLevel: currentRadiation.level,
                     newLevel,
                     source: options.source
@@ -121,7 +122,7 @@ const DebuffAPI = {
                     [JSON.stringify(newInfections), playerId]
                 );
                 
-                await logPlayerAction(playerId, 'debuff_infection_apply', {
+                await logPlayerAction(client, playerId, 'debuff_infection_apply', {
                     type,
                     level,
                     totalInfections: newInfections.reduce((s, i) => s + i.level, 0),
@@ -139,11 +140,12 @@ const DebuffAPI = {
      * @returns {Promise<object>} статус дебаффов
      */
     async check(playerId) {
-        return await tx(async () => {
-            const player = await client.query(
+        return await tx(async (client) => {
+            const playerResult = await client.query(
                 `SELECT radiation, infections, health FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
+            const player = playerResult.rows[0];
             
             if (!player) {
                 throw new Error('Игрок не найден');
@@ -162,7 +164,7 @@ const DebuffAPI = {
                     // Дебафф истёк
                     await client.query(
                         `UPDATE players SET radiation = $1 WHERE id = $2`,
-                        [{ level: 0, expires_at: null, applied_at: null }, playerId]
+                        [JSON.stringify({ level: 0, expires_at: null, applied_at: null }), playerId]
                     );
                     expired.push('radiation');
                 } else {
@@ -210,7 +212,7 @@ const DebuffAPI = {
             }
             
             // Расчёт урона от дебаффов
-            const totalDamage = this.calculateDebuffDamage(active, player.health);
+            const totalDamage = this.calculateDebuffDamage(active);
             if (totalDamage > 0) {
                 await client.query(
                     `UPDATE players SET health = GREATEST(0, health - $1) WHERE id = $2`,
@@ -240,7 +242,8 @@ const DebuffAPI = {
             if (expiresAt <= now) continue;
             
             // Дебафф активен - наносим урон если уровень >= 5
-            const config = DEBUFF_CONFIG[debuff.type];
+            const configKey = debuff.type === DEBUFF_TYPES.INFECTION ? 'infection' : debuff.type;
+            const config = DEBUFF_CONFIG[configKey];
             if (config && debuff.level >= 5) {
                 damage += config.damagePerLevel;
             }
@@ -295,12 +298,13 @@ const DebuffAPI = {
             throw new Error(`Неизвестный тип лечения: ${cureType}`);
         }
         
-        return await tx(async () => {
+        return await tx(async (client) => {
             // Получаем игрока и инвентарь
-            const player = await client.query(
+            const playerResult = await client.query(
                 `SELECT radiation, infections, inventory FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
+            const player = playerResult.rows[0];
             
             if (!player) {
                 throw new Error('Игрок не найден');
@@ -343,14 +347,14 @@ const DebuffAPI = {
                 
                 await client.query(
                     `UPDATE players SET radiation = $1 WHERE id = $2`,
-                    [{
+                    [JSON.stringify({
                         level: newLevel,
                         expires_at: newExpiresAt,
                         applied_at: radiation.applied_at
-                    }, playerId]
+                    }), playerId]
                 );
                 
-                await logPlayerAction(playerId, 'debuff_cure_radiation', {
+                await logPlayerAction(client, playerId, 'debuff_cure_radiation', {
                     cureType,
                     oldLevel: radiation.level,
                     newLevel
@@ -379,12 +383,12 @@ const DebuffAPI = {
                     }
                 }
                 
-                await query(
-                    `UPDATE players SET infections = $1 WHERE telegram_id = $2`,
+                await client.query(
+                    `UPDATE players SET infections = $1 WHERE id = $2`,
                     [JSON.stringify(remaining), playerId]
                 );
                 
-                await logPlayerAction(playerId, 'debuff_cure_infection', {
+                await logPlayerAction(client, playerId, 'debuff_cure_infection', {
                     cureType,
                     removed: infections.length - remaining.length
                 });
@@ -499,7 +503,7 @@ router.post('/cure', async (req, res) => {
     } catch (error) {
         logger.error('[debuffs] Ошибка лечения', { error: error.message, code: error.code });
         // Различаем типы ошибок: валидация - 400, внутренние - 500
-        const statusCode = error.statusCode || (error.code && ['INVALID_TYPE', 'MISSING_ITEM_ID', 'ITEM_NOT_FOUND'].includes(error.code)) ? 400 : 500;
+        const statusCode = error.statusCode || ((error.code && ['INVALID_TYPE', 'MISSING_ITEM_ID', 'ITEM_NOT_FOUND'].includes(error.code)) ? 400 : 500);
         res.status(statusCode).json({ success: false, error: error.message });
     }
 });

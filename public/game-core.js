@@ -64,6 +64,14 @@ const gameState = {
     // Последний вход
     lastLogin: null,
 
+    // Инсайты для главного экрана
+    mainInsights: {
+        loadedAt: 0,
+        bosses: [],
+        achievements: [],
+        achievementStats: null
+    },
+
     // Активные дебаффы
     debuffs: {
         radiation: {
@@ -389,7 +397,7 @@ const API = {
         clan: '/api/game/clans/clan',
         market: '/api/game/market/listings',
         pvp: '/api/game/pvp/players',
-        achievements: '/api/game/achievements/progress',
+        achievements: '/api/achievements/progress',
         status: '/api/game/status',
         energy: '/api/game/energy'
     },
@@ -980,6 +988,9 @@ function onScreenOpen(screenName) {
         case 'main':
             // Обновляем главный экран (данные уже загружены)
             renderMain();
+            if (typeof refreshMainScreenInsights === 'function') {
+                refreshMainScreenInsights();
+            }
             break;
 
         case 'map':

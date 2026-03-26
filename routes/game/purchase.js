@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query } = require('../../db/database');
+const { pool } = require('../../db/database');
 const { logger, handleError } = require('../../utils/serverApi');
 
 const BUFFS_CONFIG = {

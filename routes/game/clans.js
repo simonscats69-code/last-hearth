@@ -131,7 +131,7 @@ router.post('/clan/create', wrap(async (req, res) => {
         return fail(res, 'Нужно 1000 монет', 'NOT_ENOUGH_COINS');
     }
     
-    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+    const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -142,29 +142,30 @@ router.post('/clan/create', wrap(async (req, res) => {
         }
 
         // Проверяем уникальность имени клана
-        const existingClan = await queryOne(
+        const existingClanResult = await client.query(
             'SELECT id FROM clans WHERE LOWER(name) = LOWER($1)',
             [nameValidation.value]
         );
+        const existingClan = existingClanResult.rows[0];
         if (existingClan) {
             throw new Error('Клан с таким именем уже существует');
         }
 
-        const insertResult = await query(
+        const insertResult = await client.query(
             `INSERT INTO clans (name, description, leader_id, created_at, is_open, is_public, invite_code) 
              VALUES ($1, $2, $3, NOW(), $4, $5, $6) RETURNING id`,
             [nameValidation.value, String(description).slice(0, 200), lockedPlayer.telegram_id, Boolean(is_public), Boolean(is_public), inviteCode]
         );
         const clanId = insertResult.rows[0].id;
         
-        await query(
+        await client.query(
             `UPDATE players SET clan_id = $1, clan_role = 'leader', coins = coins - 1000 
-             WHERE telegram_id = $2`,
+             WHERE id = $2`,
             [clanId, playerId]
         );
 
         // Логируем создание клана
-        await logPlayerAction(pool, playerId, 'clan_create', {
+        await logPlayerAction(client, playerId, 'clan_create', {
             clan_id: clanId,
             clan_name: nameValidation.value,
             cost: 1000
@@ -213,7 +214,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         return fail(res, 'Клан полный (макс. 30 участников)', 'CLAN_FULL');
     }
     
-    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+    const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -224,16 +225,17 @@ router.post('/clan/join', wrap(async (req, res) => {
         }
 
         // Проверяем количество участников
-        const memberCount = await queryOne(
+        const memberCountResult = await client.query(
             'SELECT COUNT(*) as count FROM players WHERE clan_id = $1',
             [clan_id]
         );
+        const memberCount = memberCountResult.rows[0];
 
         if (Number(memberCount.count) >= 30) {
             throw new Error('Клан полный');
         }
 
-        const updateResult = await query(`
+        const updateResult = await client.query(`
             UPDATE players
             SET clan_id = $1, clan_role = 'member'
             WHERE id = $2
@@ -246,7 +248,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         }
 
         // Логируем вступление
-        await logPlayerAction(pool, playerId, 'clan_join', {
+        await logPlayerAction(client, playerId, 'clan_join', {
             clan_id,
             clan_name: clan.name
         });
@@ -273,18 +275,18 @@ router.post('/clan/leave', wrap(async (req, res) => {
         return fail(res, 'Лидер не может покинуть клан. Передайте лидерство.', 'LEADER_CANT_LEAVE', 403);
     }
     
-    await withPlayerLock(playerId, async (lockedPlayer) => {
+    await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
 
-        await query(
-            `UPDATE players SET clan_id = NULL, clan_role = NULL WHERE telegram_id = $1`, 
+        await client.query(
+            `UPDATE players SET clan_id = NULL, clan_role = NULL WHERE id = $1`, 
             [playerId]
         );
 
         // Логируем выход из клана
-        await logPlayerAction(pool, playerId, 'clan_leave', {
+        await logPlayerAction(client, playerId, 'clan_leave', {
             clan_id: player.clan_id
         });
     });
@@ -508,7 +510,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
         return fail(res, 'Слишком большая сумма (макс. 1,000,000)', 'AMOUNT_TOO_BIG');
     }
     
-    const result = await withPlayerLock(playerId, async (lockedPlayer) => {
+    const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
             throw new Error('Игрок не найден');
         }
@@ -518,25 +520,25 @@ router.post('/clan/donate', wrap(async (req, res) => {
         }
 
         // Списание с игрока и добавление в казну клана
-        await query(
+        await client.query(
             `UPDATE players SET coins = coins - $1, clan_donated = clan_donated + $1 
-             WHERE telegram_id = $2`,
+             WHERE id = $2`,
             [donation, playerId]
         );
         
-        await query(
+        await client.query(
             `UPDATE clans SET total_donated = total_donated + $1 WHERE id = $2`,
             [donation, player.clan_id]
         );
         
         // Получаем обновленную сумму пожертвований клана
-        const clanResult = await queryOne(
+        const clanResult = await client.query(
             `SELECT total_donated FROM clans WHERE id = $1`,
             [player.clan_id]
         );
 
         // Логируем пожертвование
-        await logPlayerAction(pool, playerId, 'clan_donate', {
+        await logPlayerAction(client, playerId, 'clan_donate', {
             clan_id: player.clan_id,
             amount: donation,
             new_balance: lockedPlayer.coins - donation
@@ -546,7 +548,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
             success: true,
             donated: donation,
             new_balance: lockedPlayer.coins - donation,
-            clan_total: clanResult?.total_donated || donation
+            clan_total: clanResult.rows[0]?.total_donated || donation
         };
     });
     

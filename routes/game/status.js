@@ -27,7 +27,7 @@ function getPlayerStatus(player) {
 async function runStatusCheck(client, playerId) {
     const lockResult = await client.query(
         `SELECT health, radiation, infections
-         FROM players WHERE telegram_id = $1 FOR UPDATE`,
+         FROM players WHERE id = $1 FOR UPDATE`,
         [playerId]
     );
 
@@ -203,7 +203,7 @@ router.post('/heal', async (req, res) => {
             // Блокируем строку игрока
             const lockResult = await client.query(
                 `SELECT inventory, health, max_health, radiation, infections
-                 FROM players WHERE telegram_id = $1 FOR UPDATE`,
+                 FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
             
@@ -232,7 +232,7 @@ router.post('/heal', async (req, res) => {
                 if (type === 'health') {
                     healAmount = item.heal || 20;
                     await client.query(`
-                        UPDATE players SET health = LEAST(max_health, health + $1) WHERE telegram_id = $2
+                        UPDATE players SET health = LEAST(max_health, health + $1) WHERE id = $2
                     `, [healAmount, playerId]);
                     message = 'Здоровье +' + healAmount;
                     healed = true;
@@ -254,7 +254,7 @@ router.post('/heal', async (req, res) => {
                     
                     // Обновляем как JSON объект
                     await client.query(`
-                        UPDATE players SET radiation = $1 WHERE telegram_id = $2
+                        UPDATE players SET radiation = $1 WHERE id = $2
                     `, [JSON.stringify({ level: newLevel, expires_at: null, applied_at: null }), playerId]);
                     
                     message = 'Радиация -' + healAmount;
@@ -265,7 +265,7 @@ router.post('/heal', async (req, res) => {
                     // Удаляем использованный предмет
                     const newInventory = inventory.filter(i => i.id !== item_id);
                     await client.query(`
-                        UPDATE players SET inventory = $1 WHERE telegram_id = $2
+                        UPDATE players SET inventory = $1 WHERE id = $2
                     `, [JSON.stringify(newInventory), playerId]);
                     
                     // Логируем действие
@@ -361,7 +361,7 @@ const StatusAPI = {
         return await tx(async (client) => {
             const lockResult = await client.query(
                 `SELECT inventory, health, max_health, radiation, infections
-                 FROM players WHERE telegram_id = $1 FOR UPDATE`,
+                 FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
             
@@ -387,13 +387,13 @@ const StatusAPI = {
                 const healAmount = item.heal || 20;
 
                 await client.query(
-                    `UPDATE players SET health = LEAST(max_health, health + $1) WHERE telegram_id = $2`,
+                    `UPDATE players SET health = LEAST(max_health, health + $1) WHERE id = $2`,
                     [healAmount, playerId]
                 );
 
                 const newInventory = inventory.filter((candidate) => candidate.id !== itemId);
                 await client.query(
-                    `UPDATE players SET inventory = $1 WHERE telegram_id = $2`,
+                    `UPDATE players SET inventory = $1 WHERE id = $2`,
                     [JSON.stringify(newInventory), playerId]
                 );
 
@@ -417,13 +417,13 @@ const StatusAPI = {
                 
                 // Обновляем как JSON объект
                 await client.query(
-                    `UPDATE players SET radiation = $1 WHERE telegram_id = $2`,
+                    `UPDATE players SET radiation = $1 WHERE id = $2`,
                     [JSON.stringify({ level: newLevel, expires_at: null, applied_at: null }), playerId]
                 );
 
                 const newInventory = inventory.filter((candidate) => candidate.id !== itemId);
                 await client.query(
-                    `UPDATE players SET inventory = $1 WHERE telegram_id = $2`,
+                    `UPDATE players SET inventory = $1 WHERE id = $2`,
                     [JSON.stringify(newInventory), playerId]
                 );
 

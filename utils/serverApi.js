@@ -140,6 +140,26 @@ function sanitize(obj) {
     return clone;
 }
 
+function getTelegramIdFromHeaders(headers = {}) {
+    const directTelegramId = headers['x-telegram-id'];
+    if (directTelegramId) {
+        return String(directTelegramId);
+    }
+
+    const initData = headers['x-telegram-init-data'] || headers['x-init-data'];
+    if (!initData || typeof initData !== 'string') {
+        return null;
+    }
+
+    try {
+        const params = new URLSearchParams(initData);
+        const user = JSON.parse(params.get('user') || '{}');
+        return user?.id ? String(user.id) : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Middleware для автоматического логирования HTTP запросов
  */
@@ -158,7 +178,7 @@ function requestMiddleware(req, res, next) {
             query: sanitize(req.query),
             status: res.statusCode,
             duration,
-            playerId: req.headers['x-telegram-id'] || 'anonymous',
+            playerId: getTelegramIdFromHeaders(req.headers) || 'anonymous',
             ip: req.ip,
             userAgent: req.headers['user-agent'],
             contentLength: parseInt(req.headers['content-length']) || 0
@@ -619,11 +639,12 @@ async function withClanLock(clanId, fn) {
         };
     }
     
-    return await tx(async () => {
-        const lockedClan = await queryOne(
+    return await tx(async (client) => {
+        const lockedClanResult = await client.query(
             'SELECT * FROM clans WHERE id = $1 FOR UPDATE',
             [clanId]
         );
+        const lockedClan = lockedClanResult.rows[0] || null;
         
         if (!lockedClan) {
             throw { 
@@ -633,7 +654,7 @@ async function withClanLock(clanId, fn) {
             };
         }
         
-        return await fn(lockedClan);
+        return await fn(client, lockedClan);
     });
 }
 
@@ -657,11 +678,12 @@ async function withPlayerAndClanLock(playerId, clanId, fn) {
         };
     }
     
-    return await tx(async () => {
-        const lockedPlayer = await queryOne(
+    return await tx(async (client) => {
+        const lockedPlayerResult = await client.query(
             'SELECT * FROM players WHERE id = $1 FOR UPDATE',
             [playerId]
         );
+        const lockedPlayer = lockedPlayerResult.rows[0] || null;
         
         if (!lockedPlayer) {
             throw { 
@@ -671,10 +693,11 @@ async function withPlayerAndClanLock(playerId, clanId, fn) {
             };
         }
         
-        const lockedClan = await queryOne(
+        const lockedClanResult = await client.query(
             'SELECT * FROM clans WHERE id = $1 FOR UPDATE',
             [clanId]
         );
+        const lockedClan = lockedClanResult.rows[0] || null;
         
         if (!lockedClan) {
             throw { 
@@ -684,7 +707,7 @@ async function withPlayerAndClanLock(playerId, clanId, fn) {
             };
         }
         
-        return await fn(lockedPlayer, lockedClan);
+        return await fn(client, lockedPlayer, lockedClan);
     });
 }
 
@@ -1335,6 +1358,7 @@ module.exports = {
     parseJSONField,
     safeJsonParse,
     safeParse,
+    getTelegramIdFromHeaders,
     
     // Транзакции с блокировкой
     withPlayerLock,

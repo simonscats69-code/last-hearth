@@ -55,7 +55,7 @@ let currentAchievementCategory = null;
  */
 async function loadAchievements() {
     try {
-        const data = await apiRequest('/api/game/achievements/progress');
+        const data = await apiRequest('/api/achievements/progress');
         
         if (data && data.progress) {
             renderAchievementsStats(data.stats);
@@ -123,7 +123,7 @@ async function filterAchievements(category) {
     currentAchievementCategory = category;
     
     // Фильтруем уже загруженные данные вместо перезагрузки
-    const data = await apiRequest('/api/game/achievements/progress');
+    const data = await apiRequest('/api/achievements/progress');
     
     if (data && data.progress) {
         renderAchievementsStats(data.stats);
@@ -198,7 +198,7 @@ function renderAchievementsList(achievements) {
  */
 async function claimAchievement(achievementId) {
     try {
-        const data = await apiRequest('/api/game/achievements/claim', {
+        const data = await apiRequest('/api/achievements/claim', {
             method: 'POST',
             body: { achievement_id: achievementId }
         });
@@ -539,7 +539,7 @@ async function loadPVPStats() {
  */
 async function loadReferralCode() {
     try {
-        const result = await apiRequest('/api/game/referral/code');
+        const result = await apiRequest('/api/game/player/referral/code');
         
         if (result.success) {
             const codeEl = document.getElementById('referral-code');
@@ -560,7 +560,7 @@ async function loadReferralCode() {
  */
 async function loadReferralStats() {
     try {
-        const result = await apiRequest('/api/game/referral/stats');
+        const result = await apiRequest('/api/game/player/referral/stats');
         
         if (result.success) {
             setElementText('total-referrals', result.stats.total_referrals);
@@ -577,7 +577,7 @@ async function loadReferralStats() {
  */
 async function loadReferralsList() {
     try {
-        const result = await apiRequest('/api/game/referral/list');
+        const result = await apiRequest('/api/game/player/referral/list');
         
         const listContainer = document.getElementById('referrals-list');
         
@@ -656,7 +656,7 @@ async function changeReferralCode() {
     }
     
     try {
-        const result = await apiRequest('/api/game/referral/code', {
+        const result = await apiRequest('/api/game/player/referral/code', {
             method: 'PUT',
             body: { new_code: newCode }
         });
@@ -697,7 +697,7 @@ async function useReferralCode() {
     }
     
     try {
-        const result = await apiRequest('/api/game/referral/use', {
+        const result = await apiRequest('/api/game/player/referral/use', {
             method: 'POST',
             body: { code: code }
         });

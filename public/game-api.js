@@ -6,8 +6,12 @@
  * Оптимизировано со словарём эндпоинтов
  */
 
-// Базовый URL API (используем HTTPS для работы с BotHost)
-const API_BASE = 'https://last-hearth.bothost.ru/api';
+// Базовый URL API
+// Сначала пробуем явную конфигурацию окна, затем same-origin для prod/dev,
+// и только потом fallback на основной production endpoint.
+const API_BASE = window.__API_BASE__
+    || `${window.location.origin}/api`
+    || 'https://last-hearth.bothost.ru/api';
 
 // ============================================
 // СЛОВАРЬ ЭНДПОИНТОВ
@@ -36,7 +40,7 @@ const endpoints = {
     // Статус и магазин
     statusCheck: { endpoint: '/game/status/check', method: 'POST' },
     purchase: { endpoint: '/game/purchase', method: 'POST' },
-    achievements: { endpoint: '/game/achievements/progress', method: 'GET' },
+    achievements: { endpoint: '/achievements/progress', method: 'GET' },
     
     // Рейтинги
     ratingsPlayers: { endpoint: '/rating/players', method: 'GET' },

@@ -58,10 +58,16 @@
         <!-- Главное меню -->
         <div id="main-screen" class="screen">
             <!-- Хедер с статами -->
-            <header class="game-header">
-                <div class="player-info">
-                    <span class="player-level">Уровень <span id="player-level">1</span></span>
-                    <span class="player-name" id="player-name">Выживший</span>
+            <header class="game-header main-hero-header">
+                <div class="player-info-row">
+                    <div class="player-info">
+                        <span class="player-level">Уровень <span id="player-level">1</span></span>
+                        <span class="player-name" id="player-name">Выживший</span>
+                    </div>
+                    <div class="main-currency-badges">
+                        <span class="currency-badge coins">💰 <span id="main-coins-value">0</span></span>
+                        <span class="currency-badge stars">⭐ <span id="main-stars-value">0</span></span>
+                    </div>
                 </div>
                 <div class="player-stats">
                     <div class="stat-bar">
@@ -76,9 +82,47 @@
                         <div class="bar exp-bar" id="exp-bar" style="width: 0%"></div>
                         <span class="bar-text">⭐ <span id="exp-text">0/500</span></span>
                     </div>
-                    <div class="energy-timer" id="energy-timer" style="display: none;"></div>
                 </div>
+                <div class="energy-timer inline" id="energy-timer" style="display: none;"></div>
             </header>
+
+            <!-- Блок рекомендаций -->
+            <section class="main-guidance-section">
+                <div class="main-guidance-card" id="main-guidance-card" data-tone="ready">
+                    <div class="guidance-topline">
+                        <span class="guidance-kicker">Что делать сейчас</span>
+                        <span class="guidance-state" id="guidance-state">Готов</span>
+                    </div>
+                    <h3 class="guidance-title" id="guidance-title">Искать припасы</h3>
+                    <p class="guidance-text" id="guidance-text">Сейчас лучший ход — выйти на поиск и усилить персонажа.</p>
+                    <div class="guidance-meta">
+                        <span class="meta-pill" id="guidance-meta-primary">⚡ Энергии достаточно</span>
+                        <span class="meta-pill" id="guidance-meta-secondary">🎯 Можно фармить прямо сейчас</span>
+                    </div>
+                    <button class="action-btn guidance-action-btn" id="guidance-action-btn">Начать</button>
+                </div>
+            </section>
+
+            <!-- Быстрый прогресс -->
+            <section class="quick-progress-section">
+                <div class="quick-progress-grid">
+                    <div class="progress-card">
+                        <span class="progress-card-label">Следующий уровень</span>
+                        <strong class="progress-card-value" id="next-level-value">0 XP</strong>
+                        <span class="progress-card-desc" id="next-level-desc">До уровня 2</span>
+                    </div>
+                    <div class="progress-card">
+                        <span class="progress-card-label">Следующий босс</span>
+                        <strong class="progress-card-value" id="next-boss-value">Нет данных</strong>
+                        <span class="progress-card-desc" id="next-boss-desc">Загрузка данных</span>
+                    </div>
+                    <div class="progress-card">
+                        <span class="progress-card-label">Следующая награда</span>
+                        <strong class="progress-card-value" id="next-reward-value">Нет данных</strong>
+                        <span class="progress-card-desc" id="next-reward-desc">Загрузка достижений</span>
+                    </div>
+                </div>
+            </section>
 
             <!-- Текущая локация -->
             <section class="location-section">
@@ -111,10 +155,22 @@
 
             <section class="player-bonuses">
                 <div class="bonus-pill">🎯 Дроп: <span id="player-drop-chance">10%</span></div>
+                <div class="bonus-pill">⚔️ Урон: <span id="player-damage-preview">+1</span></div>
+                <div class="bonus-pill">🛡️ Выживание: <span id="player-survival-preview">Стабильно</span></div>
             </section>
 
             <!-- Статусы персонажа -->
             <section class="status-section">
+                <div class="risk-summary-card" id="risk-summary-card" data-risk="safe">
+                    <div class="risk-summary-main">
+                        <span class="risk-summary-label">Состояние</span>
+                        <strong id="risk-summary-level">Стабильно</strong>
+                        <p id="risk-summary-text">Пока всё под контролем — можно безопасно продолжать вылазку.</p>
+                    </div>
+                    <div class="risk-summary-side">
+                        <span class="risk-summary-action" id="risk-summary-action">Ищи лут</span>
+                    </div>
+                </div>
                 <div class="status-grid">
                     <!-- Радиация -->
                     <div class="status-item danger" id="debuff-radiation-panel">
@@ -162,15 +218,19 @@
             <section class="extra-actions">
                 <button class="extra-btn" id="bosses-btn">
                     <span>👹</span> Боссы
+                    <span class="extra-badge" id="bosses-badge" style="display: none;"></span>
                 </button>
                 <button class="extra-btn" id="shop-btn">
                     <span>🏪</span> Магазин
+                    <span class="extra-badge" id="shop-badge" style="display: none;"></span>
                 </button>
                 <button class="extra-btn" id="rating-btn">
                     <span>🏆</span> Рейтинг
+                    <span class="extra-badge" id="rating-badge" style="display: none;"></span>
                 </button>
                 <button class="extra-btn" id="pvp-btn">
                     <span>⚔️</span> PvP
+                    <span class="extra-badge" id="pvp-badge" style="display: none;"></span>
                 </button>
             </section>
 
@@ -203,6 +263,7 @@
                     <span>🎁</span>
                     <label>Рефералы</label>
                 </button>
+            </nav>
         </div>
 
         <!-- Экран карты -->

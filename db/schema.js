@@ -784,6 +784,10 @@ async function runMigrations() {
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referred_by INTEGER`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_bonus_claimed BOOLEAN DEFAULT false`);
 
+    // Миграции для магазина Stars
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS buffs JSONB DEFAULT '{}'`);
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS cosmetics JSONB DEFAULT '[]'`);
+
     // Миграции для колеса удачи
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_wheel_spin TIMESTAMP`);
     

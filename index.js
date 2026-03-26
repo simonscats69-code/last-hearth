@@ -16,17 +16,40 @@ try {
 // ADMIN_IDS парсится один раз при старте
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
 
-const { logger, requestMiddleware, telegramAuthMiddleware } = require('./utils/serverApi');
+const { logger, requestMiddleware, telegramAuthMiddleware, getTelegramIdFromHeaders } = require('./utils/serverApi');
+
+let server;
+let isShuttingDown = false;
+
+function handleFatalRuntimeError(kind, error) {
+    console.error(kind, error?.message, error?.stack || error);
+
+    try {
+        logger.error({
+            type: 'fatal_runtime_error',
+            kind,
+            message: error?.message || String(error),
+            stack: error?.stack || null
+        });
+    } catch {
+        // Ничего не делаем — в аварийном режиме логгер тоже может быть недоступен.
+    }
+
+    if (server && !isShuttingDown) {
+        shutdown(kind);
+        return;
+    }
+
+    setTimeout(() => process.exit(1), 100);
+}
 
 // Глобальные обработчики ошибок для отладки
 process.on('uncaughtException', (err) => {
-    console.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
-    process.exit(1);
+    handleFatalRuntimeError('UNCAUGHT EXCEPTION', err);
 });
 
 process.on('unhandledRejection', (reason) => {
-    console.error('UNHANDLED REJECTION:', reason, reason?.stack);
-    process.exit(1);
+    handleFatalRuntimeError('UNHANDLED REJECTION', reason);
 });
 
 const express = require('express');
@@ -48,6 +71,10 @@ const leaderboardRouter = require('./routes/leaderboard');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+function getRateLimitKey(req) {
+    return getTelegramIdFromHeaders(req.headers) || req.ip;
+}
 
 // Базовая конфигурация приложения
 app.disable('x-powered-by');
@@ -144,14 +171,14 @@ const limiter = rateLimit({
     message: { error: 'Слишком много запросов. Попробуй позже.' },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.headers['x-telegram-id'] || req.ip
+    keyGenerator: getRateLimitKey
 });
 
 const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 1000, // Убрали лимит - игра требует много кликов
     message: { error: 'API лимит превышен' },
-    keyGenerator: (req) => req.headers['x-telegram-id'] || req.ip
+    keyGenerator: getRateLimitKey
 });
 
 const healthLimiter = rateLimit({
@@ -279,9 +306,6 @@ app.use((err, req, res, next) => {
         requestId: req.requestId
     });
 });
-
-let server;
-let isShuttingDown = false;
 
 function shutdown(signal) {
     logger.info(`Получен сигнал ${signal}. Завершаем сервер...`);
