@@ -521,17 +521,4 @@ router.get('/stats', async (req, res) => {
         return handleError(res, error, 'pvp_stats', playerId);
     }
 });
-
-
-
-const GamePVP = {
-    router,
-    utils: {
-        isValidId,
-        handleError,
-        logPlayerAction
-    }
-};
-
 module.exports = router;
-module.exports.GamePVP = GamePVP;

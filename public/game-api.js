@@ -17,8 +17,7 @@ const API_BASE = window.__API_BASE__
 // СЛОВАРЬ ЭНДПОИНТОВ
 // ============================================
 const endpoints = {
-    // Регистрация и профиль
-    register: { endpoint: '/game/register', method: 'POST' },
+    // Профиль
     profile: { endpoint: '/game/profile', method: 'GET' },
     inventory: { endpoint: '/game/inventory', method: 'GET' },
     

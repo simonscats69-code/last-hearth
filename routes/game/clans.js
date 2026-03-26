@@ -554,19 +554,4 @@ router.post('/clan/donate', wrap(async (req, res) => {
     
     ok(res, result);
 }));
-
-
-
-const GameClans = {
-    router,
-    utils: {
-        validateId,
-        sanitizeName,
-        serializeJSONField,
-        withPlayerLock,
-        logPlayerAction
-    }
-};
-
 module.exports = router;
-module.exports.GameClans = GameClans;

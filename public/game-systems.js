@@ -2855,7 +2855,6 @@ window.sendClanMessage = sendClanMessage;
 window.restoreEnergy = restoreEnergy;
 window.loadRating = loadRating;
 window.renderRating = renderRating;
-window.watchAd = watchAd;
 window.healInfections = healInfections;
 window.showLootAnimation = showLootAnimation;
 window.showDamageEffect = showDamageEffect;

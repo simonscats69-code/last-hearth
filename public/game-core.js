@@ -579,66 +579,6 @@ function render(containerIdOrEl, data, template, options = {}) {
         ? data.map(item => template(item)).join('')
         : template(data);
 }
-
-
-// performAction - универсальный обработчик действий
-// ============================================================================
-
-/**
- * Универсальное выполнение действия с подтверждением и обработкой
- * @param {string} type - тип действия (market/buy, pvp/attack и т.д.)
- * @param {Object} data - данные для отправки
- * @param {Object} options - опции
- */
-async function performAction(type, data, options = {}) {
-    const {
-        confirmMsg = null,
-        confirmPrice = 0,
-        successMsg = '✅ Успешно',
-        errorMsg = '❌ Ошибка',
-        onSuccess = null,
-        lockKey = null
-    } = options;
-    
-    // Блокировка
-    const lockName = lockKey || type.replace(/[\/]/g, '');
-    if (!lockAction(lockName)) return;
-    
-    // Подтверждение
-    if (confirmMsg || confirmPrice > 0) {
-        const confirmed = await confirmAction(
-            confirmMsg || 'Подтвердите действие',
-            confirmPrice,
-            CONSTANTS.CONFIRM_THRESHOLD
-        );
-        if (!confirmed) {
-            unlockAction(lockName);
-            return;
-        }
-    }
-    
-    try {
-        const result = await apiRequest(`/api/game/${type}`, { method: 'POST', body: data });
-        
-        if (result.success) {
-            showNotification?.(result.message || successMsg, 'success');
-            if (typeof playSound === 'function') playSound('success');
-            if (onSuccess) await onSuccess(result);
-            // Инвалидировать кэш
-            if (typeof RenderCache !== 'undefined') RenderCache.clear();
-        } else {
-            showNotification?.(result.message || errorMsg, 'error');
-        }
-        
-        return result;
-    } catch (error) {
-        console.error(`${type} error:`, error);
-        showNotification?.('Произошла ошибка', 'error');
-    } finally {
-        unlockAction(lockName);
-    }
-}
-
 // ============================================================================
 // УТИЛИТЫ DOM И РЕНДЕРИНГА
 // ============================================================================
@@ -753,7 +693,6 @@ window.clearAllIntervals = clearAllIntervals;
 window.lockAction = lockAction;
 window.unlockAction = unlockAction;
 window.render = render;
-window.performAction = performAction;
 window.getEl = getEl;
 window.setHtml = setHtml;
 window.renderList = renderList;
