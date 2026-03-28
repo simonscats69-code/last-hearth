@@ -498,6 +498,60 @@ router.post('/move', async (req, res) => {
  * GET /api/game/locations (через алиас из index.js)
  * GET /api/game/world/locations
  */
+// Добавляем маршрут на корень для совместимости с алиасом /api/game/locations
+router.get('/', async (req, res) => {
+    logger.info('[world] GET / (алиас для locations) вызван', { playerId: req.player?.id, query: req.query });
+    try {
+        const player = req.player;
+        
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
+        const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+        
+        const countResult = await query(`
+            SELECT COUNT(*) as total FROM locations
+        `);
+        const totalLocations = parseInt(countResult.rows[0].total);
+        
+        const locations = await queryAll(`
+            SELECT id, name, icon, color, radiation, infection, danger_level,
+                   min_level as required_level, description
+            FROM locations
+            ORDER BY min_level ASC
+            LIMIT $1 OFFSET $2
+        `, [limit, offset]);
+        
+        const availableLocations = locations.map(loc => ({
+            id: loc.id,
+            name: loc.name,
+            icon: loc.icon,
+            color: loc.color,
+            radiation: loc.radiation,
+            infection: loc.infection || 0,
+            danger_level: loc.danger_level,
+            required_level: loc.required_level,
+            min_level: loc.required_level,
+            description: loc.description,
+            unlocked: player.level >= loc.required_level,
+            current: loc.id === player.current_location_id
+        }));
+        
+        res.json({
+            success: true,
+            locations: availableLocations,
+            current_location_id: player.current_location_id,
+            pagination: {
+                total: totalLocations,
+                limit: limit,
+                offset: offset,
+                has_more: offset + locations.length < totalLocations
+            }
+        });
+        
+    } catch (error) {
+        handleError(res, error, 'locations_list_root');
+    }
+});
+
 router.get('/locations', async (req, res) => {
     logger.info('[world] GET /locations вызван', { playerId: req.player?.id, query: req.query });
     try {
