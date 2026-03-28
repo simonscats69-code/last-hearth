@@ -23,32 +23,6 @@ function animateElement(element, animationName, duration = 1000, onComplete = nu
 }
 
 /**
- * Визуальный эффект при получении лута
- * @param {Object} item - данные предмета
- */
-function showLootAnimation(item) {
-    const app = document.getElementById('app');
-    
-    // Создаём элемент анимации
-    const lootEl = document.createElement('div');
-    lootEl.className = 'loot-animation';
-    lootEl.innerHTML = `
-        <div class="loot-icon">${item.icon || '📦'}</div>
-        <div class="loot-name">${item.name || 'Предмет'}</div>
-    `;
-    
-    app.appendChild(lootEl);
-    
-    // Анимация
-    lootEl.style.animation = 'slideUp 1s ease-out forwards';
-    
-    // Удаляем после анимации
-    setTimeout(() => {
-        lootEl.remove();
-    }, 1000);
-}
-
-/**
  * Визуальный эффект вспышки (урон/лечение)
  * @param {string} type - тип эффекта ('damage' или 'heal')
  */
@@ -64,7 +38,6 @@ function showFlashEffect(type = 'damage') {
 }
 
 // Алиасы для обратной совместимости
-function showDamageEffect() { showFlashEffect('damage'); }
 function showHealEffect() { showFlashEffect('heal'); }
 
 /**
@@ -157,6 +130,97 @@ function showNotification(message, type = 'info', duration = 3000) {
         notification.style.animation = 'fadeOut 0.3s ease-out';
         setTimeout(() => notification.remove(), 300);
     }, duration);
+}
+
+/**
+ * Визуальный эффект при получении лута
+ * @param {Object} item - данные предмета
+ */
+function showLootAnimation(item) {
+    const app = document.getElementById('app') || document.body;
+
+    const lootEl = document.createElement('div');
+    lootEl.className = 'loot-animation';
+    lootEl.innerHTML = `
+        <div class="loot-icon">${item.icon || '📦'}</div>
+        <div class="loot-name">${item.name || 'Предмет'}</div>
+    `;
+
+    app.appendChild(lootEl);
+    lootEl.style.animation = 'slideUp 1s ease-out forwards';
+
+    setTimeout(() => {
+        lootEl.remove();
+    }, 1000);
+}
+
+/**
+ * Визуальный эффект при получении урона
+ */
+function showDamageEffect() {
+    const app = document.getElementById('app');
+    if (!app) return;
+
+    app.style.animation = 'damageFlash 0.3s';
+    setTimeout(() => {
+        app.style.animation = '';
+    }, 300);
+}
+
+/**
+ * Звуковые эффекты (упрощённо через вибрацию)
+ */
+function playSound(type) {
+    if (!navigator.vibrate) return;
+
+    switch (type) {
+        case 'loot':
+            navigator.vibrate(50);
+            break;
+        case 'attack':
+            navigator.vibrate([50, 30, 50]);
+            break;
+        case 'use':
+            navigator.vibrate(30);
+            break;
+        case 'modal':
+            navigator.vibrate(20);
+            break;
+        case 'success':
+        case 'victory':
+            navigator.vibrate(100);
+            break;
+    }
+}
+
+/**
+ * Обновление отображения баланса игрока
+ */
+function updateBalanceDisplay(newCoins) {
+    if (newCoins && typeof newCoins === 'object') {
+        const coins = Number(newCoins.coins ?? 0);
+        const stars = Number(newCoins.stars ?? 0);
+
+        updateBalanceDisplay(coins);
+
+        const starsElements = document.querySelectorAll('#inv-stars, #main-stars-value, .stars-display');
+        starsElements.forEach(el => {
+            if (el) el.textContent = formatNumber(stars);
+        });
+
+        if (gameState?.player) {
+            gameState.player.coins = coins;
+            gameState.player.stars = stars;
+        }
+
+        return;
+    }
+
+    const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display');
+    balanceElements.forEach(el => {
+        if (el) el.textContent = formatNumber(newCoins);
+    });
+    if (gameState?.player) gameState.player.coins = newCoins;
 }
 
 /**
@@ -493,3 +557,7 @@ window.showRewardCelebration = showRewardCelebration;
 window.showBossVictorySummary = showBossVictorySummary;
 window.showKeyRewardCelebration = showKeyRewardCelebration;
 window.showLocationUnlockCelebration = showLocationUnlockCelebration;
+window.showLootAnimation = showLootAnimation;
+window.showDamageEffect = showDamageEffect;
+window.playSound = playSound;
+window.updateBalanceDisplay = updateBalanceDisplay;

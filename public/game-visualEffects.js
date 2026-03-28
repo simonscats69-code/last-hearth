@@ -285,7 +285,14 @@ function renderLocations() {
             if (infoContainer && !infoContainer.querySelector('.map-location-info')) {
                 const info = document.createElement('div');
                 info.className = 'map-location-info';
-                info.innerHTML = `☢️ Радиация: ${hoveredLoc.radiation} | ${hoveredLoc.unlocked ? '✅ Доступно' : '🔒 Требуется уровень ' + hoveredLoc.min_level}`;
+                const fakePlayer = {
+                    location: hoveredLoc,
+                    equipment: gameState.player?.equipment || {}
+                };
+                const risk = typeof getCurrentZoneRiskProfile === 'function'
+                    ? getCurrentZoneRiskProfile(fakePlayer)
+                    : { label: 'Неизвестно' };
+                info.textContent = `☢️ Радиация: ${hoveredLoc.radiation} | 🦠 Инфекция: ${hoveredLoc.infection || 0} | ${hoveredLoc.unlocked ? '✅' : '🔒'} ${risk.label}`;
                 infoContainer.appendChild(info);
             }
         }

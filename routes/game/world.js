@@ -511,7 +511,7 @@ router.get('/locations', async (req, res) => {
         const totalLocations = parseInt(countResult.rows[0].total);
         
         const locations = await queryAll(`
-            SELECT id, name, icon, color, radiation, danger_level,
+            SELECT id, name, icon, color, radiation, infection, danger_level,
                    min_level as required_level, description
             FROM locations
             ORDER BY min_level ASC
@@ -524,6 +524,7 @@ router.get('/locations', async (req, res) => {
             icon: loc.icon,
             color: loc.color,
             radiation: loc.radiation,
+            infection: loc.infection || 0,
             danger_level: loc.danger_level,
             required_level: loc.required_level,
             min_level: loc.required_level,

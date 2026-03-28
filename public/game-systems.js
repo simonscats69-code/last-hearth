@@ -729,6 +729,20 @@ function updateZonePreparationUI(player) {
     return zoneRisk;
 }
 
+function findBestPreparationItem(type) {
+    const inventory = Array.isArray(gameState.inventory) ? gameState.inventory : [];
+
+    if (type === 'infection') {
+        return inventory.find(item => Number(item?.stats?.infection_cure || item?.infection_cure || 0) > 0) || null;
+    }
+
+    if (type === 'radiation') {
+        return inventory.find(item => Number(item?.stats?.radiation_cure || item?.rad_removal || 0) > 0) || null;
+    }
+
+    return null;
+}
+
 function updateRiskSummary(player) {
     const status = player.status || {};
     const health = Number(status.health || 0);
@@ -1077,6 +1091,7 @@ async function searchLoot() {
             
             // Анимация
             playSound('loot');
+            updateMapRiskPreview();
             
         } else {
             // Обработка ошибок
@@ -1118,6 +1133,7 @@ async function moveToLocation(locationId) {
             gameState.player.current_location_id = locationData?.id || locationId;
             gameState.player.location = locationData;
             updateProfileUI(gameState.player);
+            updateMapRiskPreview();
             showScreen('main');
             showModal('✅ Успех', result.message || result.data?.message);
         } else {
@@ -2485,53 +2501,6 @@ function renderRating(items, type) {
         list.appendChild(rank);
     }
 }
-
-
-// ============================================================================
-// РЕКЛАМА
-// ============================================================================
-
-/**
- * Запуск рекламы AdsGram
- */
-async function watchAd() {
-    if (!Adsgram) {
-        showModal('⚠️ Реклама', 'Реклама временно недоступна. Попробуй позже!');
-        return;
-    }
-    
-    try {
-        await Adsgram.showRewarded({
-            onStart: () => {
-                console.log('Реклама началась');
-            },
-            onReward: () => {
-                if (!gameState.player || !gameState.player.status) {
-                    showModal('⚠️ Ошибка', 'Данные игрока не загружены');
-                    return;
-                }
-                
-                const status = gameState.player.status;
-                const maxEnergy = status.max_energy || 100;
-                const currentEnergy = status.energy || 0;
-                syncPlayerEnergyState(Math.min(maxEnergy, currentEnergy + 20), maxEnergy, new Date().toISOString());
-                updateProfileUI(gameState.player);
-                refreshPlayerEnergyUI();
-                showModal('✅ Награда', '+20 энергии за просмотр рекламы!');
-            },
-            onError: (error) => {
-                console.error('AdsGram error:', error);
-                showModal('⚠️ Ошибка', 'Не удалось показать рекламу');
-            },
-            onEnd: () => {
-                console.log('Реклама завершена');
-            }
-        });
-    } catch (error) {
-        console.error('AdsGram error:', error);
-    }
-}
-
 // ============================================================================
 // ЛЕЧЕНИЕ
 // ============================================================================
@@ -2545,102 +2514,49 @@ async function healInfections() {
         showModal('ℹ️ Инфо', 'У вас нет инфекций');
         return;
     }
+
+    if (!Array.isArray(gameState.inventory) || gameState.inventory.length === 0) {
+        await loadInventory();
+    }
+
+    const cureItem = findBestPreparationItem('infection');
+    if (!cureItem) {
+        showModal('⚠️ Нет антидота', 'В инвентаре нет предмета для лечения инфекции. Загляни в магазин подготовки.');
+        return;
+    }
     
     try {
-        const result = await apiRequest('/api/game/status/heal', {
+        const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
-            body: { type: 'debuff', use_stars: false }
+            body: { item_id: cureItem.index }
         });
         
         if (result.success) {
             showModal('✅ Успех', result.message);
+            await loadInventory();
             await loadProfile();
-        } else if (result.has_antidote === false && result.stars_price) {
-            showModal('⚠️ Нет антидота', result.message + '\n\nХотите лечить за Stars?');
         } else {
-            showModal('⚠️ Внимание', result.message);
+            showModal('⚠️ Внимание', result.message || result.error || 'Не удалось вылечить инфекцию');
         }
     } catch (error) {
         console.error('Ошибка лечения:', error);
     }
 }
 
+function updateMapRiskPreview() {
+    const infoContainer = document.querySelector('.map-info');
+    if (!infoContainer) return;
+
+    const info = infoContainer.querySelector('.map-location-info');
+    if (!info || !gameState.player?.location) return;
+
+    const zoneRisk = getCurrentZoneRiskProfile(gameState.player);
+    info.textContent = `☢️ ${gameState.player.location.radiation || 0} | 🦠 ${gameState.player.location.infection || 0} | ${zoneRisk.label}`;
+}
+
 // ============================================================================
 // АНИМАЦИИ И ЭФФЕКТЫ
 // ============================================================================
-
-/**
- * Визуальный эффект при получении лута
- */
-function showLootAnimation(item) {
-    const container = document.getElementById('loading-screen') || document.body;
-    
-    const lootEl = document.createElement('div');
-    lootEl.className = 'loot-animation';
-    lootEl.innerHTML = `
-        <div class="loot-icon">${item.icon || '📦'}</div>
-        <div class="loot-name">${item.name || 'Предмет'}</div>
-    `;
-    
-    container.appendChild(lootEl);
-    
-    lootEl.style.animation = 'slideUp 1s ease-out forwards';
-    
-    setTimeout(() => {
-        lootEl.remove();
-    }, 1000);
-}
-
-/**
- * Визуальный эффект при получении урона
- */
-function showDamageEffect() {
-    const app = document.getElementById('app');
-    if (app) {
-        app.style.animation = 'damageFlash 0.3s';
-        setTimeout(() => {
-            app.style.animation = '';
-        }, 300);
-    }
-}
-
-
-/**
- * Звуковые эффекты (упрощённо)
- */
-function playSound(type) {
-    if (navigator.vibrate) {
-        switch (type) {
-            case 'loot':
-                navigator.vibrate(50);
-                break;
-            case 'attack':
-                navigator.vibrate([50, 30, 50]);
-                break;
-            case 'use':
-                navigator.vibrate(30);
-                break;
-            case 'modal':
-                navigator.vibrate(20);
-                break;
-            case 'success':
-                navigator.vibrate(100);
-                break;
-        }
-    }
-}
-
-/**
- * Обновление отображения баланса игрока
- */
-function updateBalanceDisplay(newCoins) {
-    const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display');
-    balanceElements.forEach(el => {
-        if (el) el.textContent = formatNumber(newCoins);
-    });
-    if (gameState?.player) gameState.player.coins = newCoins;
-}
-
 
 // ============================================================================
 // ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
@@ -2856,7 +2772,3 @@ window.restoreEnergy = restoreEnergy;
 window.loadRating = loadRating;
 window.renderRating = renderRating;
 window.healInfections = healInfections;
-window.showLootAnimation = showLootAnimation;
-window.showDamageEffect = showDamageEffect;
-window.playSound = playSound;
-window.updateBalanceDisplay = updateBalanceDisplay;

@@ -684,6 +684,44 @@ if (window.AdsgramAvailable && typeof AdsgramInit === 'function' && ADSGRAM_APP_
     console.log('AdsGram SDK недоступен');
 }
 
+async function watchAd() {
+    if (!Adsgram) {
+        showModal('⚠️ Реклама', 'Реклама временно недоступна. Попробуй позже!');
+        return;
+    }
+
+    try {
+        await Adsgram.showRewarded({
+            onStart: () => {
+                console.log('Реклама началась');
+            },
+            onReward: () => {
+                if (!gameState.player || !gameState.player.status) {
+                    showModal('⚠️ Ошибка', 'Данные игрока не загружены');
+                    return;
+                }
+
+                const status = gameState.player.status;
+                const maxEnergy = status.max_energy || 100;
+                const currentEnergy = status.energy || 0;
+                syncPlayerEnergyState(Math.min(maxEnergy, currentEnergy + 20), maxEnergy, new Date().toISOString());
+                updateProfileUI(gameState.player);
+                refreshPlayerEnergyUI();
+                showModal('✅ Награда', '+20 энергии за просмотр рекламы!');
+            },
+            onError: (error) => {
+                console.error('AdsGram error:', error);
+                showModal('⚠️ Ошибка', 'Не удалось показать рекламу');
+            },
+            onEnd: () => {
+                console.log('Реклама завершена');
+            }
+        });
+    } catch (error) {
+        console.error('AdsGram error:', error);
+    }
+}
+
 // ============================================================================
 // ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
 // ============================================================================
@@ -704,6 +742,7 @@ window.API = API;
 window.DataLoader = DataLoader;
 window.RenderCache = RenderCache;
 window.Adsgram = Adsgram;
+window.watchAd = watchAd;
 
 // ============================================================================
 // СИСТЕМА ПРЕДПРОСМОТРА УРОНА И ЭНЕРГИИ
@@ -1075,25 +1114,6 @@ function initNavigationHandlers() {
             showScreen(targetScreen);
         });
     });
-
-    // Обработчики кнопок главного меню
-    const mainButtons = {
-        'map-btn': 'map',
-        'inventory-btn': 'inventory',
-        'btn-bosses': 'bosses',
-        'btn-shop': 'shop',
-        'btn-clan': 'clan',
-        'btn-rating': 'rating',
-        'btn-achievements': 'achievements',
-        'btn-profile': 'profile'
-    };
-
-    for (const [btnId, screenName] of Object.entries(mainButtons)) {
-        const btn = document.getElementById(btnId);
-        if (btn) {
-            bindClickOnce(btn, btnId, () => showScreen(screenName));
-        }
-    }
 
     // Обработчики табов (если есть)
     initTabHandlers();

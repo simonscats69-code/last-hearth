@@ -196,7 +196,7 @@ router.post('/heal', async (req, res) => {
         }
 
         if (type === 'debuff') {
-            const result = await DebuffAPI.cure(playerId, 'antidote', item_id);
+            const result = await DebuffAPI.cure(playerId, 'antibiotic', item_id);
             return res.json({
                 success: true,
                 ...result,

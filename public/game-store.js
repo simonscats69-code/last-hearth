@@ -8,36 +8,6 @@
  * - Косметика (эффекты, скины)
  */
 
-// Маппинг строковых ID в числовые для бэкенда
-const ITEM_ID_MAP = {
-    // Баффы
-    'buff_loot_1h': 1,
-    'buff_energy_1h': 2,
-    'buff_radiation_1h': 3,
-    'buff_exp_1h': 4,
-    'buff_loot_daily': 5,
-    // Косметика
-    'cosm_glow_gold': 101,
-    'cosm_glow_blue': 102,
-    'cosm_frame_elite': 103,
-    'cosm_title_veteran': 104,
-    'cosm_particles_fire': 105,
-};
-
-/**
- * Получение числового ID для API
- * @param {string} itemId - строковый ID товара
- * @returns {number} числовой ID для бэкенда
- */
-function getNumericItemId(itemId) {
-    if (ITEM_ID_MAP[itemId] !== undefined) {
-        return ITEM_ID_MAP[itemId];
-    }
-    // Пробуем извлечь число из строки
-    const num = parseInt(itemId.replace(/[^0-9]/g, ''));
-    return num || 0;
-}
-
 // Данные товаров магазина
 const SHOP_ITEMS = {
     // Баффы
@@ -157,11 +127,10 @@ async function buyShopItem(itemId, category) {
     
     // Покупка
     try {
-        const numericId = getNumericItemId(itemId);
         const result = await apiRequest('/api/game/purchase', {
             method: 'POST',
             body: {
-                item_id: numericId,
+                item_id: itemId,
                 currency: item.currency
             }
         });

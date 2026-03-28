@@ -139,7 +139,8 @@ router.get('/players', async (req, res) => {
         // Получаем игроков на той же локации с пагинацией
         const players = await queryAll(`
             SELECT id, telegram_id, username, first_name, level, 
-                   health, max_health, strength, endurance, agility
+                   health, max_health, strength, endurance, agility,
+                   pvp_wins, pvp_rating, pvp_streak
             FROM players 
             WHERE current_location_id = $1 AND id != $2
             LIMIT $3 OFFSET $4
@@ -498,21 +499,32 @@ router.get('/stats', async (req, res) => {
     
     try {
         const stats = await queryOne(`
-            SELECT pvp_wins, pvp_losses, pvp_damage_dealt, pvp_damage_taken,
-                   pvp_rating, pvp_streak, pvp_max_streak, pvp_coins_stolen, pvp_items_stolen
+            SELECT pvp_wins, pvp_losses, pvp_total_damage_dealt, pvp_total_damage_taken,
+                   pvp_rating, pvp_streak, pvp_max_streak, coins_stolen_from_me, items_stolen_from_me
             FROM players WHERE id = $1
         `, [playerId]);
         
         ok(res, {
+            stats: {
+                wins: stats?.pvp_wins || 0,
+                losses: stats?.pvp_losses || 0,
+                totalDamageDealt: stats?.pvp_total_damage_dealt || 0,
+                totalDamageTaken: stats?.pvp_total_damage_taken || 0,
+                rating: stats?.pvp_rating || 1000,
+                streak: stats?.pvp_streak || 0,
+                maxStreak: stats?.pvp_max_streak || 0,
+                coinsStolenFromMe: stats?.coins_stolen_from_me || 0,
+                itemsStolenFromMe: stats?.items_stolen_from_me || 0
+            },
             wins: stats?.pvp_wins || 0,
             losses: stats?.pvp_losses || 0,
-            damage_dealt: stats?.pvp_damage_dealt || 0,
-            damage_taken: stats?.pvp_damage_taken || 0,
+            damage_dealt: stats?.pvp_total_damage_dealt || 0,
+            damage_taken: stats?.pvp_total_damage_taken || 0,
             rating: stats?.pvp_rating || 1000,
             streak: stats?.pvp_streak || 0,
             maxStreak: stats?.pvp_max_streak || 0,
-            coinsStolenFromMe: stats?.pvp_coins_stolen || 0,
-            itemsStolenFromMe: stats?.pvp_items_stolen || 0,
+            coinsStolenFromMe: stats?.coins_stolen_from_me || 0,
+            itemsStolenFromMe: stats?.items_stolen_from_me || 0,
             recentMatches: [],
             cooldown: { active: false }
         });

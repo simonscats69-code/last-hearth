@@ -204,15 +204,15 @@ async function claimAchievement(achievementId) {
         });
         
         if (data.success) {
-            alert(data.message);
+            showModal('✅ Награда получена', data.message || 'Награда получена');
             updateBalanceDisplay(data.new_balance);
             await loadAchievements();
         } else {
-            alert(data.error || 'Ошибка получения награды');
+            showModal('❌ Ошибка', data.error || 'Ошибка получения награды');
         }
     } catch (error) {
         console.error('Ошибка получения награды:', error);
-        alert('Ошибка получения награды');
+        showModal('❌ Ошибка', 'Ошибка получения награды');
     }
 }
 
@@ -253,9 +253,9 @@ async function loadPVPGamePlayers() {
                         <span>HP: ${player.health}/${player.max_health}</span>
                     </div>
                     <div class="pvp-player-pvp">
-                        <span>Побед: ${player.pvpWins || 0}</span>
-                        <span>Рейтинг: ${player.pvpRating || 1000}</span>
-                        <span>Серия: ${player.pvpStreak || 0}</span>
+                        <span>Побед: ${player.pvp_wins || 0}</span>
+                        <span>Рейтинг: ${player.pvp_rating || 1000}</span>
+                        <span>Серия: ${player.pvp_streak || 0}</span>
                     </div>
                 </div>
                 <button class="pvp-attack-player-btn" onclick="startPVPFight(${player.id}, '${escapeHtml(player.username) || 'Игрок'}', ${player.level}, ${player.health}, ${player.max_health})">
@@ -403,9 +403,9 @@ function handlePVPBattleEnd(result) {
     if (result.winner && result.winner.id === gameState.player?.id) {
         if (rewardsContent) {
             rewardsContent.innerHTML = `
-                <div class="reward-item">💰 +${result.rewards?.coinsStolen || 0} монет</div>
-                <div class="reward-item">📦 +${result.rewards?.itemsStolen || 0} предметов</div>
-                <div class="reward-item">⭐ +${result.rewards?.experienceGained || 0} опыта</div>
+                <div class="reward-item">💰 +${result.rewards?.coins || 0} монет</div>
+                <div class="reward-item">📦 ${result.rewards?.item ? 'Получен предмет' : 'Без предмета'}</div>
+                <div class="reward-item">⭐ +50 опыта</div>
             `;
         }
         playSound('loot');
