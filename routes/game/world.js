@@ -499,6 +499,7 @@ router.post('/move', async (req, res) => {
  * GET /api/game/world/locations
  */
 router.get('/locations', async (req, res) => {
+    logger.info('[world] GET /locations вызван', { playerId: req.player?.id, query: req.query });
     try {
         const player = req.player;
         

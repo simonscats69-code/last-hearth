@@ -35,8 +35,20 @@ const purchaseLimiter = rateLimit({
 function safeRequire(path, name) {
     try {
         logger.info(`[game] Попытка загрузить ${name} из ${path}`);
-        const module = require(path);
+        let module = require(path);
         logger.info(`[game] Модуль ${name} загружен, тип:`, typeof module);
+        
+        // Если модуль является функцией (Express router), проверяем её методы
+        if (typeof module === 'function') {
+            // Проверяем через stack (для роутеров с middleware)
+            if (Array.isArray(module.stack)) {
+                logger.info(`[game] ${name} имеет stack (Express router), возвращаем как есть`);
+                return module;
+            }
+            // Функция без stack - пробуем вызвать для получения роутера
+            logger.info(`[game] ${name} вызываем как функцию()`);
+            module = module();
+        }
         
         // Если модуль экспортирует объект с полем router, извлекаем его
         if (module && typeof module === 'object' && module.router) {
@@ -268,7 +280,8 @@ router.use('/status', statusRouter);
 router.use('/wheel', wheelRouter);
 
 // Алиасы для обратной совместимости
-router.use('/locations', worldRouter); // /api/game/world/locations + /api/game/world/locations
+router.use('/locations', worldRouter); // /api/game/locations -> worldRouter
+logger.info('[game] Алиас /locations -> worldRouter подключён');
 router.use('/profile', playerRouter);    // /api/game/profile + /api/game/player
 router.use('/inventory', itemsRouter);   // /api/game/inventory + /api/game/items
 
