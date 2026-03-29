@@ -1,10 +1,124 @@
 /**
- * Система достижений
- * Достижения и прогрессия игроков
+ * Объединённый модуль игровых хелперов
+ * Объединяет функции работы с состоянием игрока и систему достижений
+ * 
+ * Объединённые модули:
+ * - playerState.js (нормализация состояния игрока)
+ * - achievements.js (система достижений)
  */
 
 const { query, transaction: tx } = require('../db/database');
-const { logger } = require('../utils/serverApi');
+const { logger } = require('./serverApi');
+
+// ==========================================
+// ФУНКЦИИ СОСТОЯНИЯ ИГРОКА (из playerState.js)
+// ==========================================
+
+const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
+
+/**
+ * Безопасный парсинг JSON с fallback значением
+ */
+function safeParseJson(value, fallback) {
+    if (value === null || value === undefined || value === '') {
+        return fallback;
+    }
+
+    if (typeof value === 'object') {
+        return value;
+    }
+
+    try {
+        return JSON.parse(value);
+    } catch {
+        return fallback;
+    }
+}
+
+/**
+ * Нормализация инвентаря
+ */
+function normalizeInventory(value) {
+    const parsed = safeParseJson(value, []);
+
+    if (Array.isArray(parsed)) {
+        return parsed;
+    }
+
+    if (parsed && typeof parsed === 'object') {
+        return Object.values(parsed).filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+    }
+
+    return [];
+}
+
+/**
+ * Нормализация радиации
+ */
+function normalizeRadiation(value) {
+    const parsed = safeParseJson(value, { level: 0 });
+
+    if (typeof parsed === 'number') {
+        return {
+            level: parsed,
+            expires_at: null,
+            applied_at: null
+        };
+    }
+
+    if (parsed && typeof parsed === 'object') {
+        return {
+            level: Number(parsed.level || 0),
+            expires_at: parsed.expires_at || null,
+            applied_at: parsed.applied_at || null
+        };
+    }
+
+    return {
+        level: 0,
+        expires_at: null,
+        applied_at: null
+    };
+}
+
+/**
+ * Нормализация инфекций
+ */
+function normalizeInfections(value) {
+    const parsed = safeParseJson(value, []);
+    return Array.isArray(parsed) ? parsed : [];
+}
+
+/**
+ * Получить общий уровень инфекций
+ */
+function getInfectionLevel(value) {
+    return normalizeInfections(value).reduce((sum, infection) => sum + (infection.level || 0), 0);
+}
+
+/**
+ * Построение объекта статуса игрока
+ */
+function buildPlayerStatus(player) {
+    const radiation = normalizeRadiation(player.radiation);
+    const infectionsList = normalizeInfections(player.infections);
+
+    return {
+        health: Number(player.health || 0),
+        max_health: Number(player.max_health || 0),
+        radiation: radiation.level,
+        fatigue: 0,
+        energy: Number(player.energy || 0),
+        max_energy: Number(player.max_energy || 0),
+        infections: infectionsList.reduce((sum, infection) => sum + (infection.level || 0), 0),
+        infections_list: infectionsList,
+        last_energy_update: player.last_energy_update || null
+    };
+}
+
+// ==========================================
+// СИСТЕМА ДОСТИЖЕНИЙ (из achievements.js)
+// ==========================================
 
 // Список достижений
 const ACHIEVEMENTS = {
@@ -25,7 +139,7 @@ const ACHIEVEMENTS = {
     pvp_10: { name: 'Боец', desc: 'Выиграй 10 PvP боёв', type: 'pvp', req: 10, reward: 40 },
     pvp_50: { name: 'Воин', desc: 'Выиграй 50 PvP боёв', type: 'pvp', req: 50, reward: 100 },
     
-    // Лoot
+    // Loot
     loot_100: { name: 'Собиратель', desc: 'Собери 100 предметов', type: 'loot', req: 100, reward: 20 },
     loot_500: { name: 'Кладовщик', desc: 'Собери 500 предметов', type: 'loot', req: 500, reward: 50 },
     loot_1000: { name: 'Король добычи', desc: 'Собери 1000 предметов', type: 'loot', req: 1000, reward: 100 },
@@ -216,7 +330,21 @@ async function initAchievementsTable() {
     `);
 }
 
+// ==========================================
+// ЭКСПОРТ
+// ==========================================
+
 module.exports = {
+    // Функции состояния игрока (playerState.js)
+    ENERGY_REGEN_INTERVAL_MS,
+    safeParseJson,
+    normalizeInventory,
+    normalizeRadiation,
+    normalizeInfections,
+    getInfectionLevel,
+    buildPlayerStatus,
+    
+    // Функции достижений (achievements.js)
     ACHIEVEMENTS,
     checkAchievements,
     getPlayerAchievements,

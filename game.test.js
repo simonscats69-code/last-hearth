@@ -4,7 +4,7 @@
 
 const { validateTelegramInitData, isAdmin } = require('./utils/serverApi');
 const { getMetrics, resetMetrics } = require('./utils/realtime');
-const { ACHIEVEMENTS } = require('./utils/achievements');
+const { ACHIEVEMENTS } = require('./utils/game-helpers');
 
 // =============================================================================
 // Тесты telegramAuth

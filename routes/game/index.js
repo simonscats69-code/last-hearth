@@ -81,7 +81,6 @@ function safeRequire(path, name) {
 // Импорт роутеров (объединённые модули)
 const worldRouter = safeRequire('./world', 'world');
 const bossesRouter = safeRequire('./bosses', 'bosses');
-const purchaseRouter = safeRequire('./purchase', 'purchase');
 
 logger.info('[game] worldRouter загружен:', worldRouter ? 'OK' : 'NULL');
 if (worldRouter?.stack) {
@@ -99,7 +98,7 @@ const playerRouter = safeRequire('./player', 'player');
 const debuffsRouter = safeRequire('./debuffs', 'debuffs');
 const itemsRouter = safeRequire('./items', 'items');
 const statusRouter = safeRequire('./status', 'status');
-const wheelRouter = safeRequire('./wheel', 'wheel');
+const minigamesRouter = safeRequire('./minigames', 'minigames');
 
 function buildReferralCode(telegramId) {
     try {
@@ -252,10 +251,10 @@ router.use(validatePlayer);
 // Критические действия: атаки боссов, PvP атаки, спин колеса
 router.use('/bosses', criticalActionLimiter);
 router.use('/pvp', criticalActionLimiter);
-router.use('/wheel/spin', criticalActionLimiter);
+router.use('/minigames/wheel/spin', criticalActionLimiter);
 
 // Покупки: отдельный лимитер
-router.use('/purchase', purchaseLimiter);
+router.use('/minigames/purchase', purchaseLimiter);
 router.use('/items/buy', purchaseLimiter);
 
 // Общие действия: все остальные маршруты
@@ -270,20 +269,22 @@ router.use((req, res, next) => {
 // Подключение роутеров (объединённые модули)
 router.use('/world', worldRouter);
 router.use('/bosses', bossesRouter);
-router.use('/purchase', purchaseRouter);
 router.use('/clans', clansRouter);
 router.use('/pvp', pvpRouter);
 router.use('/player', playerRouter);
 router.use('/debuffs', debuffsRouter);
 router.use('/items', itemsRouter);
 router.use('/status', statusRouter);
-router.use('/wheel', wheelRouter);
+router.use('/minigames', minigamesRouter);
 
 // Алиасы для обратной совместимости
 router.use('/locations', worldRouter); // /api/game/locations -> worldRouter
 logger.info('[game] Алиас /locations -> worldRouter подключён');
 router.use('/profile', playerRouter);    // /api/game/profile + /api/game/player
 router.use('/inventory', itemsRouter);   // /api/game/inventory + /api/game/items
+// Алиасы для обратной совместимости со старыми endpoints
+router.use('/wheel', minigamesRouter);   // /api/game/wheel -> minigames
+router.use('/purchase', minigamesRouter); // /api/game/purchase -> minigames
 
 // Экспорт
 module.exports = router;

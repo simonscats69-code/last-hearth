@@ -60,14 +60,13 @@ const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
 const { startScheduler } = require('./utils/scheduler');
-const { initAchievementsTable } = require('./utils/achievements');
+const { initAchievementsTable } = require('./utils/game-helpers');
 const { initWebSocket, getMetrics, stopHeartbeat } = require('./utils/realtime');
 const { initDatabase, query, closePool, setLogger } = require('./db/database');
 const { setupWebhook } = require('./webhook');
 const gameRouter = require('./routes/game');
 const apiRouter = require('./routes/api');
 const adminRouter = require('./routes/admin');
-const leaderboardRouter = require('./routes/leaderboard');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -236,7 +235,13 @@ if (gameRouter?.stack) {
 }
 app.use('/api/game', gameRouter);
 app.use('/api/admin', adminRouter);
-app.use('/api/leaderboard', leaderboardRouter);
+// Leaderboard теперь доступен через game router: /api/game/minigames/leaderboard/*
+// Для обратной совместимости добавляем алиас
+app.use('/api/leaderboard', (req, res, next) => {
+    // Перенаправляем на game router с префиксом minigames/leaderboard
+    req.url = '/minigames' + req.url;
+    gameRouter(req, res, next);
+});
 app.use('/api', apiRouter);
 
 // Статика

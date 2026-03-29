@@ -2631,7 +2631,7 @@ function renderRaids(raids) {
                         <div class="raid-hp-fill" style="width: ${hpPercent}%"></div>
                     </div>
                     <div class="raid-hp-text">${formatNumber(raid.hp)} / ${formatNumber(raid.max_hp)} (${hpPercent}%)</div>
-                    <div class="raid-leader">Лидер: ${raid.leader?.name || 'Неизвестно'}</div>
+                    <div class="raid-leader">Лидер: ${escapeHtml(raid.leader?.name || 'Неизвестно')}</div>
                     <div class="raid-participants">Участников: ${raid.participants_count || 0}</div>
                     <div class="raid-timer">Осталось: ${timeRemaining}</div>
                     ${isParticipating ? 

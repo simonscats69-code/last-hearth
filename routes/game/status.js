@@ -8,7 +8,7 @@ const { query, queryOne, transaction: tx } = require('../../db/database');
 const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
 const { DebuffAPI } = require('./debuffs');
-const { buildPlayerStatus, normalizeInventory } = require('../../utils/playerState');
+const { buildPlayerStatus, normalizeInventory } = require('../../utils/game-helpers');
 
 
 

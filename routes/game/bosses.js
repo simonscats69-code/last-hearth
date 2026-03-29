@@ -12,7 +12,7 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
-const { normalizeInventory } = require('../../utils/playerState');
+const { normalizeInventory } = require('../../utils/game-helpers');
 
 const KEYS_REQUIRED_FOR_BOSS = 3;
 const SOLO_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;

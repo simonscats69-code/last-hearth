@@ -291,8 +291,6 @@ async function createTables() {
             is_raid BOOLEAN DEFAULT false,
             leader_id INTEGER REFERENCES players(id),
             leader_name VARCHAR(255),
-            is_clan_raid BOOLEAN DEFAULT false,
-            clan_id INTEGER REFERENCES clans(id),
             UNIQUE(boss_id, is_active)
         );
     `);
@@ -623,10 +621,6 @@ async function createTables() {
     // Индексы для boss_sessions
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_sessions_boss ON boss_sessions(boss_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_sessions_player ON boss_sessions(player_id)`);
-
-    // Индексы для clan_bosses
-    await query(`CREATE INDEX IF NOT EXISTS idx_clan_bosses_clan ON clan_bosses(clan_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_clan_bosses_active ON clan_bosses(is_active) WHERE is_active = true`);
 }
 
 /**

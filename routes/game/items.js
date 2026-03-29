@@ -104,7 +104,7 @@ router.get('/', async (req, res) => {
                 equipment: equipment,
                 items_by_type: itemsByType,
                 total_items: inventory.length,
-                max_inventory: player.max_inventory || 30
+                max_inventory: 30
             }
         });
         

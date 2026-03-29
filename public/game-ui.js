@@ -165,8 +165,8 @@ function renderAchievementsList(achievements) {
             <div class="achievement-card ${ach.completed ? 'completed' : ''} ${rarityClass}">
                 <div class="icon">${ach.icon || '🏆'}</div>
                 <div class="info">
-                    <div class="name">${ach.name}</div>
-                    <div class="description">${ach.description}</div>
+                    <div class="name">${escapeHtml(ach.name || '')}</div>
+                    <div class="description">${escapeHtml(ach.description || '')}</div>
                     <div class="progress">
                         <div class="progress-bar">
                             <div class="progress-fill" style="width: ${ach.percent}%"></div>

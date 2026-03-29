@@ -14,8 +14,7 @@ const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
 const { getExpForLevel, getTotalExpForLevel } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
-const { buildPlayerStatus, normalizeInventory } = require('../../utils/playerState');
-const { getPlayerAchievements, getPlayerProgress } = require('../../utils/achievements');
+const { buildPlayerStatus, normalizeInventory, getPlayerAchievements, getPlayerProgress } = require('../../utils/game-helpers');
 const {
     createReferralCode,
     changeReferralCode,

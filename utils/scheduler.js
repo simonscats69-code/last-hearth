@@ -11,7 +11,7 @@
 
 const { query, transaction: tx } = require('../db/database');
 const { logger } = require('./serverApi');
-const { checkAchievements } = require('./achievements');
+const { checkAchievements } = require('./game-helpers');
 
 // Состояние планировщика
 let isRunning = {
