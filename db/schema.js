@@ -893,6 +893,11 @@ async function runMigrations() {
     await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_10_bonus_claimed_at TIMESTAMP`);
     await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_20_bonus_claimed_at TIMESTAMP`);
 
+    // Миграции для daily_tasks в таблице players
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_completed INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referrals INTEGER DEFAULT 0`);
+
     // Миграции для achievements
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS rarity VARCHAR(20) DEFAULT 'common'`);
