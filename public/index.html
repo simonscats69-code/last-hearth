@@ -23,18 +23,60 @@
     
     <!-- Глобальный обработчик ошибок -->
     <script>
+        // Максимальное количество подавленных ошибок
+        const MAX_SUPPRESSED_ERRORS = 20;
+        let suppressedCount = 0;
+        
+        // Известные коды ошибок Telegram, которые можно игнорировать
+        const IGNORED_ERROR_CODES = [
+            'Failed to execute \'drawImage\'',
+            'The image source is detached',
+            'MediaError',
+            'ERR_CONNECTION_RESET',
+            'net::ERR_CONNECTION_RESET',
+            'leak',
+            'peer changed'
+        ];
+        
+        // Проверяем, нужно ли игнорировать ошибку
+        function shouldIgnoreError(error) {
+            if (suppressedCount >= MAX_SUPPRESSED_ERRORS) {
+                return false;
+            }
+            
+            const errorStr = String(error.reason || error.message || error);
+            
+            for (const ignored of IGNORED_ERROR_CODES) {
+                if (errorStr.includes(ignored)) {
+                    suppressedCount++;
+                    console.warn('[ErrorFilter] Игнорируем известную ошибку:', ignored);
+                    return true;
+                }
+            }
+            return false;
+        }
+        
         // Отлавливаем необработанные ошибки промисов
         window.addEventListener('unhandledrejection', function(event) {
+            if (shouldIgnoreError(event.reason)) {
+                event.preventDefault();
+                return;
+            }
             console.error('[Global] Unhandled Promise Rejection:', event.reason);
             // Не показываем пользователю технические ошибки
         });
         
         // Отлавливаем ошибки скриптов
         window.addEventListener('error', function(event) {
+            // Проверяем на ошибки изображений и видео
+            if (event.message && event.message.includes('Image')) {
+                console.warn('[Global] Ошибка изображения (игнорируем):', event.message);
+                return;
+            }
             console.error('[Global] Script Error:', event.message, 'at', event.filename + ':' + event.lineno);
         });
         
-        console.log('[index.html] Страница загружена, версия: 6');
+        console.log('[index.html] Страница загружена, версия: 7');
     </script>
     
     <!-- Предподключение для внешних ресурсов -->

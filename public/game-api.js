@@ -209,6 +209,12 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             return data;
         } catch (error) {
             const isLastAttempt = attempt === retries;
+            
+            // Всегда очищаем таймауты при ошибке
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
             clearTimeout(loadingTimeout);
             
             if (error.name === 'AbortError') {

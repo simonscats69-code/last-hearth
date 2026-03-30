@@ -178,6 +178,16 @@ function safeClearInterval(id) {
 function clearAllIntervals() {
     activeIntervals.forEach(id => clearInterval(id));
     activeIntervals.length = 0;
+    
+    // Очищаем глобальные таймеры
+    if (window.bossFightTimerId) {
+        clearInterval(window.bossFightTimerId);
+        window.bossFightTimerId = null;
+    }
+    if (window.pvpCooldownTimerId) {
+        clearInterval(window.pvpCooldownTimerId);
+        window.pvpCooldownTimerId = null;
+    }
 }
 
 // Очищаем интервалы при закрытии страницы

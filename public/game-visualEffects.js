@@ -13,6 +13,7 @@
 
 /**
  * Класс ParticleSystem - управление визуальными эффектами
+ * Улучшенная версия с защитой от утечек памяти
  */
 class ParticleSystem {
     constructor() {
@@ -20,38 +21,85 @@ class ParticleSystem {
         this.canvas = null;
         this.ctx = null;
         this.animationId = null;
+        this._resizeHandler = null;
+        this._isDestroyed = false;
     }
 
     /**
      * Инициализация canvas для частиц
      */
     init() {
+        if (this._isDestroyed) {
+            console.warn('[ParticleSystem] Система уже уничтожена');
+            return;
+        }
         if (this.canvas) return;
         
-        this.canvas = document.createElement('canvas');
-        this.canvas.id = 'particle-canvas';
-        this.canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999;';
-        document.body.appendChild(this.canvas);
+        try {
+            this.canvas = document.createElement('canvas');
+            this.canvas.id = 'particle-canvas';
+            this.canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999;';
+            document.body.appendChild(this.canvas);
+            
+            this.ctx = this.canvas.getContext('2d');
+            this.resize();
+            
+            // Удаляем старый обработчик если есть
+            if (this._resizeHandler) {
+                window.removeEventListener('resize', this._resizeHandler);
+            }
+            // Сохраняем ссылку на обработчик
+            this._resizeHandler = () => this.resize();
+            window.addEventListener('resize', this._resizeHandler);
+        } catch (e) {
+            console.error('[ParticleSystem] Ошибка инициализации:', e);
+        }
+    }
+
+    /**
+     * Очистка всех ресурсов (предотвращение утечек памяти)
+     */
+    destroy() {
+        this._isDestroyed = true;
         
-        this.ctx = this.canvas.getContext('2d');
-        this.resize();
+        // Останавливаем анимацию
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
         
-        // Удаляем старый обработчик если есть
+        // Удаляем обработчик resize
         if (this._resizeHandler) {
             window.removeEventListener('resize', this._resizeHandler);
+            this._resizeHandler = null;
         }
-        // Сохраняем ссылку на обработчик
-        this._resizeHandler = () => this.resize();
-        window.addEventListener('resize', this._resizeHandler);
+        
+        // Очищаем canvas
+        if (this.canvas) {
+            try {
+                this.ctx = null;
+                this.canvas.remove();
+                this.canvas = null;
+            } catch (e) {
+                console.warn('[ParticleSystem] Ошибка удаления canvas:', e);
+            }
+        }
+        
+        // Очищаем массив частиц
+        this.particles = [];
     }
 
     /**
      * Изменение размера canvas при ресайзе окна
      */
     resize() {
-        if (this.canvas) {
+        if (this._isDestroyed || !this.canvas) return;
+        
+        try {
             this.canvas.width = window.innerWidth;
             this.canvas.height = window.innerHeight;
+        } catch (e) {
+            console.warn('[ParticleSystem] Ошибка изменения размера:', e);
         }
     }
 

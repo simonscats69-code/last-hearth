@@ -147,6 +147,12 @@ async function initGame() {
 async function loadProfile() {
     const response = await apiRequest('/api/game/profile');
     
+    // Проверяем success
+    if (!response?.success) {
+        console.error('Ошибка загрузки профиля:', response?.message || 'Unknown error');
+        return;
+    }
+    
     // API возвращает { success: true, data: { ... } }
     // Нужно распаковать данные для удобного доступа
     const data = response?.data || response;
