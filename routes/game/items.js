@@ -889,12 +889,15 @@ router.post('/buy', async (req, res) => {
         inventory.push(newItem);
         
         await client.query(
-            'UPDATE players SET inventory = $1 WHERE id = $2',
+            `UPDATE players
+             SET inventory = $1,
+                 items_collected = COALESCE(items_collected, 0) + 1
+             WHERE id = $2`,
             [JSON.stringify(inventory), playerId]
         );
         
         // Логируем действие
-        await logPlayerAction(playerId, 'shop_buy', {
+        await logPlayerAction(pool, playerId, 'shop_buy', {
             item_id: shopItem.id,
             item_name: shopItem.name,
             price: price,

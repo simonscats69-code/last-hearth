@@ -184,22 +184,36 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
     let loadingTimeout = createLoadingTimeout(options.showLoading);
     
     for (let attempt = 0; attempt <= retries; attempt++) {
+        let timeoutId = null;
+
         try {
             if (loadingTimeout) clearTimeout(loadingTimeout);
             loadingTimeout = createLoadingTimeout(options.showLoading);
             
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            timeoutId = setTimeout(() => controller.abort(), 8000);
             
             const response = await fetch(url, { ...config, signal: controller.signal });
             clearTimeout(timeoutId);
+            timeoutId = null;
             clearTimeout(loadingTimeout);
+
+            const contentType = response.headers.get('content-type') || '';
+            const data = contentType.includes('application/json')
+                ? await response.json()
+                : null;
             
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const serverMessage = data?.error || data?.message || `HTTP error! status: ${response.status}`;
+                const httpError = new Error(serverMessage);
+                httpError.status = response.status;
+                httpError.response = data;
+                throw httpError;
             }
-            
-            const data = await response.json();
+
+            if (!data) {
+                return { success: true };
+            }
             
             if (data.error === true) {
                 console.error('API Error:', data.message);

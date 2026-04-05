@@ -172,6 +172,7 @@ async function loadProfile() {
     data.max_energy = data.status.max_energy;
     
     gameState.player = data;
+    gameState.buffs = data.buffs || {};
     
     // Обновляем UI
     updateProfileUI(data);
@@ -940,6 +941,8 @@ async function updateProfileUI(player) {
     if (invCoins) invCoins.textContent = player.coins || 0;
     if (mainStars) mainStars.textContent = player.stars || 0;
     if (mainCoins) mainCoins.textContent = player.coins || 0;
+
+    renderActiveBuffs(player.buffs || gameState.buffs || {});
     
     // Обновляем отображение переломов и инфекций
     updateConditionsUI(status);
@@ -948,6 +951,45 @@ async function updateProfileUI(player) {
     refreshMainScreenInsights().catch(error => {
         console.debug('Не удалось обновить инсайты главного экрана:', error);
     });
+}
+
+function renderActiveBuffs(buffs = {}) {
+    const section = document.getElementById('active-buffs-section');
+    const list = document.getElementById('active-buffs-list');
+    if (!section || !list) return;
+
+    const buffMeta = {
+        loot_x2: { icon: '📦', label: 'x2 добыча' },
+        exp_x2: { icon: '⬆️', label: 'x2 опыт' },
+        free_energy: { icon: '⚡', label: 'Без расхода энергии' },
+        no_radiation: { icon: '☢️', label: 'Защита от радиации' }
+    };
+
+    const activeBuffs = Object.entries(buffs).filter(([, buff]) => {
+        const expiresAt = new Date(buff?.expires_at || buff?.expiresAt || buff?.expires || 0).getTime();
+        return Number.isFinite(expiresAt) && expiresAt > Date.now();
+    });
+
+    if (!activeBuffs.length) {
+        section.style.display = 'none';
+        list.innerHTML = '';
+        return;
+    }
+
+    section.style.display = 'flex';
+    list.innerHTML = activeBuffs.map(([effect, buff]) => {
+        const meta = buffMeta[effect] || { icon: '✨', label: effect };
+        const expiresAt = new Date(buff?.expires_at || buff?.expiresAt || buff?.expires || 0).getTime();
+        const minutesLeft = Math.max(1, Math.ceil((expiresAt - Date.now()) / 60000));
+
+        return `
+            <div class="active-buff-pill">
+                <span class="buff-icon">${meta.icon}</span>
+                <span class="buff-label">${meta.label}</span>
+                <span class="buff-time">${minutesLeft}м</span>
+            </div>
+        `;
+    }).join('');
 }
 
 /**
@@ -1970,6 +2012,8 @@ function renderClanScreen(data) {
     const content = document.getElementById('clan-content');
     if (!content) return;
     const clan = data.clan;
+    const clanCoins = Number(clan.coins || 0);
+    const totalDonated = Number(clan.total_donated || 0);
     
     const roleEmoji = { leader: '👑', officer: '⭐', member: '👤' };
     
@@ -1991,13 +2035,18 @@ function renderClanScreen(data) {
                 </div>
                 <div class="clan-stat">
                     <span class="stat-icon">💰</span>
-                    <span class="stat-value">${clan.coins}</span>
+                    <span class="stat-value">${clanCoins}</span>
                     <span class="stat-label">Казна</span>
                 </div>
                 <div class="clan-stat">
                     <span class="stat-icon">✨</span>
                     <span class="stat-value">${clan.loot_bonus}%</span>
                     <span class="stat-label">Бонус добычи</span>
+                </div>
+                <div class="clan-stat">
+                    <span class="stat-icon">📈</span>
+                    <span class="stat-value">${totalDonated}</span>
+                    <span class="stat-label">Пожертвовано всего</span>
                 </div>
             </div>
         </div>
@@ -2124,15 +2173,16 @@ async function createClan() {
             method: 'POST',
             body: { name, description, is_public: isPublic }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
-            showModal('✅ Успех', result.message);
+            showModal('✅ Успех', payload.message || 'Клан создан');
             if (nameInput) nameInput.value = '';
             if (descInput) descInput.value = '';
             showScreen('clan');
             loadClan();
         } else {
-            showModal('⚠️ Ошибка', result.message);
+            showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось создать клан');
         }
     } catch (error) {
         console.error('Create clan error:', error);
@@ -2146,7 +2196,8 @@ async function loadClansList(search = '') {
     try {
         const url = search ? '/api/game/clans?search=' + encodeURIComponent(search) : '/api/game/clans';
         const data = await apiRequest(url);
-        renderClansList(data.clans);
+        const payload = data?.data || data;
+        renderClansList(payload.clans || []);
     } catch (error) {
         console.error('Load clans error:', error);
     }
@@ -2189,15 +2240,16 @@ async function joinClan(clanId) {
             method: 'POST',
             body: { clan_id: clanId }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
-            showModal('✅ Успех', result.message);
-            if (!result.application_pending) {
+            showModal('✅ Успех', payload.message || 'Вы вступили в клан');
+            if (!payload.application_pending) {
                 showScreen('clan');
                 loadClan();
             }
         } else {
-            showModal('⚠️ Ошибка', result.message);
+            showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось вступить в клан');
         }
     } catch (error) {
         console.error('Join clan error:', error);
@@ -2215,13 +2267,14 @@ async function leaveClan() {
             method: 'POST',
             body: {}
         });
+        const payload = result?.data || result;
         
         if (result.success) {
-            showModal('✅ Успех', result.message);
+            showModal('✅ Успех', payload.message || 'Вы покинули клан');
             clanState.clan = null;
             loadClan();
         } else {
-            showModal('⚠️ Ошибка', result.message);
+            showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось покинуть клан');
         }
     } catch (error) {
         console.error('Leave clan error:', error);
@@ -2234,7 +2287,8 @@ async function leaveClan() {
 async function loadClanMembers() {
     try {
         const data = await apiRequest('/api/game/clans/clan/members');
-        if (data.success) showClanMembersModal(data.members);
+        const payload = data?.data || data;
+        if (data.success) showClanMembersModal(payload.members || []);
     } catch (error) {
         console.error('Load members error:', error);
     }
@@ -2307,13 +2361,14 @@ async function donateToClan(amount) {
             method: 'POST',
             body: { amount }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
-            showModal('✅ Успех', `Пожертвование принято! Вы пожертвовали ${amount} монет.`);
-            gameState.player.coins -= amount;
+            showModal('✅ Успех', `Пожертвование принято! Вы пожертвовали ${amount} монет. Казна: ${payload.clan_total || 0}`);
+            gameState.player.coins = Number(payload.new_balance ?? (gameState.player.coins - amount));
             loadClan();
         } else {
-            showModal('⚠️ Ошибка', result.message);
+            showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось отправить пожертвование');
         }
     } catch (error) {
         console.error('Donate error:', error);
@@ -2347,7 +2402,8 @@ function showClanSettings() {
 async function loadClanChat() {
     try {
         const data = await apiRequest('/api/game/clans/clan/chat');
-        if (data.success) renderClanChat(data.data.messages);
+        const payload = data?.data || data;
+        if (data.success) renderClanChat(payload.messages || []);
     } catch (error) {
         console.error('Load chat error:', error);
     }

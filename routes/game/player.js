@@ -14,7 +14,7 @@ const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
 const { getExpForLevel, getTotalExpForLevel } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
-const { buildPlayerStatus, normalizeInventory, getPlayerAchievements, getPlayerProgress } = require('../../utils/game-helpers');
+const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress } = require('../../utils/game-helpers');
 const {
     createReferralCode,
     changeReferralCode,
@@ -171,6 +171,8 @@ router.get('/', async (req, res) => {
 
         const inventory = normalizeInventory(player.inventory);
         const equipment = safeJsonParse(player.equipment, {});
+        const buffs = getActiveBuffs(player.buffs);
+        const cosmetics = safeJsonParse(player.cosmetics, []);
         const status = buildPlayerStatus(player);
 
         logger.info(`[player] Просмотр профиля`, {
@@ -214,6 +216,8 @@ router.get('/', async (req, res) => {
                 },
                 inventory: inventory,
                 equipment: equipment,
+                buffs,
+                cosmetics: Array.isArray(cosmetics) ? cosmetics : [],
                 coins: player.coins,
                 stars: player.stars,
                 boss_keys: keys,

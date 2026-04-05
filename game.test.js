@@ -5,6 +5,9 @@
 const { validateTelegramInitData, isAdmin } = require('./utils/serverApi');
 const { getMetrics, resetMetrics } = require('./utils/realtime');
 const { ACHIEVEMENTS } = require('./utils/game-helpers');
+const { calculateLocationRiskProfile } = require('./utils/gameConstants');
+const { calculateCoinsToSteal, calculatePVPRewardExperience } = require('./db/pvp');
+const { normalizeInventory, getActiveBuffs, isBuffActive } = require('./utils/game-helpers');
 
 // =============================================================================
 // Тесты telegramAuth
@@ -109,6 +112,32 @@ describe('achievements', () => {
 // =============================================================================
 
 describe('Игровая логика', () => {
+    describe('Профиль риска локации', () => {
+        test('должен считать зону безопасной при достаточной защите', () => {
+            const profile = calculateLocationRiskProfile(
+                { radiation: 10, infection: 10 },
+                {
+                    armor: { stats: { radiation_resist: 10, infection_resist: 10 } }
+                }
+            );
+
+            expect(profile.tier).toBe('safe');
+            expect(profile.isPrepared).toBe(true);
+            expect(profile.riskScore).toBe(0);
+        });
+
+        test('должен повышать риск для опасной зоны без экипировки', () => {
+            const profile = calculateLocationRiskProfile(
+                { radiation: 80, infection: 40 },
+                {}
+            );
+
+            expect(profile.riskScore).toBeGreaterThan(7);
+            expect(profile.tier).toBe('deadly');
+            expect(profile.isPrepared).toBe(false);
+        });
+    });
+
     describe('Расчёт опыта для уровня', () => {
         test('должен требовать больше опыта для высоких уровней', () => {
             // Базовый расчёт: 100 * level^1.5
@@ -145,6 +174,24 @@ describe('Игровая логика', () => {
             const maxHealth10 = Math.min(200, 100 + Math.floor(10 / 5) * 10);
             
             expect(maxHealth10).toBeGreaterThanOrEqual(maxHealth1);
+        });
+    });
+
+    describe('PvP награды', () => {
+        test('должен давать больше опыта за победу над более сильным противником', () => {
+            const equalReward = calculatePVPRewardExperience(10, 10);
+            const harderReward = calculatePVPRewardExperience(15, 10);
+
+            expect(harderReward).toBeGreaterThan(equalReward);
+        });
+
+        test('не должен красть монеты у пустого кошелька', () => {
+            expect(calculateCoinsToSteal(0, 10)).toBe(0);
+        });
+
+        test('не должен красть больше половины монет', () => {
+            const stolen = calculateCoinsToSteal(1000, 999);
+            expect(stolen).toBeLessThanOrEqual(500);
         });
     });
 });
@@ -186,6 +233,56 @@ describe('Валидация', () => {
                 const isValid = Number.isInteger(amount) && amount >= 1 && amount <= 100;
                 expect(isValid).toBe(false);
             }
+        });
+    });
+});
+
+// =============================================================================
+// Тесты нормализации состояния
+// =============================================================================
+
+describe('Нормализация состояния', () => {
+    describe('normalizeInventory', () => {
+        test('должен сохранять массив инвентаря как есть', () => {
+            const inventory = [{ id: 1, name: 'Нож' }];
+            expect(normalizeInventory(inventory)).toEqual(inventory);
+        });
+
+        test('должен преобразовывать объектный инвентарь в массив', () => {
+            const inventoryObject = {
+                a: { id: 1, name: 'Нож' },
+                b: { id: 2, name: 'Аптечка' }
+            };
+
+            expect(normalizeInventory(inventoryObject)).toEqual([
+                { id: 1, name: 'Нож' },
+                { id: 2, name: 'Аптечка' }
+            ]);
+        });
+    });
+
+    describe('баффы', () => {
+        test('должен возвращать только активные баффы', () => {
+            const now = Date.now();
+            const buffs = {
+                loot_x2: { expires_at: new Date(now + 60_000).toISOString() },
+                exp_x2: { expires_at: new Date(now - 60_000).toISOString() }
+            };
+
+            const activeBuffs = getActiveBuffs(buffs, now);
+
+            expect(activeBuffs).toHaveProperty('loot_x2');
+            expect(activeBuffs).not.toHaveProperty('exp_x2');
+        });
+
+        test('должен корректно определять активность конкретного баффа', () => {
+            const now = Date.now();
+            const buffs = {
+                free_energy: { expires_at: new Date(now + 60_000).toISOString() }
+            };
+
+            expect(isBuffActive(buffs, 'free_energy', now)).toBe(true);
+            expect(isBuffActive(buffs, 'loot_x2', now)).toBe(false);
         });
     });
 });

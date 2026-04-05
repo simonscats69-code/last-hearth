@@ -60,7 +60,11 @@ router.get('/clan', wrap(async (req, res) => {
                             'first_name', p.first_name,
                             'level', p.level,
                             'clan_role', p.clan_role,
-                            'clan_donated', p.clan_donated
+                            'clan_donated', p.clan_donated,
+                            'is_online', CASE
+                                WHEN p.last_action_time IS NOT NULL AND p.last_action_time > NOW() - INTERVAL '10 minutes' THEN true
+                                ELSE false
+                            END
                         )
                         ORDER BY p.clan_donated DESC
                         LIMIT 30
@@ -527,13 +531,13 @@ router.post('/clan/donate', wrap(async (req, res) => {
         );
         
         await client.query(
-            `UPDATE clans SET total_donated = total_donated + $1 WHERE id = $2`,
+            `UPDATE clans SET total_donated = total_donated + $1, coins = coins + $1 WHERE id = $2`,
             [donation, player.clan_id]
         );
         
-        // Получаем обновленную сумму пожертвований клана
+        // Получаем обновлённые показатели клана
         const clanResult = await client.query(
-            `SELECT total_donated FROM clans WHERE id = $1`,
+            `SELECT total_donated, coins FROM clans WHERE id = $1`,
             [player.clan_id]
         );
 
@@ -548,7 +552,8 @@ router.post('/clan/donate', wrap(async (req, res) => {
             success: true,
             donated: donation,
             new_balance: lockedPlayer.coins - donation,
-            clan_total: clanResult.rows[0]?.total_donated || donation
+            clan_total: clanResult.rows[0]?.coins || donation,
+            total_donated: clanResult.rows[0]?.total_donated || donation
         };
     });
     

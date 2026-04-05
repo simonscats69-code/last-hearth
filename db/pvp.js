@@ -121,16 +121,18 @@ async function getPVPStats(playerId) {
     
     // Получаем последние бои
     const recentMatches = await queryAll(
-        `SELECT pm.*, 
+        `SELECT pb.*, 
                 attacker.username as attacker_name,
+                attacker.first_name as attacker_first_name,
                 defender.username as defender_name,
+                defender.first_name as defender_first_name,
                 winner.username as winner_name
-         FROM pvp_matches pm
-         LEFT JOIN players attacker ON pm.attacker_id = attacker.id
-         LEFT JOIN players defender ON pm.defender_id = defender.id
-         LEFT JOIN players winner ON pm.winner_id = winner.id
-         WHERE pm.attacker_id = $1 OR pm.defender_id = $1
-         ORDER BY pm.started_at DESC
+         FROM pvp_battles pb
+         LEFT JOIN players attacker ON pb.attacker_id = attacker.id
+         LEFT JOIN players defender ON pb.defender_id = defender.id
+         LEFT JOIN players winner ON pb.winner_id = winner.id
+         WHERE pb.attacker_id = $1 OR pb.defender_id = $1
+         ORDER BY pb.started_at DESC
          LIMIT 10`,
         [playerId]
     );
@@ -165,8 +167,8 @@ async function createPVPMatch(attackerId, defenderId, locationId, client = null)
         : (sql, params) => queryOne(sql, params);
     
     const match = await executeQuery(
-        `INSERT INTO pvp_matches (attacker_id, defender_id, location_id, started_at)
-         VALUES ($1, $2, $3, NOW())
+        `INSERT INTO pvp_battles (attacker_id, defender_id, location_id, started_at, status)
+         VALUES ($1, $2, $3, NOW(), 'active')
          RETURNING *`,
         [attackerId, defenderId, locationId]
     );
@@ -264,7 +266,7 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
                 coins = GREATEST(0, coins - $2),
                 coins_stolen_from_me = coins_stolen_from_me + $2,
                 current_location_id = COALESCE(
-                    (SELECT id FROM locations WHERE is_red_zone IS NOT TRUE ORDER BY id LIMIT 1),
+                    (SELECT id FROM locations WHERE COALESCE(danger_level, 0) < 6 ORDER BY danger_level ASC, id ASC LIMIT 1),
                     1
                 )
              WHERE id = $3

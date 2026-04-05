@@ -158,6 +158,10 @@ async function buyShopItem(itemId, category) {
             
             showModal('✅ Успешно!', `Куплено: ${item.name}`);
             showConfetti();
+
+            if (typeof loadProfile === 'function') {
+                loadProfile().catch(error => console.error('Не удалось обновить профиль после покупки:', error));
+            }
         }
     } catch (error) {
         showModal('❌ Ошибка', 'Не удалось совершить покупку');

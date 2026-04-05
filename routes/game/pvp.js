@@ -16,6 +16,7 @@ const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError, safeParse, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
+const { getActiveBuffs } = require('../../utils/game-helpers');
 
 
 
@@ -126,10 +127,10 @@ router.get('/players', async (req, res) => {
 
         // Проверяем, что игрок на красной зоне
         const location = await queryOne(`
-            SELECT is_red_zone FROM locations WHERE id = $1
+            SELECT danger_level FROM locations WHERE id = $1
         `, [player.current_location_id]);
         
-        if (!location || !location.is_red_zone) {
+        if (!location || Number(location.danger_level || 0) < 6) {
             return ok(res, {
                 available: false,
                 message: 'PvP доступно только на красных зонах'
@@ -218,10 +219,10 @@ router.post('/attack', async (req, res) => {
 
             // Проверяем красную зону
             const location = await client.query(`
-                SELECT is_red_zone FROM locations WHERE id = $1
+                SELECT danger_level FROM locations WHERE id = $1
             `, [lockedPlayer.current_location_id]);
 
-            if (!location.rows[0] || !location.rows[0].is_red_zone) {
+            if (!location.rows[0] || Number(location.rows[0].danger_level || 0) < 6) {
                 throw new Error('PvP доступно только на красных зонах');
             }
 
@@ -229,16 +230,12 @@ router.post('/attack', async (req, res) => {
                 throw new Error('Игрок не на этой локации');
             }
 
+            const startBuffs = getActiveBuffs(lockedPlayer.buffs);
+
             // Проверяем наличие энергии ДО списания
-            if (!lockedPlayer || lockedPlayer.energy < 1) {
+            if (!lockedPlayer || (!startBuffs.free_energy && lockedPlayer.energy < 1)) {
                 throw new Error('Нужна энергия для атаки');
             }
-
-            // Обновляем энергию (вычитаем 1 за атаку)
-            await client.query(
-                `UPDATE players SET energy = energy - 1 WHERE id = $1`,
-                [playerId]
-            );
 
             // Создаём сессию боя с передачей client для работы внутри транзакции
             const battle = await pvp.createPVPMatch(playerId, target_id, lockedPlayer.current_location_id, client);
@@ -297,7 +294,7 @@ router.post('/attack-hit', async (req, res) => {
         const battleResult = await transaction(async (client) => {
             // Получаем бой
             const battle = await client.query(`
-                SELECT * FROM pvp_battles WHERE id = $1
+                SELECT * FROM pvp_battles WHERE id = $1 FOR UPDATE
             `, [battle_id]);
 
             if (!battle.rows[0]) {
@@ -306,14 +303,18 @@ router.post('/attack-hit', async (req, res) => {
 
             const battleData = battle.rows[0];
 
-            if (battleData.attacker_id !== playerId && battleData.target_id !== playerId) {
+            if (battleData.status !== 'active') {
+                throw new Error('Бой уже завершён');
+            }
+
+            if (battleData.attacker_id !== playerId && battleData.defender_id !== playerId) {
                 throw new Error('Вы не участник этого боя');
             }
 
             // Определяем атакующего и защитника
             const isAttacker = battleData.attacker_id === playerId;
-            const attackerId = isAttacker ? battleData.attacker_id : battleData.target_id;
-            const defenderId = isAttacker ? battleData.target_id : battleData.attacker_id;
+            const attackerId = isAttacker ? battleData.attacker_id : battleData.defender_id;
+            const defenderId = isAttacker ? battleData.defender_id : battleData.attacker_id;
 
             // Блокируем обоих игроков в определённом порядке для предотвращения deadlock
             const [firstId, secondId] = attackerId < defenderId
@@ -345,6 +346,23 @@ router.post('/attack-hit', async (req, res) => {
                 throw new Error('Противник уже мертв');
             }
 
+            const activeBuffs = getActiveBuffs(attacker.buffs);
+            if (!activeBuffs.free_energy && Number(attacker.energy || 0) < 1) {
+                throw new Error('Нужна энергия для удара');
+            }
+
+            const energyCost = activeBuffs.free_energy ? 0 : 1;
+
+            const energyResult = await client.query(
+                `UPDATE players
+                 SET energy = GREATEST(0, energy - $1),
+                     last_energy_update = NOW()
+                 WHERE id = $2
+                 RETURNING energy`,
+                [energyCost, attackerId]
+            );
+            const energyLeft = Number(energyResult.rows[0]?.energy || 0);
+
             // Вычисляем урон атакующего
             let damage = (attacker.strength * 2) + (attacker.agility * 0.5);
 
@@ -360,8 +378,25 @@ router.post('/attack-hit', async (req, res) => {
             const isDodged = Math.random() * 100 < dodgeChance;
             
             if (isDodged) {
-                // Возвращаем специальный объект для обработки вне транзакции
-                return { dodged: true, attackerHealth: attacker.health, defenderHealth: defender.health };
+                await client.query(
+                    `UPDATE pvp_battles
+                     SET battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
+                     WHERE id = $1`,
+                    [battle_id]
+                );
+
+                return {
+                    dodged: true,
+                    battleEnded: false,
+                    message: 'Противник уклонился от атаки!',
+                    hit: {
+                        damage: 0,
+                        yourHealth: attacker.health,
+                        targetHealth: defender.health,
+                        maxHealth: defender.max_health
+                    },
+                    energy_left: energyLeft
+                };
             }
 
             // Защита от выносливости (endurance)
@@ -377,12 +412,37 @@ router.post('/attack-hit', async (req, res) => {
                 UPDATE players SET health = $1 WHERE id = $2
             `, [newHealth, defenderId]);
 
+            await client.query(
+                `UPDATE players
+                 SET pvp_total_damage_dealt = pvp_total_damage_dealt + $1
+                 WHERE id = $2`,
+                [damage, attackerId]
+            );
+
+            await client.query(
+                `UPDATE players
+                 SET pvp_total_damage_taken = pvp_total_damage_taken + $1
+                 WHERE id = $2`,
+                [damage, defenderId]
+            );
+
+            const battleDamageField = isAttacker ? 'attacker_damage' : 'defender_damage';
+            await client.query(
+                `UPDATE pvp_battles
+                 SET ${battleDamageField} = COALESCE(${battleDamageField}, 0) + $1,
+                     battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
+                 WHERE id = $2`,
+                [damage, battle_id]
+            );
+
             // Проверяем победу
-            let ended = false;
-            let reward = null;
+            let battleEnded = false;
+            let rewards = null;
+            let winner = null;
+            let loser = null;
 
             if (newHealth <= 0) {
-                ended = true;
+                battleEnded = true;
 
                 // Награда победителю
                 // Ограничиваем максимальную награду
@@ -392,45 +452,51 @@ router.post('/attack-hit', async (req, res) => {
                     MAX_PVP_COINS
                 );
 
-                await client.query(`
-                    UPDATE players SET coins = coins + $1 WHERE id = $2
-                `, [coinsReward, attackerId]);
-
                 // Шанс украсть предмет (снижено с 30% до 10%)
-                const inventory = safeParse(defender.inventory, []);
-                if (inventory.length > 0 && Math.random() < 0.1) {
-                    const stolenItem = inventory[Math.floor(Math.random() * inventory.length)];
+                const defenderInventory = safeParse(defender.inventory, []);
+                const attackerInventory = safeParse(attacker.inventory, []);
+                let stolenItem = null;
 
-                    // Добавляем предмет атакующему
-                    const attackerInventory = safeParse(attacker.inventory, []);
-                    attackerInventory.push(stolenItem);
+                if (Array.isArray(defenderInventory) && defenderInventory.length > 0 && Math.random() < 0.1) {
+                    const stolenIndex = Math.floor(Math.random() * defenderInventory.length);
+                    const [removedItem] = defenderInventory.splice(stolenIndex, 1);
 
-                    await client.query(`
-                        UPDATE players SET inventory = $1 WHERE id = $2
-                    `, [safeStringify(attackerInventory), attackerId]);
-
-                    reward = {
-                        coins: coinsReward,
-                        item: stolenItem
-                    };
-                } else {
-                    reward = {
-                        coins: coinsReward
-                    };
+                    if (removedItem) {
+                        stolenItem = removedItem;
+                        attackerInventory.push(removedItem);
+                    }
                 }
+
+                const safeLocationResult = await client.query(
+                    `SELECT id
+                     FROM locations
+                     WHERE COALESCE(danger_level, 0) < 6
+                     ORDER BY danger_level ASC, id ASC
+                     LIMIT 1`
+                );
+                const safeLocationId = Number(safeLocationResult.rows[0]?.id || 1);
 
                 // Завершаем бой
                 await client.query(`
-                    UPDATE pvp_battles SET status = 'completed', winner_id = $1, ended_at = NOW()
-                    WHERE id = $2
-                `, [attackerId, battle_id]);
+                    UPDATE pvp_battles
+                    SET status = 'completed',
+                        winner_id = $1,
+                        loser_id = $2,
+                        attacker_reward = CASE WHEN attacker_id = $1 THEN $3 ELSE 0 END,
+                        defender_reward = CASE WHEN defender_id = $1 THEN $3 ELSE 0 END,
+                        ended_at = NOW(),
+                        battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
+                    WHERE id = $4
+                `, [attackerId, defenderId, coinsReward, battle_id]);
 
                 // Обновляем PvP статистику победителя и даём опыт
                 const pvpExpReward = 50; // 50 XP за победу в PvP
                 await client.query(`
                     UPDATE players
                     SET pvp_wins = pvp_wins + 1,
-                        pvp_damage_dealt = pvp_damage_dealt + $1,
+                        pvp_streak = pvp_streak + 1,
+                        pvp_max_streak = GREATEST(pvp_max_streak, pvp_streak + 1),
+                        pvp_rating = pvp_rating + 25,
                         experience = experience + $2
                     WHERE id = $3
                 `, [damage, pvpExpReward, attackerId]);
@@ -439,9 +505,36 @@ router.post('/attack-hit', async (req, res) => {
                 await client.query(`
                     UPDATE players
                     SET pvp_losses = pvp_losses + 1,
-                        pvp_damage_taken = pvp_damage_taken + $1
-                    WHERE id = $2
-                `, [damage, defenderId]);
+                        pvp_streak = 0,
+                        pvp_rating = GREATEST(500, pvp_rating - 15),
+                        coins = GREATEST(0, coins - $1),
+                        coins_stolen_from_me = coins_stolen_from_me + $1,
+                        items_stolen_from_me = items_stolen_from_me + $2,
+                        current_location_id = $3
+                    WHERE id = $4
+                `, [coinsReward, stolenItem ? 1 : 0, safeLocationId, defenderId]);
+
+                await client.query(`
+                    UPDATE players SET coins = coins + $1 WHERE id = $2
+                `, [coinsReward, attackerId]);
+
+                if (stolenItem) {
+                    await client.query(
+                        `UPDATE players SET inventory = $1 WHERE id = $2`,
+                        [safeStringify(defenderInventory), defenderId]
+                    );
+                    await client.query(
+                        `UPDATE players SET inventory = $1 WHERE id = $2`,
+                        [safeStringify(attackerInventory), attackerId]
+                    );
+                }
+
+                rewards = {
+                    coins: coinsReward,
+                    item: stolenItem
+                };
+                winner = { id: attackerId };
+                loser = { id: defenderId };
 
                 // Логируем завершение боя
                 await logPlayerAction(playerId, 'pvp_battle_win', {
@@ -449,7 +542,7 @@ router.post('/attack-hit', async (req, res) => {
                     opponent_id: defenderId,
                     damage_dealt: damage,
                     coins_reward: coinsReward,
-                    item_stolen: !!reward?.item
+                    item_stolen: !!stolenItem
                 }, client);
             } else {
                 // Логируем удар
@@ -462,24 +555,20 @@ router.post('/attack-hit', async (req, res) => {
             }
 
             return {
-                damage: damage,
-                defender_health: newHealth,
-                ended: ended,
-                reward: reward,
-                message: ended ? 'Победа!' : 'Удар нанесён'
+                battleEnded,
+                winner,
+                loser,
+                rewards,
+                hit: {
+                    damage,
+                    yourHealth: attacker.health,
+                    targetHealth: newHealth,
+                    maxHealth: defender.max_health
+                },
+                energy_left: energyLeft,
+                message: battleEnded ? 'Победа!' : 'Удар нанесён'
             };
         });
-
-        // Обработка уклонения
-        if (battleResult?.dodged) {
-            return res.json({
-                success: true,
-                message: 'Противник уклонился от атаки!',
-                dodged: true,
-                attackerHealth: battleResult.attackerHealth,
-                defenderHealth: battleResult.defenderHealth
-            });
-        }
 
         return ok(res, battleResult);
 
@@ -503,6 +592,40 @@ router.get('/stats', async (req, res) => {
                    pvp_rating, pvp_streak, pvp_max_streak, coins_stolen_from_me, items_stolen_from_me
             FROM players WHERE id = $1
         `, [playerId]);
+
+        const cooldown = await pvp.getPVPCooldown(playerId);
+        const recentBattles = await queryAll(`
+            SELECT b.id, b.attacker_id, b.defender_id, b.winner_id,
+                   b.attacker_damage, b.defender_damage,
+                   COALESCE(b.ended_at, b.started_at) AS battle_time,
+                   attacker.username AS attacker_username,
+                   attacker.first_name AS attacker_first_name,
+                   defender.username AS defender_username,
+                   defender.first_name AS defender_first_name
+            FROM pvp_battles b
+            LEFT JOIN players attacker ON attacker.id = b.attacker_id
+            LEFT JOIN players defender ON defender.id = b.defender_id
+            WHERE (b.attacker_id = $1 OR b.defender_id = $1)
+              AND b.status = 'completed'
+            ORDER BY COALESCE(b.ended_at, b.started_at) DESC
+            LIMIT 10
+        `, [playerId]);
+
+        const recentMatches = recentBattles.map((battle) => {
+            const isOriginalAttacker = Number(battle.attacker_id) === Number(playerId);
+            const opponentName = isOriginalAttacker
+                ? (battle.defender_username || battle.defender_first_name || 'Игрок')
+                : (battle.attacker_username || battle.attacker_first_name || 'Игрок');
+
+            return {
+                id: battle.id,
+                result: Number(battle.winner_id) === Number(playerId) ? 'win' : 'loss',
+                opponentName,
+                date: battle.battle_time,
+                damageDealt: isOriginalAttacker ? Number(battle.attacker_damage || 0) : Number(battle.defender_damage || 0),
+                damageTaken: isOriginalAttacker ? Number(battle.defender_damage || 0) : Number(battle.attacker_damage || 0)
+            };
+        });
         
         ok(res, {
             stats: {
@@ -525,8 +648,15 @@ router.get('/stats', async (req, res) => {
             maxStreak: stats?.pvp_max_streak || 0,
             coinsStolenFromMe: stats?.coins_stolen_from_me || 0,
             itemsStolenFromMe: stats?.items_stolen_from_me || 0,
-            recentMatches: [],
-            cooldown: { active: false }
+            recentMatches,
+            cooldown: cooldown
+                ? {
+                    active: true,
+                    type: cooldown.cooldown_type,
+                    expiresAt: cooldown.expires_at,
+                    reason: cooldown.reason
+                }
+                : { active: false }
         });
 
     } catch (error) {

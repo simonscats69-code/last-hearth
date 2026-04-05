@@ -14,7 +14,7 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, withPlayerLock, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeRadiation, getActiveBuffs } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
 
 // =============================================================================
@@ -42,6 +42,93 @@ const safeParse = (value, fallback = {}) => {
 
 function validateLocationId(locationId) {
     return Number.isInteger(locationId) && locationId > 0;
+}
+
+function getLootTypePool(locationId) {
+    const normalizedLocationId = Number(locationId || 1);
+
+    if (normalizedLocationId <= 1) {
+        return ['food', 'medicine', 'resource', 'weapon'];
+    }
+
+    if (normalizedLocationId <= 3) {
+        return ['food', 'medicine', 'resource', 'weapon', 'armor'];
+    }
+
+    if (normalizedLocationId <= 5) {
+        return ['weapon', 'armor', 'medicine', 'resource', 'food'];
+    }
+
+    return ['weapon', 'armor', 'medicine', 'resource', 'food'];
+}
+
+async function getRandomLootItem(client, rarity, locationId) {
+    const preferredTypes = getLootTypePool(locationId);
+
+    const baseSelect = `
+        SELECT
+            id,
+            name,
+            type,
+            category,
+            rarity,
+            icon,
+            slot,
+            durability,
+            stats,
+            COALESCE((stats->>'damage')::integer, 0) AS damage,
+            COALESCE((stats->>'defense')::integer, 0) AS defense
+        FROM items
+        WHERE rarity = $1
+          AND type != 'key'
+    `;
+
+    const preferredResult = await client.query(
+        `${baseSelect}
+          AND type = ANY($2::text[])
+        ORDER BY random()
+        LIMIT 1`,
+        [rarity, preferredTypes]
+    );
+
+    if (preferredResult.rows[0]) {
+        return preferredResult.rows[0];
+    }
+
+    const fallbackResult = await client.query(
+        `${baseSelect}
+        ORDER BY random()
+        LIMIT 1`,
+        [rarity]
+    );
+
+    return fallbackResult.rows[0] || null;
+}
+
+function buildInventoryItem(item, rarity) {
+    const parsedStats = safeParse(item?.stats, {});
+
+    return {
+        id: item.id,
+        name: item.name,
+        type: item.type || 'misc',
+        category: item.category || item.type || 'misc',
+        rarity: rarity || item.rarity || 'common',
+        icon: item.icon,
+        slot: item.slot || null,
+        stats: parsedStats,
+        damage: Number(item.damage || parsedStats.damage || 0),
+        defense: Number(item.defense || parsedStats.defense || 0),
+        heal: Number(parsedStats.health || item.heal || 0),
+        rad_removal: Number(parsedStats.radiation_cure || item.rad_removal || 0),
+        radiation_resist: Number(parsedStats.radiation_resist || 0),
+        infection_resist: Number(parsedStats.infection_resist || 0),
+        durability: Number(item.durability || 100),
+        max_durability: Number(item.durability || 100),
+        quantity: 1,
+        upgrade_level: 0,
+        modifications: {}
+    };
 }
 
 // =============================================================================
@@ -130,7 +217,7 @@ router.post('/search', async (req, res) => {
         // SELECT с явным списком полей вместо SELECT *
         const playerResult = await client.query(`
             SELECT id, energy, max_energy, current_location_id, radiation, inventory, 
-                   equipment, luck, health, level, experience
+                   equipment, luck, health, level, experience, buffs
             FROM players WHERE id = $1 FOR UPDATE
         `, [playerId]);
         
@@ -145,7 +232,8 @@ router.post('/search', async (req, res) => {
             });
         }
         
-        const energyCost = 1;
+        const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
+        const energyCost = activeBuffs.free_energy ? 0 : 1;
         if (updatedPlayer.energy < energyCost) {
             await client.query('ROLLBACK');
             return res.json({
@@ -178,7 +266,7 @@ router.post('/search', async (req, res) => {
         const radiationDefense = riskProfile.radiationDefense;
         let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         
-        if (locationData.radiation > 0) {
+        if (locationData.radiation > 0 && !activeBuffs.no_radiation) {
             const baseRadiation = Math.ceil(locationData.radiation / 10);
             const randomFactor = 0.7 + Math.random() * 0.6;
             radiationGain = Math.max(0, Math.ceil((baseRadiation - radiationDefense) * randomFactor));
@@ -235,6 +323,7 @@ router.post('/search', async (req, res) => {
         let foundItem = null;
         let itemRarity = null;
         let expGained = 0;
+        let itemsCollected = 0;
         let inventoryUpdate = null;
         
         if (rolled <= dropChance) {
@@ -283,42 +372,31 @@ router.post('/search', async (req, res) => {
                 itemRarity = foundItem?.rarity || 'epic';
             } else {
                 itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck);
-                
-                const itemResult = await client.query(`
-                    SELECT
-                        id, name, type, rarity, icon,
-                        COALESCE((stats->>'damage')::integer, 0) AS damage,
-                        COALESCE((stats->>'defense')::integer, 0) AS defense
-                    FROM items
-                    WHERE rarity = $1 AND type = 'weapon'
-                    LIMIT 1 OFFSET floor(random() * (
-                        SELECT COUNT(*) FROM items WHERE rarity = $1 AND type = 'weapon'
-                    ))::integer
-                `, [itemRarity]);
-                
-                foundItem = itemResult.rows[0] || null;
+
+                foundItem = await getRandomLootItem(client, itemRarity, locationData.id);
             }
             
             if (foundItem) {
                 const inventory = normalizeInventory(updatedPlayer.inventory);
-                
-                const newItem = {
-                    id: foundItem.id,
-                    name: foundItem.name,
-                    type: foundItem.type || 'misc',
-                    rarity: itemRarity,
-                    icon: foundItem.icon, // Добавляем icon в инвентарь
-                    damage: foundItem.damage || 0,
-                    defense: foundItem.defense || 0,
-                    upgrade_level: 0,
-                    modifications: {}
-                };
+                const newItem = buildInventoryItem(foundItem, itemRarity);
                 
                 inventory.push(newItem);
+                itemsCollected += 1;
+
+                // Бафф x2 к добыче дублирует обычный предмет, но не ключ.
+                if (activeBuffs.loot_x2 && newItem.type !== 'key') {
+                    inventory.push({ ...newItem });
+                    itemsCollected += 1;
+                }
+
                 inventoryUpdate = JSON.stringify(inventory);
                 
                 const baseExpReward = Math.floor(6 + (itemRarity === 'common' ? 0 : itemRarity === 'uncommon' ? 3 : itemRarity === 'rare' ? 7 : itemRarity === 'epic' ? 11 : 15));
                 expGained = Math.max(1, Math.floor(baseExpReward * riskProfile.expMultiplier));
+
+                if (activeBuffs.exp_x2) {
+                    expGained *= 2;
+                }
             }
         }
         
@@ -352,6 +430,10 @@ router.post('/search', async (req, res) => {
         if (expGained > 0) {
             params.push(expGained);
             setParts.push(`experience = experience + $${params.length}`);
+        }
+        if (itemsCollected > 0) {
+            params.push(itemsCollected);
+            setParts.push(`items_collected = COALESCE(items_collected, 0) + $${params.length}`);
         }
         
         params.push(playerId);

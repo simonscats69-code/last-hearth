@@ -90,6 +90,49 @@ function normalizeInfections(value) {
 }
 
 /**
+ * Нормализация активных баффов игрока
+ */
+function normalizePlayerBuffs(value) {
+    const parsed = safeParseJson(value, {});
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+/**
+ * Получить только активные баффы игрока
+ */
+function getActiveBuffs(value, now = Date.now()) {
+    const buffs = normalizePlayerBuffs(value);
+    const active = {};
+
+    for (const [effect, buffData] of Object.entries(buffs)) {
+        if (!buffData || typeof buffData !== 'object') continue;
+
+        const expiresAtRaw = buffData.expires_at || buffData.expiresAt || buffData.expires;
+        if (!expiresAtRaw) continue;
+
+        const expiresAt = typeof expiresAtRaw === 'number'
+            ? expiresAtRaw
+            : new Date(expiresAtRaw).getTime();
+
+        if (Number.isFinite(expiresAt) && expiresAt > now) {
+            active[effect] = {
+                ...buffData,
+                expires_at: new Date(expiresAt).toISOString()
+            };
+        }
+    }
+
+    return active;
+}
+
+/**
+ * Проверка активности конкретного баффа
+ */
+function isBuffActive(value, effect, now = Date.now()) {
+    return Boolean(getActiveBuffs(value, now)[effect]);
+}
+
+/**
  * Получить общий уровень инфекций
  */
 function getInfectionLevel(value) {
@@ -328,6 +371,15 @@ async function initAchievementsTable() {
         
         CREATE INDEX IF NOT EXISTS idx_achievements_player ON player_achievements(player_id);
     `);
+
+    // Совмещаем старую key-based систему достижений с новой таблицей из схемы БД.
+    await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS achievement_key VARCHAR(50)`);
+    await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS rewarded_at TIMESTAMP DEFAULT NOW()`);
+    await query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_player_achievements_player_key
+        ON player_achievements(player_id, achievement_key)
+        WHERE achievement_key IS NOT NULL
+    `);
 }
 
 // ==========================================
@@ -341,6 +393,9 @@ module.exports = {
     normalizeInventory,
     normalizeRadiation,
     normalizeInfections,
+    normalizePlayerBuffs,
+    getActiveBuffs,
+    isBuffActive,
     getInfectionLevel,
     buildPlayerStatus,
     

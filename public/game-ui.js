@@ -226,25 +226,26 @@ async function claimAchievement(achievementId) {
 async function loadPVPGamePlayers() {
     try {
         const result = await apiRequest('/api/game/pvp/players');
+        const payload = result?.data || result;
         
         const indicator = document.getElementById('pvp-zone-indicator');
         const list = document.getElementById('pvp-players-list');
         if (!indicator || !list) return;
         
-        if (result.available === false) {
-            indicator.innerHTML = `<div class="pvp-zone-safe">🛡️ ${result.message || 'PvP недоступно'}</div>`;
+        if (payload.available === false) {
+            indicator.innerHTML = `<div class="pvp-zone-safe">🛡️ ${payload.message || 'PvP недоступно'}</div>`;
             list.innerHTML = '<div class="empty-message">Перейдите в локацию с опасностью 6+ для PvP</div>';
             return;
         }
         
         indicator.innerHTML = '<div class="pvp-zone-danger">⚠️ КРАСНАЯ ЗОНА - PvP РАЗРЕШЕНО!</div>';
         
-        if (!result.players || result.players.length === 0) {
+        if (!payload.players || payload.players.length === 0) {
             list.innerHTML = '<div class="empty-message">Нет игроков для атаки</div>';
             return;
         }
         
-        list.innerHTML = result.players.map(player => `
+        list.innerHTML = payload.players.map(player => `
             <div class="pvp-player-item">
                 <div class="pvp-player-info">
                     <div class="pvp-player-name">${escapeHtml(player.username) || 'Игрок'}</div>
@@ -278,10 +279,11 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
             method: 'POST',
             body: { target_id: targetId }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
             gameState.pvpMatch = {
-                battleId: result.battle_id,
+                battleId: payload.battle_id,
                 targetId: targetId,
                 targetName: targetName,
                 targetLevel: targetLevel
@@ -315,7 +317,7 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
             showScreen('pvp-fight');
             playSound('attack');
         } else {
-            showModal('❌ Ошибка', result.error);
+            showModal('❌ Ошибка', result.error || result.message || 'Не удалось начать PvP бой');
         }
         
     } catch (error) {
@@ -338,24 +340,31 @@ async function attackPVPTarget() {
             method: 'POST',
             body: { battle_id: gameState.pvpMatch.battleId }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
             playSound('attack');
+
+            if (payload.energy_left !== undefined && gameState.player?.status) {
+                gameState.player.status.energy = payload.energy_left;
+                gameState.player.energy = payload.energy_left;
+                refreshPlayerEnergyUI?.();
+            }
             
-            if (result.battleEnded) {
-                handlePVPBattleEnd(result);
+            if (payload.battleEnded) {
+                handlePVPBattleEnd(payload);
             } else {
-                if (result.hit) {
+                if (payload.hit) {
                     updatePVPHealth(
                         'attacker',
-                        result.hit.yourHealth,
+                        payload.hit.yourHealth,
                         gameState.player?.status?.max_health || 100
                     );
-                    updatePVPHealth('defender', result.hit.targetHealth, result.hit.maxHealth);
+                    updatePVPHealth('defender', payload.hit.targetHealth, payload.hit.maxHealth);
                     
                     const log = document.getElementById('pvp-battle-log');
                     if (log) {
-                        log.innerHTML += `<p>${result.message}</p>`;
+                        log.innerHTML += `<p>${payload.message || 'Удар нанесён'}</p>`;
                         log.scrollTop = log.scrollHeight;
                     }
                 }
@@ -364,7 +373,7 @@ async function attackPVPTarget() {
             loadProfile();
             
         } else {
-            showModal('❌ Ошибка', result.error);
+            showModal('❌ Ошибка', result.error || result.message || 'Не удалось выполнить атаку');
         }
         
     } catch (error) {
@@ -447,9 +456,10 @@ async function claimPVPRewards() {
 async function loadPVPStats() {
     try {
         const result = await apiRequest('/api/game/pvp/stats');
+        const payload = result?.data || result;
         
-        if (result.success && result.stats) {
-            const stats = result.stats;
+        if (result.success && payload.stats) {
+            const stats = payload.stats;
             
             setElementText('pvp-rating-value', stats.rating || 1000);
             setElementText('pvp-wins', stats.wins || 0);
@@ -463,9 +473,9 @@ async function loadPVPStats() {
             
             // Кулдаун
             const cooldownDiv = document.getElementById('pvp-cooldown');
-            if (result.cooldown && result.cooldown.active && cooldownDiv) {
+            if (payload.cooldown && payload.cooldown.active && cooldownDiv) {
                 cooldownDiv.style.display = 'flex';
-                const expiresAt = new Date(result.cooldown.expiresAt);
+                const expiresAt = new Date(payload.cooldown.expiresAt);
                 const timerEl = document.getElementById('pvp-cooldown-timer');
                 
                 const updateTimer = () => {
@@ -498,8 +508,8 @@ async function loadPVPStats() {
             // Последние бои
             const matchesList = document.getElementById('pvp-recent-matches-list');
             if (matchesList) {
-                if (result.recentMatches && result.recentMatches.length > 0) {
-                    matchesList.innerHTML = result.recentMatches.map(m => {
+                if (payload.recentMatches && payload.recentMatches.length > 0) {
+                    matchesList.innerHTML = payload.recentMatches.map(m => {
                         const resultClass = m.result === 'win' ? 'win' : (m.result === 'loss' ? 'loss' : 'draw');
                         const resultIcon = m.result === 'win' ? '✅' : (m.result === 'loss' ? '❌' : '➖');
                         const date = new Date(m.date).toLocaleDateString();
@@ -638,7 +648,6 @@ function copyReferralCode() {
  * Изменение реферального кода
  */
 async function changeReferralCode() {
-    if (!lockAction('referral')) return;
     const newCodeInput = document.getElementById('new-referral-code');
     const newCode = newCodeInput?.value.trim().toUpperCase();
     
@@ -654,17 +663,20 @@ async function changeReferralCode() {
         showModal('❌ Ошибка', 'Код должен содержать только латинские буквы, цифры и подчёркивания');
         return;
     }
+
+    if (!lockAction('referral')) return;
     
     try {
         const result = await apiRequest('/api/game/player/referral/code', {
             method: 'PUT',
             body: { new_code: newCode }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
             const codeEl = document.getElementById('referral-code');
             const changeSection = document.getElementById('referral-change-section');
-            if (codeEl) codeEl.textContent = result.code;
+            if (codeEl) codeEl.textContent = payload.code;
             if (changeSection) changeSection.style.display = 'none';
             if (newCodeInput) newCodeInput.value = '';
             showModal('✅ Успех', 'Реферальный код изменён!');
@@ -683,7 +695,6 @@ async function changeReferralCode() {
  * Использование реферального кода
  */
 async function useReferralCode() {
-    if (!lockAction('referral')) return;
     const codeInput = document.getElementById('use-referral-code');
     const code = codeInput?.value.trim().toUpperCase();
     
@@ -695,17 +706,21 @@ async function useReferralCode() {
         showModal('❌ Ошибка', 'Код должен быть от 3 до 20 символов');
         return;
     }
+
+    if (!lockAction('referral')) return;
     
     try {
         const result = await apiRequest('/api/game/player/referral/use', {
             method: 'POST',
             body: { code: code }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
+            const bonus = payload.bonus || {};
             showModal(
                 '🎁 Бонус получен!',
-                `Ты получил: +${result.bonus.coins} монет, +${result.bonus.energy} Energy!`
+                `Ты получил: +${bonus.coins || 0} монет, +${bonus.energy || 0} Energy!`
             );
             if (codeInput) codeInput.value = '';
             loadProfile();
@@ -760,6 +775,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
     document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
     document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
+    document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
     document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
     document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
     document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));

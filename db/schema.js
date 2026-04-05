@@ -897,6 +897,7 @@ async function runMigrations() {
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_completed INTEGER DEFAULT 0`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referrals INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_collected INTEGER DEFAULT 0`);
 
     // Миграции для achievements
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);

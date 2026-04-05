@@ -233,6 +233,11 @@
                 <div class="bonus-pill">🛡️ Выживание: <span id="player-survival-preview">Стабильно</span></div>
             </section>
 
+            <section class="active-buffs-section" id="active-buffs-section" style="display: none;">
+                <div class="active-buffs-header">Активные усиления</div>
+                <div class="active-buffs-list" id="active-buffs-list"></div>
+            </section>
+
             <!-- Статусы персонажа -->
             <section class="status-section">
                 <div class="risk-summary-card" id="risk-summary-card" data-risk="safe">
@@ -463,7 +468,7 @@
                         <span class="btn-text">Атаковать</span>
                         <span class="btn-cost">-1 ⚡</span>
                     </button>
-                    <button class="action-btn weapon-btn" id="inventory-btn" data-screen="inventory">
+                    <button class="action-btn weapon-btn" id="boss-fight-inventory-btn" data-screen="inventory">
                         <span class="btn-icon">🎒</span>
                         <span class="btn-text">Инвентарь</span>
                     </button>
