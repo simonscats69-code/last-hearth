@@ -562,7 +562,7 @@ router.post('/move', async (req, res) => {
         }
         
         const targetLocation = await client.query(`
-            SELECT id, name, radiation, description, min_level, required_level 
+            SELECT id, name, radiation, description, min_level
             FROM locations WHERE id = $1
         `, [location_id]);
         
@@ -577,7 +577,7 @@ router.post('/move', async (req, res) => {
         
         const locationData = targetLocation.rows[0];
         
-        const requiredLevel = locationData.min_level || locationData.required_level || 1;
+        const requiredLevel = locationData.min_level || 1;
         if (player.level < requiredLevel) {
             await client.query('ROLLBACK');
             return res.json({
