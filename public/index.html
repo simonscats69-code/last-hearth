@@ -76,7 +76,7 @@
             console.error('[Global] Script Error:', event.message, 'at', event.filename + ':' + event.lineno);
         });
         
-        console.log('[index.html] Страница загружена, версия: 7');
+        console.log('[index.html] Страница загружена, версия: 11');
     </script>
     
     <!-- Предподключение для внешних ресурсов -->
@@ -84,7 +84,7 @@
     <link rel="preconnect" href="https://adsgram.app">
     
     <!-- Основные стили -->
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
     <div id="app">
@@ -897,8 +897,6 @@
         <div id="adsgram-container"></div>
     </div>
 
-    <!-- Telegram Web App SDK -->
-    <script src="https://telegram.org/js/telegram-web-app.js" async></script>
     <!-- AdsGram SDK (с проверкой загрузки) -->
     <script>
         // Проверка загрузки AdsGram
@@ -918,14 +916,14 @@
         });
     </script>
     <!-- Модули игры (в правильном порядке) -->
-    <script src="game-utils.js?v=10" defer></script>
-    <script src="game-api.js?v=10" defer></script>
+    <script src="game-utils.js?v=11" defer></script>
+    <script src="game-api.js?v=11" defer></script>
     <!-- Основной скрипт игры (разбит на 3 модуля) - должны загружаться до game-screens.js -->
-    <script src="game-core.js?v=10" defer></script>
-    <script src="game-systems.js?v=10" defer></script>
-    <script src="game-ui.js?v=10" defer></script>
-    <script src="game-store.js?v=10" defer></script>
-    <script src="game-visualEffects.js?v=10" defer></script>
-    <script src="game-animations.js?v=10" defer></script>
+    <script src="game-core.js?v=11" defer></script>
+    <script src="game-systems.js?v=11" defer></script>
+    <script src="game-ui.js?v=11" defer></script>
+    <script src="game-store.js?v=11" defer></script>
+    <script src="game-visualEffects.js?v=11" defer></script>
+    <script src="game-animations.js?v=11" defer></script>
 </body>
 </html>

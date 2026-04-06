@@ -4,19 +4,19 @@
  * Улучшенная версия с защитой от ошибок переподключения
  */
 
-const CACHE_NAME = 'last-hearth-v5';
+const CACHE_NAME = 'last-hearth-v11';
 const STATIC_ASSETS = [
     '/',
     '/index.html',
-    '/styles.css',
-    '/game-core.js',
-    '/game-systems.js',
-    '/game-ui.js',
-    '/game-api.js',
-    '/game-utils.js',
-    '/game-store.js',
-    '/game-animations.js',
-    '/game-visualEffects.js'
+    '/styles.css?v=11',
+    '/game-core.js?v=11',
+    '/game-systems.js?v=11',
+    '/game-ui.js?v=11',
+    '/game-api.js?v=11',
+    '/game-utils.js?v=11',
+    '/game-store.js?v=11',
+    '/game-animations.js?v=11',
+    '/game-visualEffects.js?v=11'
 ];
 
 // Максимальное количество попыток переподключения
@@ -155,12 +155,4 @@ self.addEventListener('fetch', (event) => {
 // Обработка ошибок
 self.addEventListener('error', (event) => {
     console.error('[SW] Ошибка:', event.message);
-});
-
-self.addEventListener('install', (event) => {
-    console.log('[SW] Установлен');
-});
-
-self.addEventListener('activate', (event) => {
-    console.log('[SW] Активирован');
 });
