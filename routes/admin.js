@@ -46,7 +46,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
         
         // Активные игроки за последние 24 часа
         const activeResult = await query(
-            "SELECT COUNT(*) as count FROM players WHERE last_active > NOW() - INTERVAL '24 hours'"
+            "SELECT COUNT(*) as count FROM players WHERE last_action_time > NOW() - INTERVAL '24 hours'"
         );
         stats.activePlayers24h = parseInt(activeResult.rows[0].count, 10);
         
@@ -76,7 +76,7 @@ router.get('/player/:telegramId', requireAdmin, async (req, res) => {
         const result = await query(
             `SELECT telegram_id, username, level, strength, endurance, agility, 
                     intelligence, luck, health, radiation,
-                    energy, max_energy, experience, created_at, last_active
+                    energy, max_energy, experience, created_at, last_action_time
              FROM players WHERE telegram_id = $1`,
             [telegramId]
         );
@@ -255,7 +255,7 @@ router.post('/player/:telegramId/unban', requireAdmin, async (req, res) => {
 router.get('/banned', requireAdmin, async (req, res) => {
     try {
         const result = await query(
-            "SELECT telegram_id, username, ban_reason, last_active FROM players WHERE banned = true"
+            "SELECT telegram_id, username, ban_reason, last_action_time FROM players WHERE banned = true"
         );
         
         res.json({ success: true, players: result.rows });

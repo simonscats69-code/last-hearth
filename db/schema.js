@@ -35,6 +35,8 @@ async function createTables() {
             equipment JSONB DEFAULT '{}',
             coins INTEGER DEFAULT 0,
             stars INTEGER DEFAULT 0,
+            banned BOOLEAN DEFAULT false,
+            ban_reason TEXT,
             clan_id INTEGER,
             clan_role VARCHAR(50) DEFAULT 'member',
             total_actions INTEGER DEFAULT 0,
@@ -898,6 +900,8 @@ async function runMigrations() {
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referrals INTEGER DEFAULT 0`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_collected INTEGER DEFAULT 0`);
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT false`);
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS ban_reason TEXT`);
 
     // Миграции для achievements
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);

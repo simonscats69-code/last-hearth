@@ -113,7 +113,7 @@ async function checkDailyActivity() {
         const resetResult = await query(`
             UPDATE players 
             SET daily_streak = 0
-            WHERE last_active < NOW() - INTERVAL '2 days'
+            WHERE last_action_time < NOW() - INTERVAL '2 days'
             AND daily_streak > 0
             RETURNING id
         `);
@@ -129,8 +129,8 @@ async function checkDailyActivity() {
         await query(`
             UPDATE players 
             SET daily_streak = LEAST(365, daily_streak + 1)
-            WHERE last_active > NOW() - INTERVAL '20 hours'
-            AND last_active < NOW() - INTERVAL '4 hours'
+            WHERE last_action_time > NOW() - INTERVAL '20 hours'
+            AND last_action_time < NOW() - INTERVAL '4 hours'
         `);
         
         const duration = Date.now() - startTime;
@@ -277,7 +277,7 @@ async function checkAllAchievements() {
                 SELECT id, level, bosses_killed, pvp_wins, items_collected,
                        daily_streak, referrals
                 FROM players 
-                WHERE last_active > NOW() - INTERVAL '24 hours'
+                WHERE last_action_time > NOW() - INTERVAL '24 hours'
                 ORDER BY id
                 LIMIT $1 OFFSET $2
             `, [BATCH_SIZE, achievementsOffset]);

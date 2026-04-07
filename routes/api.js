@@ -62,10 +62,15 @@ async function getAchievementRuntimeContext(playerId, client = null) {
         'SELECT COUNT(DISTINCT boss_id) as total FROM boss_mastery WHERE player_id = $1 AND kills > 0',
         [playerId]
     );
+    const maxSingleBossKills = await queryOneFn(
+        'SELECT COALESCE(MAX(kills), 0) as total FROM boss_mastery WHERE player_id = $1',
+        [playerId]
+    );
 
     return {
         totalBosses: Number(bossCount?.total || 0),
-        defeatedBosses: Number(defeatedBosses?.total || 0)
+        defeatedBosses: Number(defeatedBosses?.total || 0),
+        maxSingleBossKills: Number(maxSingleBossKills?.total || 0)
     };
 }
 
@@ -78,8 +83,9 @@ function getAchievementCurrentValue(condition, player, runtimeContext) {
         case 'bosses_killed':
         case 'boss_kills':
         case 'first_boss_kill':
-        case 'single_boss_kills':
             return player.bosses_killed || 0;
+        case 'single_boss_kills':
+            return runtimeContext.maxSingleBossKills;
         case 'all_bosses_killed':
             return runtimeContext.defeatedBosses;
         case 'pvp_wins':

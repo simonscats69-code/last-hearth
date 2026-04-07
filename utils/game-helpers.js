@@ -229,9 +229,9 @@ async function checkAchievements(playerId, stats) {
             
             if (value >= ach.req) {
                 // Выдаём достижение и награду в транзакции
-                await tx(async () => {
+                await tx(async (client) => {
                     // Проверяем ещё раз, чтобы избежать дубликатов
-                    const existing = await query(
+                    const existing = await client.query(
                         'SELECT id FROM player_achievements WHERE player_id = $1 AND achievement_key = $2',
                         [playerId, key]
                     );
@@ -241,7 +241,7 @@ async function checkAchievements(playerId, stats) {
                     }
                     
                     // Выдаём достижение
-                    await query(
+                    await client.query(
                         `INSERT INTO player_achievements (player_id, achievement_key, rewarded_at) 
                          VALUES ($1, $2, NOW())`,
                         [playerId, key]
@@ -249,7 +249,7 @@ async function checkAchievements(playerId, stats) {
                     
                     // Начисляем награду
                     if (ach.reward > 0) {
-                        await query(
+                        await client.query(
                             'UPDATE players SET stars = stars + $1 WHERE id = $2',
                             [ach.reward, playerId]
                         );
@@ -285,7 +285,7 @@ async function checkAchievements(playerId, stats) {
 async function getPlayerAchievements(playerId) {
     try {
         const ownedResult = await query(
-            'SELECT achievement_key, rewarded_at FROM player_achievements WHERE player_id = $1',
+            'SELECT achievement_key, rewarded_at FROM player_achievements WHERE player_id = $1 AND achievement_key IS NOT NULL',
             [playerId]
         );
         const owned = new Map(ownedResult.rows.map(r => [r.achievement_key, r.rewarded_at]));

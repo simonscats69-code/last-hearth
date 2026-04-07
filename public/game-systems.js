@@ -917,19 +917,27 @@ async function updateProfileUI(player) {
     
     // Статусы
     const radiationValue = document.getElementById('radiation-value');
+    const infectionValue = document.getElementById('infection-value');
     if (radiationValue) radiationValue.textContent = status.radiation || 0;
+    if (infectionValue) infectionValue.textContent = status.infections || 0;
     
     const coinsValue = document.getElementById('coins-value');
     if (coinsValue) coinsValue.textContent = player.coins || 0;
     
     // Локация
     if (player.location) {
+        const locationIcon = document.getElementById('location-icon');
         const locationName = document.getElementById('location-name');
+        const locationDesc = document.getElementById('location-desc');
         const locationRadiation = document.getElementById('location-radiation');
         const locationInfection = document.getElementById('location-infection');
+        const locationDanger = document.getElementById('location-danger');
+        if (locationIcon) locationIcon.textContent = player.location.icon || '🏠';
         if (locationName) locationName.textContent = player.location.name;
+        if (locationDesc) locationDesc.textContent = player.location.description || 'Описание локации недоступно';
         if (locationRadiation) locationRadiation.textContent = player.location.radiation;
         if (locationInfection) locationInfection.textContent = player.location.infection || 0;
+        if (locationDanger) locationDanger.textContent = player.location.danger_level || 1;
     }
     
     // Звёзды
@@ -941,6 +949,11 @@ async function updateProfileUI(player) {
     if (invCoins) invCoins.textContent = player.coins || 0;
     if (mainStars) mainStars.textContent = player.stars || 0;
     if (mainCoins) mainCoins.textContent = player.coins || 0;
+
+    const searchBtnCost = document.querySelector('#search-btn .btn-cost');
+    if (searchBtnCost) {
+        searchBtnCost.textContent = player?.buffs?.free_energy ? 'Бесплатно' : '-1 ⚡';
+    }
 
     renderActiveBuffs(player.buffs || gameState.buffs || {});
     
@@ -998,12 +1011,14 @@ function renderActiveBuffs(buffs = {}) {
 function updateConditionsUI(status) {
     const conditionsGrid = document.getElementById('conditions-grid');
     const infectionsDisplay = document.getElementById('infections-display');
+    const infectionValue = document.getElementById('infection-value');
     const healActions = document.getElementById('heal-actions');
     const healInfectionsBtn = document.getElementById('heal-infections-btn');
     
     if (!conditionsGrid) return;
     
     const infections = status.infections || 0;
+    if (infectionValue) infectionValue.textContent = infections;
     
     // Показываем/скрываем секцию состояний
     if (infections > 0) {
@@ -1025,7 +1040,7 @@ function updateConditionsUI(status) {
             // Обновляем эффект
             const effect = document.getElementById('infection-effect');
             if (effect) {
-                effect.textContent = `-${infections * 10}% XP`;
+                effect.textContent = `Ослабление: ур. ${infections}`;
             }
             if (healInfectionsBtn) healInfectionsBtn.style.display = 'flex';
         } else {
