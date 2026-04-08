@@ -562,7 +562,7 @@ router.post('/move', async (req, res) => {
         }
         
         const targetLocation = await client.query(`
-            SELECT id, name, radiation, description, min_level
+            SELECT id, name, radiation, infection, description, min_level, danger_level, icon
             FROM locations WHERE id = $1
         `, [location_id]);
         
@@ -607,7 +607,10 @@ router.post('/move', async (req, res) => {
                 location: {
                     id: locationData.id,
                     name: locationData.name,
+                    icon: locationData.icon || '🏠',
                     radiation: locationData.radiation,
+                    infection: locationData.infection || 0,
+                    danger_level: locationData.danger_level || 1,
                     description: locationData.description
                 },
                 message: `Вы прибыли в ${locationData.name}`

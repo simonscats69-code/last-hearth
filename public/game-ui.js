@@ -259,11 +259,29 @@ async function loadPVPGamePlayers() {
                         <span>Серия: ${player.pvp_streak || 0}</span>
                     </div>
                 </div>
-                <button class="pvp-attack-player-btn" onclick="startPVPFight(${player.id}, '${escapeHtml(player.username) || 'Игрок'}', ${player.level}, ${player.health}, ${player.max_health})">
+                <button
+                    class="pvp-attack-player-btn"
+                    data-target-id="${player.id}"
+                    data-target-name="${escapeHtml(player.username) || 'Игрок'}"
+                    data-target-level="${player.level}"
+                    data-target-health="${player.health}"
+                    data-target-max-health="${player.max_health}">
                     ⚔️ Атаковать
                 </button>
             </div>
         `).join('');
+
+        list.querySelectorAll('.pvp-attack-player-btn').forEach((button) => {
+            button.addEventListener('click', () => {
+                startPVPFight(
+                    Number(button.dataset.targetId),
+                    button.dataset.targetName || 'Игрок',
+                    Number(button.dataset.targetLevel || 1),
+                    Number(button.dataset.targetHealth || 0),
+                    Number(button.dataset.targetMaxHealth || 100)
+                );
+            });
+        });
         
     } catch (error) {
         console.error('Ошибка загрузки PvP игроков:', error);
@@ -310,10 +328,16 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
             if (battleLog) {
                 battleLog.innerHTML = `
                     <p>⚔️ Бой начат против ${escapeHtml(targetName)}!</p>
-                    <p>Каждый удар тратит 1 энергию</p>
+                    <p>${gameState.buffs?.free_energy ? 'Атаки бесплатны благодаря активному баффу' : 'Каждый удар тратит 1 энергию'}</p>
                 `;
             }
-            
+
+            const attackBtn = document.getElementById('pvp-attack-btn');
+            if (attackBtn) {
+                attackBtn.disabled = false;
+                attackBtn.textContent = gameState.buffs?.free_energy ? '👊 АТАКОВАТЬ БЕСПЛАТНО' : '👊 АТАКОВАТЬ';
+            }
+             
             showScreen('pvp-fight');
             playSound('attack');
         } else {
@@ -335,6 +359,12 @@ async function attackPVPTarget() {
         return;
     }
     
+    const attackBtn = document.getElementById('pvp-attack-btn');
+    if (attackBtn) {
+        attackBtn.disabled = true;
+        attackBtn.textContent = '⏳ АТАКА...';
+    }
+
     try {
         const result = await apiRequest('/api/game/pvp/attack-hit', {
             method: 'POST',
@@ -378,6 +408,11 @@ async function attackPVPTarget() {
         
     } catch (error) {
         console.error('Ошибка атаки в PvP:', error);
+    } finally {
+        if (attackBtn) {
+            attackBtn.disabled = false;
+            attackBtn.textContent = gameState.buffs?.free_energy ? '👊 АТАКОВАТЬ БЕСПЛАТНО' : '👊 АТАКОВАТЬ';
+        }
     }
 }
 
@@ -414,7 +449,7 @@ function handlePVPBattleEnd(result) {
             rewardsContent.innerHTML = `
                 <div class="reward-item">💰 +${result.rewards?.coins || 0} монет</div>
                 <div class="reward-item">📦 ${result.rewards?.item ? 'Получен предмет' : 'Без предмета'}</div>
-                <div class="reward-item">⭐ +50 опыта</div>
+                <div class="reward-item">⭐ +${result.rewards?.experience || 0} опыта</div>
             `;
         }
         playSound('loot');
@@ -775,7 +810,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
     document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
     document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
-    document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
+    document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => openWeaponSelect());
     document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
     document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
     document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));

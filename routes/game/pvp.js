@@ -194,6 +194,10 @@ router.post('/attack', async (req, res) => {
             return fail(res, 'Укажите корректный ID цели (число > 0)', 'INVALID_TARGET_ID');
         }
 
+        if (target_id === playerId) {
+            return fail(res, 'Нельзя атаковать самого себя', 'SELF_TARGET');
+        }
+
         // Выполняем атаку в транзакции с блокировкой обоих игроков
         const result = await transaction(async (client) => {
             // Блокируем обоих игроков в порядке возрастания ID для предотвращения deadlock
@@ -228,6 +232,59 @@ router.post('/attack', async (req, res) => {
 
             if (targetPlayer.current_location_id !== lockedPlayer.current_location_id) {
                 throw new Error('Игрок не на этой локации');
+            }
+
+            if (Number(targetPlayer.health || 0) <= 0) {
+                throw new Error('Противник уже мертв');
+            }
+
+            const attackerProtected = await pvp.isProtectedFromPVP(playerId);
+            if (attackerProtected) {
+                throw new Error('Игроки ниже 5 уровня не могут участвовать в PvP');
+            }
+
+            const targetProtected = await pvp.isProtectedFromPVP(target_id);
+            if (targetProtected) {
+                throw new Error('Цель защищена от PvP до 5 уровня');
+            }
+
+            const attackerCooldownResult = await client.query(
+                `SELECT expires_at
+                 FROM pvp_cooldowns
+                 WHERE player_id = $1 AND cooldown_type = 'pvp_battle' AND expires_at > NOW()
+                 ORDER BY expires_at DESC
+                 LIMIT 1`,
+                [playerId]
+            );
+
+            if (attackerCooldownResult.rows[0]) {
+                throw new Error('COOLDOWN: Подождите перед следующим PvP боем');
+            }
+
+            const targetCooldownResult = await client.query(
+                `SELECT expires_at
+                 FROM pvp_cooldowns
+                 WHERE player_id = $1 AND cooldown_type = 'pvp_battle' AND expires_at > NOW()
+                 ORDER BY expires_at DESC
+                 LIMIT 1`,
+                [target_id]
+            );
+
+            if (targetCooldownResult.rows[0]) {
+                throw new Error('COOLDOWN: Противник временно защищён от PvP');
+            }
+
+            const existingBattleResult = await client.query(
+                `SELECT id, attacker_id, defender_id
+                 FROM pvp_battles
+                 WHERE status = 'active'
+                   AND (attacker_id = $1 OR defender_id = $1 OR attacker_id = $2 OR defender_id = $2)
+                 LIMIT 1`,
+                [playerId, target_id]
+            );
+
+            if (existingBattleResult.rows[0]) {
+                throw new Error('Один из игроков уже находится в активном PvP бою');
             }
 
             const startBuffs = getActiveBuffs(lockedPlayer.buffs);
@@ -531,7 +588,8 @@ router.post('/attack-hit', async (req, res) => {
 
                 rewards = {
                     coins: coinsReward,
-                    item: stolenItem
+                    item: stolenItem,
+                    experience: pvpExpReward
                 };
                 winner = { id: attackerId };
                 loser = { id: defenderId };

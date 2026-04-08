@@ -603,6 +603,7 @@ router.get('/', async (req, res) => {
             data: {
                 bosses: bossList,
                 raids: raids.raids,
+                participating_raid_ids: raids.participatingIds,
                 participating_boss_ids: raids.participatingIds,
                 player_energy: player.energy,
                 player_max_energy: player.max_energy,
@@ -1034,6 +1035,7 @@ router.get('/raids', async (req, res) => {
             success: true,
             data: {
                 raids: raids.raids,
+                participating_raid_ids: raids.participatingIds,
                 participating_boss_ids: raids.participatingIds
             }
         });

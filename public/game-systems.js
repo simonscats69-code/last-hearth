@@ -1139,6 +1139,7 @@ async function searchLoot() {
                 if (!gameState.player.status) gameState.player.status = {};
                 const currentInfections = Number(gameState.player.status.infections || 0);
                 gameState.player.status.infections = Math.max(0, currentInfections + Number(result.infection.gained || 0));
+                updateConditionsUI(gameState.player.status);
             }
 
             if (result.risk_profile) {
@@ -1392,7 +1393,7 @@ async function loadBosses() {
 
         gameState.bosses = Array.isArray(data?.bosses) ? data.bosses : [];
         gameState.raids = Array.isArray(data?.raids) ? data.raids : [];
-        gameState.raidsParticipating = data?.participating_boss_ids || [];
+        gameState.raidsParticipating = data?.participating_raid_ids || data?.participating_boss_ids || [];
         gameState.bossesInfo = data?.info || null;
         gameState.activeBattle = data?.active_battle || null;
 
@@ -1601,6 +1602,7 @@ async function startMassBossFight(bossId) {
 function startBossFight(boss, timeRemainingMs = null) {
     gameState.currentBoss = boss;
     gameState.bossFightEndTime = timeRemainingMs ? Date.now() + timeRemainingMs : null;
+    const isFreeAttack = Boolean(gameState.buffs?.free_energy);
     
     const bossName = document.getElementById('boss-name');
     const bossIcon = document.getElementById('boss-icon');
@@ -1624,7 +1626,7 @@ function startBossFight(boss, timeRemainingMs = null) {
     if (fightLog) {
         fightLog.innerHTML = `
             <p class="fight-start">🎯 Бой с <strong>${escapeHtml(boss.name)}</strong> начался!</p>
-            <p>1 удар = 1 энергия. Бой длится 8 часов.</p>
+            <p>${isFreeAttack ? 'Бафф активен: атаки не тратят энергию.' : '1 удар = 1 энергия.'} Бой длится 8 часов.</p>
         `;
     }
     
@@ -1644,7 +1646,7 @@ function startBossFight(boss, timeRemainingMs = null) {
     
     if (attackSingleBtn) {
         attackSingleBtn.style.display = 'inline-flex';
-        attackSingleBtn.textContent = '⚔️ Атаковать (1 ⚡)';
+        attackSingleBtn.textContent = isFreeAttack ? '⚔️ Атаковать (бесплатно)' : '⚔️ Атаковать (1 ⚡)';
     }
     
     // Скрываем прогресс
@@ -1752,7 +1754,8 @@ async function attackWithWeapon(itemIndex) {
     actionLocks.attackBoss = true;
     
     const status = gameState.player?.status;
-    if (!status || status.energy < 1) {
+    const isFreeAttack = Boolean(gameState.buffs?.free_energy);
+    if (!status || (!isFreeAttack && status.energy < 1)) {
         showModal('⚠️ Нет энергии', 'Подожди пока восстановится или купи за звёзды');
         actionLocks.attackBoss = false;
         return;
@@ -1785,9 +1788,21 @@ async function attackWithWeapon(itemIndex) {
             const bossHealthText = document.getElementById('boss-health-text');
             if (bossHealthBar) bossHealthBar.style.width = `${hpPercent}%`;
             if (bossHealthText) bossHealthText.textContent = `${result.data.boss_hp}/${result.data.boss_max_hp}`;
-            
+
+            gameState.currentBoss.hp = result.data.boss_hp;
+            gameState.currentBoss.max_hp = result.data.boss_max_hp;
+            gameState.currentBoss.health = result.data.boss_hp;
+            gameState.currentBoss.max_health = result.data.boss_max_hp;
+             
             syncPlayerEnergyState(result.data.energy, gameState.player?.status?.max_energy);
             refreshPlayerEnergyUI();
+
+            const attackBtn = document.getElementById('attack-boss-btn');
+            if (attackBtn) {
+                attackBtn.textContent = Boolean(gameState.buffs?.free_energy)
+                    ? '⚔️ Атаковать (бесплатно)'
+                    : '⚔️ Атаковать (1 ⚡)';
+            }
             
             if (result.data.killed) {
                 showVictoryFlash?.();
@@ -1833,7 +1848,8 @@ async function attackBoss() {
     
     // Проверка энергии
     const status = gameState.player?.status;
-    if (!status || status.energy < 1) {
+    const isFreeAttack = Boolean(gameState.buffs?.free_energy);
+    if (!status || (!isFreeAttack && status.energy < 1)) {
         showModal('⚠️ Нет энергии', 'Подожди пока восстановится или купи за звёзды');
         actionLocks.attackBoss = false;
         return;
@@ -1880,7 +1896,7 @@ async function attackBoss() {
             refreshPlayerEnergyUI();
 
             if (energyUsed) {
-                energyUsed.textContent = '-1';
+                energyUsed.textContent = isFreeAttack ? '0' : '-1';
                 energyUsed.classList.add('show');
                 setTimeout(() => energyUsed.classList.remove('show'), 500);
             }
@@ -1888,6 +1904,8 @@ async function attackBoss() {
             // Сохраняем текущее HP в state
             gameState.currentBoss.health = result.boss_hp;
             gameState.currentBoss.max_health = result.boss_max_hp;
+            gameState.currentBoss.hp = result.boss_hp;
+            gameState.currentBoss.max_hp = result.boss_max_hp;
             
             // Проверка на победу
             if (result.boss_defeated) {
@@ -1931,7 +1949,9 @@ async function attackBoss() {
     } finally {
         if (btn) {
             btn.disabled = false;
-            btn.textContent = '⚔️ Атаковать (1 ⚡)';
+            btn.textContent = Boolean(gameState.buffs?.free_energy)
+                ? '⚔️ Атаковать (бесплатно)'
+                : '⚔️ Атаковать (1 ⚡)';
         }
         actionLocks.attackBoss = false;
     }
@@ -2674,7 +2694,7 @@ async function loadRaids() {
         const response = await apiRequest('/api/game/bosses/raids');
         const data = response?.data || response;
         gameState.raids = data.raids || [];
-        gameState.raidsParticipating = data.participating_boss_ids || [];
+        gameState.raidsParticipating = data.participating_raid_ids || data.participating_boss_ids || [];
         return data;
     } catch (error) {
         console.error('Ошибка загрузки рейдов:', error);
@@ -2697,7 +2717,7 @@ function renderRaids(raids) {
     container.innerHTML = raids.map(raid => {
         const hpPercent = raid.hp_percent || 0;
         const timeRemaining = formatTimeRemaining(raid.time_remaining_ms);
-        const isParticipating = gameState.raidsParticipating?.includes(raid.boss.id);
+        const isParticipating = gameState.raidsParticipating?.includes(raid.id);
         
         return `
             <div class="raid-item" data-raid-id="${raid.id}" data-boss-id="${raid.boss.id}">
@@ -2743,10 +2763,11 @@ async function joinRaid(raidId) {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/join`, {
             method: 'POST'
         });
+        const payload = result?.data || result;
         
         if (result.success) {
-            showNotification('Вы присоединились к рейду!', 'success');
-            
+            showNotification(`Вы присоединились к рейду против ${payload?.boss?.name || 'босса'}!`, 'success');
+             
             // Обновляем список рейдов
             await loadRaids();
             renderRaids(gameState.raids);
@@ -2792,6 +2813,8 @@ async function attackRaid(raidId) {
                     showKeyAnimation?.();
                 }
                 showBossVictorySummary?.('Рейдовый босс', data.rewards || {}, null);
+            } else if (typeof data.your_total_damage === 'number') {
+                showNotification(`Урон нанесён. Ваш вклад: ${data.your_total_damage}`, 'success');
             }
         } else {
             showNotification(result.error || 'Ошибка атаки', 'error');

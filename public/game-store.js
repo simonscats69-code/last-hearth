@@ -43,6 +43,18 @@ function openShop() {
     renderShopCategory('buffs');
 }
 
+function formatMinutesRemaining(ms) {
+    const totalMinutes = Math.max(1, Math.ceil(Number(ms || 0) / 60000));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours > 0) {
+        return `${hours}ч ${minutes}м`;
+    }
+
+    return `${minutes}м`;
+}
+
 /**
  * Отрисовка категории магазина
  * @param {string} category - категория (buffs/minigames/cosmetics)
@@ -67,6 +79,16 @@ function renderShopCategory(category) {
         const priceText = item.currency === 'free' ? 'Бесплатно' : 
                           item.currency === 'stars' ? `⭐ ${item.price}` : 
                           `💰 ${item.price}`;
+        const isOwnedCosmetic = category === 'cosmetics' && Array.isArray(gameState.player?.cosmetics) && gameState.player.cosmetics.includes(item.effect);
+        const isActiveBuff = category === 'buffs' && hasBuff(item.effect);
+        const isUnavailable = isOwnedCosmetic || isActiveBuff;
+        const buttonLabel = item.type === 'game'
+            ? 'Играть'
+            : isOwnedCosmetic
+                ? 'Куплено'
+                : isActiveBuff
+                    ? 'Активно'
+                    : 'Купить';
         
         return `
             <div class="shop-item" data-item-id="${item.id}">
@@ -76,8 +98,8 @@ function renderShopCategory(category) {
                     <div class="shop-item-desc">${item.desc}</div>
                 </div>
                 <div class="shop-item-price">${priceText}</div>
-                <button class="shop-buy-btn" ${item.price === 0 && item.currency !== 'free' ? 'disabled' : ''}>
-                    ${item.type === 'game' ? 'Играть' : 'Купить'}
+                <button class="shop-buy-btn" ${(item.price === 0 && item.currency !== 'free') || isUnavailable ? 'disabled' : ''}>
+                    ${buttonLabel}
                 </button>
             </div>
         `;
@@ -174,8 +196,10 @@ async function buyShopItem(itemId, category) {
  */
 function applyBuff(buff) {
     gameState.buffs = gameState.buffs || {};
+    const expiresAt = Date.now() + (buff.duration * 1000);
     gameState.buffs[buff.effect] = {
-        expires: Date.now() + (buff.duration * 1000)
+        expires: expiresAt,
+        expires_at: new Date(expiresAt).toISOString()
     };
     
     showNotification(`⚡ ${buff.name} активирован!`, 'success');
@@ -195,7 +219,8 @@ function checkActiveBuffs() {
     
     const now = Date.now();
     for (const [effect, data] of Object.entries(gameState.buffs)) {
-        if (data.expires && now >= data.expires) {
+        const expiresAt = data?.expires || new Date(data?.expires_at || 0).getTime();
+        if (Number.isFinite(expiresAt) && expiresAt > 0 && now >= expiresAt) {
             delete gameState.buffs[effect];
         }
     }
@@ -207,7 +232,16 @@ function checkActiveBuffs() {
  * @returns {boolean} активен ли бафф
  */
 function hasBuff(effect) {
-    return gameState.buffs?.[effect] !== undefined;
+    if (!gameState.buffs?.[effect]) return false;
+
+    const data = gameState.buffs[effect];
+    const expiresAt = data?.expires || new Date(data?.expires_at || 0).getTime();
+    if (Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() >= expiresAt) {
+        delete gameState.buffs[effect];
+        return false;
+    }
+
+    return true;
 }
 
 // ============================================
@@ -228,6 +262,52 @@ const WHEEL_PRIZES = [
  */
 function openWheel() {
     showScreen('wheel');
+    loadWheelInfo();
+}
+
+async function loadWheelInfo() {
+    const freeBtn = document.getElementById('wheel-free-btn');
+    const paidBtn = document.getElementById('wheel-paid-btn');
+    const freeInfo = document.getElementById('wheel-free-info');
+    const paidInfo = document.getElementById('wheel-paid-info');
+
+    if (freeBtn) freeBtn.disabled = true;
+    if (paidBtn) paidBtn.disabled = true;
+
+    try {
+        const response = await gameApi.get('/game/wheel');
+        const payload = response?.data || response;
+        const canSpinFree = Boolean(payload.can_spin_free);
+        const nextFreeSpin = Number(payload.next_free_spin || 0);
+
+        if (freeBtn) {
+            freeBtn.disabled = !canSpinFree;
+            freeBtn.textContent = canSpinFree
+                ? '🎡 Бесплатно'
+                : `⏳ ${formatMinutesRemaining(nextFreeSpin)}`;
+        }
+
+        if (paidBtn) {
+            const stars = Number(gameState.player?.stars || 0);
+            paidBtn.disabled = stars < 1;
+            paidBtn.textContent = stars < 1 ? '⭐ Нужен 1 Star' : '⭐ За 1 Star';
+        }
+
+        if (freeInfo) {
+            freeInfo.textContent = canSpinFree
+                ? 'Бесплатное вращение доступно прямо сейчас.'
+                : `Следующее бесплатное вращение через ${formatMinutesRemaining(nextFreeSpin)}.`;
+        }
+
+        if (paidInfo) {
+            paidInfo.textContent = `Платное вращение доступно всегда. Stars: ${Number(gameState.player?.stars || 0)}.`;
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки информации о колесе:', error);
+        if (freeBtn) freeBtn.disabled = false;
+        if (paidBtn) paidBtn.disabled = false;
+        if (freeInfo) freeInfo.textContent = 'Не удалось получить состояние колеса.';
+    }
 }
 
 /**
@@ -290,6 +370,12 @@ async function spinWheelPaid() {
  */
 function spinWheelAnimation(prize, isPaid) {
     const wheel = document.getElementById('wheel');
+    const freeBtn = document.getElementById('wheel-free-btn');
+    const paidBtn = document.getElementById('wheel-paid-btn');
+    if (!wheel) return;
+
+    if (freeBtn) freeBtn.disabled = true;
+    if (paidBtn) paidBtn.disabled = true;
     
     // Анимация
     const rotations = 5 + Math.random() * 5;
@@ -301,8 +387,6 @@ function spinWheelAnimation(prize, isPaid) {
     
     setTimeout(() => {
         // Выдача приза
-        const player = gameState.player;
-        
         if (prize.type === 'coins') {
             showModal('🎉 Выигрыш!', `Выпало: ${prize.text}`, 'success');
         } else if (prize.type === 'multiplier') {
@@ -314,8 +398,10 @@ function spinWheelAnimation(prize, isPaid) {
         showConfetti(80);
         
         // Обновляем данные игрока после вращения
-        // Вызываем status/check для получения актуальных данных
-        gameApi.post('/game/status/check', {}).catch(e => console.error('Failed to update player:', e));
+        if (typeof loadProfile === 'function') {
+            loadProfile().catch(e => console.error('Failed to update player:', e));
+        }
+        loadWheelInfo().catch(e => console.error('Не удалось обновить состояние колеса:', e));
         
         // Сброс колеса
         setTimeout(() => {
@@ -475,7 +561,7 @@ async function buyCoinItem(itemId) {
             
             // Обновляем баланс
             if (gameState.player) {
-                gameState.player.coins = (gameState.player.coins || 0) - price;
+                gameState.player.coins = Number(response.remaining_coins ?? ((gameState.player.coins || 0) - price));
                 const balanceEl = document.getElementById('shop-coins-balance');
                 if (balanceEl) {
                     balanceEl.textContent = formatNumber(gameState.player.coins);
@@ -485,6 +571,9 @@ async function buyCoinItem(itemId) {
             // Перезагружаем инвентарь
             if (typeof loadInventory === 'function') {
                 loadInventory();
+            }
+            if (typeof loadProfile === 'function') {
+                loadProfile().catch(error => console.error('Не удалось обновить профиль после покупки за монеты:', error));
             }
         } else {
             showModal('❌ Ошибка', response.error || 'Не удалось купить предмет');
