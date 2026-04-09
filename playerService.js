@@ -40,12 +40,13 @@ async function updateInventory(playerId, inventory) {
     if (!Number.isInteger(playerId) || playerId <= 0) {
         throw { message: 'Некорректный ID игрока', code: 'INVALID_PLAYER_ID', statusCode: 400 };
     }
-    if (!inventory || typeof inventory !== 'object') {
-        throw { message: 'Инвентарь должен быть объектом', code: 'INVALID_INVENTORY', statusCode: 400 };
+    if ((!Array.isArray(inventory) && (!inventory || typeof inventory !== 'object')) || inventory === null) {
+        throw { message: 'Инвентарь должен быть массивом или объектом', code: 'INVALID_INVENTORY', statusCode: 400 };
     }
     
     const result = await db.updatePlayerInventory(playerId, inventory);
-    await db.logPlayerAction(playerId, 'update_inventory', { inventory_size: Object.keys(inventory).length });
+    const inventorySize = Array.isArray(inventory) ? inventory.length : Object.keys(inventory).length;
+    await db.logPlayerAction(playerId, 'update_inventory', { inventory_size: inventorySize });
     
     return result;
 }
@@ -162,7 +163,7 @@ async function regenerateEnergy(playerId) {
             
             await db.updatePlayerEnergy(playerId, actualRestored, { client, updateTimestamp: true });
             
-            await db.logPlayerAction(playerId, 'regenerate_energy', { restored: actualRestored });
+            await db.logPlayerAction(playerId, 'regenerate_energy', { restored: actualRestored }, client);
             
             return { success: true, energy_restored: actualRestored };
         }

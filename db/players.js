@@ -29,10 +29,12 @@ function validateString(str, name, maxLength = 50) {
 
 function validateAmount(amount) {
     if (!Number.isFinite(amount)) throw new Error('Неверное количество');
+    if (amount === 0) throw new Error('Количество не может быть нулевым');
+    if (amount < 0) throw new Error('Количество не может быть отрицательным');
 }
 
 function validateExperience(exp) {
-    if (exp <= 0) throw new Error('Опыт должен быть положительным');
+    if (!Number.isFinite(exp) || exp <= 0) throw new Error('Опыт должен быть положительным');
 }
 
 function normalizeLimit(limit, max = 100) {
@@ -131,11 +133,13 @@ async function getTopPlayers(limit = 10, offset = 0) {
 }
 
 async function updatePlayerLocation(playerId, locationId) {
+    const client = arguments[2] || null;
     playerId = validateId(playerId, 'playerId');
     locationId = validateId(locationId, 'locationId');
-    const result = await defaultQuery('UPDATE players SET current_location_id = $1 WHERE id = $2', [locationId, playerId]);
+    const exec = getExecutor(client);
+    const result = await exec('UPDATE players SET current_location_id = $1 WHERE id = $2', [locationId, playerId]);
     if (result.rowCount === 0) throw new Error(ERR_PLAYER_NOT_FOUND);
-    await logPlayerAction(playerId, 'location_changed', { locationId });
+    await logPlayerAction(playerId, 'location_changed', { locationId }, client);
     return { success: true };
 }
 
@@ -154,21 +158,26 @@ async function updatePlayerEnergy(playerId, energyChange, options = {}) {
         return { success: true, energy: result.rows[0].energy, max_energy: result.rows[0].max_energy };
     };
     
-    return useTransaction ? tx(process) : process(client);
+    if (client) {
+        return process(client);
+    }
+
+    return useTransaction ? tx(process) : process(null);
 }
 
 async function setPlayerHealth(playerId, newHealth, options = {}) {
     // Устанавливает абсолютное значение здоровья (не дельту)
     // Для изменения здоровья на дельту используйте updatePlayerEnergy с отрицательным значением
-    const { useReturning = false } = options;
+    const { client = null, useReturning = false } = options;
     playerId = validateId(playerId, 'playerId');
+    const exec = getExecutor(client);
     const returningClause = useReturning ? 'RETURNING health, max_health' : '';
-    const result = await defaultQuery(
+    const result = await exec(
         `UPDATE players SET health = LEAST(max_health, GREATEST(0, $1)), updated_at = NOW() WHERE id = $2 ${returningClause}`,
         [newHealth, playerId]
     );
     if (result.rowCount === 0) throw new Error(ERR_PLAYER_NOT_FOUND);
-    await logPlayerAction(playerId, 'health_updated', { health: newHealth });
+    await logPlayerAction(playerId, 'health_updated', { health: newHealth }, client);
     return useReturning ? { success: true, ...result.rows[0] } : { success: true };
 }
 
@@ -246,11 +255,11 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     // Также добавлена прокачка удачи с ограничением MAX_LUCK = 150
     const result = levelsGained <= 1
         ? await exec(
-            `WITH updated AS (UPDATE players SET level = level + 1, experience = 0, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, luck = LEAST(149, luck + 1), energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
-            [playerId]
+            `WITH updated AS (UPDATE players SET level = level + 1, experience = $2, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, luck = LEAST(150, luck + 1), energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
+            [playerId, newExperience]
         )
         : await exec(
-            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST(149, luck + $3), energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST(150, luck + $3), energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
             [levelsGained, newExperience, luckBonus, playerId]
         );
     

@@ -242,11 +242,16 @@ const DebuffAPI = {
             // Дебафф истёк - пропускаем (урон не наносится)
             if (expiresAt <= now) continue;
             
-            // Дебафф активен - наносим урон если уровень >= 5
             const configKey = debuff.type === DEBUFF_TYPES.INFECTION ? 'infection' : debuff.type;
             const config = DEBUFF_CONFIG[configKey];
-            if (config && debuff.level >= 5) {
-                damage += config.damagePerLevel;
+            if (!config) continue;
+
+            if (debuff.type === DEBUFF_TYPES.RADIATION && debuff.level >= 5) {
+                damage += Math.max(0, debuff.level - 4) * config.damagePerLevel;
+            }
+
+            if (debuff.type === DEBUFF_TYPES.INFECTION && debuff.level > 0 && Math.random() < 0.1) {
+                damage += debuff.level * config.damagePerLevel;
             }
         }
         
@@ -428,15 +433,17 @@ const DebuffAPI = {
 router.get('/status', async (req, res) => {
     try {
         const player = req.player;
-        
-        // Проверяем дебаффы
-        const checkResult = await DebuffAPI.check(player.id);
-        
+
         // Получаем активные дебаффы
         const active = DebuffAPI.getActive(player);
-        
+
         // Получаем модификаторы
         const modifiers = DebuffAPI.getModifiers(player);
+
+        const warnings = active
+            .filter((debuff) => debuff.expiresAt)
+            .filter((debuff) => (new Date(debuff.expiresAt).getTime() - Date.now()) < 30 * 60 * 1000)
+            .map((debuff) => `${debuff.type}_expiring`);
         
         res.json({
             success: true,
@@ -445,8 +452,8 @@ router.get('/status', async (req, res) => {
                 infections: safeJsonParse(player.infections, []),
                 active,
                 modifiers,
-                warnings: checkResult.warnings,
-                damage: checkResult.damage
+                warnings,
+                damage: 0
             }
         });
     } catch (error) {
