@@ -63,7 +63,7 @@ const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/game-helpers');
 const { initWebSocket, getMetrics, stopHeartbeat } = require('./utils/realtime');
 const { initDatabase, query, closePool, setLogger } = require('./db/database');
-const { setupWebhook } = require('./webhook');
+const { setupWebhook, bot } = require('./webhook');
 const gameRouter = require('./routes/game');
 const apiRouter = require('./routes/api');
 const adminRouter = require('./routes/admin');
@@ -327,6 +327,16 @@ function shutdown(signal) {
         logger.info('WebSocket heartbeat остановлен');
     } catch (err) {
         logger.warn('Ошибка остановки heartbeat:', err.message);
+    }
+
+    // Останавливаем Telegram bot polling
+    try {
+        if (bot && typeof bot.stop === 'function') {
+            bot.stop(signal);
+            logger.info('Telegram bot polling остановлен');
+        }
+    } catch (err) {
+        logger.warn('Ошибка остановки Telegram bot:', err.message);
     }
     
     if (server) {

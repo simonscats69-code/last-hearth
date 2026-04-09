@@ -283,10 +283,10 @@ router.get('/bosses', requireAdmin, async (req, res) => {
 router.put('/bosses/:id', requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, health, damage, reward_exp, reward_items } = req.body;
+        const { name, health, max_health, damage, reward_exp, reward_experience, reward_items } = req.body;
         
         // Whitelist допустимых полей для обновления босса
-        const ALLOWED_FIELDS = ['name', 'health', 'damage', 'reward_exp', 'reward_items'];
+        const ALLOWED_FIELDS = ['name', 'health', 'max_health', 'damage', 'reward_exp', 'reward_experience', 'reward_items'];
         
         let updates = [];
         let values = [];
@@ -299,12 +299,13 @@ router.put('/bosses/:id', requireAdmin, async (req, res) => {
             updates.push(`name = $${paramIndex++}`);
             values.push(name);
         }
-        if (health !== undefined) {
-            if (!Number.isInteger(health) || health < 1 || health > 1000000) {
-                return res.status(400).json({ error: 'health должен быть целым числом от 1 до 1000000' });
+        const normalizedMaxHealth = max_health ?? health;
+        if (normalizedMaxHealth !== undefined) {
+            if (!Number.isInteger(normalizedMaxHealth) || normalizedMaxHealth < 1 || normalizedMaxHealth > 1000000) {
+                return res.status(400).json({ error: 'max_health должен быть целым числом от 1 до 1000000' });
             }
-            updates.push(`health = $${paramIndex++}`);
-            values.push(health);
+            updates.push(`max_health = $${paramIndex++}`);
+            values.push(normalizedMaxHealth);
         }
         if (damage !== undefined) {
             if (!Number.isInteger(damage) || damage < 0 || damage > 100000) {
@@ -313,12 +314,13 @@ router.put('/bosses/:id', requireAdmin, async (req, res) => {
             updates.push(`damage = $${paramIndex++}`);
             values.push(damage);
         }
-        if (reward_exp !== undefined) {
-            if (!Number.isInteger(reward_exp) || reward_exp < 0 || reward_exp > 1000000) {
-                return res.status(400).json({ error: 'reward_exp должен быть целым числом от 0 до 1000000' });
+        const normalizedRewardExp = reward_experience ?? reward_exp;
+        if (normalizedRewardExp !== undefined) {
+            if (!Number.isInteger(normalizedRewardExp) || normalizedRewardExp < 0 || normalizedRewardExp > 1000000) {
+                return res.status(400).json({ error: 'reward_experience должен быть целым числом от 0 до 1000000' });
             }
-            updates.push(`reward_exp = $${paramIndex++}`);
-            values.push(reward_exp);
+            updates.push(`reward_experience = $${paramIndex++}`);
+            values.push(normalizedRewardExp);
         }
         if (reward_items !== undefined) {
             if (!Array.isArray(reward_items)) {

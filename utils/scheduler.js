@@ -440,12 +440,32 @@ async function cleanupExpiredRaids() {
             
             // Помечаем рейды как неактивные
             for (const raid of expiredRaids.rows) {
+                const participantsResult = await query(
+                    'SELECT player_id FROM boss_sessions WHERE raid_id = $1',
+                    [raid.id]
+                );
+                const participantIds = participantsResult.rows.map(row => row.player_id);
+
                 await query(`
                     UPDATE raid_progress 
                     SET is_active = false, ended_at = NOW()
                     WHERE id = $1
                 `, [raid.id]);
+
+                if (participantIds.length > 0) {
+                    await query(
+                        `UPDATE players
+                         SET active_boss_id = NULL,
+                             active_boss_started_at = NULL,
+                             active_boss_mode = NULL,
+                             active_raid_id = NULL
+                         WHERE id = ANY($1::bigint[])`,
+                        [participantIds]
+                    );
+                }
                 
+                await query('DELETE FROM boss_sessions WHERE raid_id = $1', [raid.id]);
+                 
                 // Логируем истёкший рейд
                 logger.info({
                     type: 'raid_expired',

@@ -65,8 +65,8 @@ async function setupWebhook(app) {
                 await query(`
                     UPDATE players SET inventory = $1 WHERE telegram_id = $2
                 `, [JSON.stringify([
-                    { id: '1', name: 'Консервы', type: 'food', hunger: 10 },
-                    { id: '2', name: 'Вода', type: 'water', thirst: 15 }
+                    { id: 1, name: 'Консервы', type: 'food', rarity: 'common', icon: '🥫', stats: { energy: 5 }, quantity: 1 },
+                    { id: 2, name: 'Вода', type: 'food', rarity: 'common', icon: '💧', stats: { energy: 3 }, quantity: 1 }
                 ]), telegramId]);
             } else {
                 // Обновляем username при повторном входе
