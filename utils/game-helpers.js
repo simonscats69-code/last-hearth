@@ -53,6 +53,61 @@ function normalizeInventory(value) {
 }
 
 /**
+ * Нормализация stats предмета
+ */
+function normalizeItemStats(value) {
+    const parsed = safeParseJson(value, {});
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+/**
+ * Построить унифицированный предмет инвентаря
+ */
+function createInventoryItem(item, options = {}) {
+    const source = item && typeof item === 'object' ? item : {};
+    const stats = normalizeItemStats(options.stats !== undefined ? options.stats : source.stats);
+    const durability = Number(options.durability ?? source.durability ?? 100);
+    const rawModifications = options.modifications ?? source.modifications ?? {};
+    const modifications = rawModifications && typeof rawModifications === 'object' && !Array.isArray(rawModifications)
+        ? { ...rawModifications }
+        : {};
+
+    return {
+        ...source,
+        id: source.id ?? options.id ?? null,
+        name: source.name || options.name || 'Предмет',
+        type: source.type || options.type || 'misc',
+        category: source.category || options.category || source.type || options.type || 'misc',
+        rarity: options.rarity || source.rarity || 'common',
+        icon: source.icon || options.icon || '📦',
+        slot: source.slot || options.slot || null,
+        stats,
+        damage: Number(options.damage ?? source.damage ?? stats.damage ?? 0),
+        defense: Number(options.defense ?? source.defense ?? stats.defense ?? 0),
+        heal: Number(options.heal ?? source.heal ?? stats.health ?? stats.health_restore ?? 0),
+        rad_removal: Number(options.rad_removal ?? source.rad_removal ?? stats.radiation_cure ?? 0),
+        radiation_resist: Number(options.radiation_resist ?? source.radiation_resist ?? stats.radiation_resist ?? 0),
+        infection_resist: Number(options.infection_resist ?? source.infection_resist ?? stats.infection_resist ?? 0),
+        durability,
+        max_durability: Number(options.max_durability ?? source.max_durability ?? source.durability ?? durability),
+        quantity: Math.max(1, Number(options.quantity ?? source.quantity ?? 1) || 1),
+        upgrade_level: Number(options.upgrade_level ?? source.upgrade_level ?? 0),
+        modifications
+    };
+}
+
+/**
+ * Получить категорию предмета инвентаря без жёсткой привязки к диапазонам ID
+ */
+function getInventoryItemCategory(item) {
+    if (!item || typeof item !== 'object') {
+        return 'misc';
+    }
+
+    return String(item.category || item.type || 'misc').toLowerCase();
+}
+
+/**
  * Нормализация радиации
  */
 function normalizeRadiation(value) {
@@ -391,6 +446,9 @@ module.exports = {
     ENERGY_REGEN_INTERVAL_MS,
     safeParseJson,
     normalizeInventory,
+    normalizeItemStats,
+    createInventoryItem,
+    getInventoryItemCategory,
     normalizeRadiation,
     normalizeInfections,
     normalizePlayerBuffs,

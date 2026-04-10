@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, validateIndex, validateBoolean, validatePositiveInt, ok, fail, error, badRequest, guard, wrap, logPlayerAction, serializeJSONField, logger, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { normalizeInventory, createInventoryItem } = require('../../utils/game-helpers');
 
 function getShopCategory(item) {
     if (!item) return 'misc';
@@ -57,6 +58,23 @@ function reduceInfections(infections, cureAmount) {
         .filter((infection) => Number(infection.level || 0) > 0);
 }
 
+function resolveInventoryItemIndex(inventory, itemIndex, itemId) {
+    const normalizedItemIndex = itemIndex === undefined || itemIndex === null ? null : Number(itemIndex);
+    if (Number.isInteger(normalizedItemIndex) && normalizedItemIndex >= 0 && normalizedItemIndex < inventory.length) {
+        return normalizedItemIndex;
+    }
+
+    if (itemId !== undefined && itemId !== null) {
+        const normalizedItemId = Number(itemId);
+        const itemIndexById = inventory.findIndex((item) => Number(item?.id) === normalizedItemId);
+        if (itemIndexById >= 0) {
+            return itemIndexById;
+        }
+    }
+
+    return Number.isInteger(normalizedItemIndex) ? normalizedItemIndex : -1;
+}
+
 // =============================================================================
 // ИНВЕНТАРЬ
 // =============================================================================
@@ -74,15 +92,16 @@ router.get('/', async (req, res) => {
     try {
         const player = req.player;
         
-        const inventory = safeJsonParse(player.inventory, []);
+        const inventory = normalizeInventory(player.inventory);
         const equipment = safeJsonParse(player.equipment, {});
         
         const itemsByType = {};
         inventory.forEach((item, index) => {
-            if (!itemsByType[item.type]) {
-                itemsByType[item.type] = [];
+            const itemType = item.type || 'misc';
+            if (!itemsByType[itemType]) {
+                itemsByType[itemType] = [];
             }
-            itemsByType[item.type].push({
+            itemsByType[itemType].push({
                 index: index,
                 ...item
             });
@@ -133,7 +152,7 @@ router.post('/upgrade-item', async (req, res) => {
         // Используем withPlayerLock для автоматического управления транзакцией
         // Передаём client для выполнения запросов внутри транзакции
         const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
-            const inventory = safeJsonParse(lockedPlayer.inventory, []);
+            const inventory = normalizeInventory(lockedPlayer.inventory);
             
             // Валидация индекса внутри транзакции на актуальных данных
             const indexValidation = validateIndex(item_index, inventory.length, 'индекс предмета');
@@ -309,7 +328,7 @@ router.post('/modify-item', async (req, res) => {
         // Используем withPlayerLock для автоматического управления транзакцией
         // Передаём client для выполнения запросов внутри транзакции
         const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
-            const inventory = safeJsonParse(lockedPlayer.inventory, []);
+            const inventory = normalizeInventory(lockedPlayer.inventory);
             
             // Валидация индекса внутри транзакции
             const indexValidation = validateIndex(item_index, inventory.length, 'индекс предмета');
@@ -506,17 +525,17 @@ router.post('/use-item', async (req, res) => {
     try {
         const { item_index, item_id, equip = false } = req.body;
         const playerId = req.player.id;
-        const normalizedItemIndex = Number(item_index ?? item_id);
+        const normalizedItemIndexInput = item_index === undefined ? null : Number(item_index);
         
         if (item_index === undefined && item_id === undefined) {
             return res.status(400).json({
                 success: false,
-                error: 'Укажите индекс предмета',
+                error: 'Укажите индекс или ID предмета',
                 code: 'MISSING_ITEM_INDEX'
             });
         }
         
-        if (!Number.isInteger(normalizedItemIndex)) {
+        if (item_index !== undefined && !Number.isInteger(normalizedItemIndexInput)) {
             return res.status(400).json({
                 success: false,
                 error: 'Индекс предмета должен быть целым числом',
@@ -542,7 +561,8 @@ router.post('/use-item', async (req, res) => {
                 });
             }
             
-            const inventory = safeJsonParse(player.inventory, []);
+            const inventory = normalizeInventory(player.inventory);
+            const normalizedItemIndex = resolveInventoryItemIndex(inventory, normalizedItemIndexInput, item_id);
             
             if (normalizedItemIndex < 0 || normalizedItemIndex >= inventory.length) {
                 await client.query('ROLLBACK');
@@ -555,7 +575,7 @@ router.post('/use-item', async (req, res) => {
             
             const item = inventory[normalizedItemIndex];
             
-            if (!item || typeof item !== 'object' || !item.id || !item.name) {
+            if (!item || typeof item !== 'object' || !item.name || !(item.type || item.category)) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
@@ -863,28 +883,8 @@ router.post('/buy', async (req, res) => {
         );
         
         // Добавляем предмет в инвентарь
-        let inventory = safeJsonParse(player.inventory, []);
-        const parsedStats = safeJsonParse(shopItem.stats, {});
-        
-        const newItem = {
-            id: shopItem.id,
-            name: shopItem.name,
-            type: shopItem.type,
-            category: shopItem.category,
-            rarity: shopItem.rarity,
-            icon: shopItem.icon,
-            slot: shopItem.slot || null,
-            stats: parsedStats,
-            damage: parsedStats.damage || 0,
-            defense: parsedStats.defense || 0,
-            heal: parsedStats.health || 0,
-            rad_removal: parsedStats.radiation_cure || 0,
-            radiation_resist: parsedStats.radiation_resist || 0,
-            infection_resist: parsedStats.infection_resist || 0,
-            durability: shopItem.durability || 100,
-            max_durability: shopItem.durability || 100,
-            quantity: 1
-        };
+        let inventory = normalizeInventory(player.inventory);
+        const newItem = createInventoryItem(shopItem, { quantity: 1 });
         
         inventory.push(newItem);
         

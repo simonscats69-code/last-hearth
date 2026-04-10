@@ -12,7 +12,7 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, getActiveBuffs } = require('../../utils/game-helpers');
+const { normalizeInventory, getActiveBuffs, createInventoryItem } = require('../../utils/game-helpers');
 
 const KEYS_REQUIRED_FOR_BOSS = 3;
 const SOLO_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
@@ -96,6 +96,14 @@ function normalizeRewardItems(rawRewardItems) {
     return Array.isArray(parsed) ? parsed : [];
 }
 
+function calculateGrantedQuantity(totalQuantity, multiplier = 1) {
+    const expectedQuantity = Math.max(0, Number(totalQuantity || 0) * Number(multiplier || 0));
+    const guaranteedQuantity = Math.floor(expectedQuantity);
+    const fractionalPart = expectedQuantity - guaranteedQuantity;
+
+    return guaranteedQuantity + (Math.random() < fractionalPart ? 1 : 0);
+}
+
 async function getBossById(client, bossId) {
     const result = await client.query('SELECT * FROM bosses WHERE id = $1', [bossId]);
     return result.rows[0] || null;
@@ -129,15 +137,15 @@ async function clearPlayerActiveBattle(client, playerId) {
 async function clearActiveBattleForPlayers(client, playerIds) {
     if (!playerIds.length) return;
 
-            await client.query(
-                `UPDATE players
-                 SET active_boss_id = NULL,
-                     active_boss_started_at = NULL,
-                     active_boss_mode = NULL,
-                     active_raid_id = NULL
-                 WHERE id = ANY($1::bigint[])`,
-                [playerIds]
-            );
+    await client.query(
+        `UPDATE players
+         SET active_boss_id = NULL,
+             active_boss_started_at = NULL,
+             active_boss_mode = NULL,
+             active_raid_id = NULL
+         WHERE id = ANY($1::bigint[])`,
+        [playerIds]
+    );
 }
 
 async function resolveActiveBattle(client, playerId) {
@@ -209,6 +217,7 @@ async function resolveActiveBattle(client, playerId) {
 
         const raid = raidResult.rows[0];
         if (!raid) {
+            await client.query('DELETE FROM boss_sessions WHERE player_id = $1 AND raid_id = $2', [playerId, player.active_raid_id]);
             await clearPlayerActiveBattle(client, playerId);
             return null;
         }
@@ -300,7 +309,7 @@ async function loadItemTemplates(client, rewardItems) {
         if (reward.item_id || reward.id) {
             const itemId = reward.item_id || reward.id;
             const result = await client.query(
-                `SELECT id, name, type, rarity, icon,
+                `SELECT id, name, type, category, rarity, icon, slot, durability, stats,
                         COALESCE((stats->>'damage')::integer, 0) AS damage,
                         COALESCE((stats->>'defense')::integer, 0) AS defense
                  FROM items WHERE id = $1`,
@@ -308,19 +317,14 @@ async function loadItemTemplates(client, rewardItems) {
             );
 
             if (result.rows[0]) {
-                templates.push({ ...result.rows[0], quantity: Number(reward.quantity || 1) });
+                templates.push(createInventoryItem(result.rows[0], {
+                    quantity: Number(reward.quantity || 1)
+                }));
             }
         } else if (reward.name && reward.type) {
-            templates.push({
-                id: reward.id || reward.item_id || null,
-                name: reward.name,
-                type: reward.type,
-                rarity: reward.rarity || 'common',
-                icon: reward.icon || '📦',
-                damage: Number(reward.damage || 0),
-                defense: Number(reward.defense || 0),
+            templates.push(createInventoryItem(reward, {
                 quantity: Number(reward.quantity || 1)
-            });
+            }));
         }
     }
 
@@ -341,22 +345,16 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
 
     for (const template of templates) {
         const totalQuantity = Math.max(1, template.quantity || 1);
-        const grantedQuantity = Math.floor(totalQuantity * multiplier);
+        const grantedQuantity = calculateGrantedQuantity(totalQuantity, multiplier);
 
         if (grantedQuantity <= 0) continue;
 
         for (let i = 0; i < grantedQuantity; i++) {
-            inventory.push({
-                id: template.id,
-                name: template.name,
-                type: template.type,
-                rarity: template.rarity || 'common',
-                icon: template.icon || '📦',
-                damage: template.damage || 0,
-                defense: template.defense || 0,
+            inventory.push(createInventoryItem(template, {
+                quantity: 1,
                 upgrade_level: 0,
                 modifications: {}
-            });
+            }));
         }
 
         granted.push({
@@ -395,11 +393,19 @@ async function getActiveRaids(client, playerId) {
     );
 
     const participatingResult = await client.query(
-        'SELECT raid_id FROM boss_sessions WHERE player_id = $1 AND raid_id IS NOT NULL',
+        `SELECT bs.raid_id, bs.boss_id
+         FROM boss_sessions bs
+         JOIN raid_progress rp ON rp.id = bs.raid_id
+         WHERE bs.player_id = $1
+           AND bs.raid_id IS NOT NULL
+           AND rp.is_active = true
+           AND rp.is_raid = true
+           AND rp.expires_at > NOW()`,
         [playerId]
     );
 
-    const participatingIds = participatingResult.rows.map((row) => row.raid_id);
+    const participatingIds = [...new Set(participatingResult.rows.map((row) => Number(row.raid_id)).filter(Boolean))];
+    const participatingBossIds = [...new Set(participatingResult.rows.map((row) => Number(row.boss_id)).filter(Boolean))];
 
     return {
         raids: raidsResult.rows.map((raid) => ({
@@ -421,7 +427,8 @@ async function getActiveRaids(client, playerId) {
             expires_at: raid.expires_at,
             time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now()
         })),
-        participatingIds
+        participatingIds,
+        participatingBossIds
     };
 }
 
@@ -471,6 +478,12 @@ router.post('/start', async (req, res) => {
             if (!boss) {
                 await client.query('ROLLBACK');
                 return res.status(404).json({ success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' });
+            }
+
+            const player = await getPlayerBaseState(client, playerId);
+            if (!player || player.health <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя начать бой с боссом.', code: 'PLAYER_DEAD' });
             }
 
             if (bossId > 1) {
@@ -604,7 +617,7 @@ router.get('/', async (req, res) => {
                 bosses: bossList,
                 raids: raids.raids,
                 participating_raid_ids: raids.participatingIds,
-                participating_boss_ids: raids.participatingIds,
+                participating_boss_ids: raids.participatingBossIds,
                 player_energy: player.energy,
                 player_max_energy: player.max_energy,
                 player_level: player.level,
@@ -724,7 +737,7 @@ router.post('/attack-boss', async (req, res) => {
                     rewards.key = grantedKey;
                 }
 
-                const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, (Math.random() < 0.5 ? 1 : 0) * lootMultiplier);
+                const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, 0.5 * lootMultiplier);
                 if (grantedItems.length) {
                     rewards.items = grantedItems;
                 }
@@ -840,7 +853,7 @@ router.post('/attack-with-weapon', async (req, res) => {
                 });
             }
 
-            const inventory = safeJsonParse(player.inventory, []);
+            const inventory = normalizeInventory(player.inventory);
             
             if (itemIndex >= inventory.length) {
                 await client.query('ROLLBACK');
@@ -921,7 +934,7 @@ router.post('/attack-with-weapon', async (req, res) => {
                     rewards.key = grantedKey;
                 }
 
-                const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, (Math.random() < 0.5 ? 1 : 0) * lootMultiplier);
+                const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, 0.5 * lootMultiplier);
                 if (grantedItems.length) {
                     rewards.items = grantedItems;
                 }
@@ -995,7 +1008,7 @@ router.get('/weapons', async (req, res) => {
             [playerId]
         );
         
-        const inventory = safeJsonParse(playerResult.rows[0]?.inventory, []);
+        const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
         
         const weapons = inventory
             .map((item, index) => {
@@ -1036,7 +1049,7 @@ router.get('/raids', async (req, res) => {
             data: {
                 raids: raids.raids,
                 participating_raid_ids: raids.participatingIds,
-                participating_boss_ids: raids.participatingIds
+                participating_boss_ids: raids.participatingBossIds
             }
         });
     } catch (error) {
@@ -1073,9 +1086,19 @@ router.post('/raid/start', async (req, res) => {
                 return res.status(404).json({ success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' });
             }
 
-            if (bossId > 1) {
-                await spendBossKeys(client, playerId, bossId - 1);
+            const player = await getPlayerBaseState(client, playerId);
+            if (!player || player.health <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя начать массовый бой.', code: 'PLAYER_DEAD' });
             }
+
+            await client.query(
+                `DELETE FROM raid_progress
+                 WHERE boss_id = $1
+                   AND is_raid = true
+                   AND (expires_at <= NOW() OR is_active = false)`,
+                [bossId]
+            );
 
             const existingRaid = await client.query(
                 `SELECT id FROM raid_progress
@@ -1093,6 +1116,10 @@ router.post('/raid/start', async (req, res) => {
                 });
             }
 
+            if (bossId > 1) {
+                await spendBossKeys(client, playerId, bossId - 1);
+            }
+
             const expiresAt = new Date(Date.now() + MASS_FIGHT_DURATION_MS);
 
             const raidResult = await client.query(
@@ -1107,7 +1134,13 @@ router.post('/raid/start', async (req, res) => {
 
             await client.query(
                 `INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
-                 VALUES ($1, $2, $3, 0, NOW(), NOW())`,
+                 VALUES ($1, $2, $3, 0, NOW(), NOW())
+                 ON CONFLICT (boss_id, player_id)
+                 DO UPDATE SET raid_id = EXCLUDED.raid_id,
+                               damage_dealt = 0,
+                               rewards_earned = false,
+                               joined_at = NOW(),
+                               last_hit_at = NOW()`,
                 [bossId, playerId, raidId]
             );
 
@@ -1194,9 +1227,21 @@ router.post('/raid/:id/join', async (req, res) => {
                 return res.status(404).json({ success: false, error: 'Массовый бой не найден', code: 'RAID_NOT_FOUND' });
             }
 
+            const player = await getPlayerBaseState(client, playerId);
+            if (!player || player.health <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя присоединиться к массовому бою.', code: 'PLAYER_DEAD' });
+            }
+
             await client.query(
                 `INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
-                 VALUES ($1, $2, $3, 0, NOW(), NOW())`,
+                 VALUES ($1, $2, $3, 0, NOW(), NOW())
+                 ON CONFLICT (boss_id, player_id)
+                 DO UPDATE SET raid_id = EXCLUDED.raid_id,
+                               damage_dealt = 0,
+                               rewards_earned = false,
+                               joined_at = NOW(),
+                               last_hit_at = NOW()`,
                 [raid.boss_id, playerId, raidId]
             );
 
@@ -1292,17 +1337,23 @@ router.post('/raid/:id/attack', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Недостаточно энергии', code: 'INSUFFICIENT_ENERGY' });
             }
 
+            if (player.health <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя атаковать рейдового босса.', code: 'PLAYER_DEAD' });
+            }
+
             const masteries = await getBossMasteries(client, playerId);
             const damage = calculateDamage(raid.boss_id, player, masteries);
             const newHp = Math.max(0, raid.current_health - damage);
             const newTotalDamage = session.damage_dealt + damage;
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
-            await client.query(
+            const energyResult = await client.query(
                 `UPDATE players
                  SET energy = GREATEST(0, energy - $1),
                       last_energy_update = NOW()
-                 WHERE id = $2`,
+                 WHERE id = $2
+                 RETURNING energy`,
                 [energyCost, playerId]
             );
 
@@ -1320,15 +1371,16 @@ router.post('/raid/:id/attack', async (req, res) => {
                     `SELECT bs.player_id, bs.damage_dealt, p.buffs
                      FROM boss_sessions bs
                      JOIN players p ON p.id = bs.player_id
-                     WHERE bs.raid_id = $1 AND bs.damage_dealt > 0`,
+                     WHERE bs.raid_id = $1`,
                     [raidId]
                 );
 
-                const participants = participantsResult.rows;
-                const totalDamage = participants.reduce((sum, row) => sum + Number(row.damage_dealt || 0), 0) || 1;
-                const participantIds = participants.map((row) => row.player_id);
+                const allParticipants = participantsResult.rows;
+                const rewardParticipants = allParticipants.filter((row) => Number(row.damage_dealt || 0) > 0);
+                const totalDamage = rewardParticipants.reduce((sum, row) => sum + Number(row.damage_dealt || 0), 0) || 1;
+                const participantIds = allParticipants.map((row) => row.player_id);
 
-                for (const participant of participants) {
+                for (const participant of rewardParticipants) {
                     const share = Number(participant.damage_dealt || 0) / totalDamage;
                     const coinsReward = Math.floor((raid.reward_coins || 0) * share);
                     const participantBuffs = getActiveBuffs(participant.buffs);
@@ -1374,6 +1426,8 @@ router.post('/raid/:id/attack', async (req, res) => {
                 }
 
                 await clearActiveBattleForPlayers(client, participantIds);
+                await client.query('DELETE FROM boss_sessions WHERE raid_id = $1', [raidId]);
+                await client.query('DELETE FROM raid_progress WHERE id = $1', [raidId]);
             }
 
             await client.query('COMMIT');
@@ -1388,6 +1442,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         hp_percent: raid.max_health > 0 ? Math.round((newHp / raid.max_health) * 100) : 0
                     },
                     damage,
+                    player_energy: energyResult.rows[0]?.energy ?? player.energy,
                     your_total_damage: newTotalDamage,
                     killed,
                     rewards

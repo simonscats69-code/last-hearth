@@ -1257,16 +1257,33 @@ async function checkPlayerStatus() {
 /**
  * Использование предмета
  */
-async function useItem(itemId) {
+function isEquippableInventoryItem(item) {
+    if (!item || typeof item !== 'object') return false;
+
+    const type = String(item.type || '').toLowerCase();
+    const slot = String(item.slot || '').toLowerCase();
+    const category = String(item.category || '').toLowerCase();
+
+    return type === 'weapon'
+        || type === 'armor'
+        || ['weapon', 'armor', 'helmet', 'boots', 'accessory'].includes(slot)
+        || ['weapon', 'armor'].includes(category);
+}
+
+async function useItem(itemId, options = {}) {
     if (!lockAction('useItem')) return;
     try {
         const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
-            body: { item_id: parseInt(itemId) }
+            body: {
+                item_index: parseInt(itemId, 10),
+                equip: Boolean(options.equip)
+            }
         });
+        const payload = result?.data || result;
         
         if (result.success) {
-            showModal('✅ Успех', result.message);
+            showModal('✅ Успех', payload.message || result.message || 'Действие выполнено');
             
             // Обновляем инвентарь и профиль
             await loadInventory();
@@ -1274,10 +1291,11 @@ async function useItem(itemId) {
             
             playSound('use');
         } else {
-            showModal('⚠️ Внимание', result.message);
+            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось выполнить действие');
         }
     } catch (error) {
         console.error('Use item error:', error);
+        showModal('⚠️ Внимание', error?.message || 'Не удалось использовать предмет');
     } finally {
         unlockAction('useItem');
     }
@@ -1325,13 +1343,15 @@ function renderInventory(items) {
     for (const item of normalizedItems) {
         const slot = document.createElement('div');
         slot.className = `inventory-slot item-rarity rarity-${item.rarity || 'common'}`;
+        const isEquippable = isEquippableInventoryItem(item);
+        const amount = item.quantity || item.count || 1;
         slot.innerHTML = `
             <span class="item-icon">${item.icon || '📦'}</span>
-            <span class="item-count">${item.count || 1}</span>
+            <span class="item-count">${amount}</span>
         `;
         
-        // Обработчик клика - использовать предмет
-        slot.addEventListener('click', () => useItem(item.index));
+        // Обработчик клика: расходник используем, экипировку надеваем
+        slot.addEventListener('click', () => useItem(item.index, { equip: isEquippable }));
         
         grid.appendChild(slot);
     }
@@ -1351,7 +1371,7 @@ function renderInventoryWithFilters(items) {
     
     if (typeof currentInventoryFilter !== 'undefined' && currentInventoryFilter !== 'all') {
         filteredItems = filteredItems.filter((item) => {
-            const category = getItemCategory(item.id);
+            const category = String(item.category || item.type || getItemCategory(item.id)).toLowerCase();
             return category === currentInventoryFilter;
         });
     }
@@ -1368,7 +1388,7 @@ function renderInventoryWithFilters(items) {
                 const rB = rarityOrder[b.rarity] || 0;
                 return rB - rA;
             case 'count':
-                return (b.count || 1) - (a.count || 1);
+                return (b.quantity || b.count || 1) - (a.quantity || a.count || 1);
             case 'id':
             default:
                 return (a.id || 0) - (b.id || 0);
@@ -1393,7 +1413,8 @@ async function loadBosses() {
 
         gameState.bosses = Array.isArray(data?.bosses) ? data.bosses : [];
         gameState.raids = Array.isArray(data?.raids) ? data.raids : [];
-        gameState.raidsParticipating = data?.participating_raid_ids || data?.participating_boss_ids || [];
+        gameState.raidsParticipating = data?.participating_raid_ids || [];
+        gameState.participatingBossIds = data?.participating_boss_ids || [];
         gameState.bossesInfo = data?.info || null;
         gameState.activeBattle = data?.active_battle || null;
 
@@ -1432,7 +1453,11 @@ async function loadBosses() {
         console.error('Bosses error:', error);
         // При ошибке показываем пустой список
         gameState.bosses = [];
+        gameState.raids = [];
+        gameState.raidsParticipating = [];
+        gameState.participatingBossIds = [];
         renderBosses([]);
+        renderRaids([]);
     }
 }
 
@@ -1812,8 +1837,13 @@ async function attackWithWeapon(itemIndex) {
                     showKeyAnimation?.();
                 }
                 showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', result.data.rewards || {}, result.data.mastery ?? null);
-                await loadBosses();
-                showScreen('bosses');
+                gameState.currentBoss = null;
+                gameState.activeBattle = null;
+                setTimeout(() => {
+                    loadBosses().catch((loadError) => {
+                        console.error('Boss reload error:', loadError);
+                    });
+                }, 2200);
             }
         } else {
             showNotification(result.error || 'Ошибка атаки', 'error');
@@ -1917,6 +1947,8 @@ async function attackBoss() {
                     showKeyAnimation?.();
                 }
                 showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', result.rewards || {}, result.mastery ?? null);
+                gameState.currentBoss = null;
+                gameState.activeBattle = null;
                 
                 // Обновляем мастерство
                 if (result.mastery !== undefined) {
@@ -1927,11 +1959,11 @@ async function attackBoss() {
                 }
                 
                 // Загружаем новых боссов
-                await loadBosses();
-                
                 setTimeout(() => {
-                    showScreen('bosses');
-                }, 3000);
+                    loadBosses().catch((loadError) => {
+                        console.error('Boss reload error:', loadError);
+                    });
+                }, 2200);
             }
             
             // Обновляем энергию локально (уже обновлена выше из result.player_energy)
@@ -2625,7 +2657,7 @@ async function healInfections() {
     try {
         const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
-            body: { item_id: cureItem.index }
+            body: { item_index: cureItem.index }
         });
         
         if (result.success) {
@@ -2694,10 +2726,14 @@ async function loadRaids() {
         const response = await apiRequest('/api/game/bosses/raids');
         const data = response?.data || response;
         gameState.raids = data.raids || [];
-        gameState.raidsParticipating = data.participating_raid_ids || data.participating_boss_ids || [];
+        gameState.raidsParticipating = data.participating_raid_ids || [];
+        gameState.participatingBossIds = data.participating_boss_ids || [];
         return data;
     } catch (error) {
         console.error('Ошибка загрузки рейдов:', error);
+        gameState.raids = [];
+        gameState.raidsParticipating = [];
+        gameState.participatingBossIds = [];
         return { raids: [], participating_boss_ids: [] };
     }
 }
@@ -2787,9 +2823,9 @@ async function joinRaid(raidId) {
  * @param {number} raidId - ID рейда
  */
 async function attackRaid(raidId) {
+    if (!lockAction('attackBoss')) return;
+
     try {
-        lockAction('attack');
-        
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/attack`, {
             method: 'POST'
         });
@@ -2799,6 +2835,11 @@ async function attackRaid(raidId) {
             
             // Показываем урон
             showDamageAnimation(data.damage);
+
+            if (typeof data.player_energy === 'number') {
+                syncPlayerEnergyState(data.player_energy, gameState.player?.status?.max_energy);
+                refreshPlayerEnergyUI();
+            }
             
             // Обновляем UI рейда
             await loadRaids();
@@ -2812,6 +2853,7 @@ async function attackRaid(raidId) {
                 if (data.rewards?.key?.boss_name) {
                     showKeyAnimation?.();
                 }
+                gameState.activeBattle = null;
                 showBossVictorySummary?.('Рейдовый босс', data.rewards || {}, null);
             } else if (typeof data.your_total_damage === 'number') {
                 showNotification(`Урон нанесён. Ваш вклад: ${data.your_total_damage}`, 'success');
@@ -2825,7 +2867,7 @@ async function attackRaid(raidId) {
         console.error('Ошибка атаки в рейде:', error);
         showNotification('Ошибка при атаке', 'error');
     } finally {
-        unlockAction('attack');
+        unlockAction('attackBoss');
     }
 }
 

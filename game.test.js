@@ -7,7 +7,7 @@ const { getMetrics, resetMetrics } = require('./utils/realtime');
 const { ACHIEVEMENTS } = require('./utils/game-helpers');
 const { calculateLocationRiskProfile } = require('./utils/gameConstants');
 const { calculateCoinsToSteal, calculatePVPRewardExperience } = require('./db/pvp');
-const { normalizeInventory, getActiveBuffs, isBuffActive } = require('./utils/game-helpers');
+const { normalizeInventory, createInventoryItem, getInventoryItemCategory, getActiveBuffs, isBuffActive } = require('./utils/game-helpers');
 
 // =============================================================================
 // Тесты telegramAuth
@@ -258,6 +258,64 @@ describe('Нормализация состояния', () => {
                 { id: 1, name: 'Нож' },
                 { id: 2, name: 'Аптечка' }
             ]);
+        });
+
+        test('должен отбрасывать мусорные значения из объектного инвентаря', () => {
+            const inventoryObject = {
+                a: { id: 1, name: 'Нож', type: 'weapon' },
+                b: null,
+                c: 'bad',
+                d: 12
+            };
+
+            expect(normalizeInventory(inventoryObject)).toEqual([
+                { id: 1, name: 'Нож', type: 'weapon' }
+            ]);
+        });
+    });
+
+    describe('createInventoryItem', () => {
+        test('должен собирать предмет с унифицированными полями из stats', () => {
+            const item = createInventoryItem({
+                id: 7,
+                name: 'Армейская аптечка',
+                type: 'medicine',
+                icon: '🩹',
+                stats: { health: 35, radiation_cure: 2 }
+            });
+
+            expect(item.heal).toBe(35);
+            expect(item.rad_removal).toBe(2);
+            expect(item.quantity).toBe(1);
+            expect(item.modifications).toEqual({});
+            expect(item.stats).toEqual({ health: 35, radiation_cure: 2 });
+        });
+
+        test('должен сохранять категорию и количество из overrides', () => {
+            const item = createInventoryItem({
+                id: 11,
+                name: 'Самодельный дробовик',
+                type: 'weapon'
+            }, {
+                category: 'weapon',
+                quantity: 3,
+                damage: 14
+            });
+
+            expect(item.category).toBe('weapon');
+            expect(item.quantity).toBe(3);
+            expect(item.damage).toBe(14);
+        });
+    });
+
+    describe('getInventoryItemCategory', () => {
+        test('должен брать category как основной источник', () => {
+            expect(getInventoryItemCategory({ category: 'Medicine', type: 'food' })).toBe('medicine');
+        });
+
+        test('должен fallback на type', () => {
+            expect(getInventoryItemCategory({ type: 'weapon' })).toBe('weapon');
+            expect(getInventoryItemCategory(null)).toBe('misc');
         });
     });
 

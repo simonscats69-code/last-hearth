@@ -168,9 +168,10 @@ router.post('/check', async (req, res) => {
  */
 router.post('/heal', async (req, res) => {
     try {
-        const { type, item_id } = req.body;
+        const { type, item_id, item_index } = req.body;
         const player = req.player;
         const playerId = player.id;
+        const normalizedItemIndex = item_index === undefined ? null : Number(item_index);
         
         // Валидация входных данных
         if (!type || typeof type !== 'string') {
@@ -194,9 +195,16 @@ router.post('/heal', async (req, res) => {
         if (item_id !== undefined) {
             validateItemId(item_id);
         }
+        if (item_index !== undefined && !Number.isInteger(normalizedItemIndex)) {
+            return res.status(400).json({
+                success: false,
+                error: 'item_index должен быть целым числом',
+                code: 'INVALID_ITEM_INDEX'
+            });
+        }
 
         if (type === 'debuff') {
-            const result = await DebuffAPI.cure(playerId, 'antibiotic', item_id);
+            const result = await DebuffAPI.cure(playerId, 'antibiotic', item_id, normalizedItemIndex);
             return res.json({
                 success: true,
                 ...result,
@@ -222,21 +230,28 @@ router.post('/heal', async (req, res) => {
             
             // Для типов, требующих item_id
             if (['health', 'radiation', 'debuff'].includes(type)) {
-                if (!item_id) {
-                    throw { message: 'item_id обязателен для этого типа', code: 'MISSING_ITEM_ID', statusCode: 400 };
+                if (item_id === undefined && item_index === undefined) {
+                    throw { message: 'item_id или item_index обязателен для этого типа', code: 'MISSING_ITEM_ID', statusCode: 400 };
                 }
-                
-                const item = inventory.find(i => i.id === item_id);
-                if (!item) {
+
+                const resolvedItemIndex = Number.isInteger(normalizedItemIndex)
+                    ? normalizedItemIndex
+                    : inventory.findIndex(i => Number(i?.id) === Number(item_id));
+                if (resolvedItemIndex < 0 || resolvedItemIndex >= inventory.length) {
                     throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_FOUND', statusCode: 404 };
                 }
+                const item = inventory[resolvedItemIndex];
+                const itemStats = safeJsonParse(item.stats, item.stats && typeof item.stats === 'object' ? item.stats : {}) || {};
                 
                 let healed = false;
                 let message = '';
                 let healAmount = 0;
                 
                 if (type === 'health') {
-                    healAmount = item.heal || 20;
+                    healAmount = Number(item.heal || itemStats.health || itemStats.health_restore || 0);
+                    if (healAmount <= 0) {
+                        throw { message: 'Этот предмет не восстанавливает здоровье', code: 'INVALID_ITEM_TYPE', statusCode: 400 };
+                    }
                     await client.query(`
                         UPDATE players SET health = LEAST(max_health, health + $1) WHERE id = $2
                     `, [healAmount, playerId]);
@@ -244,7 +259,10 @@ router.post('/heal', async (req, res) => {
                     healed = true;
                     
                 } else if (type === 'radiation') {
-                    healAmount = item.rad_removal || 30;
+                    healAmount = Number(item.rad_removal || itemStats.radiation_cure || 0);
+                    if (healAmount <= 0) {
+                        throw { message: 'Этот предмет не снижает радиацию', code: 'INVALID_ITEM_TYPE', statusCode: 400 };
+                    }
                     
                     // Получаем текущее значение радиации (может быть JSON или числом)
                     const currentRadiation = p.radiation;
@@ -269,7 +287,8 @@ router.post('/heal', async (req, res) => {
                 
                 if (healed) {
                     // Удаляем использованный предмет
-                    const newInventory = inventory.filter(i => i.id !== item_id);
+                    const newInventory = [...inventory];
+                    newInventory.splice(resolvedItemIndex, 1);
                     await client.query(`
                         UPDATE players SET inventory = $1 WHERE id = $2
                     `, [JSON.stringify(newInventory), playerId]);
@@ -277,7 +296,7 @@ router.post('/heal', async (req, res) => {
                     // Логируем действие
                     await logPlayerActionSimple(client, playerId, 'status_heal', {
                         type,
-                        item_id,
+                        item_id: item.id ?? item_id ?? null,
                         amount: healAmount
                     });
                     

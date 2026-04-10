@@ -12,6 +12,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, transaction: tx } = require('../../db/database');
 const { logger, safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
+const { normalizeInventory } = require('../../utils/game-helpers');
 const { 
     DEBUFF_TYPES, 
     DEBUFF_CONFIG, 
@@ -19,6 +20,10 @@ const {
     calculateDebuffModifiers,
     getDebuffTier
 } = require('../../utils/gameConstants');
+
+function createDebuffError(message, code, statusCode = 400) {
+    return { message, code, statusCode };
+}
 
 
 
@@ -300,10 +305,10 @@ const DebuffAPI = {
     /**
      * Лечить дебафф предметом
      */
-    async cure(playerId, cureType, itemId) {
+    async cure(playerId, cureType, itemId, itemIndex = null) {
         const cure = DEBUFF_CURES[cureType];
         if (!cure) {
-            throw new Error(`Неизвестный тип лечения: ${cureType}`);
+            throw createDebuffError(`Неизвестный тип лечения: ${cureType}`, 'INVALID_TYPE', 400);
         }
         
         return await tx(async (client) => {
@@ -315,29 +320,32 @@ const DebuffAPI = {
             const player = playerResult.rows[0];
             
             if (!player) {
-                throw new Error('Игрок не найден');
+                throw createDebuffError('Игрок не найден', 'PLAYER_NOT_FOUND', 404);
             }
             
             // Ищем предмет в инвентаре
-            const inventory = safeJsonParse(player.inventory, []);
-            const itemIndex = inventory.findIndex(i => i.id === itemId);
+            const inventory = normalizeInventory(player.inventory);
+            const resolvedItemIndex = Number.isInteger(itemIndex)
+                ? itemIndex
+                : inventory.findIndex(i => Number(i?.id) === Number(itemId));
             
-            if (itemIndex < 0) {
-                throw new Error('Предмет не найден в инвентаре');
+            if (resolvedItemIndex < 0 || resolvedItemIndex >= inventory.length) {
+                throw createDebuffError('Предмет не найден в инвентаре', 'ITEM_NOT_FOUND', 404);
             }
             
-            const item = inventory[itemIndex];
+            const item = inventory[resolvedItemIndex];
+            const itemStats = safeJsonParse(item.stats, item.stats && typeof item.stats === 'object' ? item.stats : {}) || {};
             
             // Проверяем, что предмет подходит для лечения
-            const canCure = (cure.radiationReduction && item.stats?.radiation_cure) ||
-                           (cure.infectionReduction && item.stats?.infection_cure);
+            const canCure = (cure.radiationReduction && Number(itemStats.radiation_cure || item.rad_removal || 0) > 0) ||
+                           (cure.infectionReduction && Number(itemStats.infection_cure || item.infection_cure || 0) > 0);
             
             if (!canCure) {
-                throw new Error('Этот предмет не лечит дебаффы');
+                throw createDebuffError('Этот предмет не лечит дебаффы', 'INVALID_ITEM_TYPE', 400);
             }
             
             // Лечим радиацию
-            if (cure.radiationReduction && item.stats?.radiation_cure) {
+            if (cure.radiationReduction && Number(itemStats.radiation_cure || item.rad_removal || 0) > 0) {
                 const radiation = safeJsonParse(player.radiation, { level: 0 });
                 const newLevel = Math.max(0, radiation.level - cure.radiationReduction);
                 
@@ -370,7 +378,7 @@ const DebuffAPI = {
             }
             
             // Лечим инфекции
-            if (cure.infectionReduction && item.stats?.infection_cure) {
+            if (cure.infectionReduction && Number(itemStats.infection_cure || item.infection_cure || 0) > 0) {
                 const infections = safeJsonParse(player.infections, []);
                 const remaining = [];
                 
@@ -403,7 +411,7 @@ const DebuffAPI = {
             }
             
             // Удаляем использованный предмет
-            inventory.splice(itemIndex, 1);
+            inventory.splice(resolvedItemIndex, 1);
             await client.query(
                 `UPDATE players SET inventory = $1 WHERE id = $2`,
                 [JSON.stringify(inventory), playerId]
@@ -485,14 +493,15 @@ router.post('/check', async (req, res) => {
  */
 router.post('/cure', async (req, res) => {
     try {
-        const { cureType, itemId } = req.body;
+        const { cureType, itemId, item_index } = req.body;
         const playerId = req.player.id;
+        const normalizedItemIndex = item_index === undefined ? null : Number(item_index);
         
         // Валидация
-        if (!cureType || !itemId) {
+        if (!cureType || (itemId === undefined && item_index === undefined)) {
             return res.status(400).json({
                 success: false,
-                error: 'cureType и itemId обязательны'
+                error: 'cureType и itemId/item_index обязательны'
             });
         }
         
@@ -502,8 +511,15 @@ router.post('/cure', async (req, res) => {
                 error: `Неверный тип лечения. Доступно: ${Object.keys(DEBUFF_CURES).join(', ')}`
             });
         }
+
+        if (item_index !== undefined && !Number.isInteger(normalizedItemIndex)) {
+            return res.status(400).json({
+                success: false,
+                error: 'item_index должен быть целым числом'
+            });
+        }
         
-        const result = await DebuffAPI.cure(playerId, cureType, itemId);
+        const result = await DebuffAPI.cure(playerId, cureType, itemId, normalizedItemIndex);
         
         res.json({
             success: true,

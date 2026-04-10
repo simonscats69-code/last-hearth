@@ -16,7 +16,7 @@ const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError, safeParse, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
-const { getActiveBuffs } = require('../../utils/game-helpers');
+const { getActiveBuffs, normalizeInventory } = require('../../utils/game-helpers');
 
 
 
@@ -510,8 +510,8 @@ router.post('/attack-hit', async (req, res) => {
                 );
 
                 // Шанс украсть предмет (снижено с 30% до 10%)
-                const defenderInventory = safeParse(defender.inventory, []);
-                const attackerInventory = safeParse(attacker.inventory, []);
+                const defenderInventory = normalizeInventory(defender.inventory);
+                const attackerInventory = normalizeInventory(attacker.inventory);
                 let stolenItem = null;
 
                 if (Array.isArray(defenderInventory) && defenderInventory.length > 0 && Math.random() < 0.1) {

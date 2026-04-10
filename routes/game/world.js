@@ -14,7 +14,7 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, withPlayerLock, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation, getActiveBuffs } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
 
 // =============================================================================
@@ -106,29 +106,15 @@ async function getRandomLootItem(client, rarity, locationId) {
 }
 
 function buildInventoryItem(item, rarity) {
-    const parsedStats = safeParse(item?.stats, {});
-
-    return {
-        id: item.id,
-        name: item.name,
-        type: item.type || 'misc',
-        category: item.category || item.type || 'misc',
-        rarity: rarity || item.rarity || 'common',
-        icon: item.icon,
-        slot: item.slot || null,
-        stats: parsedStats,
-        damage: Number(item.damage || parsedStats.damage || 0),
-        defense: Number(item.defense || parsedStats.defense || 0),
-        heal: Number(parsedStats.health || item.heal || 0),
-        rad_removal: Number(parsedStats.radiation_cure || item.rad_removal || 0),
-        radiation_resist: Number(parsedStats.radiation_resist || 0),
-        infection_resist: Number(parsedStats.infection_resist || 0),
-        durability: Number(item.durability || 100),
-        max_durability: Number(item.durability || 100),
+    return createInventoryItem({
+        ...item,
+        stats: safeParse(item?.stats, {})
+    }, {
+        rarity,
         quantity: 1,
         upgrade_level: 0,
         modifications: {}
-    };
+    });
 }
 
 // =============================================================================

@@ -248,9 +248,14 @@ async function validatePlayer(req, res, next) {
 router.use(validatePlayer);
 
 // Применяем rate limiters к критическим маршрутам
-// Критические действия: атаки боссов, PvP атаки, спин колеса
-router.use('/bosses', criticalActionLimiter);
-router.use('/pvp', criticalActionLimiter);
+// Критические действия: только боевые удары и спин колеса.
+// Важно: не лимитируем весь namespace /bosses и /pvp, иначе под 429 попадают
+// обычные экраны загрузки списка боссов, рейдов и игроков.
+router.use('/bosses/attack-boss', criticalActionLimiter);
+router.use('/bosses/attack-with-weapon', criticalActionLimiter);
+router.use(/^\/bosses\/raid\/\d+\/attack$/, criticalActionLimiter);
+router.use('/pvp/attack', criticalActionLimiter);
+router.use('/pvp/attack-hit', criticalActionLimiter);
 router.use('/minigames/wheel/spin', criticalActionLimiter);
 
 // Покупки: отдельный лимитер
