@@ -898,6 +898,9 @@ async function runMigrations() {
     // Миграции для daily_tasks в таблице players
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_completed INTEGER DEFAULT 0`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
+
+    // Миграция для wheel в таблице players
+    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_wheel_spin TIMESTAMP`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referrals INTEGER DEFAULT 0`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_collected INTEGER DEFAULT 0`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT false`);

@@ -91,9 +91,27 @@ function resolveInventoryItemIndex(inventory, itemIndex, itemId) {
 router.get('/', async (req, res) => {
     try {
         const player = req.player;
-        
+
         const inventory = normalizeInventory(player.inventory);
         const equipment = safeJsonParse(player.equipment, {});
+
+        // DEBUG: Логируем инвентарь для диагностики проблемы с ключом
+        logger.info('[inventory] Загрузка инвентаря для игрока:', {
+            playerId: player.id,
+            inventoryLength: inventory.length,
+            inventoryItems: inventory.map(item => ({
+                type: item.type,
+                name: item.name,
+                quantity: item.quantity
+            }))
+        });
+
+        const keyItems = inventory.filter(item => item.type === 'key');
+        if (keyItems.length > 0) {
+            logger.info('[inventory] Найдены ключи:', keyItems);
+        } else {
+            logger.info('[inventory] Ключи не найдены в инвентаре');
+        }
         
         const itemsByType = {};
         inventory.forEach((item, index) => {

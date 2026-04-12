@@ -490,6 +490,23 @@ router.post('/start', async (req, res) => {
                 await spendBossKeys(client, playerId, bossId - 1);
             }
 
+            // DEBUG: Проверить существование игрока перед вставкой
+            const playerExists = await client.query('SELECT id FROM players WHERE id = $1', [playerId]);
+            logger.info('[bosses/start] Проверка существования игрока:', {
+                playerId,
+                exists: playerExists.rows.length > 0,
+                playerExistsRow: playerExists.rows[0]
+            });
+
+            if (playerExists.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Игрок не найден в базе данных',
+                    code: 'PLAYER_NOT_FOUND_IN_DB'
+                });
+            }
+
             await client.query(
                 `INSERT INTO player_boss_progress (player_id, boss_id, current_hp, max_hp, started_at, last_attack)
                  VALUES ($1, $2, $3, $4, NOW(), NOW())
