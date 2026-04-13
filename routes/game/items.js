@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { withPlayerLock, validateId, validateIndex, validateBoolean, validatePositiveInt, ok, fail, error, badRequest, guard, wrap, logPlayerAction, serializeJSONField, logger, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { withPlayerLock, validateIndex, validateBoolean, ok, fail, error, badRequest, logPlayerAction, logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 const { normalizeInventory, createInventoryItem } = require('../../utils/game-helpers');
 
 function getShopCategory(item) {
@@ -21,7 +21,7 @@ function getShopCategory(item) {
 }
 
 function resolveEquipSlot(item) {
-    const rawSlot = String(item?.slot || item?.category || item?.type || '').toLowerCase();
+    const rawSlot = String(item?.slot ?? item?.category ?? item?.type ?? '').toLowerCase();
 
     if (rawSlot === 'weapon') return 'weapon';
     if (['body', 'armor', 'chest'].includes(rawSlot)) return 'armor';
@@ -95,23 +95,7 @@ router.get('/', async (req, res) => {
         const inventory = normalizeInventory(player.inventory);
         const equipment = safeJsonParse(player.equipment, {});
 
-        // DEBUG: Логируем инвентарь для диагностики проблемы с ключом
-        logger.info('[inventory] Загрузка инвентаря для игрока:', {
-            playerId: player.id,
-            inventoryLength: inventory.length,
-            inventoryItems: inventory.map(item => ({
-                type: item.type,
-                name: item.name,
-                quantity: item.quantity
-            }))
-        });
-
-        const keyItems = inventory.filter(item => item.type === 'key');
-        if (keyItems.length > 0) {
-            logger.info('[inventory] Найдены ключи:', keyItems);
-        } else {
-            logger.info('[inventory] Ключи не найдены в инвентаре');
-        }
+        // Удалены DEBUG логи
         
         const itemsByType = {};
         inventory.forEach((item, index) => {
@@ -181,7 +165,7 @@ router.post('/upgrade-item', async (req, res) => {
             const item = inventory[item_index];
             
             // Проверяем, что предмет можно улучшать
-            if (!item.damage && !item.defense) {
+            if (!('damage' in item) && !('defense' in item)) {
                 throw { message: 'Этот предмет нельзя улучшить', code: 'ITEM_NOT_UPGRADEABLE', statusCode: 400 };
             }
             
@@ -208,7 +192,7 @@ router.post('/upgrade-item', async (req, res) => {
             }
             
             // Шанс успеха (уменьшается с каждым уровнем)
-            let successChance = 100 - (currentLevel * 8);
+            let successChance = Math.max(0, 100 - (currentLevel * 8));
             if (normalizedUseProtection) {
                 successChance += 20;
             }
@@ -232,10 +216,9 @@ router.post('/upgrade-item', async (req, res) => {
                 
                 // Обновляем инвентарь и списываем монеты внутри транзакции
                 await client.query(`
-                    UPDATE players 
+                    UPDATE players
                     SET inventory = $1, coins = coins - $2
                     WHERE id = $3
-                    RETURNING *
                 `, [inventory, upgradeCost, lockedPlayer.id]);
                 
             } else {
@@ -244,19 +227,17 @@ router.post('/upgrade-item', async (req, res) => {
                     // Защита сработала - предмет не сломался
                     await client.query(`
                         UPDATE players SET coins = coins - $1 WHERE id = $2
-                        RETURNING *
                     `, [upgradeCost, lockedPlayer.id]);
                     
                 } else {
                     // Предмет сломался
                     itemBroken = true;
                     inventory.splice(item_index, 1);
-                    
+
                     await client.query(`
-                        UPDATE players 
+                        UPDATE players
                         SET inventory = $1, coins = coins - $2
                         WHERE id = $3
-                        RETURNING *
                     `, [inventory, upgradeCost, lockedPlayer.id]);
                 }
             }
@@ -392,7 +373,7 @@ router.post('/modify-item', async (req, res) => {
             }
             
             // Шанс успеха
-            const successChance = 90 - (currentMod * 10);
+            const successChance = Math.max(0, 90 - (currentMod * 10));
             const rolled = Math.random() * 100;
             
             if (rolled <= successChance) {
@@ -407,10 +388,9 @@ router.post('/modify-item', async (req, res) => {
                 
                 // Выполняем запрос внутри транзакции
                 await client.query(`
-                    UPDATE players 
+                    UPDATE players
                     SET inventory = $1, coins = coins - $2
                     WHERE id = $3
-                    RETURNING *
                 `, [inventory, modCost, lockedPlayer.id]);
                 
                 // Возвращаем результат успеха
@@ -427,7 +407,6 @@ router.post('/modify-item', async (req, res) => {
                 // Неудача - монеты все равно списываются
                 await client.query(`
                     UPDATE players SET coins = coins - $1 WHERE id = $2
-                    RETURNING *
                 `, [modCost, lockedPlayer.id]);
                 
                 // Возвращаем результат неудачи
@@ -487,9 +466,9 @@ router.post('/modify-item', async (req, res) => {
 
 /**
  * Получение списка предметов (справочник)
- * GET /api/game/items или GET /api/game/items/
+ * GET /api/game/items/list
  */
-router.get('/items', async (req, res) => {
+router.get('/list', async (req, res) => {
     try {
         // Валидация пагинации
         let limit = parseInt(req.query.limit) || 50;
@@ -538,125 +517,74 @@ router.get('/items', async (req, res) => {
  * POST /api/game/inventory/use-item (через алиас) или POST /api/game/items/use
  */
 router.post('/use-item', async (req, res) => {
-    const client = await pool.connect();
-    
     try {
         const { item_index, item_id, equip = false } = req.body;
         const playerId = req.player.id;
         const normalizedItemIndexInput = item_index === undefined ? null : Number(item_index);
-        
+
+        // Валидация входных данных
         if (item_index === undefined && item_id === undefined) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите индекс или ID предмета',
-                code: 'MISSING_ITEM_INDEX'
-            });
+            return badRequest(res, 'Укажите индекс или ID предмета', 'MISSING_ITEM_INDEX');
         }
-        
+
         if (item_index !== undefined && !Number.isInteger(normalizedItemIndexInput)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Индекс предмета должен быть целым числом',
-                code: 'INVALID_ITEM_INDEX_TYPE'
-            });
+            return badRequest(res, 'Индекс предмета должен быть целым числом', 'INVALID_ITEM_INDEX_TYPE');
         }
-        
-        await client.query('BEGIN');
-        
-        try {
-            const playerResult = await client.query(`
-                SELECT * FROM players WHERE id = $1 FOR UPDATE
-            `, [playerId]);
-            
-            const player = playerResult.rows[0];
-            
-            if (!player) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({
-                    success: false,
-                    error: 'Игрок не найден',
-                    code: 'PLAYER_NOT_FOUND'
-                });
-            }
-            
-            const inventory = normalizeInventory(player.inventory);
+
+        // Используем withPlayerLock для автоматического управления транзакцией
+        const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
+            const inventory = normalizeInventory(lockedPlayer.inventory);
             const normalizedItemIndex = resolveInventoryItemIndex(inventory, normalizedItemIndexInput, item_id);
-            
+
+            // Валидация индекса внутри транзакции
             if (normalizedItemIndex < 0 || normalizedItemIndex >= inventory.length) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Неверный индекс предмета',
-                    code: 'INVALID_ITEM_INDEX'
-                });
+                throw { message: 'Неверный индекс предмета', code: 'INVALID_ITEM_INDEX', statusCode: 400 };
             }
-            
+
             const item = inventory[normalizedItemIndex];
-            
+
             if (!item || typeof item !== 'object' || !item.name || !(item.type || item.category)) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Некорректная структура предмета',
-                    code: 'INVALID_ITEM_STRUCTURE'
-                });
+                throw { message: 'Некорректная структура предмета', code: 'INVALID_ITEM_STRUCTURE', statusCode: 400 };
             }
-            
+
             if (equip) {
-                const equipment = safeJsonParse(player.equipment, {});
+                const equipment = safeJsonParse(lockedPlayer.equipment, {});
                 const slot = resolveEquipSlot(item);
-                
+
                 if (!slot) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        error: 'Этот предмет нельзя экипировать',
-                        code: 'INVALID_EQUIP_TYPE'
-                    });
+                    throw { message: 'Этот предмет нельзя экипировать', code: 'INVALID_EQUIP_TYPE', statusCode: 400 };
                 }
-                
+
                 const oldItem = equipment[slot];
                 if (oldItem) {
                     inventory.push(oldItem);
                 }
-                
+
                 equipment[slot] = item;
                 inventory.splice(normalizedItemIndex, 1);
-                
+
                 await client.query(`
-                    UPDATE players 
+                    UPDATE players
                     SET equipment = $1, inventory = $2
                     WHERE id = $3
-                `, [JSON.stringify(equipment), JSON.stringify(inventory), playerId]);
-                
-                await client.query('COMMIT');
-                
-                logger.info(`[items] Экипировка предмета`, {
-                    playerId,
-                    itemName: item.name,
-                    slot
-                });
-                
-                res.json({
-                    success: true,
-                    message: `Экипирован ${item.name}`,
-                    data: {
-                        message: `Экипирован ${item.name}`,
-                        equipped: slot,
-                        item: item
-                    }
-                });
-                
+                `, [equipment, inventory, lockedPlayer.id]);
+
+                return {
+                    action: 'equip',
+                    slot,
+                    item
+                };
+
             } else {
                 let message = '';
                 let updated = false;
-                
+
                 const newInventory = inventory.filter((_, i) => i !== normalizedItemIndex);
                 const stats = normalizeItemStats(item);
-                
+
                 if (stats.infection_cure) {
                     const cureAmount = Number(stats.infection_cure || 0);
-                    const currentInfections = safeJsonParse(player.infections, []);
+                    const currentInfections = safeJsonParse(lockedPlayer.infections, []);
                     const updatedInfections = reduceInfections(currentInfections, cureAmount);
                     const oldLevel = currentInfections.reduce((sum, infection) => sum + Number(infection.level || 0), 0);
                     const newLevel = updatedInfections.reduce((sum, infection) => sum + Number(infection.level || 0), 0);
@@ -666,7 +594,7 @@ router.post('/use-item', async (req, res) => {
                         SET infections = $1,
                             inventory = $2
                         WHERE id = $3
-                    `, [JSON.stringify(updatedInfections), JSON.stringify(newInventory), playerId]);
+                    `, [updatedInfections, newInventory, lockedPlayer.id]);
 
                     message = `Использовали ${item.name}. Инфекция снижена с ${oldLevel} до ${newLevel}`;
                     updated = true;
@@ -675,11 +603,11 @@ router.post('/use-item', async (req, res) => {
                     const radiationCure = Number(stats.radiation_cure || item.rad_removal || 2);
 
                     let currentRadiation = { level: 0 };
-                    if (player.radiation) {
-                        if (typeof player.radiation === 'object') {
-                            currentRadiation = player.radiation;
-                        } else if (typeof player.radiation === 'number') {
-                            currentRadiation = { level: player.radiation };
+                    if (lockedPlayer.radiation) {
+                        if (typeof lockedPlayer.radiation === 'object') {
+                            currentRadiation = lockedPlayer.radiation;
+                        } else if (typeof lockedPlayer.radiation === 'number') {
+                            currentRadiation = { level: lockedPlayer.radiation };
                         }
                     }
 
@@ -696,11 +624,11 @@ router.post('/use-item', async (req, res) => {
                     }
 
                     await client.query(`
-                        UPDATE players 
+                        UPDATE players
                         SET radiation = $1,
                             inventory = $2
                         WHERE id = $3
-                    `, [JSON.stringify({ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }), JSON.stringify(newInventory), playerId]);
+                    `, [{ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }, newInventory, lockedPlayer.id]);
 
                     message = `Использовали ${item.name}. Радиация снижена с ${currentRadiation.level} до ${newLevel}`;
                     updated = true;
@@ -712,76 +640,92 @@ router.post('/use-item', async (req, res) => {
                         SET energy = LEAST(max_energy, energy + $1),
                             inventory = $2
                         WHERE id = $3
-                    `, [energyRestored, JSON.stringify(newInventory), playerId]);
+                    `, [energyRestored, newInventory, lockedPlayer.id]);
 
                     message = `Использовали ${item.name}. Энергия +${energyRestored}`;
                     updated = true;
 
                 } else if (item.type === 'medicine') {
                     // Бонус к лечению от intelligence: +10% за каждую единицу
-                    const intBonus = 1 + (((player.intelligence || 1) - 1) * 0.1);
+                    const intBonus = 1 + (((lockedPlayer.intelligence || 1) - 1) * 0.1);
                     const healthRestored = Math.floor(((item.heal ?? stats.health ?? 20)) * intBonus);
                     await client.query(`
-                        UPDATE players 
+                        UPDATE players
                         SET health = LEAST(max_health, health + $1),
                             inventory = $2
                         WHERE id = $3
-                    `, [healthRestored, JSON.stringify(newInventory), playerId]);
-                    
-                    message = `Использовали ${item.name}. Здоровье +${healthRestored}${player.intelligence > 1 ? ' (бонус интеллекта +' + Math.round((intBonus - 1) * 100) + '%)' : ''}`;
+                    `, [healthRestored, newInventory, lockedPlayer.id]);
+
+                    message = `Использовали ${item.name}. Здоровье +${healthRestored}${lockedPlayer.intelligence > 1 ? ' (бонус интеллекта +' + Math.round((intBonus - 1) * 100) + '%)' : ''}`;
                     updated = true;
-                    
+
                 } else if (item.type === 'bandage') {
-                    const healthRestored = item.heal || item.stats?.health_restore || 10;
-                    
+                    const healthRestored = stats.health_restore || item.heal || 10;
+
                     await client.query(`
-                        UPDATE players 
+                        UPDATE players
                         SET health = LEAST(max_health, health + $1),
                             inventory = $2
                         WHERE id = $3
-                    `, [healthRestored, JSON.stringify(newInventory), playerId]);
-                    
+                    `, [healthRestored, newInventory, lockedPlayer.id]);
+
                     message = `Использовали ${item.name}. Здоровье +${healthRestored}`;
                     updated = true;
-                    
+
                 } else {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        error: 'Этот предмет нельзя использовать',
-                        code: 'UNUSABLE_ITEM'
-                    });
+                    throw { message: 'Этот предмет нельзя использовать', code: 'UNUSABLE_ITEM', statusCode: 400 };
                 }
-                
-                await client.query('COMMIT');
-                
+
                 if (updated) {
-                    logger.info(`[items] Использование предмета`, {
-                        playerId,
-                        itemName: item.name,
-                        itemType: item.type
-                    });
-                    
-                    res.json({
-                        success: true,
+                    return {
+                        action: 'use',
                         message,
-                        data: {
-                            message: message,
-                            item: item
-                        }
-                    });
+                        item
+                    };
                 }
             }
-            
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
+        });
+
+        // Логируем действие после успешной транзакции
+        try {
+            if (result.action === 'equip') {
+                logger.info(`[items] Экипировка предмета`, {
+                    playerId,
+                    itemName: result.item.name,
+                    slot: result.slot
+                });
+            } else if (result.action === 'use') {
+                logger.info(`[items] Использование предмета`, {
+                    playerId,
+                    itemName: result.item.name,
+                    itemType: result.item.type
+                });
+            }
+        } catch (logErr) {
+            logger.error({ type: 'use_item_log_error', message: logErr.message });
         }
-        
-    } catch (error) {
-        handleError(res, error, 'use_item');
-    } finally {
-        client.release();
+
+        // Отправляем ответ
+        if (result.action === 'equip') {
+            ok(res, {
+                message: `Экипирован ${result.item.name}`,
+                equipped: result.slot,
+                item: result.item
+            });
+        } else if (result.action === 'use') {
+            ok(res, {
+                message: result.message,
+                item: result.item
+            });
+        }
+
+    } catch (err) {
+        // Обработка ошибок from withPlayerLock
+        if (err.code && err.statusCode) {
+            return fail(res, err.message, err.code, err.statusCode);
+        }
+        logger.error('[items] Ошибка использования:', err);
+        error(res, 'Ошибка использования предмета', 'USE_ITEM_ERROR', 500);
     }
 });
 
@@ -826,7 +770,7 @@ router.get('/shop', async (req, res) => {
                 let parsedStats = {};
                 if (item.stats) {
                     try {
-                        parsedStats = typeof item.stats === 'string' ? JSON.parse(item.stats) : item.stats;
+                        parsedStats = typeof item.stats === 'string' ? JSON.parse(item.stats) : (typeof item.stats === 'object' ? item.stats : {});
                     } catch (e) {
                         parsedStats = {};
                     }
@@ -906,29 +850,34 @@ router.post('/buy', async (req, res) => {
         
         inventory.push(newItem);
         
-        await client.query(
+        const updateResult = await client.query(
             `UPDATE players
              SET inventory = $1,
                  items_collected = COALESCE(items_collected, 0) + 1
-             WHERE id = $2`,
-            [JSON.stringify(inventory), playerId]
+             WHERE id = $2
+             RETURNING coins`,
+            [inventory, playerId]
         );
-        
-        // Логируем действие
-        await logPlayerAction(pool, playerId, 'shop_buy', {
-            item_id: shopItem.id,
-            item_name: shopItem.name,
-            price: price,
-            currency: currency
-        });
-        
+
         await client.query('COMMIT');
+
+        // Логируем действие после успешного коммита
+        try {
+            await logPlayerAction(pool, playerId, 'shop_buy', {
+                item_id: shopItem.id,
+                item_name: shopItem.name,
+                price: price,
+                currency: currency
+            });
+        } catch (logErr) {
+            logger.error({ type: 'shop_buy_log_error', message: logErr.message });
+        }
         
         res.json({
             success: true,
             message: `Вы купили ${shopItem.name} за ${price} монет`,
             purchased_item: newItem,
-            remaining_coins: playerCoins - price
+            remaining_coins: updateResult.rows[0].coins
         });
         
     } catch (error) {
