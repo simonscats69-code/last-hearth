@@ -1371,8 +1371,7 @@ const SCREENS = [
     'pvp-fight',      // PvP бой
     'pvp-stats',      // PvP статистика
     'achievements',   // Достижения
-    'referral',       // Рефералы
-    'profile'         // Профиль
+    'referral'        // Рефералы
 ];
 
 /**
@@ -1470,13 +1469,6 @@ function onScreenOpen(screenName) {
         case 'achievements':
             // Загружаем достижения
             loadAchievements();
-            break;
-
-        case 'profile':
-            // Профиль уже загружен, обновляем UI из кэша
-            if (gameState.player) {
-                updateProfileUI(gameState.player);
-            }
             break;
 
         case 'market':
@@ -7063,4 +7055,3 @@ window.showLootAnimation = showLootAnimation;
 window.showDamageEffect = showDamageEffect;
 window.playSound = playSound;
 window.updateBalanceDisplay = updateBalanceDisplay;
-

@@ -4,12 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    
-    <!-- Telegram Mini App мета-теги -->
-    <meta name="telegram-web-app-version" content="1.0.0">
-    <meta name="telegram-web-app-enabled" content="true">
-    <meta name="telegram-web-app-platform" content="ios/android">
-    
+
     <!-- SEO -->
     <meta name="description" content="Последний Очаг - постапокалиптическая RPG игра">
     <meta name="theme-color" content="#1a1814">
@@ -23,60 +18,10 @@
     
     <!-- Глобальный обработчик ошибок -->
     <script>
-        // Максимальное количество подавленных ошибок
-        const MAX_SUPPRESSED_ERRORS = 20;
-        let suppressedCount = 0;
-        
-        // Известные коды ошибок Telegram, которые можно игнорировать
-        const IGNORED_ERROR_CODES = [
-            'Failed to execute \'drawImage\'',
-            'The image source is detached',
-            'MediaError',
-            'ERR_CONNECTION_RESET',
-            'net::ERR_CONNECTION_RESET',
-            'leak',
-            'peer changed'
-        ];
-        
-        // Проверяем, нужно ли игнорировать ошибку
-        function shouldIgnoreError(error) {
-            if (suppressedCount >= MAX_SUPPRESSED_ERRORS) {
-                return false;
-            }
-            
-            const errorStr = String(error.reason || error.message || error);
-            
-            for (const ignored of IGNORED_ERROR_CODES) {
-                if (errorStr.includes(ignored)) {
-                    suppressedCount++;
-                    console.warn('[ErrorFilter] Игнорируем известную ошибку:', ignored);
-                    return true;
-                }
-            }
-            return false;
-        }
-        
-        // Отлавливаем необработанные ошибки промисов
-        window.addEventListener('unhandledrejection', function(event) {
-            if (shouldIgnoreError(event.reason)) {
-                event.preventDefault();
-                return;
-            }
-            console.error('[Global] Unhandled Promise Rejection:', event.reason);
-            // Не показываем пользователю технические ошибки
+        const _ignored = ['drawImage', 'MediaError', 'ERR_CONNECTION_RESET', 'peer changed'];
+        window.addEventListener('unhandledrejection', e => {
+            if (_ignored.some(s => String(e.reason).includes(s))) e.preventDefault();
         });
-        
-        // Отлавливаем ошибки скриптов
-        window.addEventListener('error', function(event) {
-            // Проверяем на ошибки изображений и видео
-            if (event.message && event.message.includes('Image')) {
-                console.warn('[Global] Ошибка изображения (игнорируем):', event.message);
-                return;
-            }
-            console.error('[Global] Script Error:', event.message, 'at', event.filename + ':' + event.lineno);
-        });
-        
-        console.log('[index.html] Страница загружена, версия: 11');
     </script>
     
     <!-- Предподключение для внешних ресурсов -->
@@ -256,20 +201,12 @@
                         <span class="status-icon">☢️</span>
                         <span class="status-value" id="radiation-value">0</span>
                         <span class="status-label">Радиация</span>
-                        <div class="debuff-mini-bar">
-                            <div class="debuff-mini-fill" id="debuff-radiation-bar" style="width: 0%"></div>
-                        </div>
-                        <span class="debuff-timer" id="debuff-radiation-timer"></span>
                     </div>
                     <!-- Инфекция -->
                     <div class="status-item danger" id="debuff-infection-panel">
                         <span class="status-icon">🦠</span>
                         <span class="status-value" id="infection-value">0</span>
                         <span class="status-label">Инфекция</span>
-                        <div class="debuff-mini-bar">
-                            <div class="debuff-mini-fill" id="debuff-infection-bar" style="width: 0%"></div>
-                        </div>
-                        <span class="debuff-timer" id="debuff-infection-timer"></span>
                     </div>
                     <div class="status-item">
                         <span class="status-icon">💰</span>
@@ -280,11 +217,6 @@
                 
                 <!-- Состояния: переломы и инфекции -->
                 <div class="conditions-grid" id="conditions-grid" style="display: none;">
-                    <div class="condition-item broken-bones" id="broken-bones-display" style="display: none;">
-                        <span class="condition-icon">🦴</span>
-                        <span class="condition-text" id="broken-bones-text">Переломы: 0</span>
-                        <span class="condition-effect">-50% ⚡</span>
-                    </div>
                     <div class="condition-item infections" id="infections-display" style="display: none;">
                         <span class="condition-icon">🤒</span>
                         <span class="condition-text" id="infections-text">Инфекции: 0</span>
@@ -298,10 +230,6 @@
                 <button class="extra-btn" id="bosses-btn">
                     <span>👹</span> Боссы
                     <span class="extra-badge" id="bosses-badge" style="display: none;"></span>
-                </button>
-                <button class="extra-btn" id="shop-btn">
-                    <span>🏪</span> Магазин
-                    <span class="extra-badge" id="shop-badge" style="display: none;"></span>
                 </button>
                 <button class="extra-btn" id="rating-btn">
                     <span>🏆</span> Рейтинг
@@ -893,28 +821,12 @@
             </div>
         </div>
 
-        <!-- AdsGram контейнер -->
-        <div id="adsgram-container"></div>
     </div>
 
-    <!-- AdsGram SDK (с проверкой загрузки) -->
-    <script>
-        // Проверка загрузки AdsGram
-        window.addEventListener('load', function() {
-            var adsgramScript = document.createElement('script');
-            adsgramScript.src = 'https://adsgram.app/js/adsgram.js';
-            adsgramScript.async = true;
-            adsgramScript.onerror = function() {
-                console.warn('AdsGram SDK не загружен (возможно, сервис недоступен)');
-                window.AdsgramAvailable = false;
-            };
-            adsgramScript.onload = function() {
-                console.log('AdsGram SDK загружен');
-                window.AdsgramAvailable = true;
-            };
-            document.head.appendChild(adsgramScript);
-        });
-    </script>
+    <!-- AdsGram SDK -->
+    <script async src="https://adsgram.app/js/adsgram.js"
+        onload="window.AdsgramAvailable=true"
+        onerror="window.AdsgramAvailable=false"></script>
     <!-- Объединённый скрипт игры -->
     <script src="game.js?v=12" defer></script>
 </body>
