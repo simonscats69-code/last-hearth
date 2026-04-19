@@ -492,7 +492,8 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
                     showNotification('Пропал интернет. Проверь соединение.', 'error');
                 } else {
-                    showNotification('Ошибка: ' + error.message, 'error');
+                    const message = error.message || 'Неизвестная ошибка';
+                    showNotification('Ошибка: ' + message, 'error');
                 }
                 throw error;
             }

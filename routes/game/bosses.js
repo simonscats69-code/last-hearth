@@ -504,11 +504,20 @@ function buildAlreadyInFightResponse(activeBattle) {
 }
 
 router.post('/start', async (req, res) => {
-    const client = await pool.connect();
+    logger.info('[bosses/start] Начало запроса', { playerId: req.player?.id, body: req.body });
+    let client;
+    try {
+        client = await pool.connect();
+        logger.info('[bosses/start] Подключение к БД успешно');
+    } catch (dbError) {
+        logger.error('[bosses/start] Ошибка подключения к БД', dbError);
+        return res.status(502).json({ success: false, error: 'Ошибка подключения к базе данных' });
+    }
 
     try {
         const bossId = Number(req.body?.boss_id);
         const playerId = req.player.id;
+        logger.info('[bosses/start] Валидация данных', { bossId, playerId });
 
         if (!validateBossId(bossId)) {
             return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
@@ -597,7 +606,7 @@ router.post('/start', async (req, res) => {
     } catch (error) {
         return handleError(res, error, 'solo_start');
     } finally {
-        client.release();
+        if (client) client.release();
     }
 });
 
@@ -632,10 +641,19 @@ router.get('/bonuses', async (req, res) => {
 });
 
 router.get('/', async (req, res) => {
-    const client = await pool.connect();
+    logger.info('[bosses/get] Начало запроса', { playerId: req.player?.id });
+    let client;
+    try {
+        client = await pool.connect();
+        logger.info('[bosses/get] Подключение к БД успешно');
+    } catch (dbError) {
+        logger.error('[bosses/get] Ошибка подключения к БД', dbError);
+        return res.status(502).json({ success: false, error: 'Ошибка подключения к базе данных' });
+    }
 
     try {
         const playerId = req.player.id;
+        logger.info('[bosses/get] Получение данных игрока', { playerId });
         const player = await getPlayerBaseState(client, playerId);
         const activeBattle = await resolveActiveBattle(client, playerId);
         const masteries = await getBossMasteries(client, playerId);
@@ -703,7 +721,7 @@ router.get('/', async (req, res) => {
     } catch (error) {
         return handleError(res, error, 'boss_list');
     } finally {
-        client.release();
+        if (client) client.release();
     }
 });
 

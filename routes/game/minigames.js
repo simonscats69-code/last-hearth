@@ -52,13 +52,16 @@ function selectPrize() {
  * GET /wheel - получить информацию о колесе
  */
 router.get('/wheel', async (req, res) => {
+    logger.info('[minigames/wheel] Начало запроса', { playerId: req.player?.id });
     const playerId = req.player?.id;
-    
+
     if (!playerId) {
+        logger.warn('[minigames/wheel] Нет playerId');
         return res.status(401).json({ success: false, error: 'Не авторизован' });
     }
-    
+
     try {
+        logger.info('[minigames/wheel] Запрос к БД для playerId', playerId);
         // Получаем время последнего вращения
         const result = await query(
             'SELECT last_wheel_spin FROM players WHERE id = $1',
