@@ -4,6 +4,7 @@
  */
 
 const { query, queryOne, queryAll, pool } = require('./database');
+const { logger } = require('../utils/serverApi');
 
 /**
  * Проверка, является ли локация красной зоной (PvP разрешено)
@@ -163,7 +164,7 @@ async function getPVPStats(playerId) {
  */
 async function createPVPMatch(attackerId, defenderId, locationId, client = null) {
     const executeQuery = client
-        ? (sql, params) => client.query(sql, params).then(r => r.rows[0])
+        ? (sql, params) => client.query(sql, params).then(r => r.rows[0] ?? null)
         : (sql, params) => queryOne(sql, params);
     
     const match = await executeQuery(
@@ -228,7 +229,7 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
         
         // Логирование для отладки (только в dev режиме)
         if (process.env.NODE_ENV !== 'production') {
-            console.debug(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
+            logger.debug(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
         }
         
         // Формируем правильный запрос для обновления
@@ -318,6 +319,7 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
         };
         
     } catch (error) {
+        logger.error('[PvP] Ошибка в resolvePvpFight:', error);
         await client.query('ROLLBACK');
         throw error;
     } finally {

@@ -191,6 +191,9 @@ function rollLootDrop(lootTable, luck, itemRarity) {
     }
     
     // Случайный предмет из отфильтрованных
+    if (filteredItems.length === 0) {
+        return null;
+    }
     return filteredItems[Math.floor(Math.random() * filteredItems.length)];
 }
 

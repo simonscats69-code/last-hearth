@@ -1,7 +1,7 @@
 /**
  * Объединённый модуль серверных утилит для Last Hearth
  * Объединяет: валидацию, ответы API, транзакции, логирование, обработку ошибок, Telegram авторизацию
- * 
+ *
  * Объединённые модули:
  * - apiHelpers.js (валидация, ответы API)
  * - transactions.js (транзакции, блокировки, логирование)
@@ -14,6 +14,7 @@
 
 
 
+
 const { query, queryOne, transaction: tx, pool } = require('../db/database');
 const playerService = require('../playerService');
 const winston = require('winston');
@@ -21,6 +22,15 @@ const crypto = require('crypto');
 const { randomUUID } = require('crypto');
 const path = require('path');
 const fs = require('fs');
+
+class AppError extends Error {
+    constructor(message, code, statusCode) {
+        super(message);
+        this.name = 'AppError';
+        this.code = code;
+        this.statusCode = statusCode;
+    }
+}
 
 
 
@@ -38,7 +48,40 @@ const ERROR_CODES = {
     EXTERNAL_SERVICE_ERROR: { status: 502, message: 'Ошибка внешнего сервиса' },
 };
 
-const PLAYER_ACTIONS_TABLE = 'player_logs';
+const TABLES = Object.freeze({
+    PLAYER_ACTIONS: 'player_logs'
+});
+
+const ERROR_MESSAGES = Object.freeze({
+    INSUFFICIENT_COINS: 'Недостаточно монет',
+    INSUFFICIENT_STARS: 'Недостаточно звёзд',
+    INSUFFICIENT_ENERGY: 'Недостаточно энергии',
+    INSUFFICIENT_HEALTH: 'Недостаточно здоровья'
+});
+
+/**
+ * Получить игрока по Telegram ID
+ */
+async function getPlayerByTelegramId(telegramId) {
+    return await queryOne('SELECT * FROM players WHERE telegram_id = $1', [telegramId]);
+}
+
+const rateLimitMap = new Map();
+
+// Очистка устаревших записей каждые 60 секунд (не в тестах)
+if (process.env.NODE_ENV !== 'test') {
+    setInterval(() => {
+        const now = Date.now();
+        for (const [ip, timestamps] of rateLimitMap.entries()) {
+            const filtered = timestamps.filter(t => now - t < 60000);
+            if (filtered.length === 0) {
+                rateLimitMap.delete(ip);
+            } else {
+                rateLimitMap.set(ip, filtered);
+            }
+        }
+    }, 60000);
+}
 
 
 
@@ -127,16 +170,29 @@ logger.on('error', err => {
 /**
  * Санитайз чувствительных данных в логах
  */
-function sanitize(obj) {
+function sanitize(obj, seen = new WeakSet()) {
     if (!obj || typeof obj !== 'object') return obj;
-    
-    const clone = { ...obj };
+
+    if (seen.has(obj)) return '[Circular]';
+
     const sensitive = ['password', 'token', 'authorization', 'secret', 'api_key', 'apikey'];
-    
-    for (const key of sensitive) {
-        if (clone[key]) clone[key] = '***';
+
+    const clone = Array.isArray(obj) ? [] : {};
+
+    seen.add(obj);
+
+    for (const key of Object.keys(obj)) {
+        const value = obj[key];
+
+        if (sensitive.includes(key.toLowerCase())) {
+            clone[key] = '***';
+        } else if (typeof value === 'object' && value !== null) {
+            clone[key] = sanitize(value, seen);
+        } else {
+            clone[key] = value;
+        }
     }
-    
+
     return clone;
 }
 
@@ -155,7 +211,8 @@ function getTelegramIdFromHeaders(headers = {}) {
         const params = new URLSearchParams(initData);
         const user = JSON.parse(params.get('user') || '{}');
         return user?.id ? String(user.id) : null;
-    } catch {
+    } catch (e) {
+        logger.warn('Ошибка парсинга initData в getTelegramIdFromHeaders:', e.message);
         return null;
     }
 }
@@ -168,21 +225,28 @@ function requestMiddleware(req, res, next) {
     const start = Date.now();
 
     res.on('finish', () => {
-        const duration = Date.now() - start;
-        
-        logger.info({
-            type: 'http_request',
-            requestId: req.requestId,
-            method: req.method,
-            url: req.originalUrl,
-            query: sanitize(req.query),
-            status: res.statusCode,
-            duration,
-            playerId: getTelegramIdFromHeaders(req.headers) || 'anonymous',
-            ip: req.ip,
-            userAgent: req.headers['user-agent'],
-            contentLength: parseInt(req.headers['content-length']) || 0
-        });
+        try {
+            const duration = Date.now() - start;
+            const isProd = process.env.NODE_ENV === 'production';
+
+            logger.info({
+                type: 'http_request',
+                requestId: req.requestId,
+                method: req.method,
+                url: req.originalUrl,
+                status: res.statusCode,
+                duration,
+                playerId: getTelegramIdFromHeaders(req.headers) || 'anonymous',
+
+                ...(isProd ? {} : {
+                    query: sanitize(req.query),
+                    ip: req.ip,
+                    userAgent: req.headers?.['user-agent']
+                })
+            });
+        } catch (e) {
+            console.error('Logging failed', e);
+        }
     });
 
     next();
@@ -224,11 +288,6 @@ function logSecurity(event, details = {}) {
     });
 }
 
-const gameLogger = {
-    action: logGameAction,
-    security: logSecurity,
-    error: logPlayerError
-};
 
 
 
@@ -237,12 +296,12 @@ const gameLogger = {
  */
 function validateId(value, fieldName = 'ID') {
     if (value === undefined || value === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
+        return { ok: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
     }
     if (!Number.isInteger(value) || value <= 0) {
-        return { valid: false, error: `${fieldName} должен быть целым числом > 0`, code: 'INVALID_ID' };
+        return { ok: false, error: `${fieldName} должен быть целым числом > 0`, code: 'INVALID_ID' };
     }
-    return { valid: true };
+    return { ok: true, value };
 }
 
 /**
@@ -250,30 +309,30 @@ function validateId(value, fieldName = 'ID') {
  */
 function validateString(value, fieldName = 'строка', options = {}) {
     const { minLength = 1, maxLength = 100, pattern } = options;
-    
+
     if (value === undefined || value === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
+        return { ok: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
     }
-    
+
     if (typeof value !== 'string') {
-        return { valid: false, error: `${fieldName} должна быть строкой`, code: 'INVALID_TYPE' };
+        return { ok: false, error: `${fieldName} должна быть строкой`, code: 'INVALID_TYPE' };
     }
-    
+
     const trimmed = value.trim();
-    
+
     if (trimmed.length < minLength) {
-        return { valid: false, error: `${fieldName} слишком короткая (мин. ${minLength} символов)`, code: 'TOO_SHORT' };
+        return { ok: false, error: `${fieldName} слишком короткая (мин. ${minLength} символов)`, code: 'TOO_SHORT' };
     }
-    
+
     if (trimmed.length > maxLength) {
-        return { valid: false, error: `${fieldName} слишком длинная (макс. ${maxLength} символов)`, code: 'TOO_LONG' };
+        return { ok: false, error: `${fieldName} слишком длинная (макс. ${maxLength} символов)`, code: 'TOO_LONG' };
     }
-    
+
     if (pattern && !pattern.test(trimmed)) {
-        return { valid: false, error: `${fieldName} содержит недопустимые символы`, code: 'INVALID_FORMAT' };
+        return { ok: false, error: `${fieldName} содержит недопустимые символы`, code: 'INVALID_FORMAT' };
     }
-    
-    return { valid: true, value: trimmed };
+
+    return { ok: true, value: trimmed };
 }
 
 /**
@@ -302,19 +361,29 @@ function validateBoolean(value, fieldName = 'значение') {
     if (value === undefined || value === null) {
         return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
     }
-    
+
     if (typeof value === 'boolean') {
-        return { valid: true };
+        return { valid: true, value };
     }
-    
+
     if (typeof value === 'string') {
         const lower = value.toLowerCase();
         if (lower === 'true' || lower === 'false') {
-            return { valid: true };
+            return { valid: true, value: lower === 'true' };
         }
     }
-    
+
     return { valid: false, error: `${fieldName} должно быть булевым значением`, code: 'INVALID_TYPE' };
+}
+
+/**
+ * Проверка, является ли пользователь админом
+ */
+function isAdmin(userId, adminList) {
+    if (!adminList || !Array.isArray(adminList)) {
+        return false;
+    }
+    return adminList.includes(String(userId));
 }
 
 /**
@@ -482,13 +551,28 @@ function badRequest(res, message, code = 'BAD_REQUEST') {
 }
 
 /**
+ * Утилита для выполнения транзакций с автоматическим BEGIN/COMMIT/ROLLBACK
+ */
+async function withTransaction(client, fn) {
+    await client.query('BEGIN');
+    try {
+        const result = await fn(client); // ← ВАЖНО
+        await client.query('COMMIT');
+        return result;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    }
+}
+
+/**
  * Middleware для валидации параметров запроса
  */
-function guard(validations) {
+function guard(validations = []) {
     return function(req, res, next) {
         for (const validation of validations) {
-            if (!validation.valid) {
-                return fail(res, validation.error, validation.code, 400);
+            if (!validation || !validation.ok) {
+                return fail(res, validation?.error || 'Ошибка валидации', validation?.code || 'VALIDATION_ERROR', 400);
             }
         }
         next();
@@ -519,6 +603,7 @@ function serializeJSONField(value) {
     try {
         return JSON.stringify(value);
     } catch (error) {
+        logger.warn('serializeJSONField failed', { error: error.message });
         return '{}';
     }
 }
@@ -536,48 +621,31 @@ function safeStringify(obj, space) {
     try {
         return JSON.stringify(obj, null, space);
     } catch (error) {
+        logger.warn('JSON stringify failed');
         return '{}';
     }
 }
 
 /**
- * Безопасный парсинг JSON-строки
- */
-function parseJSONField(str, defaultValue = {}) {
-    if (!str || typeof str !== 'string') {
-        return defaultValue;
-    }
-    if (!str.trim()) {
-        return defaultValue;
-    }
-    try {
-        return JSON.parse(str);
-    } catch (error) {
-        logger.error('[serverApi] JSON.parse failed:', { type: typeof str, preview: str?.toString?.().substring(0, 100) });
-        return defaultValue;
-    }
-}
-
-/**
- * Безопасный парсинг JSON (из jsonHelper.js)
+ * Безопасный парсинг JSON
  */
 function safeJsonParse(str, defaultValue = null) {
     if (!str) return defaultValue;
-    
-    if (typeof str === 'object') {
-        return str;
-    }
-    
+
+    if (typeof str === 'object') return str;
+
     try {
         return JSON.parse(str);
     } catch (e) {
-        logger.warn('safeJsonParse: failed to parse', str.substring(0, 100));
+        logger.warn('[safeJsonParse failed]', {
+            error: e.message,
+            str: str?.substring(0, 100),
+            type: typeof str,
+            length: str?.length
+        });
         return defaultValue;
     }
 }
-
-// Алиас для совместимости
-const safeParse = safeJsonParse;
 
 
 
@@ -589,42 +657,32 @@ const safeParse = safeJsonParse;
  */
 async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
     if (!Number.isInteger(playerId) || playerId <= 0) {
-        throw { 
-            message: 'Некорректный ID игрока', 
+        throw {
+            message: 'Некорректный ID игрока',
             code: 'INVALID_PLAYER_ID',
-            statusCode: 400 
+            statusCode: 400
         };
     }
-    
-    const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-            reject({ 
-                message: 'Превышен таймаут ожидания блокировки игрока', 
-                code: 'LOCK_TIMEOUT',
-                statusCode: 504 
-            });
-        }, timeoutMs);
-    });
-    
-    const lockPromise = tx(async (client) => {
+
+    return await tx(async (client) => {
+        // Таймаут на уровне PostgreSQL
+        await client.query('SET LOCAL statement_timeout = $1', [timeoutMs]);
+
         const lockedPlayer = await client.query(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
+            'SELECT * FROM players WHERE id = $1 FOR UPDATE SKIP LOCKED',
             [playerId]
         );
-        
+
         if (!lockedPlayer.rows[0]) {
-            throw { 
-                message: 'Игрок не найден', 
+            throw {
+                message: 'Игрок не найден',
                 code: 'PLAYER_NOT_FOUND',
-                statusCode: 404 
+                statusCode: 404
             };
         }
-        
-        // Передаём client и lockedPlayer в callback для использования внутри транзакции
+
         return await fn(client, lockedPlayer.rows[0]);
     });
-    
-    return await Promise.race([lockPromise, timeoutPromise]);
 }
 
 /**
@@ -641,7 +699,7 @@ async function withClanLock(clanId, fn) {
     
     return await tx(async (client) => {
         const lockedClanResult = await client.query(
-            'SELECT * FROM clans WHERE id = $1 FOR UPDATE',
+            'SELECT * FROM clans WHERE id = $1 FOR UPDATE SKIP LOCKED',
             [clanId]
         );
         const lockedClan = lockedClanResult.rows[0] || null;
@@ -680,7 +738,7 @@ async function withPlayerAndClanLock(playerId, clanId, fn) {
     
     return await tx(async (client) => {
         const lockedPlayerResult = await client.query(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
+            'SELECT * FROM players WHERE id = $1 FOR UPDATE SKIP LOCKED',
             [playerId]
         );
         const lockedPlayer = lockedPlayerResult.rows[0] || null;
@@ -694,7 +752,7 @@ async function withPlayerAndClanLock(playerId, clanId, fn) {
         }
         
         const lockedClanResult = await client.query(
-            'SELECT * FROM clans WHERE id = $1 FOR UPDATE',
+            'SELECT * FROM clans WHERE id = $1 FOR UPDATE SKIP LOCKED',
             [clanId]
         );
         const lockedClan = lockedClanResult.rows[0] || null;
@@ -716,24 +774,26 @@ async function withPlayerAndClanLock(playerId, clanId, fn) {
 /**
  * Middleware: проверка что игрок состоит в клане
  */
-function ensureInClan(req, res, next) {
-    const playerId = req.player?.id;
-    
-    if (!playerId) {
-        return res.status(401).json({ 
-            success: false, 
-            error: 'Требуется авторизация',
-            code: 'UNAUTHORIZED'
-        });
-    }
-    
-    queryOne(
-        'SELECT c.*, pc.role as clan_role FROM players p ' +
-        'LEFT JOIN clans c ON p.clan_id = c.id ' +
-        'LEFT JOIN player_clans pc ON pc.player_id = p.id AND pc.clan_id = c.id ' +
-        'WHERE p.id = $1',
-        [playerId]
-    ).then(playerWithClan => {
+async function ensureInClan(req, res, next) {
+    try {
+        const playerId = req.player?.id;
+
+        if (!playerId) {
+            return res.status(401).json({
+                success: false,
+                error: 'Требуется авторизация',
+                code: 'UNAUTHORIZED'
+            });
+        }
+
+        const playerWithClan = await queryOne(
+            'SELECT c.*, pc.role as clan_role FROM players p ' +
+            'LEFT JOIN clans c ON p.clan_id = c.id ' +
+            'LEFT JOIN player_clans pc ON pc.player_id = p.id AND pc.clan_id = c.id ' +
+            'WHERE p.id = $1',
+            [playerId]
+        );
+
         if (!playerWithClan || !playerWithClan.clan_id) {
             return res.status(400).json({
                 success: false,
@@ -741,7 +801,7 @@ function ensureInClan(req, res, next) {
                 code: 'NOT_IN_CLAN'
             });
         }
-        
+
         req.clan = {
             id: playerWithClan.clan_id,
             name: playerWithClan.name,
@@ -751,42 +811,17 @@ function ensureInClan(req, res, next) {
             level: playerWithClan.level
         };
         req.playerClan = playerWithClan;
-        
+
         next();
-    }).catch(err => {
+    } catch (err) {
         logger.error({ type: 'ensureInClan_error', message: err.message });
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             error: 'Ошибка проверки клана',
             code: 'INTERNAL_ERROR'
         });
-    });
-}
-
-/**
- * Middleware: проверка что игрок - лидер клана
- */
-function ensureLeader(req, res, next) {
-    if (!req.clan) {
-        return res.status(400).json({
-            success: false,
-            error: 'Сначала проверьте членство в клане (ensureInClan)',
-            code: 'MIDDLEWARE_ORDER_ERROR'
-        });
     }
-    
-    if (req.clan.role !== 'leader') {
-        return res.status(403).json({
-            success: false,
-            error: 'Только лидер клана может это сделать',
-            code: 'NOT_LEADER'
-        });
-    }
-    
-    next();
 }
-
-
 
 /**
  * Проверить достаточно ли ресурсов у игрока
@@ -795,12 +830,15 @@ function checkResources(player, resources, options = {}) {
     const { allowNegative = false } = options;
     
     if (resources.coins !== undefined) {
+        if (!Number.isInteger(resources.coins)) {
+            return { valid: false, error: 'Некорректное значение монет', code: 'INVALID_AMOUNT' };
+        }
         if (!allowNegative && resources.coins < 0) {
             return { valid: false, error: 'Количество монет не может быть отрицательным', code: 'INVALID_AMOUNT' };
         }
-        if (player.coins < resources.coins) {
-            return { 
-                valid: false, 
+        if (player.coins == null || player.coins < resources.coins) {
+            return {
+                valid: false,
                 error: `Недостаточно монет. Требуется: ${resources.coins}, у вас: ${player.coins}`,
                 code: 'INSUFFICIENT_COINS',
                 required: resources.coins,
@@ -810,12 +848,15 @@ function checkResources(player, resources, options = {}) {
     }
     
     if (resources.stars !== undefined) {
+        if (!Number.isInteger(resources.stars)) {
+            return { valid: false, error: 'Некорректное значение звёзд', code: 'INVALID_AMOUNT' };
+        }
         if (!allowNegative && resources.stars < 0) {
             return { valid: false, error: 'Количество звёзд не может быть отрицательным', code: 'INVALID_AMOUNT' };
         }
-        if (player.stars < resources.stars) {
-            return { 
-                valid: false, 
+        if (player.stars == null || player.stars < resources.stars) {
+            return {
+                valid: false,
                 error: `Недостаточно звёзд. Требуется: ${resources.stars}, у вас: ${player.stars}`,
                 code: 'INSUFFICIENT_STARS',
                 required: resources.stars,
@@ -823,14 +864,17 @@ function checkResources(player, resources, options = {}) {
             };
         }
     }
-    
+
     if (resources.energy !== undefined) {
+        if (!Number.isInteger(resources.energy)) {
+            return { valid: false, error: 'Некорректное значение энергии', code: 'INVALID_AMOUNT' };
+        }
         if (!allowNegative && resources.energy < 0) {
             return { valid: false, error: 'Энергия не может быть отрицательной', code: 'INVALID_AMOUNT' };
         }
-        if (player.energy < resources.energy) {
-            return { 
-                valid: false, 
+        if (player.energy == null || player.energy < resources.energy) {
+            return {
+                valid: false,
                 error: `Недостаточно энергии. Требуется: ${resources.energy}, у вас: ${player.energy}`,
                 code: 'INSUFFICIENT_ENERGY',
                 required: resources.energy,
@@ -838,14 +882,17 @@ function checkResources(player, resources, options = {}) {
             };
         }
     }
-    
+
     if (resources.health !== undefined) {
+        if (!Number.isInteger(resources.health)) {
+            return { valid: false, error: 'Некорректное значение здоровья', code: 'INVALID_AMOUNT' };
+        }
         if (!allowNegative && resources.health < 0) {
             return { valid: false, error: 'Здоровье не может быть отрицательным', code: 'INVALID_AMOUNT' };
         }
-        if (player.health < resources.health) {
-            return { 
-                valid: false, 
+        if (player.health == null || player.health < resources.health) {
+            return {
+                valid: false,
                 error: `Недостаточно здоровья. Требуется: ${resources.health}, у вас: ${player.health}`,
                 code: 'INSUFFICIENT_HEALTH',
                 required: resources.health,
@@ -884,51 +931,13 @@ function checkClanMembersLimit(clan, additionalMembers = 1) {
 
 
 /**
- * Универсальная пагинация
- */
-async function paginate(countSql, countParams, dataSql, dataParams, options = {}) {
-    const { defaultLimit = 10, maxLimit = 50 } = options;
-    
-    let limit = defaultLimit;
-    let offset = 0;
-    
-    if (options.page !== undefined && options.limit !== undefined) {
-        limit = Math.min(Math.max(1, options.limit), maxLimit);
-        offset = (options.page - 1) * limit;
-    } else if (options.limit !== undefined) {
-        limit = Math.min(Math.max(1, options.limit), maxLimit);
-        offset = options.offset || 0;
-    }
-    
-    const totalResult = await query(countSql, countParams);
-    const total = parseInt(totalResult.rows[0]?.count || 0, 10);
-    
-    const dataResult = await query(
-        `${dataSql} LIMIT $${dataParams.length + 1} OFFSET $${dataParams.length + 2}`,
-        [...dataParams, limit, offset]
-    );
-    
-    const page = Math.floor(offset / limit) + 1;
-    const hasMore = offset + dataResult.rows.length < total;
-    
-    return {
-        data: dataResult.rows,
-        total,
-        page,
-        limit,
-        hasMore,
-        rows: dataResult.rows,
-        count: total
-    };
-}
-
-
-
-/**
  * Централизованный обработчик ошибок логирования
  */
 function handleLogError(error, context) {
-    logger.error(`[${context}] Ошибка логирования:`, error.message);
+    logger.error(`[${context}] Ошибка логирования`, {
+        message: error.message,
+        stack: error.stack
+    });
 }
 
 /**
@@ -943,7 +952,7 @@ async function logPlayerAction(poolConnection, playerId, action, meta = {}) {
     try {
         const serializedMeta = serializeJSONField(meta);
         await poolConnection.query(
-            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, metadata, created_at) 
+            `INSERT INTO ${TABLES.PLAYER_ACTIONS} (player_id, action, metadata, created_at)
              VALUES ($1, $2, $3, NOW())`,
             [playerId, action, serializedMeta]
         );
@@ -952,26 +961,6 @@ async function logPlayerAction(poolConnection, playerId, action, meta = {}) {
     }
 }
 
-/**
- * Логирование действия игрока в рамках транзакции
- */
-async function logPlayerActionWithTx(txConnection, playerId, action, meta = {}) {
-    if (!txConnection || !playerId || !action) {
-        logger.error('[logPlayerActionWithTx] Некорректные параметры');
-        return;
-    }
-
-    try {
-        const serializedMeta = serializeJSONField(meta);
-        await txConnection.query(
-            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, metadata, created_at) 
-             VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, serializedMeta]
-        );
-    } catch (error) {
-        handleLogError(error, 'logPlayerActionWithTx');
-    }
-}
 
 /**
  * Универсальное логирование действия игрока (работает с query, pool или tx client)
@@ -992,9 +981,13 @@ async function logPlayerActionSimple(queryFn, playerId, action, metadata = {}) {
             logger.warn('[logPlayerActionSimple] Некорректный параметр queryFn');
             return;
         }
-        
+
+        if (!execFn) {
+            throw new Error('Invalid query executor');
+        }
+
         await execFn(
-            `INSERT INTO ${PLAYER_ACTIONS_TABLE} (player_id, action, metadata, created_at) 
+            `INSERT INTO ${TABLES.PLAYER_ACTIONS} (player_id, action, metadata, created_at)
              VALUES ($1, $2, $3, NOW())`,
             [playerId, action, serializeJSONField(metadata)]
         );
@@ -1005,63 +998,7 @@ async function logPlayerActionSimple(queryFn, playerId, action, metadata = {}) {
 
 
 
-/**
- * Фабрика стандартизированного ответа об ошибке
- */
-function createErrorResponse(errorType, options = {}) {
-    const errorConfig = ERROR_CODES[errorType] || ERROR_CODES.INTERNAL_ERROR;
-    
-    const response = {
-        error: options.message || errorConfig.message,
-        type: errorType,
-    };
-    
-    if (options.details && process.env.NODE_ENV !== 'production') {
-        response.details = options.details;
-    }
-    
-    return response;
-}
 
-/**
- * Middleware для централизованной обработки ошибок
- */
-function errorMiddleware(err, req, res, next) {
-    logger.error({
-        type: 'request_error',
-        message: err.message,
-        stack: err.stack,
-        path: req.path,
-        method: req.method,
-    });
-    
-    let statusCode = 500;
-    let errorType = 'INTERNAL_ERROR';
-    
-    if (err.name === 'ValidationError' || err.name === 'CastError') {
-        statusCode = 400;
-        errorType = 'BAD_REQUEST';
-    } else if (err.name === 'UnauthorizedError') {
-        statusCode = 401;
-        errorType = 'UNAUTHORIZED';
-    } else if (err.code === '23505') {
-        statusCode = 409;
-        errorType = 'CONFLICT';
-    }
-    
-    res.status(statusCode).json(createErrorResponse(errorType, {
-        message: err.message,
-    }));
-}
-
-/**
- * Async wrapper для обработки ошибок в роутерах
- */
-function asyncHandler(fn) {
-    return (req, res, next) => {
-        Promise.resolve(fn(req, res, next)).catch(next);
-    };
-}
 
 /**
  * Функция для обработки ошибок БД
@@ -1124,11 +1061,13 @@ function validateTelegramInitData(initData, botToken) {
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
 
-        logger.info('Валидация initData', {
-            hasDataHash: !!hash,
-            paramsCount: entries.length,
-            dataCheckStringLength: dataCheckString.length
-        });
+        if (process.env.NODE_ENV !== 'production') {
+            logger.debug('Валидация initData', {
+                hasDataHash: !!hash,
+                paramsCount: entries.length,
+                dataCheckStringLength: dataCheckString.length
+            });
+        }
 
         const authDateStr = params.get('auth_date');
         const userStr = params.get('user');
@@ -1142,9 +1081,13 @@ function validateTelegramInitData(initData, botToken) {
         }
 
         const authDate = parseInt(authDateStr, 10);
+        if (!Number.isInteger(authDate)) {
+            return null;
+        }
         const now = Math.floor(Date.now() / 1000);
         const age = now - authDate;
-        if (age < -300 || age > 86400) {
+        const MAX_AGE = 3600; // 1 hour
+        if (age < -300 || age > MAX_AGE) {
             logger.warn('initData истёк или время не синхронизировано', { age, authDate, now });
             return null;
         }
@@ -1164,11 +1107,13 @@ function validateTelegramInitData(initData, botToken) {
             .update(botToken)
             .digest();
 
-        logger.info('Проверка подписи', {
-            userId,
-            dataKeys: [...params.keys()].sort(),
-            dataCheckStringLength: dataCheckString.length
-        });
+        if (process.env.NODE_ENV !== 'production') {
+            logger.debug('Проверка подписи', {
+                userId,
+                dataKeys: [...params.keys()].sort(),
+                dataCheckStringLength: dataCheckString.length
+            });
+        }
 
         const computedHash = crypto
             .createHmac('sha256', secretKey)
@@ -1180,12 +1125,14 @@ function validateTelegramInitData(initData, botToken) {
             const hashBuf = Buffer.from(computedHash, 'hex');
             const dataHashBuf = Buffer.from(hash, 'hex');
             
-            logger.info('Сравнение хешей', {
-                userId,
-                hashMatch: computedHash === hash,
-                computedLength: hashBuf.length,
-                receivedLength: dataHashBuf.length
-            });
+            if (process.env.NODE_ENV !== 'production') {
+                logger.debug('Сравнение хешей', {
+                    userId,
+                    hashMatch: computedHash === hash,
+                    computedLength: hashBuf.length,
+                    receivedLength: dataHashBuf.length
+                });
+            }
             
             if (hashBuf.length === dataHashBuf.length) {
                 isValid = crypto.timingSafeEqual(hashBuf, dataHashBuf);
@@ -1221,103 +1168,60 @@ function validateTelegramInitData(initData, botToken) {
  * Middleware для Express - проверяет Telegram initData
  */
 function telegramAuthMiddleware(req, res, next) {
-    const initData = req.headers['x-init-data'] || req.body.initData;
-    const botToken = process.env.TG_BOT_TOKEN;
+    try {
+        const clientIP =
+            req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+            req.ip ||
+            req.connection?.remoteAddress;
+        const now = Date.now();
+        const windowMs = 60000; // 1 minute
+        const maxRequests = 10; // per window
 
-    if (!botToken) {
-        if (process.env.NODE_ENV === 'production') {
-            logger.error('TG_BOT_TOKEN не настроен в production!');
-            return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
+        let requests = rateLimitMap.get(clientIP) || [];
+        requests = requests.filter(t => now - t < windowMs);
+
+        if (requests.length >= maxRequests) {
+            return res.status(429).json({ error: 'Too many requests' });
         }
-        logger.warn('TG_BOT_TOKEN не настроен - авторизация пропущена (development mode)');
-        return next();
-    }
 
-    if (!initData) {
-        return res.status(401).json({ error: 'Требуется initData' });
-    }
+        requests.push(now);
+        rateLimitMap.set(clientIP, requests);
 
-    const validated = validateTelegramInitData(initData, botToken);
-    
-    if (!validated) {
-        return res.status(401).json({ error: 'Неверная подпись initData' });
-    }
+        const initData = req.headers['x-init-data'] || req.body.initData;
+        const botToken = process.env.TG_BOT_TOKEN;
 
-    req.telegramUser = validated.user;
-    req.telegramAuth = validated;
-    
-    next();
+        if (!botToken) {
+            if (process.env.NODE_ENV === 'production') {
+                logger.error('TG_BOT_TOKEN не настроен в production!');
+                return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
+            }
+            logger.warn('TG_BOT_TOKEN не настроен - авторизация пропущена (development mode)');
+            return next();
+        }
+
+        if (!initData) {
+            return res.status(401).json({ error: 'Требуется initData' });
+        }
+
+        const validated = validateTelegramInitData(initData, botToken);
+
+        if (!validated) {
+            return res.status(401).json({ error: 'Неверная подпись initData' });
+        }
+
+        req.telegramUser = validated.user;
+        req.telegramAuth = validated;
+
+        next();
+    } catch (e) {
+        logger.error('telegramAuthMiddleware error', e);
+        return res.status(500).json({ error: 'Ошибка авторизации' });
+    }
 }
 
-/**
- * Проверяет является ли пользователь админом
- */
-function isAdmin(telegramId, adminIds) {
-    if (!adminIds || !Array.isArray(adminIds)) {
-        return false;
-    }
-    return adminIds.includes(String(telegramId));
-}
 
 
 
-const PlayerHelper = {
-    /**
-     * Получить игрока по Telegram ID
-     */
-    async getByTelegramId(telegramId) {
-        return await playerService.getByTelegramId(telegramId);
-    },
-    
-    /**
-     * Получить игрока по ID
-     */
-    async getById(playerId) {
-        return await playerService.getById(playerId);
-    },
-    
-    /**
-     * Обновить инвентарь
-     */
-    async updateInventory(playerId, inventory) {
-        return await playerService.updateInventory(playerId, inventory);
-    },
-    
-    /**
-     * Обновить энергию
-     */
-    async updateEnergy(playerId, energyChange) {
-        return await playerService.updateEnergy(playerId, energyChange);
-    },
-    
-    /**
-     * Обновить здоровье
-     */
-    async updateHealth(playerId, health) {
-        return await playerService.updateHealth(playerId, health);
-    },
-    
-    /**
-     * Увеличить счётчик действий
-     */
-    async incrementActions(playerId) {
-        return await playerService.incrementActions(playerId);
-    },
-    
-    /**
-     * Регенерировать энергию
-     */
-    async regenerateEnergy(playerId) {
-        return await playerService.regenerateEnergy(playerId);
-    },
-    
-    /**
-     * Добавить опыт
-     */
-    async addExperience(playerId, exp, client = null) {
-        return await playerService.addExperience(playerId, exp, client);
-    }
-};
 
 
 
@@ -1328,9 +1232,8 @@ module.exports = {
     logGameAction,
     logPlayerError,
     logSecurity,
-    gameLogger,
     sanitize,
-    
+
     // Валидация
     validateId,
     validateString,
@@ -1340,7 +1243,7 @@ module.exports = {
     sanitizeName,
     validatePositiveInt,
     validateCoins,
-    
+
     // Ответы API
     ok,
     fail,
@@ -1349,52 +1252,45 @@ module.exports = {
     unauthorized,
     forbidden,
     badRequest,
+    withTransaction,
     guard,
     wrap,
-    
+
     // JSON утилиты
     serializeJSONField,
     safeStringify,
-    parseJSONField,
     safeJsonParse,
-    safeParse,
     getTelegramIdFromHeaders,
-    
+
     // Транзакции с блокировкой
     withPlayerLock,
     withClanLock,
     withPlayerAndClanLock,
-    
+
     // Middleware для клана
     ensureInClan,
-    ensureLeader,
-    
+
     // Валидация ресурсов
     checkResources,
     checkClanMembersLimit,
-    
-    // Пагинация
-    paginate,
-    
+
     // Логирование игроков
     logPlayerAction,
-    logPlayerActionWithTx,
     logPlayerActionSimple,
-    PLAYER_ACTIONS_TABLE,
-    
+    TABLES,
+
     // Обработка ошибок
     ERROR_CODES,
-    createErrorResponse,
-    errorMiddleware,
-    asyncHandler,
+    ERROR_MESSAGES,
     handleDbError,
-    handleError,
-    
+
+    // Утилиты игроков
+    getPlayerByTelegramId,
+
     // Telegram авторизация
     validateTelegramInitData,
     telegramAuthMiddleware,
-    isAdmin,
-    
-    // Player Helper
-    PlayerHelper
+
+    // Админ утилиты
+    isAdmin
 };

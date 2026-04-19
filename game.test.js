@@ -31,11 +31,11 @@ describe('telegramAuth', () => {
         test('должен вернуть true для админа в списке', () => {
             expect(isAdmin('123', ['123', '456'])).toBe(true);
         });
-        
+
         test('должен вернуть false для не-админа', () => {
             expect(isAdmin('789', ['123', '456'])).toBe(false);
         });
-        
+
         test('должен вернуть false для пустого списка', () => {
             expect(isAdmin('123', [])).toBe(false);
             expect(isAdmin('123', null)).toBe(false);

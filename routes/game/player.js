@@ -468,7 +468,7 @@ router.post('/buy-energy', async (req, res) => {
             }
 
             const actualAmount = Math.min(amount, current.max_energy - current.energy);
-            const actualCost = Math.ceil(actualAmount / 10);
+            const actualCost = Math.ceil(actualAmount * 0.1);
 
             if (current.stars < actualCost) {
                 throw { message: 'Недостаточно Stars', code: 'NOT_ENOUGH_STARS', statusCode: 400 };

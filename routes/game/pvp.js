@@ -378,18 +378,19 @@ router.post('/attack-hit', async (req, res) => {
                 ? [attackerId, defenderId]
                 : [defenderId, attackerId];
             
-            const attackerResult = await client.query(
+            const firstPlayerResult = await client.query(
                 `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
                 [firstId]
             );
-            const defenderResult = await client.query(
+            const secondPlayerResult = await client.query(
                 `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
                 [secondId]
             );
             
-            const [firstRow, secondRow] = [attackerResult.rows[0], defenderResult.rows[0]];
-            const attacker = attackerId === firstId ? firstRow : secondRow;
-            const defender = defenderId === firstId ? firstRow : secondRow;
+            const firstPlayer = firstPlayerResult.rows[0];
+            const secondPlayer = secondPlayerResult.rows[0];
+            const attacker = attackerId === firstId ? firstPlayer : secondPlayer;
+            const defender = defenderId === firstId ? firstPlayer : secondPlayer;
 
             if (!attacker || !defender) {
                 throw new Error('Игрок не найден');

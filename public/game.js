@@ -94,6 +94,9 @@ function escapeHtml(text) {
  * @returns {string}
  */
 function formatNumber(num) {
+    if (typeof num !== 'number' || isNaN(num)) {
+        return '0';
+    }
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 }
 
@@ -237,6 +240,8 @@ window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;
 window.getRarityClassByLevel = getRarityClassByLevel;
 window.getPlayerEmoji = getPlayerEmoji;
+console.log('[DEBUG] Первое присваивание window.formatTime:', typeof window.formatTime, '-> formatTime:', typeof formatTime);
+window.formatTime = formatTime;
 /**
  * ============================================
  * API ЗАПРОСЫ (API Requests)
@@ -672,16 +677,6 @@ function safeSetInterval(callback, delay) {
 function clearAllIntervals() {
     activeIntervals.forEach(id => clearInterval(id));
     activeIntervals.length = 0;
-    
-    // Очищаем глобальные таймеры
-    if (window.bossFightTimerId) {
-        clearInterval(window.bossFightTimerId);
-        window.bossFightTimerId = null;
-    }
-    if (window.pvpCooldownTimerId) {
-        clearInterval(window.pvpCooldownTimerId);
-        window.pvpCooldownTimerId = null;
-    }
 }
 
 // Очищаем интервалы при закрытии страницы
@@ -703,7 +698,8 @@ const actionLocks = {
     purchase: false,
     referral: false,
     searchLoot: false,
-    attackBoss: false
+    attackBoss: false,
+    loadBosses: false
 };
 
 /**
@@ -1232,6 +1228,7 @@ function getTimeToNextEnergy(lastUpdate) {
  * @returns {string} форматированное время
  */
 function formatTimeMs(ms) {
+    console.log('[DEBUG] formatTimeMs вызвана с аргументом:', ms, 'тип:', typeof ms);
     const totalSeconds = Math.ceil(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -1342,7 +1339,8 @@ async function updateDamagePreviewUI(bossId) {
 
 // Экспорт новых функций
 window.getTimeToNextEnergy = getTimeToNextEnergy;
-window.formatTime = formatTimeMs;
+console.log('[DEBUG] Второе присваивание window.formatTimeMs:', typeof window.formatTimeMs, '-> formatTimeMs:', typeof formatTimeMs);
+window.formatTimeMs = formatTimeMs;
 window.updateEnergyTimer = updateEnergyTimer;
 window.getDamagePreview = getDamagePreview;
 window.updateDamagePreviewUI = updateDamagePreviewUI;
@@ -1443,7 +1441,9 @@ function onScreenOpen(screenName) {
 
         case 'bosses':
             // Загружаем боссов
-            loadBosses();
+            if (!actionLocks['loadBosses']) {
+                loadBosses();
+            }
             break;
 
         case 'shop':
@@ -2771,11 +2771,6 @@ async function searchLoot() {
                 refreshPlayerEnergyUI();
             }
             
-            // Обновляем профиль после получения XP
-            if (result.exp_gained !== undefined) {
-                await loadProfile();
-            }
-            
             // Обновляем радиацию после поиска (всегда, не только при увеличении)
             if (result.radiation) {
                 if (!gameState.player.status) gameState.player.status = {};
@@ -2789,6 +2784,10 @@ async function searchLoot() {
                 gameState.player.status.infections = Math.max(0, currentInfections + Number(result.infection.gained || 0));
                 updateConditionsUI(gameState.player.status);
             }
+
+            // Финальная синхронизация статуса/локации с сервером,
+            // чтобы исключить рассинхрон UI после лута и дебаффов.
+            await loadProfile();
 
             if (result.risk_profile) {
                 const riskHint = document.getElementById('location-risk-hint');
@@ -2811,7 +2810,8 @@ async function searchLoot() {
             
             // Особая обработка для недостатка энергии
             if (result.code === 'INSUFFICIENT_ENERGY') {
-                errorMsg = `Недостаточно энергии! Требуется: 1, у вас: ${result.energy || 0}`;
+                const currentEnergy = Number(result?.energy?.current ?? result?.energy ?? 0);
+                errorMsg = `Недостаточно энергии! Требуется: 1, у вас: ${currentEnergy}`;
             }
             
             showModal('⚠️ Внимание', errorMsg);
@@ -2848,6 +2848,7 @@ async function moveToLocation(locationId) {
             updateMapRiskPreview();
             showScreen('main');
             showModal('✅ Успех', result.message || result.data?.message);
+            await loadProfile();
         } else {
             showModal('⚠️ Внимание', result.error || result.message);
         }
@@ -2875,19 +2876,20 @@ async function checkPlayerStatus() {
             method: 'POST',
             body: {}
         });
+        const payload = result?.data || result;
         
-        if (result.died) {
+        if (payload.died) {
             // Игрок умер
             showModal(
-                result.reason === 'radiation' ? '☢️ Гибель' : '☠️ Гибель',
-                result.message + '\n\nНапиши /start боту чтобы начать заново'
+                payload.reason === 'radiation' ? '☢️ Гибель' : '☠️ Гибель',
+                (payload.message || 'Персонаж погиб') + '\n\nНапиши /start боту чтобы начать заново'
             );
             return;
         }
         
         // Обновляем UI если есть изменения
-        if (result.infection_result?.success) {
-            showModal('🤒 Инфекция!', result.infection_result.message);
+        if (payload.infection_result?.success) {
+            showModal('🤒 Инфекция!', payload.infection_result.message);
         }
         
         // Перезагружаем профиль
@@ -3055,6 +3057,8 @@ function renderInventoryWithFilters(items) {
  * GET /bosses - массив боссов с полями: is_unlocked, keys_required, player_keys, mastery, can_attack
  */
 async function loadBosses() {
+    if (!lockAction('loadBosses')) return;
+
     try {
         const response = await apiRequest('/api/game/bosses');
         const data = response?.data || response;
@@ -3106,6 +3110,8 @@ async function loadBosses() {
         gameState.participatingBossIds = [];
         renderBosses([]);
         renderRaids([]);
+    } finally {
+        unlockAction('loadBosses');
     }
 }
 
@@ -3363,7 +3369,7 @@ function updateBossFightTimer() {
     
     updateTimer();
     if (window.bossFightTimerId) clearInterval(window.bossFightTimerId);
-    window.bossFightTimerId = setInterval(updateTimer, 1000);
+    window.bossFightTimerId = safeSetInterval(updateTimer, 1000);
 }
 
 /**
@@ -3938,7 +3944,7 @@ function renderClansList(clans) {
                 '<button class="join-btn" data-clan-id="' + escapeHtml(clan.id) + '">Вступить</button>' +
             '</div>';
         },
-        '<div class="empty-message">Нет доступных кланов</div>'
+        { emptyMessage: 'Нет доступных кланов' }
     );
     
     list.querySelectorAll('.join-btn').forEach(btn => {
@@ -5095,7 +5101,7 @@ async function loadPVPStats() {
                 
                 updateTimer();
                 if (window.pvpCooldownTimerId) clearInterval(window.pvpCooldownTimerId);
-                window.pvpCooldownTimerId = setInterval(updateTimer, 1000);
+                window.pvpCooldownTimerId = safeSetInterval(updateTimer, 1000);
             } else if (cooldownDiv) {
                 cooldownDiv.style.display = 'none';
                 if (window.pvpCooldownTimerId) {
@@ -5505,6 +5511,10 @@ const SHOP_ITEMS = {
  * поэтому здесь НЕ вызываем showScreen('shop') во избежание бесконечного цикла
  */
 function openShop() {
+    // Инициализируем обработчики табов магазина, если ещё не инициализированы
+    if (typeof initShopHandlers === 'function') {
+        initShopHandlers();
+    }
     renderShopCategory('buffs');
 }
 
@@ -6458,8 +6468,8 @@ function calculateLocationPositions(count, width, height) {
  * @param {number} height - высота
  */
 function drawCityBackground(ctx, width, height) {
-    // Инициализируем статичные позиции при первом вызове
-    if (!window.cityBackgroundStars) {
+    // Инициализируем или переинициализируем позиции при изменении размера
+    if (!window.cityBackgroundStars || !window.cityBackgroundWidth || window.cityBackgroundWidth !== width || window.cityBackgroundHeight !== height) {
         window.cityBackgroundStars = [];
         for (let i = 0; i < 50; i++) {
             window.cityBackgroundStars.push({
@@ -6468,8 +6478,10 @@ function drawCityBackground(ctx, width, height) {
                 size: Math.random() * 1.5
             });
         }
+        window.cityBackgroundWidth = width;
+        window.cityBackgroundHeight = height;
     }
-    if (!window.cityBackgroundBuildings) {
+    if (!window.cityBackgroundBuildings || !window.cityBackgroundWidth || window.cityBackgroundWidth !== width) {
         window.cityBackgroundBuildings = [];
         for (let i = 0; i < 15; i++) {
             window.cityBackgroundBuildings.push({
@@ -6478,6 +6490,7 @@ function drawCityBackground(ctx, width, height) {
                 h: 50 + Math.random() * 150
             });
         }
+        window.cityBackgroundWidth = width;
     }
 
     // Градиент неба

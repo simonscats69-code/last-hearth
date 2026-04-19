@@ -11,7 +11,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../db/database');
-const { safeJsonParse, PlayerHelper: playerHelper, handleError } = require('../../utils/serverApi');
+const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger } = require('../../utils/serverApi');
 const { normalizeInventory, getActiveBuffs, createInventoryItem } = require('../../utils/game-helpers');
 
 const KEYS_REQUIRED_FOR_BOSS = 3;
@@ -303,21 +303,27 @@ async function grantNextBossKey(client, playerId, bossId) {
 }
 
 async function loadItemTemplates(client, rewardItems) {
+    const ids = rewardItems.map(r => r.item_id || r.id).filter(Boolean);
     const templates = [];
+    let itemMap = {};
+
+    if (ids.length) {
+        const result = await client.query(
+            `SELECT id, name, type, category, rarity, icon, slot, durability, stats,
+                    COALESCE((stats->>'damage')::integer, 0) AS damage,
+                    COALESCE((stats->>'defense')::integer, 0) AS defense
+             FROM items WHERE id = ANY($1::int[])`,
+            [ids]
+        );
+        itemMap = Object.fromEntries(result.rows.map(r => [r.id, r]));
+    }
 
     for (const reward of rewardItems) {
         if (reward.item_id || reward.id) {
             const itemId = reward.item_id || reward.id;
-            const result = await client.query(
-                `SELECT id, name, type, category, rarity, icon, slot, durability, stats,
-                        COALESCE((stats->>'damage')::integer, 0) AS damage,
-                        COALESCE((stats->>'defense')::integer, 0) AS defense
-                 FROM items WHERE id = $1`,
-                [itemId]
-            );
-
-            if (result.rows[0]) {
-                templates.push(createInventoryItem(result.rows[0], {
+            const item = itemMap[itemId];
+            if (item) {
+                templates.push(createInventoryItem(item, {
                     quantity: Number(reward.quantity || 1)
                 }));
             }
@@ -379,6 +385,42 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
     return granted;
 }
 
+async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteries) {
+    const boss = await getBossById(client, bossId);
+    const experienceReward = activeBuffs.exp_x2
+        ? (boss.reward_experience || 0) * 2
+        : (boss.reward_experience || 0);
+    const lootMultiplier = activeBuffs.loot_x2 ? 2 : 1;
+
+    const rewards = { coins: boss.reward_coins || 0, experience: experienceReward };
+
+    if (rewards.coins > 0)
+        await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [rewards.coins, playerId]);
+    if (experienceReward > 0)
+        await playerHelper.addExperience(playerId, experienceReward, client);
+
+    const grantedKey = await grantNextBossKey(client, playerId, bossId);
+    if (grantedKey) rewards.key = grantedKey;
+
+    const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, 0.5 * lootMultiplier);
+    if (grantedItems.length) rewards.items = grantedItems;
+
+    await client.query(
+        `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
+         VALUES ($1, $2, 1, NOW())
+         ON CONFLICT (player_id, boss_id)
+         DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
+        [playerId, bossId]
+    );
+
+    await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [playerId]);
+    await client.query('DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2', [playerId, bossId]);
+    await clearPlayerActiveBattle(client, playerId);
+
+    const kills = (masteries.find(m => m.boss_id === bossId)?.kills || 0) + 1;
+    return { rewards, mastery: kills };
+}
+
 async function getActiveRaids(client, playerId) {
     const raidsResult = await client.query(
         `SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at,
@@ -430,6 +472,26 @@ async function getActiveRaids(client, playerId) {
         participatingIds,
         participatingBossIds
     };
+}
+
+async function validateSoloAttack(client, playerId, bossId) {
+    const activeBattle = await resolveActiveBattle(client, playerId);
+    if (!activeBattle || activeBattle.type !== 'solo' || activeBattle.boss_id !== bossId) {
+        return { error: { success: false, error: 'Сначала начните соло-бой с этим боссом', code: 'BOSS_NOT_STARTED' }, status: 400 };
+    }
+
+    const player = await getPlayerBaseState(client, playerId);
+    const activeBuffs = getActiveBuffs(player.buffs);
+
+    if (!activeBuffs.free_energy && player.energy < 1) {
+        return { error: { success: false, error: 'Недостаточно энергии', code: 'INSUFFICIENT_ENERGY' }, status: 400 };
+    }
+    if (player.health <= 0) {
+        return { error: { success: false, error: 'Вы мертвы', code: 'PLAYER_DEAD' }, status: 400 };
+    }
+
+    const masteries = await getBossMasteries(client, playerId);
+    return { activeBattle, player, activeBuffs, masteries };
 }
 
 function buildAlreadyInFightResponse(activeBattle) {
@@ -488,23 +550,6 @@ router.post('/start', async (req, res) => {
 
             if (bossId > 1) {
                 await spendBossKeys(client, playerId, bossId - 1);
-            }
-
-            // DEBUG: Проверить существование игрока перед вставкой
-            const playerExists = await client.query('SELECT id FROM players WHERE id = $1', [playerId]);
-            logger.info('[bosses/start] Проверка существования игрока:', {
-                playerId,
-                exists: playerExists.rows.length > 0,
-                playerExistsRow: playerExists.rows[0]
-            });
-
-            if (playerExists.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Игрок не найден в базе данных',
-                    code: 'PLAYER_NOT_FOUND_IN_DB'
-                });
             }
 
             await client.query(
@@ -598,9 +643,16 @@ router.get('/', async (req, res) => {
 
         const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
 
+        // Получаем все ключи боссов одним запросом для устранения N+1
+        const keysResult = await client.query(
+            'SELECT boss_id, quantity FROM boss_keys WHERE player_id = $1',
+            [playerId]
+        );
+        const keysMap = Object.fromEntries(keysResult.rows.map(r => [r.boss_id, r.quantity]));
+
         const bossList = [];
         for (const boss of bossesResult.rows) {
-            const ownedKeys = boss.id === 1 ? 0 : await getPlayerKeyCount(client, playerId, boss.id - 1);
+            const ownedKeys = boss.id === 1 ? 0 : (keysMap[boss.id - 1] || 0);
             const isUnlocked = boss.id === 1 || ownedKeys >= KEYS_REQUIRED_FOR_BOSS;
             const soloProgress = activeBattle?.type === 'solo' && activeBattle.boss_id === boss.id
                 ? activeBattle.boss.hp
@@ -669,40 +721,13 @@ router.post('/attack-boss', async (req, res) => {
         await client.query('BEGIN');
 
         try {
-            const activeBattle = await resolveActiveBattle(client, playerId);
-            if (!activeBattle || activeBattle.type !== 'solo' || activeBattle.boss_id !== bossId) {
+            const validation = await validateSoloAttack(client, playerId, bossId);
+            if (validation.error) {
                 await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Сначала начните соло-бой с этим боссом',
-                    code: 'BOSS_NOT_STARTED'
-                });
+                return res.status(validation.status).json(validation.error);
             }
 
-            const player = await getPlayerBaseState(client, playerId);
-            const activeBuffs = getActiveBuffs(player.buffs);
-            if (!activeBuffs.free_energy && player.energy < 1) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Недостаточно энергии',
-                    code: 'INSUFFICIENT_ENERGY',
-                    energy: player.energy,
-                    energy_required: 1
-                });
-            }
-
-            // Проверяем здоровье игрока
-            if (player.health <= 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Вы мертвы. Нельзя атаковать босса.',
-                    code: 'PLAYER_DEAD'
-                });
-            }
-
-            const masteries = await getBossMasteries(client, playerId);
+            const { activeBattle, player, activeBuffs, masteries } = validation;
             const damage = calculateDamage(bossId, player, masteries);
             const newHp = Math.max(0, activeBattle.boss.hp - damage);
             const energyCost = activeBuffs.free_energy ? 0 : 1;
@@ -729,49 +754,9 @@ router.post('/attack-boss', async (req, res) => {
 
             if (newHp <= 0) {
                 killed = true;
-
-                const boss = await getBossById(client, bossId);
-                const experienceReward = activeBuffs.exp_x2
-                    ? (boss.reward_experience || 0) * 2
-                    : (boss.reward_experience || 0);
-                const lootMultiplier = activeBuffs.loot_x2 ? 2 : 1;
-
-                rewards = {
-                    coins: boss.reward_coins || 0,
-                    experience: experienceReward
-                };
-
-                if (boss.reward_coins > 0) {
-                    await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [boss.reward_coins, playerId]);
-                }
-
-                if (experienceReward > 0) {
-                    await playerHelper.addExperience(playerId, experienceReward, client);
-                }
-
-                const grantedKey = await grantNextBossKey(client, playerId, bossId);
-                if (grantedKey) {
-                    rewards.key = grantedKey;
-                }
-
-                const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, 0.5 * lootMultiplier);
-                if (grantedItems.length) {
-                    rewards.items = grantedItems;
-                }
-
-                await client.query(
-                    `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
-                     VALUES ($1, $2, 1, NOW())
-                     ON CONFLICT (player_id, boss_id)
-                     DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
-                    [playerId, bossId]
-                );
-
-                mastery += 1;
-
-                await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [playerId]);
-                await client.query('DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2', [playerId, bossId]);
-                await clearPlayerActiveBattle(client, playerId);
+                const killResult = await handleSoloBossKill(client, playerId, bossId, activeBuffs, masteries);
+                rewards = killResult.rewards;
+                mastery = killResult.mastery;
             }
 
             await client.query('COMMIT');
@@ -833,42 +818,13 @@ router.post('/attack-with-weapon', async (req, res) => {
         await client.query('BEGIN');
 
         try {
-            const activeBattle = await resolveActiveBattle(client, playerId);
-            if (!activeBattle || activeBattle.type !== 'solo' || activeBattle.boss_id !== bossId) {
+            const validation = await validateSoloAttack(client, playerId, bossId);
+            if (validation.error) {
                 await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Сначала начните соло-бой с этим боссом',
-                    code: 'BOSS_NOT_STARTED'
-                });
+                return res.status(validation.status).json(validation.error);
             }
 
-            const playerResult = await client.query(`
-                SELECT * FROM players WHERE id = $1 FOR UPDATE
-            `, [playerId]);
-
-            const player = playerResult.rows[0];
-            const activeBuffs = getActiveBuffs(player.buffs);
-
-            if (!activeBuffs.free_energy && player.energy < 1) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Недостаточно энергии',
-                    code: 'INSUFFICIENT_ENERGY',
-                    energy: player.energy,
-                    energy_required: 1
-                });
-            }
-
-            if (player.health <= 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Вы мертвы. Нельзя атаковать босса.',
-                    code: 'PLAYER_DEAD'
-                });
-            }
+            const { activeBattle, player, activeBuffs, masteries } = validation;
 
             const inventory = normalizeInventory(player.inventory);
             
@@ -898,7 +854,6 @@ router.post('/attack-with-weapon', async (req, res) => {
             // Удаляем оружие из инвентаря
             const newInventory = inventory.filter((_, i) => i !== itemIndex);
 
-            const masteries = await getBossMasteries(client, playerId);
             const baseDamage = calculateDamage(bossId, player, masteries);
             const damage = baseDamage + weaponDamage;
             const energyCost = activeBuffs.free_energy ? 0 : 1;
@@ -926,50 +881,9 @@ router.post('/attack-with-weapon', async (req, res) => {
 
             if (newHp <= 0) {
                 killed = true;
-
-                const boss = await getBossById(client, bossId);
-                const experienceReward = activeBuffs.exp_x2
-                    ? (boss.reward_experience || 0) * 2
-                    : (boss.reward_experience || 0);
-                const lootMultiplier = activeBuffs.loot_x2 ? 2 : 1;
-
-                rewards = {
-                    coins: boss.reward_coins || 0,
-                    experience: experienceReward
-                };
-
-                if (rewards.coins > 0) {
-                    await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [rewards.coins, playerId]);
-                }
-
-                if (experienceReward > 0) {
-                    await playerHelper.addExperience(playerId, experienceReward, client);
-                }
-
-                const grantedKey = await grantNextBossKey(client, playerId, bossId);
-                if (grantedKey) {
-                    rewards.key = grantedKey;
-                }
-
-                const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, 0.5 * lootMultiplier);
-                if (grantedItems.length) {
-                    rewards.items = grantedItems;
-                }
-
-                await client.query(`
-                    INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
-                    VALUES ($1, $2, 1, NOW())
-                    ON CONFLICT (player_id, boss_id)
-                    DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()
-                `, [playerId, bossId]);
-
-                mastery += 1;
-
-                await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [playerId]);
-
-                await client.query('DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2', [playerId, bossId]);
-
-                await clearPlayerActiveBattle(client, playerId);
+                const killResult = await handleSoloBossKill(client, playerId, bossId, activeBuffs, masteries);
+                rewards = killResult.rewards;
+                mastery = killResult.mastery;
             }
 
             await client.query('COMMIT');
@@ -1418,11 +1332,9 @@ router.post('/raid/:id/attack', async (req, res) => {
                     if (participant.player_id === playerId) {
                         rewards = {
                             coins: coinsReward,
-                            experience: experienceReward
+                            experience: experienceReward,
+                            items: grantedItems
                         };
-                        if (grantedItems.length) {
-                            rewards.items = grantedItems;
-                        }
                     }
 
                     await client.query(
@@ -1438,8 +1350,12 @@ router.post('/raid/:id/attack', async (req, res) => {
 
                 const leaderKey = await grantNextBossKey(client, raid.leader_id, raid.boss_id);
                 if (playerId === raid.leader_id && leaderKey) {
-                    rewards = rewards || { coins: 0, experience: 0 };
+                    rewards = rewards || { coins: 0, experience: 0, items: [] };
                     rewards.key = leaderKey;
+                }
+
+                if (rewards && Array.isArray(rewards.items) && rewards.items.length === 0) {
+                    delete rewards.items;
                 }
 
                 await clearActiveBattleForPlayers(client, participantIds);

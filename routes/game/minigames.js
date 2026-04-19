@@ -73,15 +73,23 @@ router.get('/wheel', async (req, res) => {
         if (!lastSpin) {
             canSpinFree = true;
         } else {
-            const timeSinceLastSpin = now - new Date(lastSpin).getTime();
-            canSpinFree = timeSinceLastSpin >= FREE_SPIN_COOLDOWN_MS;
+            const lastSpinTime = new Date(lastSpin).getTime();
+            if (isNaN(lastSpinTime)) {
+                canSpinFree = true; // Если дата corrupted, разрешаем
+            } else {
+                const timeSinceLastSpin = now - lastSpinTime;
+                canSpinFree = timeSinceLastSpin >= FREE_SPIN_COOLDOWN_MS;
+            }
         }
-        
+
         // Время до следующего бесплатного вращения
         let nextFreeSpin = null;
         if (!canSpinFree && lastSpin) {
-            const nextSpinTime = new Date(lastSpin).getTime() + FREE_SPIN_COOLDOWN_MS;
-            nextFreeSpin = Math.max(0, nextSpinTime - now);
+            const lastSpinTime = new Date(lastSpin).getTime();
+            if (!isNaN(lastSpinTime)) {
+                const nextSpinTime = lastSpinTime + FREE_SPIN_COOLDOWN_MS;
+                nextFreeSpin = Math.max(0, nextSpinTime - now);
+            }
         }
         
         res.json({

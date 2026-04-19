@@ -4,8 +4,8 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, queryAll } = require('../db/database');
-const { logger, safeJsonParse, validateTelegramInitData } = require('../utils/serverApi');
+const { query, queryOne, queryAll, transaction } = require('../db/database');
+const { logger, safeJsonParse, validateTelegramInitData, getPlayerByTelegramId } = require('../utils/serverApi');
 
 /**
  * Безопасный парсинг JSON условия достижения
@@ -53,24 +53,21 @@ function resolveTelegramId(req) {
 }
 
 async function getAchievementRuntimeContext(playerId, client = null) {
-    const queryOneFn = client
-        ? (sql, params = []) => client.query(sql, params).then(result => result.rows[0] || null)
-        : queryOne;
+    const fn = client
+        ? (sql, params) => client.query(sql, params).then(r => r.rows[0])
+        : (sql, params) => queryOne(sql, params);
 
-    const bossCount = await queryOneFn('SELECT COUNT(*) as total FROM bosses');
-    const defeatedBosses = await queryOneFn(
-        'SELECT COUNT(DISTINCT boss_id) as total FROM boss_mastery WHERE player_id = $1 AND kills > 0',
-        [playerId]
-    );
-    const maxSingleBossKills = await queryOneFn(
-        'SELECT COALESCE(MAX(kills), 0) as total FROM boss_mastery WHERE player_id = $1',
-        [playerId]
-    );
+    const row = await fn(`
+        SELECT
+            (SELECT COUNT(*) FROM bosses) AS total_bosses,
+            (SELECT COUNT(DISTINCT boss_id) FROM boss_mastery WHERE player_id = $1 AND kills > 0) AS defeated_bosses,
+            (SELECT COALESCE(MAX(kills), 0) FROM boss_mastery WHERE player_id = $1) AS max_single_boss_kills
+    `, [playerId]);
 
     return {
-        totalBosses: Number(bossCount?.total || 0),
-        defeatedBosses: Number(defeatedBosses?.total || 0),
-        maxSingleBossKills: Number(maxSingleBossKills?.total || 0)
+        totalBosses: Number(row?.total_bosses || 0),
+        defeatedBosses: Number(row?.defeated_bosses || 0),
+        maxSingleBossKills: Number(row?.max_single_boss_kills || 0)
     };
 }
 
@@ -204,7 +201,6 @@ router.get('/daily-tasks', async (req, res) => {
         }
 
         // Получаем или создаём задания на день (с транзакцией для предотвращения race condition)
-        const { transaction } = require('../db/database');
         
         const tasks = await transaction(async (client) => {
             // Проверяем существующие задания с блокировкой
@@ -263,10 +259,7 @@ router.get('/achievements', async (req, res) => {
             return res.status(401).json({ error: 'Требуется авторизация' });
         }
 
-        const player = await queryOne(
-            'SELECT id FROM players WHERE telegram_id = $1',
-            [telegramId]
-        );
+        const player = await getPlayerByTelegramId(telegramId);
 
         if (!player) {
             return res.status(404).json({ error: 'Игрок не найден' });
@@ -275,24 +268,19 @@ router.get('/achievements', async (req, res) => {
         // Все достижения (с фильтрацией по категории)
         let achievementsQuery = 'SELECT * FROM achievements';
         const queryParams = [];
-        
+
         if (category) {
             achievementsQuery += ' WHERE category = $1';
             queryParams.push(category);
         }
         achievementsQuery += ' ORDER BY category, id';
 
-        const allAchievements = await queryAll(achievementsQuery, queryParams);
+        const [allAchievements, playerAchievements] = await Promise.all([
+            queryAll(achievementsQuery, queryParams),
+            queryAll('SELECT * FROM player_achievements WHERE player_id = $1', [player.id])
+        ]);
 
-        // Прогресс игрока
-        const playerAchievements = await queryAll(`
-            SELECT * FROM player_achievements WHERE player_id = $1
-        `, [player.id]);
-
-        const progressMap = {};
-        playerAchievements.forEach(pa => {
-            progressMap[pa.achievement_id] = pa;
-        });
+        const progressMap = Object.fromEntries(playerAchievements.map(pa => [pa.achievement_id, pa]));
 
         const achievements = allAchievements.map(ach => ({
             ...ach,
@@ -322,10 +310,7 @@ router.get('/achievements/progress', async (req, res) => {
             return res.status(401).json({ error: 'Требуется авторизация' });
         }
 
-        const player = await queryOne(
-            'SELECT id, level, days_played, bosses_killed, pvp_wins, unique_items, locations_visited, clan_id, clan_role, clans_joined FROM players WHERE telegram_id = $1',
-            [telegramId]
-        );
+        const player = await getPlayerByTelegramId(telegramId);
 
         if (!player) {
             return res.status(404).json({ error: 'Игрок не найден' });
@@ -333,18 +318,13 @@ router.get('/achievements/progress', async (req, res) => {
 
         const achievementRuntimeContext = await getAchievementRuntimeContext(player.id);
 
-        // Получаем все достижения
-        const allAchievements = await queryAll('SELECT * FROM achievements');
-        
-        // Получаем прогресс игрока
-        const playerAchievements = await queryAll(`
-            SELECT * FROM player_achievements WHERE player_id = $1
-        `, [player.id]);
+        // Получаем все достижения и прогресс игрока
+        const [allAchievements, playerAchievements] = await Promise.all([
+            queryAll('SELECT * FROM achievements'),
+            queryAll('SELECT * FROM player_achievements WHERE player_id = $1', [player.id])
+        ]);
 
-        const progressMap = {};
-        playerAchievements.forEach(pa => {
-            progressMap[pa.achievement_id] = pa;
-        });
+        const progressMap = Object.fromEntries(playerAchievements.map(pa => [pa.achievement_id, pa]));
 
         // Вычисляем прогресс для каждого достижения
         const progress = allAchievements.map(ach => {
@@ -381,7 +361,6 @@ router.get('/achievements/progress', async (req, res) => {
         progress.forEach(p => {
             if (!categories[p.category]) {
                 categories[p.category] = {
-                    name: getCategoryName(p.category),
                     achievements: [],
                     completed: 0,
                     total: 0
@@ -442,22 +421,10 @@ router.post('/achievements/claim', async (req, res) => {
         }
 
         // Парсим условие и награду
-        let condition;
-        let reward;
-        try {
-            condition = typeof achievement.condition === 'string' 
-                ? JSON.parse(achievement.condition) 
-                : achievement.condition;
-            reward = typeof achievement.reward === 'string' 
-                ? JSON.parse(achievement.reward) 
-                : achievement.reward;
-        } catch(e) {
-            logger.error('[api] JSON.parse failed:', e.message);
-            return res.status(500).json({ error: 'Ошибка обработки достижения' });
-        }
+        const condition = parseAchievementCondition(achievement.condition);
+        const reward = safeJsonParse(achievement.reward, {});
 
         // Используем транзакцию с блокировкой для предотвращения race condition
-        const { transaction } = require('../db/database');
         
         const result = await transaction(async (client) => {
             // Блокируем запись игрока
@@ -564,18 +531,6 @@ router.post('/achievements/claim', async (req, res) => {
     }
 });
 
-// Вспомогательная функция для получения названия категории
-function getCategoryName(category) {
-    const names = {
-        survival: 'Выживание',
-        bosses: 'Боссы',
-        pvp: 'PvP',
-        collection: 'Коллекция',
-        exploration: 'Исследование',
-        social: 'Социальное'
-    };
-    return names[category] || category;
-}
 
 /**
  * Информация об игре (для главного экрана)
@@ -620,35 +575,11 @@ router.post('/verify-telegram', async (req, res) => {
 
         // Проверка подписи Telegram (если есть hash и bot token)
         const botToken = process.env.TG_BOT_TOKEN;
-        if (hash && botToken) {
-            const crypto = require('crypto');
-            
-            // Формируем строку для проверки
-            const dataCheckString = Object.keys(req.body)
-                .filter(key => key !== 'hash')
-                .sort()
-                .map(key => `${key}=${req.body[key]}`)
-                .join('\n');
-            
-            const secretKey = crypto.createHash('sha256').update(botToken).digest();
-            const calculatedHash = crypto
-                .createHmac('sha256', secretKey)
-                .update(dataCheckString)
-                .digest('hex');
-            
-            if (calculatedHash !== hash) {
+        if (hash && botToken && initData) {
+            const isValid = validateTelegramInitData(initData, botToken);
+            if (!isValid) {
                 logger.warn({ type: 'telegram_hash_mismatch', telegram_id });
                 return res.status(401).json({ error: 'Неверная подпись Telegram' });
-            }
-            
-            // Проверяем время (не старше 24 часов)
-            if (auth_date) {
-                const authTime = parseInt(auth_date, 10);
-                const now = Math.floor(Date.now() / 1000);
-                if (now - authTime > 86400) {
-                    logger.warn({ type: 'telegram_auth_expired', telegram_id, age: now - authTime });
-                    return res.status(401).json({ error: 'Данные авторизации устарели' });
-                }
             }
         }
 

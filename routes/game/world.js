@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query, queryOne, queryAll } = require('../../db/database');
+const { pool, query, queryAll } = require('../../db/database');
 const {
     DEBUFF_CONFIG,
     calculateDropChance,
@@ -13,32 +13,13 @@ const {
     calculateDebuffModifiers,
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
-const { logger, withPlayerLock, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
 
 // =============================================================================
 // УТИЛИТЫ
 // =============================================================================
-
-const safeStringify = (value) => {
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return JSON.stringify({});
-    }
-};
-
-const safeParse = (value, fallback = {}) => {
-    if (value === null || value === undefined) return fallback;
-    if (typeof value === 'object') return value;
-    try {
-        return typeof value === 'string' ? JSON.parse(value) : value;
-    } catch {
-        logger.error({ type: 'world_json_parse_error', value: typeof value, value_preview: String(value).substring(0, 100) });
-        return fallback;
-    }
-};
 
 function validateLocationId(locationId) {
     return Number.isInteger(locationId) && locationId > 0;
@@ -108,7 +89,7 @@ async function getRandomLootItem(client, rarity, locationId) {
 function buildInventoryItem(item, rarity) {
     return createInventoryItem({
         ...item,
-        stats: safeParse(item?.stats, {})
+        stats: safeJsonParse(item?.stats, {})
     }, {
         rarity,
         quantity: 1,

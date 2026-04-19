@@ -14,7 +14,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
-const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, badRequest, wrap, logPlayerAction, serializeJSONField, logger } = require('../../utils/serverApi');
+const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, badRequest, wrap, logPlayerAction, serializeJSONField, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
 
 
 
@@ -142,7 +142,7 @@ router.post('/clan/create', wrap(async (req, res) => {
 
         // Проверяем монеты еще раз внутри транзакции
         if (lockedPlayer.coins < 1000) {
-            throw new Error('Недостаточно монет');
+            throw new Error(ERROR_MESSAGES.INSUFFICIENT_COINS);
         }
 
         // Проверяем уникальность имени клана
@@ -520,7 +520,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
         }
 
         if (lockedPlayer.coins < donation) {
-            throw new Error('Недостаточно монет');
+            throw new Error(ERROR_MESSAGES.INSUFFICIENT_COINS);
         }
 
         // Списание с игрока и добавление в казну клана

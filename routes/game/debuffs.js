@@ -305,13 +305,11 @@ const DebuffAPI = {
     /**
      * Лечить дебафф предметом
      */
-    async cure(playerId, cureType, itemId, itemIndex = null) {
-        const cure = DEBUFF_CURES[cureType];
-        if (!cure) {
-            throw createDebuffError(`Неизвестный тип лечения: ${cureType}`, 'INVALID_TYPE', 400);
-        }
-        
-        return await tx(async (client) => {
+    async cure(playerId, cureType, itemId, itemIndex = null, options = {}) {
+        const consumeItem = options.consumeItem !== false;
+        const externalClient = options.client || null;
+
+        const executor = async (client) => {
             // Получаем игрока и инвентарь
             const playerResult = await client.query(
                 `SELECT radiation, infections, inventory FROM players WHERE id = $1 FOR UPDATE`,
@@ -335,6 +333,23 @@ const DebuffAPI = {
             
             const item = inventory[resolvedItemIndex];
             const itemStats = safeJsonParse(item.stats, item.stats && typeof item.stats === 'object' ? item.stats : {}) || {};
+
+            let resolvedCureType = cureType;
+            let cure = DEBUFF_CURES[resolvedCureType] || null;
+
+            // Авто-режим подбирает силу лечения из реального предмета,
+            // чтобы не завышать эффект при предметах со слабыми статами.
+            if (!cure && (resolvedCureType === 'auto' || resolvedCureType === 'debuff')) {
+                resolvedCureType = 'auto';
+                cure = {
+                    radiationReduction: Number(itemStats.radiation_cure || item.rad_removal || 0),
+                    infectionReduction: Number(itemStats.infection_cure || item.infection_cure || 0)
+                };
+            }
+
+            if (!cure) {
+                throw createDebuffError(`Неизвестный тип лечения: ${cureType}`, 'INVALID_TYPE', 400);
+            }
             
             // Проверяем, что предмет подходит для лечения
             const canCure = (cure.radiationReduction && Number(itemStats.radiation_cure || item.rad_removal || 0) > 0) ||
@@ -371,7 +386,7 @@ const DebuffAPI = {
                 );
                 
                 await logPlayerAction(client, playerId, 'debuff_cure_radiation', {
-                    cureType,
+                    cureType: resolvedCureType,
                     oldLevel: radiation.level,
                     newLevel
                 });
@@ -405,24 +420,33 @@ const DebuffAPI = {
                 );
                 
                 await logPlayerAction(client, playerId, 'debuff_cure_infection', {
-                    cureType,
+                    cureType: resolvedCureType,
                     removed: infections.length - remaining.length
                 });
             }
             
-            // Удаляем использованный предмет
-            inventory.splice(resolvedItemIndex, 1);
-            await client.query(
-                `UPDATE players SET inventory = $1 WHERE id = $2`,
-                [JSON.stringify(inventory), playerId]
-            );
+            // Удаляем использованный предмет (по умолчанию),
+            // опционально можно пропустить списание при внешней оркестрации.
+            if (consumeItem) {
+                inventory.splice(resolvedItemIndex, 1);
+                await client.query(
+                    `UPDATE players SET inventory = $1 WHERE id = $2`,
+                    [JSON.stringify(inventory), playerId]
+                );
+            }
             
             return {
                 success: true,
-                cured: cureType,
+                cured: resolvedCureType,
                 itemUsed: item.name
             };
-        });
+        };
+
+        if (externalClient) {
+            return executor(externalClient);
+        }
+
+        return await tx(executor);
     },
     
     /**
@@ -504,8 +528,10 @@ router.post('/cure', async (req, res) => {
                 error: 'cureType и itemId/item_index обязательны'
             });
         }
+
+        const normalizedCureType = cureType === 'debuff' ? 'auto' : cureType;
         
-        if (!DEBUFF_CURES[cureType]) {
+        if (normalizedCureType !== 'auto' && !DEBUFF_CURES[normalizedCureType]) {
             return res.status(400).json({
                 success: false,
                 error: `Неверный тип лечения. Доступно: ${Object.keys(DEBUFF_CURES).join(', ')}`
@@ -519,7 +545,7 @@ router.post('/cure', async (req, res) => {
             });
         }
         
-        const result = await DebuffAPI.cure(playerId, cureType, itemId, normalizedItemIndex);
+        const result = await DebuffAPI.cure(playerId, normalizedCureType, itemId, normalizedItemIndex);
         
         res.json({
             success: true,

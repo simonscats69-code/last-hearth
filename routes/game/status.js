@@ -204,7 +204,7 @@ router.post('/heal', async (req, res) => {
         }
 
         if (type === 'debuff') {
-            const result = await DebuffAPI.cure(playerId, 'antibiotic', item_id, normalizedItemIndex);
+            const result = await DebuffAPI.cure(playerId, 'auto', item_id, normalizedItemIndex);
             return res.json({
                 success: true,
                 ...result,
@@ -229,7 +229,7 @@ router.post('/heal', async (req, res) => {
             const inventory = normalizeInventory(p.inventory);
             
             // Для типов, требующих item_id
-            if (['health', 'radiation', 'debuff'].includes(type)) {
+            if (['health', 'radiation'].includes(type)) {
                 if (item_id === undefined && item_index === undefined) {
                     throw { message: 'item_id или item_index обязателен для этого типа', code: 'MISSING_ITEM_ID', statusCode: 400 };
                 }

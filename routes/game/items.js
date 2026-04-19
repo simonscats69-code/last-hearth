@@ -5,9 +5,30 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query, queryOne, queryAll } = require('../../db/database');
-const { withPlayerLock, validateIndex, validateBoolean, ok, fail, error, badRequest, logPlayerAction, logger, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { pool, queryOne, queryAll } = require('../../db/database');
+const { withPlayerLock, validateIndex, validateBoolean, ok, fail, error, badRequest, logPlayerAction, logger, safeJsonParse, handleError, ERROR_MESSAGES } = require('../../utils/serverApi');
 const { normalizeInventory, createInventoryItem } = require('../../utils/game-helpers');
+const { DebuffAPI } = require('./debuffs');
+
+// Конфигурация игры
+const GAME_CONFIG = {
+  upgrade: {
+    maxLevel: 10,
+    baseChance: 100,
+    decay: 8,
+    maxDamage: 10000,
+    maxDefense: 5000,
+    costMultiplier: 50
+  },
+  modification: {
+    costMultiplier: 30
+  }
+};
+
+function rollChance() {
+  const value = Math.random() * 100;
+  return { value, rounded: value.toFixed(2) };
+}
 
 function getShopCategory(item) {
     if (!item) return 'misc';
@@ -37,27 +58,6 @@ function normalizeItemStats(item) {
     return safeJsonParse(item.stats, item.stats && typeof item.stats === 'object' ? item.stats : {}) || {};
 }
 
-function reduceInfections(infections, cureAmount) {
-    const normalized = Array.isArray(infections) ? [...infections] : [];
-    let remainingCure = Math.max(0, Number(cureAmount || 0));
-
-    return normalized
-        .map((infection) => {
-            const level = Math.max(0, Number(infection.level || 0));
-            if (remainingCure <= 0 || level <= 0) {
-                return infection;
-            }
-
-            const reducedBy = Math.min(level, remainingCure);
-            remainingCure -= reducedBy;
-            return {
-                ...infection,
-                level: level - reducedBy
-            };
-        })
-        .filter((infection) => Number(infection.level || 0) > 0);
-}
-
 function resolveInventoryItemIndex(inventory, itemIndex, itemId) {
     const normalizedItemIndex = itemIndex === undefined || itemIndex === null ? null : Number(itemIndex);
     if (Number.isInteger(normalizedItemIndex) && normalizedItemIndex >= 0 && normalizedItemIndex < inventory.length) {
@@ -73,6 +73,11 @@ function resolveInventoryItemIndex(inventory, itemIndex, itemId) {
     }
 
     return Number.isInteger(normalizedItemIndex) ? normalizedItemIndex : -1;
+}
+
+function hasDebuffCureEffect(item, stats) {
+    return Number(stats?.infection_cure || item?.infection_cure || 0) > 0
+        || Number(stats?.radiation_cure || item?.rad_removal || 0) > 0;
 }
 
 // =============================================================================
@@ -170,48 +175,49 @@ router.post('/upgrade-item', async (req, res) => {
             }
             
             const currentLevel = item.upgrade_level || 0;
-            const maxLevel = 10;
-            
-            if (currentLevel >= maxLevel) {
+
+            if (currentLevel >= GAME_CONFIG.upgrade.maxLevel) {
                 throw { message: 'Максимальный уровень улучшения достигнут', code: 'MAX_LEVEL_REACHED', statusCode: 400 };
             }
-            
+
             // Стоимость улучшения
-            const upgradeCost = (currentLevel + 1) * 50;
-            
+            const upgradeCost = (currentLevel + 1) * GAME_CONFIG.upgrade.costMultiplier;
+
             const coins = parseInt(lockedPlayer.coins) || 0;
-            
+
             if (coins < upgradeCost) {
-                throw { 
-                    message: 'Недостаточно монет', 
-                    code: 'INSUFFICIENT_COINS', 
+                throw {
+                    message: ERROR_MESSAGES.INSUFFICIENT_COINS,
+                    code: 'INSUFFICIENT_COINS',
                     statusCode: 400,
                     required: upgradeCost,
                     have: coins
                 };
             }
-            
+
             // Шанс успеха (уменьшается с каждым уровнем)
-            let successChance = Math.max(0, 100 - (currentLevel * 8));
+            let successChance = Math.max(0, GAME_CONFIG.upgrade.baseChance - (currentLevel * GAME_CONFIG.upgrade.decay));
             if (normalizedUseProtection) {
                 successChance += 20;
             }
-            
-            const rolled = Math.random() * 100;
+
+            const rolled = rollChance();
             let upgradeSuccess = false;
             let itemBroken = false;
-            
-            if (rolled <= successChance) {
+
+            if (rolled.value <= successChance) {
                 // Успех!
                 upgradeSuccess = true;
                 item.upgrade_level = currentLevel + 1;
                 
                 // Увеличиваем статы
                 if (item.damage) {
-                    item.damage = Math.floor(item.damage * 1.2);
+                    item.damage = Math.min(Math.floor(item.damage * 1.2), GAME_CONFIG.upgrade.maxDamage);
+                    if (!Number.isFinite(item.damage) || item.damage < 0) item.damage = 0;
                 }
                 if (item.defense) {
-                    item.defense = Math.floor(item.defense * 1.2);
+                    item.defense = Math.min(Math.floor(item.defense * 1.2), GAME_CONFIG.upgrade.maxDefense);
+                    if (!Number.isFinite(item.defense) || item.defense < 0) item.defense = 0;
                 }
                 
                 // Обновляем инвентарь и списываем монеты внутри транзакции
@@ -244,11 +250,11 @@ router.post('/upgrade-item', async (req, res) => {
             
             // Возвращаем результат для логирования после транзакции
             return {
-                item,
+                item: itemBroken ? null : item,
                 upgradeSuccess,
                 itemBroken,
                 successChance,
-                rolled: rolled.toFixed(2),
+                rolled: rolled.rounded,
                 use_protection: normalizedUseProtection
             };
         });
@@ -358,14 +364,14 @@ router.post('/modify-item', async (req, res) => {
             }
             
             // Стоимость
-            const modCost = (currentMod + 1) * 30;
+            const modCost = (currentMod + 1) * GAME_CONFIG.modification.costMultiplier;
             
             const coins = parseInt(lockedPlayer.coins) || 0;
             
             if (coins < modCost) {
-                throw { 
-                    message: 'Недостаточно монет', 
-                    code: 'INSUFFICIENT_COINS', 
+                throw {
+                    message: ERROR_MESSAGES.INSUFFICIENT_COINS,
+                    code: 'INSUFFICIENT_COINS',
                     statusCode: 400,
                     required: modCost,
                     have: coins
@@ -374,16 +380,16 @@ router.post('/modify-item', async (req, res) => {
             
             // Шанс успеха
             const successChance = Math.max(0, 90 - (currentMod * 10));
-            const rolled = Math.random() * 100;
-            
-            if (rolled <= successChance) {
+            const rolled = rollChance();
+
+            if (rolled.value <= successChance) {
                 // Применяем модификацию
                 item.modifications[modification_type] = currentMod + 1;
                 
                 if (modification_type === 'sharpening') {
-                    item.damage = (item.damage || 0) + 5;
+                    item.damage = Math.min((item.damage || 0) + 5, GAME_CONFIG.upgrade.maxDamage);
                 } else if (modification_type === 'reinforcement') {
-                    item.defense = (item.defense || 0) + 5;
+                    item.defense = Math.min((item.defense || 0) + 5, GAME_CONFIG.upgrade.maxDefense);
                 }
                 
                 // Выполняем запрос внутри транзакции
@@ -557,6 +563,9 @@ router.post('/use-item', async (req, res) => {
 
                 const oldItem = equipment[slot];
                 if (oldItem) {
+                    if (inventory.length >= 30) {
+                        throw { message: 'Инвентарь заполнен', code: 'INVENTORY_FULL', statusCode: 400 };
+                    }
                     inventory.push(oldItem);
                 }
 
@@ -581,57 +590,23 @@ router.post('/use-item', async (req, res) => {
 
                 const newInventory = inventory.filter((_, i) => i !== normalizedItemIndex);
                 const stats = normalizeItemStats(item);
+                const hasDebuffCure = hasDebuffCureEffect(item, stats);
 
-                if (stats.infection_cure) {
-                    const cureAmount = Number(stats.infection_cure || 0);
-                    const currentInfections = safeJsonParse(lockedPlayer.infections, []);
-                    const updatedInfections = reduceInfections(currentInfections, cureAmount);
-                    const oldLevel = currentInfections.reduce((sum, infection) => sum + Number(infection.level || 0), 0);
-                    const newLevel = updatedInfections.reduce((sum, infection) => sum + Number(infection.level || 0), 0);
+                if (hasDebuffCure) {
+                    const cureResult = await DebuffAPI.cure(
+                        playerId,
+                        'auto',
+                        item.id,
+                        normalizedItemIndex,
+                        { consumeItem: true, client }
+                    );
 
-                    await client.query(`
-                        UPDATE players
-                        SET infections = $1,
-                            inventory = $2
-                        WHERE id = $3
-                    `, [updatedInfections, newInventory, lockedPlayer.id]);
-
-                    message = `Использовали ${item.name}. Инфекция снижена с ${oldLevel} до ${newLevel}`;
-                    updated = true;
-
-                } else if (stats.radiation_cure || item.type === 'antirad') {
-                    const radiationCure = Number(stats.radiation_cure || item.rad_removal || 2);
-
-                    let currentRadiation = { level: 0 };
-                    if (lockedPlayer.radiation) {
-                        if (typeof lockedPlayer.radiation === 'object') {
-                            currentRadiation = lockedPlayer.radiation;
-                        } else if (typeof lockedPlayer.radiation === 'number') {
-                            currentRadiation = { level: lockedPlayer.radiation };
-                        }
-                    }
-
-                    const newLevel = Math.max(0, currentRadiation.level - radiationCure);
-
-                    let newExpiresAt = null;
-                    if (newLevel > 0 && currentRadiation.expires_at && currentRadiation.level > 0) {
-                        const oldExpires = new Date(currentRadiation.expires_at);
-                        const now = new Date();
-                        const safeLevel = Math.max(1, currentRadiation.level);
-                        const reductionRatio = radiationCure / safeLevel;
-                        const reduction = (oldExpires - now) * reductionRatio;
-                        newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
-                    }
-
-                    await client.query(`
-                        UPDATE players
-                        SET radiation = $1,
-                            inventory = $2
-                        WHERE id = $3
-                    `, [{ level: newLevel, expires_at: newExpiresAt, applied_at: currentRadiation.applied_at }, newInventory, lockedPlayer.id]);
-
-                    message = `Использовали ${item.name}. Радиация снижена с ${currentRadiation.level} до ${newLevel}`;
-                    updated = true;
+                    return {
+                        action: 'use',
+                        message: `Использован ${cureResult.itemUsed}!`,
+                        item,
+                        debuff_cure: true
+                    };
 
                 } else if (item.type === 'food' && stats.energy) {
                     const energyRestored = Number(stats.energy || 0);
@@ -767,14 +742,7 @@ router.get('/shop', async (req, res) => {
         res.json({
             success: true,
             items: items.map(item => {
-                let parsedStats = {};
-                if (item.stats) {
-                    try {
-                        parsedStats = typeof item.stats === 'string' ? JSON.parse(item.stats) : (typeof item.stats === 'object' ? item.stats : {});
-                    } catch (e) {
-                        parsedStats = {};
-                    }
-                }
+                const parsedStats = normalizeItemStats(item);
                 return {
                     ...item,
                     stats: parsedStats,
@@ -792,100 +760,105 @@ router.get('/shop', async (req, res) => {
  * Купить предмет за монеты
  */
 router.post('/buy', async (req, res) => {
-    const client = await pool.connect();
     try {
         const { item_id, currency = 'coins' } = req.body;
         const playerId = req.player.id;
-        
+
         if (!item_id) {
             return badRequest(res, 'Требуется ID предмета', 'ITEM_REQUIRED');
         }
-        
+
         if (currency !== 'coins') {
             return badRequest(res, 'Магазин принимает только монеты', 'INVALID_CURRENCY');
         }
-        
-        // Получаем предмет из БД
-        const itemResult = await client.query('SELECT * FROM items WHERE id = $1', [item_id]);
-        if (itemResult.rows.length === 0) {
-            return badRequest(res, 'Предмет не найден', 'ITEM_NOT_FOUND');
-        }
-        
-        const shopItem = itemResult.rows[0];
-        if (!shopItem) {
-            return res.status(404).json({ success: false, error: 'Товар не найден' });
-        }
-        const price = shopItem.price || 0;
-        
-        if (price <= 0) {
-            return badRequest(res, 'Этот предмет нельзя купить', 'NOT_FOR_SALE');
-        }
-        
-        // Начинаем транзакцию
-        await client.query('BEGIN');
-        
-        // Получаем игрока с блокировкой
-        const playerResult = await client.query(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
-        );
-        
-        const player = playerResult.rows[0];
-        const playerCoins = player.coins || 0;
-        
-        if (playerCoins < price) {
-            await client.query('ROLLBACK');
-            return badRequest(res, 'Недостаточно монет', 'NOT_ENOUGH_COINS');
-        }
-        
-        // Списываем монеты
-        await client.query(
-            'UPDATE players SET coins = coins - $1 WHERE id = $2',
-            [price, playerId]
-        );
-        
-        // Добавляем предмет в инвентарь
-        let inventory = normalizeInventory(player.inventory);
-        const newItem = createInventoryItem(shopItem, { quantity: 1 });
-        
-        inventory.push(newItem);
-        
-        const updateResult = await client.query(
-            `UPDATE players
-             SET inventory = $1,
-                 items_collected = COALESCE(items_collected, 0) + 1
-             WHERE id = $2
-             RETURNING coins`,
-            [inventory, playerId]
-        );
 
-        await client.query('COMMIT');
+        // Используем withPlayerLock для автоматического управления транзакцией
+        const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
+            // Получаем предмет из БД
+            const itemResult = await client.query('SELECT * FROM items WHERE id = $1', [item_id]);
+            if (itemResult.rows.length === 0) {
+                throw { message: 'Предмет не найден', code: 'ITEM_NOT_FOUND', statusCode: 404 };
+            }
 
-        // Логируем действие после успешного коммита
+            const shopItem = itemResult.rows[0];
+
+            // Валидация структуры предмета
+            if (!shopItem.name || !shopItem.type) {
+                logger.error('Invalid shop item structure:', shopItem);
+                throw { message: 'Некорректная структура товара', code: 'INVALID_SHOP_ITEM', statusCode: 400 };
+            }
+
+            const price = shopItem.price || 0;
+
+            if (price <= 0) {
+                throw { message: 'Этот предмет нельзя купить', code: 'NOT_FOR_SALE', statusCode: 400 };
+            }
+
+            const playerCoins = parseInt(lockedPlayer.coins) || 0;
+
+            if (playerCoins < price) {
+                throw {
+                    message: ERROR_MESSAGES.INSUFFICIENT_COINS,
+                    code: 'NOT_ENOUGH_COINS',
+                    statusCode: 400,
+                    required: price,
+                    have: playerCoins
+                };
+            }
+
+            // Добавляем предмет в инвентарь
+            let inventory = normalizeInventory(lockedPlayer.inventory);
+            const newItem = createInventoryItem(shopItem, { quantity: 1 });
+
+            if (inventory.length >= 30) {
+                throw { message: 'Инвентарь заполнен', code: 'INVENTORY_FULL', statusCode: 400 };
+            }
+
+            inventory.push(newItem);
+
+            // Обновляем игрока
+            const updateResult = await client.query(
+                `UPDATE players
+                 SET inventory = $1, coins = coins - $2,
+                     items_collected = COALESCE(items_collected, 0) + 1
+                 WHERE id = $3
+                 RETURNING coins`,
+                [inventory, price, lockedPlayer.id]
+            );
+
+            return {
+                shopItem,
+                newItem,
+                remaining_coins: updateResult.rows[0].coins,
+                price
+            };
+        });
+
+        // Логируем действие после успешной транзакции
         try {
             await logPlayerAction(pool, playerId, 'shop_buy', {
-                item_id: shopItem.id,
-                item_name: shopItem.name,
-                price: price,
+                item_id: result.shopItem.id,
+                item_name: result.shopItem.name,
+                price: result.price,
                 currency: currency
             });
         } catch (logErr) {
             logger.error({ type: 'shop_buy_log_error', message: logErr.message });
         }
-        
-        res.json({
-            success: true,
-            message: `Вы купили ${shopItem.name} за ${price} монет`,
-            purchased_item: newItem,
-            remaining_coins: updateResult.rows[0].coins
+
+        ok(res, {
+            message: `Вы купили ${result.shopItem.name} за ${result.price} монет`,
+            purchased_item: result.newItem,
+            remaining_coins: result.remaining_coins
         });
-        
+
     } catch (error) {
-        await client.query('ROLLBACK');
-        logger.error({ type: 'shop_buy_error', playerId: req.player.id, message: error.message });
-        res.status(500).json({ success: false, error: 'Ошибка покупки' });
-    } finally {
-        client.release();
+        // Обработка ошибок from withPlayerLock
+        if (error.code && error.statusCode) {
+            return fail(res, error.message, error.code, error.statusCode);
+        }
+        logger.error('[items] Ошибка покупки:', error);
+        error(res, 'Ошибка покупки', 'BUY_ERROR', 500);
     }
 });
 
