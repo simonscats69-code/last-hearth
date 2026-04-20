@@ -244,6 +244,19 @@ console.log('[DEBUG] Первое присваивание window.formatTime:', 
 window.formatTime = formatTime;
 /**
  * ============================================
+ * ОБРАБОТЧИКИ ОШИБОК
+ * ============================================
+ */
+
+// Глобальный обработчик для unhandled promise rejections
+window.addEventListener('unhandledrejection', function(event) {
+    console.error('Unhandled promise rejection:', event.reason);
+    // Предотвращаем default logging, если нужно
+    // event.preventDefault();
+});
+
+/**
+ * ============================================
  * API ЗАПРОСЫ (API Requests)
  * ============================================
  * Управление запросами к серверу
