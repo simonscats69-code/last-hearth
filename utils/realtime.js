@@ -526,22 +526,21 @@ function sendToPlayer(playerId, data) {
 /**
  * Отправить сообщение всем подключённым игрокам (broadcast)
  */
-function broadcast(data, eventFilter = null) {
+async function broadcast(data, eventFilter = null) {
     const message = JSON.stringify(data);
     let count = 0;
     let failed = 0;
     
-    const results = Promise.allSettled(
-        [...clients.values()]
-            .filter(ws => ws.readyState === WebSocket.OPEN)
-            .filter(ws => !eventFilter || isSubscribed(ws, eventFilter))
-            .map(ws => safeSend(ws, message))
+    const clientsList = [...clients.values()]
+        .filter(ws => ws.readyState === WebSocket.OPEN)
+        .filter(ws => !eventFilter || isSubscribed(ws, eventFilter));
+    
+    const results = await Promise.allSettled(
+        clientsList.map(ws => safeSend(ws, message))
     );
     
-    results.then(results => {
-        count = results.filter(r => r.value === true).length;
-        failed = results.filter(r => r.status === 'rejected').length;
-    });
+    count = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
+    failed = results.filter(r => r.status === 'rejected').length;
     
     return count;
 }

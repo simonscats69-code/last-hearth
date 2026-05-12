@@ -130,27 +130,17 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
         let values = [];
         let paramIndex = 1;
         
-        // Проверяем каждое поле по whitelist
         if (energy !== undefined) {
-            if (!ALLOWED_FIELDS.includes('energy')) {
-                return res.status(400).json({ error: 'Недопустимое поле: energy' });
-            }
             updates.push(`energy = $${paramIndex++}`);
             values.push(energy);
         }
         
         if (health !== undefined) {
-            if (!ALLOWED_FIELDS.includes('health')) {
-                return res.status(400).json({ error: 'Недопустимое поле: health' });
-            }
             updates.push(`health = $${paramIndex++}`);
             values.push(health);
         }
         
         if (experience !== undefined) {
-            if (!ALLOWED_FIELDS.includes('experience')) {
-                return res.status(400).json({ error: 'Недопустимое поле: experience' });
-            }
             updates.push(`experience = $${paramIndex++}`);
             values.push(experience);
         }
@@ -283,10 +273,7 @@ router.get('/bosses', requireAdmin, async (req, res) => {
 router.put('/bosses/:id', requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, health, max_health, damage, reward_exp, reward_experience, reward_items } = req.body;
-        
-        // Whitelist допустимых полей для обновления босса
-        const ALLOWED_FIELDS = ['name', 'health', 'max_health', 'damage', 'reward_exp', 'reward_experience', 'reward_items'];
+        const { name, max_health, damage, reward_experience, reward_items } = req.body;
         
         let updates = [];
         let values = [];
@@ -299,7 +286,7 @@ router.put('/bosses/:id', requireAdmin, async (req, res) => {
             updates.push(`name = $${paramIndex++}`);
             values.push(name);
         }
-        const normalizedMaxHealth = max_health ?? health;
+        const normalizedMaxHealth = max_health;
         if (normalizedMaxHealth !== undefined) {
             if (!Number.isInteger(normalizedMaxHealth) || normalizedMaxHealth < 1 || normalizedMaxHealth > 1000000) {
                 return res.status(400).json({ error: 'max_health должен быть целым числом от 1 до 1000000' });
@@ -314,7 +301,7 @@ router.put('/bosses/:id', requireAdmin, async (req, res) => {
             updates.push(`damage = $${paramIndex++}`);
             values.push(damage);
         }
-        const normalizedRewardExp = reward_experience ?? reward_exp;
+        const normalizedRewardExp = reward_experience;
         if (normalizedRewardExp !== undefined) {
             if (!Number.isInteger(normalizedRewardExp) || normalizedRewardExp < 0 || normalizedRewardExp > 1000000) {
                 return res.status(400).json({ error: 'reward_experience должен быть целым числом от 0 до 1000000' });

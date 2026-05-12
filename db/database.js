@@ -158,129 +158,11 @@ async function queryForUpdate(text, params) {
 
 // ============================================
 // ============================================
-// ДОСТИЖЕНИЯ
+// ДОСТИЖЕНИЯ (УДАЛЕНО)
 // ============================================
-
-async function updateAchievementProgress(playerId, achievementType, value = 1) {
-    try {
-        await transaction(async (client) => {
-            const playerResult = await client.query('SELECT * FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            const player = playerResult.rows[0] || null;
-            if (!player) return;
-
-            const achievementsResult = await client.query(
-                `SELECT * FROM achievements WHERE condition->>'type' = $1`,
-                [achievementType]
-            );
-            const achievements = achievementsResult.rows;
-            if (achievements.length === 0) return;
-
-            const achievementIds = achievements.map(a => a.id);
-            const playerAchievementsResult = await client.query(
-                `SELECT * FROM player_achievements
-                 WHERE player_id = $1 AND achievement_id = ANY($2)`,
-                [playerId, achievementIds]
-            );
-            const playerAchievementsMap = new Map(
-                playerAchievementsResult.rows.map(pa => [pa.achievement_id, pa])
-            );
-
-            const toInsert = [];
-            const toUpdate = [];
-
-            for (const achievement of achievements) {
-                let condition;
-                try {
-                    condition = typeof achievement.condition === 'string'
-                        ? JSON.parse(achievement.condition)
-                        : achievement.condition;
-                } catch (e) {
-                    logger.error('[database] JSON.parse condition failed:', achievement.condition);
-                    continue;
-                }
-
-                const targetValue = Number(condition.value ?? condition.count ?? 0);
-                let currentValue = 0;
-
-                switch (achievementType) {
-                    case 'days_played':
-                        currentValue = player.days_played || 1;
-                        break;
-                    case 'bosses_killed':
-                        currentValue = player.bosses_killed || 0;
-                        break;
-                    case 'pvp_wins':
-                        currentValue = player.pvp_wins || 0;
-                        break;
-                    case 'unique_items':
-                        currentValue = Array.isArray(player.unique_items) ? player.unique_items.length : 0;
-                        break;
-                    case 'locations_visited':
-                        currentValue = Array.isArray(player.locations_visited) ? player.locations_visited.length : 0;
-                        break;
-                    case 'in_clan':
-                        currentValue = player.clan_id ? 1 : 0;
-                        break;
-                    case 'clan_leader':
-                        currentValue = player.clan_role === 'leader' ? 1 : 0;
-                        break;
-                    case 'clans_joined':
-                        currentValue = player.clans_joined || 0;
-                        break;
-                }
-
-                const existingAchievement = playerAchievementsMap.get(achievement.id);
-
-                if (!existingAchievement) {
-                    toInsert.push({ achievementId: achievement.id, currentValue, completed: currentValue >= targetValue });
-                } else if (!existingAchievement.completed && currentValue >= targetValue) {
-                    toUpdate.push({ achievementId: achievement.id, currentValue, completed: true });
-                } else if (!existingAchievement.completed) {
-                    toUpdate.push({ achievementId: achievement.id, currentValue, completed: false });
-                }
-            }
-
-            if (toInsert.length > 0) {
-                const insertValues = toInsert.map((_, idx) => {
-                    const base = idx * 4;
-                    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
-                }).join(', ');
-                const insertParams = toInsert.flatMap(item => [
-                    playerId,
-                    item.achievementId,
-                    item.currentValue,
-                    item.completed
-                ]);
-
-                await client.query(
-                    `INSERT INTO player_achievements (player_id, achievement_id, progress_value, completed)
-                     VALUES ${insertValues}`,
-                    insertParams
-                );
-            }
-
-            for (const item of toUpdate) {
-                if (item.completed) {
-                    await client.query(
-                        `UPDATE player_achievements
-                         SET progress_value = $3, completed = true, completed_at = NOW()
-                         WHERE player_id = $1 AND achievement_id = $2`,
-                        [playerId, item.achievementId, item.currentValue]
-                    );
-                } else {
-                    await client.query(
-                        `UPDATE player_achievements
-                         SET progress_value = $3
-                         WHERE player_id = $1 AND achievement_id = $2`,
-                        [playerId, item.achievementId, item.currentValue]
-                    );
-                }
-            }
-        });
-    } catch (error) {
-        logger.error('Ошибка updateAchievementProgress', { error: error.message, playerId });
-    }
-}
+// Примечание: Система достижений перенесена в utils/game-helpers.js
+// Старая система (updateAchievementProgress) удалена для предотвращения конфликтов
+// Новая система использует строковые ключи (achievement_key) вместо числовых ID
 
 // ============================================
 // РЕФЕРАЛЬНАЯ СИСТЕМА
@@ -621,7 +503,8 @@ module.exports = {
     initDatabase,
     setLogger,  // Добавлено для решения циклической зависимости
     getRankByLevel,
-    updateAchievementProgress,
+    // updateAchievementProgress удалена — система достижений перенесена в utils/game-helpers.js
+    // updateAchievementProgress,
     generateReferralCode,
     createReferralCode,
     changeReferralCode,

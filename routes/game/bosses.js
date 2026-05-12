@@ -14,7 +14,18 @@ const { pool } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger } = require('../../utils/serverApi');
 const { normalizeInventory, getActiveBuffs, createInventoryItem } = require('../../utils/game-helpers');
 
-const KEYS_REQUIRED_FOR_BOSS = 3;
+// Ключи на босса — читаются из БД (поле bosses.keys_required), fallback = 3
+async function getKeysRequiredForBoss(client, bossId) {
+    try {
+        const result = await client.query(
+            'SELECT keys_required FROM bosses WHERE id = $1',
+            [bossId]
+        );
+        return result.rows[0]?.keys_required || 3;
+    } catch {
+        return 3;
+    }
+}
 const SOLO_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAMAGE_PER_KILL = 0.1;
@@ -263,14 +274,15 @@ async function getPlayerKeyCount(client, playerId, previousBossId) {
 async function spendBossKeys(client, playerId, previousBossId) {
     if (previousBossId <= 0) return;
 
+    const keysRequired = await getKeysRequiredForBoss(client, previousBossId);
     const keyCount = await getPlayerKeyCount(client, playerId, previousBossId);
-    if (keyCount < KEYS_REQUIRED_FOR_BOSS) {
+    if (keyCount < keysRequired) {
         throw {
-            message: `Нужно ${KEYS_REQUIRED_FOR_BOSS} ключей от босса ${previousBossId}`,
+            message: `Нужно ${keysRequired} ключей от босса ${previousBossId}`,
             code: 'INSUFFICIENT_KEYS',
             statusCode: 400,
             keys_owned: keyCount,
-            keys_required: KEYS_REQUIRED_FOR_BOSS
+            keys_required: keysRequired
         };
     }
 
@@ -278,7 +290,7 @@ async function spendBossKeys(client, playerId, previousBossId) {
         `UPDATE boss_keys
          SET quantity = quantity - $1
          WHERE player_id = $2 AND boss_id = $3`,
-        [KEYS_REQUIRED_FOR_BOSS, playerId, previousBossId]
+        [keysRequired, playerId, previousBossId]
     );
 }
 
@@ -585,7 +597,7 @@ router.post('/start', async (req, res) => {
                 success: true,
                 data: {
                     mode: 'solo',
-                    keys_spent: bossId > 1 ? KEYS_REQUIRED_FOR_BOSS : 0,
+                    keys_spent: bossId > 1 ? await getKeysRequiredForBoss(client, bossId - 1) : 0,
                     boss: {
                         id: boss.id,
                         name: boss.name,
@@ -670,8 +682,9 @@ router.get('/', async (req, res) => {
 
         const bossList = [];
         for (const boss of bossesResult.rows) {
+            const keysRequired = boss.keys_required || 3;
             const ownedKeys = boss.id === 1 ? 0 : (keysMap[boss.id - 1] || 0);
-            const isUnlocked = boss.id === 1 || ownedKeys >= KEYS_REQUIRED_FOR_BOSS;
+            const isUnlocked = boss.id === 1 || ownedKeys >= keysRequired;
             const soloProgress = activeBattle?.type === 'solo' && activeBattle.boss_id === boss.id
                 ? activeBattle.boss.hp
                 : boss.max_health;
@@ -685,7 +698,7 @@ router.get('/', async (req, res) => {
                 max_hp: boss.max_health,
                 reward_coins: boss.reward_coins,
                 reward_experience: boss.reward_experience,
-                required_keys: boss.id === 1 ? 0 : KEYS_REQUIRED_FOR_BOSS,
+                required_keys: boss.id === 1 ? 0 : (boss.keys_required || 3),
                 owned_keys: ownedKeys,
                 is_unlocked: isUnlocked,
                 defeated_count: masteryMap[boss.id] || 0,
@@ -1117,7 +1130,7 @@ router.post('/raid/start', async (req, res) => {
                         hp: boss.max_health,
                         max_hp: boss.max_health
                     },
-                    keys_spent: bossId > 1 ? KEYS_REQUIRED_FOR_BOSS : 0,
+                    keys_spent: bossId > 1 ? (boss.keys_required || 3) : 0,
                     expires_at: expiresAt,
                     time_remaining_ms: MASS_FIGHT_DURATION_MS
                 }

@@ -145,6 +145,8 @@ function formatTime(seconds) {
 function getItemCategory(itemId) {
     const id = parseInt(itemId);
     
+    if (isNaN(id)) return 'unknown';
+    
     // Еда
     if (id >= 1 && id <= 5) return 'food';
     // Медикаменты
@@ -232,7 +234,6 @@ window.hapticSelection = hapticSelection;
 window.escapeHtml = escapeHtml;
 window.formatNumber = formatNumber;
 window.formatPercent = formatPercent;
-window.formatTime = formatTimeMs;
 // showModal/hideModal - в game-animations.js
 // showScreen - в game-core.js
 window.getItemCategory = getItemCategory;
@@ -240,7 +241,6 @@ window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;
 window.getRarityClassByLevel = getRarityClassByLevel;
 window.getPlayerEmoji = getPlayerEmoji;
-console.log('[DEBUG] Первое присваивание window.formatTime:', typeof window.formatTime, '-> formatTime:', typeof formatTime);
 window.formatTime = formatTime;
 /**
  * ============================================
@@ -684,6 +684,17 @@ function safeSetInterval(callback, delay) {
     return id;
 }
 
+/**
+ * Безопасная очистка одного интервала
+ * @param {number} id - id интервала для очистки
+ */
+function safeClearInterval(id) {
+    clearInterval(id);
+    const index = activeIntervals.indexOf(id);
+    if (index !== -1) {
+        activeIntervals.splice(index, 1);
+    }
+}
 
 /**
  * Очистка всех интервалов при выходе
@@ -809,7 +820,6 @@ const Loader = {
     
     async wrap(fn, message = 'Загрузка...') {
         if (typeof AppState !== 'undefined' && AppState.ui.loading) {
-            console.log('Уже грузится, пропускаем');
             return;
         }
         this.show(message);
@@ -1115,11 +1125,9 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
             .then((registration) => {
-                console.log('SW зарегистрирован:', registration.scope);
-            })
+                })
             .catch((error) => {
-                console.log('SW ошибка:', error);
-            });
+                });
     });
 }
 
@@ -1136,13 +1144,10 @@ if (window.AdsgramAvailable && typeof AdsgramInit === 'function' && ADSGRAM_APP_
         Adsgram = AdsgramInit({
             appId: ADSGRAM_APP_ID
         });
-        console.log('AdsGram инициализирован');
-    } catch (e) {
-        console.warn('AdsGram инициализация не удалась:', e);
+        } catch (e) {
+        }
+    } else if (!window.AdsgramAvailable) {
     }
-} else if (!window.AdsgramAvailable) {
-    console.log('AdsGram SDK недоступен');
-}
 
 async function watchAd() {
     if (!Adsgram) {
@@ -1153,7 +1158,6 @@ async function watchAd() {
     try {
         await Adsgram.showRewarded({
             onStart: () => {
-                console.log('Реклама началась');
             },
             onReward: () => {
                 if (!gameState.player || !gameState.player.status) {
@@ -1177,9 +1181,10 @@ async function watchAd() {
                 console.log('Реклама завершена');
             }
         });
-    } catch (error) {
-        console.error('AdsGram error:', error);
+        } catch (error) {
+        }
     }
+}
 }
 
 // ============================================================================
@@ -1242,7 +1247,6 @@ function getTimeToNextEnergy(lastUpdate) {
  * @returns {string} форматированное время
  */
 function formatTimeMs(ms) {
-    console.log('[DEBUG] formatTimeMs вызвана с аргументом:', ms, 'тип:', typeof ms);
     const totalSeconds = Math.ceil(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);

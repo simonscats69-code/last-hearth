@@ -16,7 +16,6 @@
 
 
 const { query, queryOne, transaction: tx, pool } = require('../db/database');
-const playerService = require('../playerService');
 const winston = require('winston');
 const crypto = require('crypto');
 const { randomUUID } = require('crypto');
@@ -1011,7 +1010,7 @@ function handleDbError(err, context = 'DB_OPERATION') {
         code: err.code,
     });
     
-    return createErrorResponse('DATABASE_ERROR');
+    return { success: false, error: 'DATABASE_ERROR', code: 'DATABASE_ERROR' };
 }
 
 /**
@@ -1292,5 +1291,37 @@ module.exports = {
     telegramAuthMiddleware,
 
     // Админ утилиты
-    isAdmin
+    isAdmin,
+
+    // PlayerHelper для bosses.js и других модулей
+    PlayerHelper: {
+        /**
+         * Добавить опыт игроку с автоматическим level-up
+         * @param {number} playerId 
+         * @param {number} exp 
+         * @param {object} client - опциональный клиент БД для транзакции
+         */
+        async addExperience(playerId, exp, client = null) {
+            const { addExperienceWithLevelUp } = require('../db/players');
+            const { getExpForLevel } = require('./gameConstants');
+
+            if (client) {
+                return await addExperienceWithLevelUp(client, playerId, exp, getExpForLevel);
+            }
+
+            const { pool } = require('../db/database');
+            const poolClient = await pool.connect();
+            try {
+                await poolClient.query('BEGIN');
+                const result = await addExperienceWithLevelUp(poolClient, playerId, exp, getExpForLevel);
+                await poolClient.query('COMMIT');
+                return result;
+            } catch (err) {
+                await poolClient.query('ROLLBACK');
+                throw err;
+            } finally {
+                poolClient.release();
+            }
+        }
+    }
 };

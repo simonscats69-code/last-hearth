@@ -5,15 +5,12 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../db/database');
-const { logger, safeJsonParse, validateTelegramInitData, getPlayerByTelegramId } = require('../utils/serverApi');
+const { logger, safeJsonParse, safeJsonParse: parseAchievementCondition, validateTelegramInitData, getPlayerByTelegramId } = require('../utils/serverApi');
+const { getAchievementCurrentValue, getAchievementTargetValue, getAchievementRuntimeContext } = require('../utils/game-helpers');
 
 /**
- * Безопасный парсинг JSON условия достижения
+ * Извлечь Telegram ID из initData
  */
-function parseAchievementCondition(condition) {
-    return safeJsonParse(condition, {});
-}
-
 function extractTelegramIdFromInitData(initData) {
     if (!initData) return null;
 
@@ -38,6 +35,9 @@ function extractTelegramIdFromInitData(initData) {
     }
 }
 
+/**
+ * Определить Telegram ID из запроса
+ */
 function resolveTelegramId(req) {
     const headerTelegramId = req.headers['x-telegram-id'];
     if (headerTelegramId) {
@@ -52,72 +52,6 @@ function resolveTelegramId(req) {
     return extractTelegramIdFromInitData(req.headers['x-init-data']);
 }
 
-async function getAchievementRuntimeContext(playerId, client = null) {
-    const fn = client
-        ? (sql, params) => client.query(sql, params).then(r => r.rows[0])
-        : (sql, params) => queryOne(sql, params);
-
-    const row = await fn(`
-        SELECT
-            (SELECT COUNT(*) FROM bosses) AS total_bosses,
-            (SELECT COUNT(DISTINCT boss_id) FROM boss_mastery WHERE player_id = $1 AND kills > 0) AS defeated_bosses,
-            (SELECT COALESCE(MAX(kills), 0) FROM boss_mastery WHERE player_id = $1) AS max_single_boss_kills
-    `, [playerId]);
-
-    return {
-        totalBosses: Number(row?.total_bosses || 0),
-        defeatedBosses: Number(row?.defeated_bosses || 0),
-        maxSingleBossKills: Number(row?.max_single_boss_kills || 0)
-    };
-}
-
-function getAchievementCurrentValue(condition, player, runtimeContext) {
-    switch (condition.type) {
-        case 'level':
-            return player.level || 1;
-        case 'days_played':
-            return player.days_played || 1;
-        case 'bosses_killed':
-        case 'boss_kills':
-        case 'first_boss_kill':
-            return player.bosses_killed || 0;
-        case 'single_boss_kills':
-            return runtimeContext.maxSingleBossKills;
-        case 'all_bosses_killed':
-            return runtimeContext.defeatedBosses;
-        case 'pvp_wins':
-            return player.pvp_wins || 0;
-        case 'unique_items':
-            return Array.isArray(player.unique_items) ? player.unique_items.length : 0;
-        case 'locations_visited':
-            return Array.isArray(player.locations_visited) ? player.locations_visited.length : 0;
-        case 'in_clan':
-            return player.clan_id ? 1 : 0;
-        case 'clan_leader':
-            return player.clan_role === 'leader' ? 1 : 0;
-        case 'clans_joined':
-            return player.clans_joined || 0;
-        default:
-            return 0;
-    }
-}
-
-function getAchievementTargetValue(condition, runtimeContext) {
-    if (condition.type === 'all_bosses_killed') {
-        return Math.max(1, runtimeContext.totalBosses);
-    }
-
-    if (condition.type === 'first_boss_kill') {
-        return 1;
-    }
-
-    if (condition.type === 'in_clan' || condition.type === 'clan_leader') {
-        return 1;
-    }
-
-    const rawTarget = condition.value ?? condition.count ?? 0;
-    return Number(rawTarget || 0);
-}
 router.get('/shop/items', async (req, res) => {
     try {
         const items = await queryAll(`
@@ -141,11 +75,13 @@ router.get('/shop/items', async (req, res) => {
 router.get('/rating/players', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 10;
-
+        
+        // Вычисляем bosses_killed из boss_mastery для точности рейтинга
         const players = await queryAll(`
             SELECT p.telegram_id, p.first_name, p.username, p.level, 
-                   p.experience, p.bosses_killed, p.total_actions,
-                   p.coins
+                   p.experience, p.coins,
+                   COALESCE((SELECT SUM(kills) FROM boss_mastery WHERE player_id = p.id), 0) as bosses_killed,
+                   p.total_actions
             FROM players p
             ORDER BY p.level DESC, p.experience DESC
             LIMIT $1
@@ -316,7 +252,7 @@ router.get('/achievements/progress', async (req, res) => {
             return res.status(404).json({ error: 'Игрок не найден' });
         }
 
-        const achievementRuntimeContext = await getAchievementRuntimeContext(player.id);
+        const achievementRuntimeContext = await getAchievementRuntimeContext(null, player.id);
 
         // Получаем все достижения и прогресс игрока
         const [allAchievements, playerAchievements] = await Promise.all([
@@ -328,7 +264,7 @@ router.get('/achievements/progress', async (req, res) => {
 
         // Вычисляем прогресс для каждого достижения
         const progress = allAchievements.map(ach => {
-            const condition = parseAchievementCondition(ach.condition);
+            const condition = safeJsonParse(ach.condition, {});
             let isCompleted = progressMap[ach.id]?.completed || false;
             const currentValue = getAchievementCurrentValue(condition, player, achievementRuntimeContext);
 
@@ -575,8 +511,9 @@ router.post('/verify-telegram', async (req, res) => {
 
         // Проверка подписи Telegram (если есть hash и bot token)
         const botToken = process.env.TG_BOT_TOKEN;
-        if (hash && botToken && initData) {
-            const isValid = validateTelegramInitData(initData, botToken);
+        const initDataStr = req.body.initData || req.body.init_data || '';
+        if (hash && botToken && initDataStr) {
+            const isValid = validateTelegramInitData(initDataStr, botToken);
             if (!isValid) {
                 logger.warn({ type: 'telegram_hash_mismatch', telegram_id });
                 return res.status(401).json({ error: 'Неверная подпись Telegram' });

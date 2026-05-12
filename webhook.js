@@ -52,14 +52,43 @@ async function setupWebhook(app) {
             );
 
             if (!player) {
-                // Создаём нового игрока с реферальным кодом
-                const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+                // Создаём нового игрока с уникальным реферальным кодом
+                let referralCode;
+                let playerCreated = false;
+                let attempts = 0;
+                const maxAttempts = 5;
                 
-                player = await queryOne(`
-                    INSERT INTO players (telegram_id, username, first_name, last_name, referral_code)
-                    VALUES ($1, $2, $3, $4, $5)
-                    RETURNING *
-                `, [telegramId, username, firstName, lastName, referralCode]);
+                while (attempts < maxAttempts && !playerCreated) {
+                    // Генерируем код на основе telegramId и случайной строки
+                    try {
+                        referralCode = `LH-${BigInt(String(telegramId)).toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
+                    } catch {
+                        referralCode = `LH-${String(telegramId).slice(-10)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
+                    }
+                    
+                    try {
+                        player = await queryOne(`
+                            INSERT INTO players (telegram_id, username, first_name, last_name, referral_code, created_at, updated_at)
+                            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+                            RETURNING *
+                        `, [telegramId, username, firstName, lastName, referralCode]);
+                        
+                        if (player) {
+                            playerCreated = true;
+                        }
+                    } catch (createError) {
+                        // Если код не уникален - пробуем снова
+                        if (createError.code === '23505' && createError.constraint?.includes('referral_code')) {
+                            attempts++;
+                            continue;
+                        }
+                        throw createError;
+                    }
+                }
+                
+                if (!playerCreated) {
+                    throw new Error('Не удалось создать игрока после нескольких попыток');
+                }
 
                 // Создаём начальный инвентарь
                 await query(`

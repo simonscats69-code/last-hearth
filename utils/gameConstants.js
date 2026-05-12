@@ -3,14 +3,8 @@
  * Централизованное хранилище игровой логики
  */
 
-// Формулы опыта
-const EXP_FORMULA = {
-    LOW_LEVEL_EXP: 200,      // Опыт для уровней 1-10
-    LOW_LEVEL_CAP: 10,       // Порог перехода на экспоненту
-    EXPONENT: 2.2,           // Показатель степени для формулы
-    BASE_MULTIPLIER: 150
-};
-
+// Формулы опыта — не используются, фактический расчёт в getExpForLevel()
+// Устаревшие константы удалены для чистоты кода.
 /**
  * Расчёт опыта для уровня (долгосрочная игра)
  * Формула: линейная после 10 уровня
@@ -191,9 +185,6 @@ function rollLootDrop(lootTable, luck, itemRarity) {
     }
     
     // Случайный предмет из отфильтрованных
-    if (filteredItems.length === 0) {
-        return null;
-    }
     return filteredItems[Math.floor(Math.random() * filteredItems.length)];
 }
 
@@ -484,7 +475,7 @@ module.exports = {
     GAME_CONFIG,
     RISK_TIERS,
     LOOT_TABLES,
-    EXP_FORMULA,
+    // EXP_FORMULA удалена — не используется
     ITEM_CATEGORIES,
     // Дебаффы
     DEBUFF_TYPES,

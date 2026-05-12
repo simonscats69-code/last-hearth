@@ -238,12 +238,12 @@ router.post('/attack', async (req, res) => {
                 throw new Error('Противник уже мертв');
             }
 
-            const attackerProtected = await pvp.isProtectedFromPVP(playerId);
+            const attackerProtected = await pvp.isProtectedFromPVP(playerId, client);
             if (attackerProtected) {
                 throw new Error('Игроки ниже 5 уровня не могут участвовать в PvP');
             }
 
-            const targetProtected = await pvp.isProtectedFromPVP(target_id);
+            const targetProtected = await pvp.isProtectedFromPVP(target_id, client);
             if (targetProtected) {
                 throw new Error('Цель защищена от PvP до 5 уровня');
             }

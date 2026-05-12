@@ -67,11 +67,12 @@ async function createTables() {
             referral_code_changed BOOLEAN DEFAULT false,
             referred_by INTEGER,
             referral_bonus_claimed BOOLEAN DEFAULT false,
-            clan_donated INTEGER DEFAULT 0
+            clan_donated INTEGER DEFAULT 0,
+            active_boss_id INTEGER
         );
     `);
-
-    // Миграция: добавить active_boss_id если не существует
+    
+    // Миграция: добавить active_boss_id если не существует (для существующих БД)
     // Примечание: эта миграция перенесена после создания таблицы bosses
     // и выполняется в runMigrations()
 
@@ -1067,7 +1068,7 @@ async function seedDatabase() {
         { name: 'Ключ от Медведя-мутанта', description: 'Ключ для разблокировки босса 3', type: 'key', category: 'key', rarity: 'rare', stackable: true, price: 0, icon: '🗝️', boss_level: 3 },
         { name: 'Ключ от Военного дрона', description: 'Ключ для разблокировки босса 4', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️', boss_level: 4 },
         { name: 'Ключ от Главаря мародёров', description: 'Ключ для разблокировки босса 5', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️', boss_level: 5 },
-        { name: 'Клюш от Биологического ужаса', description: 'Ключ для разблокировки босса 6', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 6 },
+        { name: 'Ключ от Биологического ужаса', description: 'Ключ для разблокировки босса 6', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 6 },
         { name: 'Ключ от Офицера-нежить', description: 'Ключ для разблокировки босса 7', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 7 },
         { name: 'Ключ от Гигантского монстра', description: 'Ключ для разблокировки босса 8', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 8 },
         { name: 'Ключ от Профессора безумия', description: 'Ключ для разблокировки босса 9', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 9 },

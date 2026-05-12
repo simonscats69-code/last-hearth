@@ -128,31 +128,51 @@ router.get('/', async (req, res) => {
             // Создаём нового игрока при первом входе
             logger.info(`[player] Создание нового игрока для telegram_id=${telegramId}`);
             
-            const referralCode = 'LH-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+            // Генерируем уникальный реферальный код
+            let referralCode;
+            let attempts = 0;
+            const maxAttempts = 5;
             
-            try {
-                const newPlayer = await queryOne(`
-                    INSERT INTO players (telegram_id, username, first_name, last_name, referral_code, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-                    RETURNING *
-                `, [telegramId, req.player.username || null, req.player.first_name || 'Новичок', req.player.last_name || null, referralCode]);
-                
-                if (!newPlayer) {
-                    return res.status(500).json({
-                        success: false,
-                        error: 'Не удалось создать игрока',
-                        code: 'CREATE_PLAYER_FAILED'
-                    });
+            while (attempts < maxAttempts) {
+                // Используем тот же алгоритм, что и в buildReferralCode из index.js
+                try {
+                    referralCode = `LH-${BigInt(String(telegramId)).toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
+                } catch {
+                    referralCode = `LH-${String(telegramId).slice(-10)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
                 }
                 
-                player = newPlayer;
-                logger.info(`[player] Создан новый игрок id=${player.id}, telegram_id=${telegramId}`);
-            } catch (createError) {
-                logger.error(`[player] Ошибка создания игрока: ${createError.message}`);
+                try {
+                    const newPlayer = await queryOne(`
+                        INSERT INTO players (telegram_id, username, first_name, last_name, referral_code, created_at, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+                        RETURNING *
+                    `, [telegramId, req.player.username || null, req.player.first_name || 'Новичок', req.player.last_name || null, referralCode]);
+                    
+                    if (newPlayer) {
+                        player = newPlayer;
+                        logger.info(`[player] Создан новый игрок id=${player.id}, telegram_id=${telegramId}`);
+                        break;
+                    }
+                } catch (createError) {
+                    // Если код не уникален - пробуем снова
+                    if (createError.code === '23505' && createError.constraint?.includes('referral_code')) {
+                        attempts++;
+                        continue;
+                    }
+                    logger.error(`[player] Ошибка создания игрока: ${createError.message}`);
+                    return res.status(500).json({
+                        success: false,
+                        error: 'Ошибка при создании игрока',
+                        code: 'CREATE_PLAYER_ERROR'
+                    });
+                }
+            }
+            
+            if (!player) {
                 return res.status(500).json({
                     success: false,
-                    error: 'Ошибка при создании игрока',
-                    code: 'CREATE_PLAYER_ERROR'
+                    error: 'Не удалось создать игрока после нескольких попыток',
+                    code: 'CREATE_PLAYER_FAILED'
                 });
             }
         }
@@ -224,7 +244,7 @@ router.get('/', async (req, res) => {
                 journey,
                 stats_ext: {
                     total_actions: player.total_actions,
-                    bosses_killed: player.bosses_killed,
+                    bosses_killed: journey.bosses_killed,
                     days_played: player.days_played
                 }
             }

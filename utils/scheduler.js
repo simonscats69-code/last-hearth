@@ -222,18 +222,9 @@ let achievementsOffset = 0;
 /**
  * Обработать одного игрока (с обработкой ошибок)
  */
-async function processPlayerAchievements(player) {
-    const stats = {
-        level: player.level,
-        bosses_killed: player.bosses_killed,
-        pvp_wins: player.pvp_wins,
-        items_collected: player.items_collected,
-        daily_streak: player.daily_streak,
-        referrals: player.referrals
-    };
-    
+async function processPlayerAchievements(player) {    
     try {
-        await checkAchievements(player.id, stats);
+        await checkAchievements(player.id);
         return { success: true, playerId: player.id };
     } catch (err) {
         logger.error({ type: 'achievement_error', playerId: player.id, message: err.message });

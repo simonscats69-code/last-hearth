@@ -22,10 +22,14 @@ async function isRedZone(locationId) {
 /**
  * Проверка, защищён ли игрок от PvP (уровень < 5)
  * @param {number} playerId - ID игрока
+ * @param {object} client - опциональный клиент БД для использования внутри транзакции
  * @returns {Promise<boolean>} true если защищён
  */
-async function isProtectedFromPVP(playerId) {
-    const player = await queryOne(
+async function isProtectedFromPVP(playerId, client = null) {
+    const exec = client
+        ? (sql, params) => client.query(sql, params).then(r => r.rows[0])
+        : (sql, params) => queryOne(sql, params);
+    const player = await exec(
         'SELECT level FROM players WHERE id = $1',
         [playerId]
     );

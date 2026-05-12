@@ -224,9 +224,14 @@ async function validatePlayer(req, res, next) {
             return res.status(401).json({ error: 'Невалидные данные авторизации' });
         }
 
-        // Устанавливаем данные пользователя из валидированных данных
-        // Преобразуем объект Telegram user в формат, ожидаемый роутерами
         const dbPlayer = await upsertPlayerFromTelegramUser(validated.user);
+        
+        // Проверяем, не забанен ли игрок
+        if (dbPlayer.banned) {
+            logger.warn({ type: 'banned_player_access', playerId: dbPlayer.id, telegramId: validated.user.id });
+            return res.status(403).json({ error: 'Ваш аккаунт заблокирован.' });
+        }
+        
         req.player = buildRequestPlayer(validated.user, dbPlayer);
         req.telegramAuth = validated;
         
