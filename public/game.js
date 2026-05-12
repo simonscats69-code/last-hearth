@@ -1144,10 +1144,9 @@ if (window.AdsgramAvailable && typeof AdsgramInit === 'function' && ADSGRAM_APP_
         Adsgram = AdsgramInit({
             appId: ADSGRAM_APP_ID
         });
-        } catch (e) {
-        }
-    } else if (!window.AdsgramAvailable) {
+    } catch (e) {
     }
+}
 
 async function watchAd() {
     if (!Adsgram) {
@@ -1181,10 +1180,8 @@ async function watchAd() {
                 console.log('Реклама завершена');
             }
         });
-        } catch (error) {
-        }
+    } catch (error) {
     }
-}
 }
 
 // ============================================================================
