@@ -4,19 +4,12 @@
  * Улучшенная версия с защитой от ошибок переподключения
  */
 
-const CACHE_NAME = 'last-hearth-v11';
+const CACHE_NAME = 'last-hearth-v12';
 const STATIC_ASSETS = [
     '/',
     '/index.html',
     '/styles.css?v=11',
-    '/game-core.js?v=11',
-    '/game-systems.js?v=11',
-    '/game-ui.js?v=11',
-    '/game-api.js?v=11',
-    '/game-utils.js?v=11',
-    '/game-store.js?v=11',
-    '/game-animations.js?v=11',
-    '/game-visualEffects.js?v=11'
+    '/game.js?v=12'
 ];
 
 // Максимальное количество попыток переподключения
