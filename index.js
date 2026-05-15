@@ -144,7 +144,8 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-hashes'", 'https://cdn.jsdelivr.net', 'https://telegram.org', 'https://adsgram.app'],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-hashes'", 'https://cdn.jsdelivr.net', 'https://telegram.org', 'https://sad.adsgram.ai'],
+            scriptSrcAttr: ["'unsafe-inline'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
             connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
@@ -370,8 +371,12 @@ async function startServer() {
         // Устанавливаем логгер для базы данных (решение циклической зависимости)
         setLogger(logger);
         
-        await initDatabase();
-        logger.info('База данных инициализирована');
+        try {
+            await initDatabase();
+            logger.info('База данных инициализирована');
+        } catch (dbError) {
+            logger.error('Ошибка инициализации БД, продолжаем без БД:', dbError.message);
+        }
         
         // Инициализация таблицы достижений
         await initAchievementsTable();

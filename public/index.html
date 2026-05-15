@@ -26,7 +26,7 @@
     
     <!-- Предподключение для внешних ресурсов -->
     <link rel="preconnect" href="https://telegram.org">
-    <link rel="preconnect" href="https://adsgram.app">
+    <link rel="preconnect" href="https://sad.adsgram.ai">
     
     <!-- Основные стили -->
     <link rel="stylesheet" href="styles.css?v=11">
@@ -823,10 +823,18 @@
 
     </div>
 
-    <!-- AdsGram SDK -->
-    <script async src="https://adsgram.app/js/adsgram.js"
-        onload="window.AdsgramAvailable=true"
-        onerror="window.AdsgramAvailable=false"></script>
+    <!-- AdsGram SDK (с игнорированием ошибок загрузки) -->
+    <script>
+        (function() {
+            var s = document.createElement('script');
+            s.async = true;
+            s.src = 'https://sad.adsgram.ai/js/sad.min.js';
+            s.onerror = function() {
+                console.warn('[AdsGram] SDK не загружен (404 или другая ошибка) — реклама отключена');
+            };
+            document.head.appendChild(s);
+        })();
+    </script>
     <!-- Объединённый скрипт игры -->
     <script src="game.js?v=12" defer></script>
 </body>
