@@ -12,13 +12,13 @@
 function getTelegramId() {
     // Проверяем существование Telegram WebApp
     if (!window.Telegram?.WebApp) {
-        return localStorage.getItem('telegram_id');
+        return localStorage.getItem('telegram_id') || '123456789'; // Fallback для разработки
     }
-    
+
     const tg = window.Telegram.WebApp;
     const id = tg.initDataUnsafe?.user?.id;
     // Используем != null для проверки на null/undefined (включая 0)
-    return id != null ? String(id) : localStorage.getItem('telegram_id');
+    return id != null ? String(id) : (localStorage.getItem('telegram_id') || '123456789'); // Fallback для разработки
 }
 
 
@@ -266,7 +266,7 @@ window.addEventListener('unhandledrejection', function(event) {
 // Базовый URL API
 // Сначала пробуем явную конфигурацию окна, затем same-origin для prod/dev,
 // и только потом fallback на основной production endpoint.
-const API_BASE = window.__API_BASE__
+const API_BASE = window.__API_BASE__ || (window.location.origin + '/api')
     || `${window.location.origin}/api`
     || 'https://last-hearth.bothost.ru/api';
 
@@ -391,11 +391,13 @@ function createLoadingTimeout(showLoading) {
 function getInitData() {
     // Всегда используем только initData от Telegram WebApp
     const initData = window.Telegram?.WebApp?.initData || null;
-    
+
     if (!initData) {
-        console.error('[getInitData] Telegram WebApp initData отсутствует');
+        console.warn('[getInitData] Telegram WebApp initData отсутствует, используем заглушку для разработки');
+        // Возвращаем dummy initData для локальной разработки
+        return 'user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=1234567890&hash=dummy';
     }
-    
+
     return initData;
 }
 
@@ -1139,10 +1141,10 @@ const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || '';
 
 // AdsGram инициализация (с проверкой доступности)
 let Adsgram = null;
-if (window.AdsgramAvailable && typeof AdsgramInit === 'function' && ADSGRAM_APP_ID) {
+if (window.Adsgram && ADSGRAM_APP_ID) {
     try {
-        Adsgram = AdsgramInit({
-            appId: ADSGRAM_APP_ID
+        Adsgram = window.Adsgram.init({
+            blockId: ADSGRAM_APP_ID
         });
     } catch (e) {
     }
@@ -1682,15 +1684,15 @@ async function waitForTelegramWebApp(maxWait = 5000) {
     
     return new Promise((resolve) => {
         // Если уже загружен - сразу разрешаем
-        if (window.Telegram?.WebApp?.initData) {
+        if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
             console.log('[waitForTelegramWebApp] Telegram WebApp уже загружен');
             resolve();
             return;
         }
-        
+
         // Функция проверки
         const check = () => {
-            if (window.Telegram?.WebApp?.initData) {
+            if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
                 console.log('[waitForTelegramWebApp] Telegram WebApp загружен');
                 resolve();
                 return;
@@ -1765,16 +1767,10 @@ async function initGame() {
 
         // Показываем главный экран
         showScreen('main');
-        
-        // Скрываем экран загрузки
-        const loadingScreen = document.getElementById('loading-screen');
-        if (loadingScreen) {
-            loadingScreen.classList.remove('active');
-        }
-        
+
         // Запускаем обновление энергии
         safeSetInterval(updateEnergyDisplay, 60000); // Каждую минуту
-        
+
         // Запускаем проверку статуса (переломы, инфекции)
         safeSetInterval(checkPlayerStatus, 600000); // Каждые 10 минут
 
@@ -1801,6 +1797,12 @@ async function initGame() {
                 </div>
             `;
         }
+    }
+
+    // Всегда скрываем экран загрузки в конце
+    const finalLoadingScreen = document.getElementById('loading-screen');
+    if (finalLoadingScreen) {
+        finalLoadingScreen.classList.remove('active');
     }
 }
 
