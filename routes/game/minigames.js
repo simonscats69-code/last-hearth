@@ -49,9 +49,9 @@ function selectPrize() {
 }
 
 /**
- * GET /wheel - получить информацию о колесе
+ * GET /wheel или GET / - получить информацию о колесе
  */
-router.get('/wheel', async (req, res) => {
+router.get(['/wheel', '/'], async (req, res) => {
     logger.info('[minigames/wheel] Начало запроса', { playerId: req.player?.id });
     const playerId = req.player?.id;
 
@@ -109,9 +109,9 @@ router.get('/wheel', async (req, res) => {
 });
 
 /**
- * POST /wheel/spin - крутить колесо
+ * POST /wheel/spin или POST /spin - крутить колесо
  */
-router.post('/wheel/spin', async (req, res) => {
+router.post(['/wheel/spin', '/spin'], async (req, res) => {
     const playerId = req.player?.id;
     // Валидация: преобразуем к boolean
     const is_paid = req.body?.is_paid === true || req.body?.is_paid === 'true';
