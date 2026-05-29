@@ -367,7 +367,6 @@ async function cleanupExpiredDebuffs() {
         logger.error({ type: 'debuffs_cleanup_error', message: err.message });
         debuffRetryCount++;
         
-        // Экспоненциальная задержка при ошибках (до 30 минут)
         const delay = Math.min(
             5 * 60 * 1000 * Math.pow(2, debuffRetryCount),
             30 * 60 * 1000
@@ -378,21 +377,21 @@ async function cleanupExpiredDebuffs() {
             retryCount: debuffRetryCount,
             nextDelayMs: delay 
         });
-        
-        if (schedulerEnabled) {
-            setTimeout(cleanupExpiredDebuffs, delay);
-        }
     } finally {
         isRunning.debuffs = false;
         
-        // Сброс счётчика только при успехе
         if (success) {
             debuffRetryCount = 0;
-            
-            // Запускаем следующую итерацию через 5 минут (если планировщик не остановлен)
-            if (schedulerEnabled) {
-                setTimeout(cleanupExpiredDebuffs, 5 * 60 * 1000);
-            }
+        }
+        
+        // Единый запуск следующей итерации
+        const nextDelay = success ? 5 * 60 * 1000 : Math.min(
+            5 * 60 * 1000 * Math.pow(2, debuffRetryCount || 1),
+            30 * 60 * 1000
+        );
+        
+        if (schedulerEnabled) {
+            setTimeout(cleanupExpiredDebuffs, nextDelay);
         }
     }
 }

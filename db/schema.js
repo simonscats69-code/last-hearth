@@ -449,29 +449,9 @@ async function createTables() {
         );
     `);
 
-    // Таблица PvP матчей
-    await query(`
-        CREATE TABLE IF NOT EXISTS pvp_matches (
-            id SERIAL PRIMARY KEY,
-            attacker_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
-            defender_id INTEGER REFERENCES players(id) ON DELETE CASCADE,
-            location_id INTEGER REFERENCES locations(id),
-            winner_id INTEGER REFERENCES players(id),
-            loser_id INTEGER REFERENCES players(id),
-            is_draw BOOLEAN DEFAULT false,
-            coins_stolen INTEGER DEFAULT 0,
-            items_stolen JSONB DEFAULT '[]',
-            experience_gained INTEGER DEFAULT 0,
-            attacker_damage_dealt INTEGER DEFAULT 0,
-            attacker_damage_taken INTEGER DEFAULT 0,
-            defender_damage_dealt INTEGER DEFAULT 0,
-            defender_damage_taken INTEGER DEFAULT 0,
-            total_hits INTEGER DEFAULT 0,
-            battle_duration INTEGER DEFAULT 0,
-            started_at TIMESTAMP DEFAULT NOW(),
-            ended_at TIMESTAMP DEFAULT NOW()
-        );
-    `);
+    // Таблица PvP матчей — УДАЛЕНА: используется pvp_battles
+    // Для обратной совместимости удаляем старую таблицу если существует
+    await query(`DROP TABLE IF EXISTS pvp_matches CASCADE`);
 
     // Таблица PvP кулдаунов
     await query(`
@@ -546,11 +526,7 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_clan ON clan_applications(clan_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_player ON clan_applications(player_id)`);
 
-    // Индексы для pvp_matches
-    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_matches_attacker ON pvp_matches(attacker_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_matches_defender ON pvp_matches(defender_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_matches_winner ON pvp_matches(winner_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_matches_location ON pvp_matches(location_id)`);
+    // Индексы для pvp_matches — УДАЛЕНЫ (таблица удалена, используется pvp_battles)
 
     // Индексы для pvp_cooldowns
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_player ON pvp_cooldowns(player_id)`);
@@ -898,6 +874,20 @@ async function runMigrations() {
 
     // Миграции для daily_tasks в таблице players
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_completed INTEGER DEFAULT 0`);
+
+    // ==========================================
+    // ИНДЕКСЫ ДЛЯ ПРОИЗВОДИТЕЛЬНОСТИ (H-10)
+    // ==========================================
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_created_at ON player_logs(created_at)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_clans_owner_id ON clans(owner_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_boss_sessions_raid_id ON boss_sessions(raid_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_players_clan_id ON players(clan_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_players_telegram_id ON players(telegram_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_achievements_player_id ON player_achievements(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_boss_mastery_player_id ON boss_mastery(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_id ON daily_tasks(player_id)`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
 
     // Миграция для wheel в таблице players

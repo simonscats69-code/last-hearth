@@ -18,22 +18,9 @@ const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
 
 /**
  * Безопасный парсинг JSON с fallback значением
+ * Импортируется из serverApi для единообразия
  */
-function safeParseJson(value, fallback) {
-    if (value === null || value === undefined || value === '') {
-        return fallback;
-    }
-
-    if (typeof value === 'object') {
-        return value;
-    }
-
-    try {
-        return JSON.parse(value);
-    } catch {
-        return fallback;
-    }
-}
+const safeParseJson = require('./serverApi').safeJsonParse;
 
 /**
  * Нормализация инвентаря

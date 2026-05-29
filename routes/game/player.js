@@ -1,550 +1,426 @@
 /**
  * Профиль игрока, достижения, рефералы и энергия
  * @module game/player
- * 
- * Объединённые модули:
- * - profile.js (профиль игрока)
- * - achievements.js (достижения)
- * - referral.js (реферальная система)
- * - energy.js (энергия и покупки за Stars)
  */
 
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
 const { getExpForLevel, getTotalExpForLevel } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
+const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress } = require('../../utils/game-helpers');
-const {
-    createReferralCode,
-    changeReferralCode,
-    applyReferralCode,
-    giveReferralRegistrationBonus,
-    getReferralsList,
-    getReferralStats
-} = require('../../db/database');
 
+// C-6: Whitelist разрешённых полей для обновления профиля
+const ALLOWED_UPDATE_FIELDS = ['username', 'first_name', 'last_name', 'avatar'];
 
-
-// =============================================================================
-// УТИЛИТЫ
-// =============================================================================
-
-/**
- * Валидация Telegram ID
- */
-function validateTelegramId(telegramId) {
-    const num = Number(telegramId);
-    return Number.isInteger(num) && num > 0;
-}
-
-function getRiskLabelByDanger(dangerLevel) {
-    if (dangerLevel >= 7) return 'Смертельный риск';
-    if (dangerLevel >= 5) return 'Опасный риск';
-    if (dangerLevel >= 3) return 'Повышенный риск';
-    return 'Стабильный риск';
-}
-
-async function buildPlayerJourney(playerId, playerLevel) {
-    const [bossMasteries, bosses, locations] = await Promise.all([
-        queryAll('SELECT boss_id, kills FROM boss_mastery WHERE player_id = $1 ORDER BY boss_id ASC', [playerId]),
-        queryAll('SELECT id, name FROM bosses ORDER BY id ASC'),
-        queryAll('SELECT id, name, min_level, danger_level FROM locations ORDER BY min_level ASC, id ASC')
-    ]);
-
-    const masteryMap = new Map(bossMasteries.map((mastery) => [Number(mastery.boss_id), Number(mastery.kills || 0)]));
-    const defeatedBossIds = bosses.filter((boss) => (masteryMap.get(Number(boss.id)) || 0) > 0).map((boss) => Number(boss.id));
-    const lastDefeatedBossId = defeatedBossIds.length ? Math.max(...defeatedBossIds) : 0;
-
-    const currentMainBoss = bosses.find((boss) => Number(boss.id) === lastDefeatedBossId + 1)
-        || bosses.find((boss) => Number(boss.id) === lastDefeatedBossId)
-        || bosses[0]
-        || null;
-
-    const nextZone = locations.find((location) => Number(location.min_level || 1) > Number(playerLevel || 1))
-        || locations[locations.length - 1]
-        || null;
-
-    const unlockedLocations = locations.filter((location) => Number(playerLevel || 1) >= Number(location.min_level || 1));
-    const masteredDangerLevel = unlockedLocations.reduce((max, location) => Math.max(max, Number(location.danger_level || 1)), 1);
-
-    return {
-        bosses_killed: bossMasteries.reduce((sum, mastery) => sum + Number(mastery.kills || 0), 0),
-        current_main_boss: currentMainBoss ? {
-            id: Number(currentMainBoss.id),
-            name: currentMainBoss.name,
-            defeated: (masteryMap.get(Number(currentMainBoss.id)) || 0) > 0,
-            kills: masteryMap.get(Number(currentMainBoss.id)) || 0
-        } : null,
-        next_zone: nextZone ? {
-            id: Number(nextZone.id),
-            name: nextZone.name,
-            required_level: Number(nextZone.min_level || 1),
-            danger_level: Number(nextZone.danger_level || 1)
-        } : null,
-        mastered_risk: {
-            danger_level: masteredDangerLevel,
-            label: getRiskLabelByDanger(masteredDangerLevel)
+function filterAllowedUpdateFields(body) {
+    const updates = {};
+    if (!body || typeof body !== 'object') return updates;
+    for (const field of ALLOWED_UPDATE_FIELDS) {
+        if (body[field] !== undefined) {
+            updates[field] = body[field];
         }
-    };
+    }
+    return updates;
 }
 
-
-
-// =============================================================================
-// ПРОФИЛЬ ИГРОКА
-// =============================================================================
-
-// =============================================================================
-// ПРОФИЛЬ, ДОСТИЖЕНИЯ, РЕФЕРАЛЫ, ЭНЕРГИЯ
-// =============================================================================
-
 /**
- * Получение профиля игрока
- * GET /api/game/profile (через алиас) или GET /api/game/player
+ * GET /profile — полный профиль игрока
  */
-router.get('/', async (req, res) => {
+router.get('/profile', async (req, res) => {
     try {
-        const telegramId = req.player.telegram_id;
-        
-        if (!validateTelegramId(telegramId)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Некорректный Telegram ID',
-                code: 'INVALID_TELEGRAM_ID'
-            });
+        const playerId = req.player?.id;
+        if (!playerId) {
+            return res.status(401).json({ error: 'Требуется авторизация' });
         }
-        
-        let player = await queryOne(`
-            SELECT p.*, l.name as location_name, l.description as location_description,
-                   l.radiation as location_radiation, l.infection as location_infection, l.danger_level as location_danger_level,
-                   l.icon as location_icon, p.last_energy_update as last_energy_update
-            FROM players p
-            LEFT JOIN locations l ON p.current_location_id = l.id
-            WHERE p.telegram_id = $1
-        `, [telegramId]);
 
+        const player = await queryOne('SELECT * FROM players WHERE id = $1', [playerId]);
         if (!player) {
-            // Создаём нового игрока при первом входе
-            logger.info(`[player] Создание нового игрока для telegram_id=${telegramId}`);
-            
-            // Генерируем уникальный реферальный код
-            let referralCode;
-            let attempts = 0;
-            const maxAttempts = 5;
-            
-            while (attempts < maxAttempts) {
-                // Используем тот же алгоритм, что и в buildReferralCode из index.js
-                try {
-                    referralCode = `LH-${BigInt(String(telegramId)).toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
-                } catch {
-                    referralCode = `LH-${String(telegramId).slice(-10)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
-                }
-                
-                try {
-                    const newPlayer = await queryOne(`
-                        INSERT INTO players (telegram_id, username, first_name, last_name, referral_code, created_at, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-                        RETURNING *
-                    `, [telegramId, req.player.username || null, req.player.first_name || 'Новичок', req.player.last_name || null, referralCode]);
-                    
-                    if (newPlayer) {
-                        player = newPlayer;
-                        logger.info(`[player] Создан новый игрок id=${player.id}, telegram_id=${telegramId}`);
-                        break;
-                    }
-                } catch (createError) {
-                    // Если код не уникален - пробуем снова
-                    if (createError.code === '23505' && createError.constraint?.includes('referral_code')) {
-                        attempts++;
-                        continue;
-                    }
-                    logger.error(`[player] Ошибка создания игрока: ${createError.message}`);
-                    return res.status(500).json({
-                        success: false,
-                        error: 'Ошибка при создании игрока',
-                        code: 'CREATE_PLAYER_ERROR'
-                    });
-                }
-            }
-            
-            if (!player) {
-                return res.status(500).json({
-                    success: false,
-                    error: 'Не удалось создать игрока после нескольких попыток',
-                    code: 'CREATE_PLAYER_FAILED'
-                });
-            }
+            return res.status(404).json({ error: 'Игрок не найден' });
         }
 
-        const keys = await queryAll(`
-            SELECT bk.boss_id, b.name as boss_name, bk.quantity
-            FROM boss_keys bk
-            JOIN bosses b ON bk.boss_id = b.id
-            WHERE bk.player_id = $1
-        `, [player.id]);
-        const journey = await buildPlayerJourney(player.id, player.level);
-        
-        const expNeeded = getExpForLevel(player.level) || 1;
-        const expPercent = Math.min(100, Math.floor((player.experience / expNeeded) * 100));
-        const totalExpForNext = getTotalExpForLevel(player.level) + expNeeded;
-
-        const inventory = normalizeInventory(player.inventory);
-        const equipment = safeJsonParse(player.equipment, {});
-        const buffs = getActiveBuffs(player.buffs);
-        const cosmetics = safeJsonParse(player.cosmetics, []);
+        const achievements = await getPlayerAchievements(playerId);
+        const progress = await getPlayerProgress(playerId);
         const status = buildPlayerStatus(player);
-
-        logger.info(`[player] Просмотр профиля`, {
-            playerId: player.id,
-            level: player.level,
-            location_id: player.current_location_id
-        });
 
         res.json({
             success: true,
             data: {
-                id: player.id,
-                telegram_id: player.telegram_id,
-                username: player.username,
-                first_name: player.first_name,
-                level: player.level,
-                experience: player.experience,
-                experience_current: Math.max(0, player.experience),
-                exp_progress: {
-                    current: player.experience,
-                    needed: expNeeded,
-                    total_for_next_level: totalExpForNext,
-                    percent: expPercent
+                player: {
+                    id: player.id,
+                    telegram_id: player.telegram_id,
+                    username: player.username,
+                    first_name: player.first_name,
+                    last_name: player.last_name,
+                    level: player.level,
+                    experience: player.experience,
+                    coins: player.coins,
+                    stars: player.stars,
+                    energy: status.energy,
+                    max_energy: status.max_energy,
+                    health: status.health,
+                    max_health: status.max_health,
+                    radiation: status.radiation,
+                    infections: status.infections,
+                    infections_list: status.infections_list,
+                    clan_id: player.clan_id,
+                    clan_role: player.clan_role,
+                    referral_code: player.referral_code,
+                    daily_streak: player.daily_streak,
+                    bosses_killed: player.bosses_killed,
+                    pvp_wins: player.pvp_wins,
+                    pvp_losses: player.pvp_losses,
+                    pvp_rating: player.pvp_rating,
+                    created_at: player.created_at,
+                    last_daily_bonus: player.last_daily_bonus
                 },
-                stats: {
-                    strength: player.strength,
-                    endurance: player.endurance,
-                    agility: player.agility,
-                    intelligence: player.intelligence,
-                    luck: player.luck
-                },
-                status,
-                location: {
-                    id: player.current_location_id,
-                    name: player.location_name,
-                    description: player.location_description,
-                    radiation: player.location_radiation,
-                    infection: player.location_infection || 0,
-                    danger_level: player.location_danger_level,
-                    icon: player.location_icon || '🏠'
-                },
-                inventory: inventory,
-                equipment: equipment,
-                buffs,
-                cosmetics: Array.isArray(cosmetics) ? cosmetics : [],
-                coins: player.coins,
-                stars: player.stars,
-                boss_keys: keys,
-                journey,
-                stats_ext: {
-                    total_actions: player.total_actions,
-                    bosses_killed: journey.bosses_killed,
-                    days_played: player.days_played
-                }
+                achievements: achievements || [],
+                progress: progress || {},
+                inventory: normalizeInventory(player.inventory),
+                equipment: safeJsonParse(player.equipment, {}),
+                active_buffs: getActiveBuffs(player.buffs || '{}')
             }
         });
-        
-    } catch (error) {
-        handleError(res, error, 'profile_view');
+    } catch (err) {
+        logger.error({ type: 'profile_error', message: err.message });
+        res.status(500).json({ error: 'Ошибка получения профиля' });
     }
 });
 
+/**
+ * PUT /update — обновление профиля (только разрешённые поля)
+ */
+router.put('/update', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) {
+            return res.status(401).json({ error: 'Требуется авторизация' });
+        }
 
+        const updates = filterAllowedUpdateFields(req.body);
+        const fieldNames = Object.keys(updates);
 
-// =============================================================================
-// ДОСТИЖЕНИЯ
-// =============================================================================
+        if (fieldNames.length === 0) {
+            return res.status(400).json({ error: 'Нет разрешённых полей для обновления' });
+        }
+
+        const setClauses = fieldNames.map((field, i) => `${field} = $${i + 2}`);
+        const values = fieldNames.map(f => updates[f]);
+        values.unshift(playerId);
+
+        await query(
+            `UPDATE players SET ${setClauses.join(', ')}, updated_at = NOW() WHERE id = $1`,
+            values
+        );
+
+        const updatedPlayer = await queryOne('SELECT * FROM players WHERE id = $1', [playerId]);
+
+        res.json({
+            success: true,
+            data: {
+                username: updatedPlayer.username,
+                first_name: updatedPlayer.first_name,
+                last_name: updatedPlayer.last_name
+            }
+        });
+    } catch (err) {
+        logger.error({ type: 'update_profile_error', message: err.message });
+        res.status(500).json({ error: 'Ошибка обновления профиля' });
+    }
+});
 
 /**
- * Получить все достижения
- * GET /player/achievements → GET /api/game/player/achievements
+ * GET /energy — текущая энергия
+ */
+router.get('/energy', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        const player = await queryOne('SELECT energy, max_energy, last_energy_update FROM players WHERE id = $1', [playerId]);
+        if (!player) return res.status(404).json({ error: 'Игрок не найден' });
+
+        const status = buildPlayerStatus(player);
+
+        res.json({
+            success: true,
+            data: {
+                energy: status.energy,
+                max_energy: status.max_energy,
+                regen_interval_ms: 60000
+            }
+        });
+    } catch (err) {
+        handleError(res, err, 'get_energy');
+    }
+});
+
+/**
+ * POST /buy-energy — покупка энергии за звёзды
+ */
+router.post('/buy-energy', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        const ENERGY_PER_PURCHASE = 25;
+        const STARS_COST = 5;
+
+        const result = await tx(async (client) => {
+            const player = await client.query(
+                'SELECT stars, energy, max_energy FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+            const p = player.rows[0];
+            if (!p) throw { message: 'Игрок не найден', code: 'NOT_FOUND' };
+            if (p.stars < STARS_COST) throw { message: 'Недостаточно звёзд', code: 'INSUFFICIENT_STARS' };
+            if (p.energy >= p.max_energy) throw { message: 'Энергия уже полная', code: 'ENERGY_FULL' };
+
+            const newEnergy = Math.min(p.energy + ENERGY_PER_PURCHASE, p.max_energy);
+
+            await client.query(
+                'UPDATE players SET stars = stars - $1, energy = $2, last_energy_update = NOW() WHERE id = $3',
+                [STARS_COST, newEnergy, playerId]
+            );
+
+            await logPlayerAction(client, playerId, 'buy_energy', { cost: STARS_COST, gained: ENERGY_PER_PURCHASE });
+
+            return { energy: newEnergy, stars: p.stars - STARS_COST };
+        });
+
+        res.json({ success: true, data: result });
+    } catch (err) {
+        if (err.code === 'INSUFFICIENT_STARS' || err.code === 'ENERGY_FULL' || err.code === 'NOT_FOUND') {
+            return res.status(400).json({ error: err.message, code: err.code });
+        }
+        handleError(res, err, 'buy_energy');
+    }
+});
+
+/**
+ * GET /referrals — рефералы игрока
+ */
+router.get('/referrals', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        const referrals = await queryAll(
+            `SELECT r.id, r.referred_id, r.bonus_claimed, r.created_at,
+                    p.username, p.first_name, p.level
+             FROM referrals r
+             LEFT JOIN players p ON p.id = r.referred_id
+             WHERE r.referrer_id = $1
+             ORDER BY r.created_at DESC`,
+            [playerId]
+        );
+
+        res.json({
+            success: true,
+            data: referrals.map(r => ({
+                id: r.id,
+                player_id: r.referred_id,
+                username: r.username,
+                first_name: r.first_name,
+                level: r.level,
+                created_at: r.created_at,
+                bonus_claimed: r.bonus_claimed
+            }))
+        });
+    } catch (err) {
+        handleError(res, err, 'get_referrals');
+    }
+});
+
+/**
+ * POST /claim-referral-bonus — забрать бонус за реферала
+ */
+router.post('/claim-referral-bonus', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        const { referralId } = req.body;
+
+        const result = await tx(async (client) => {
+            const player = await client.query('SELECT * FROM players WHERE id = $1 FOR UPDATE', [playerId]);
+            const referral = await client.query(
+                'SELECT * FROM referrals WHERE id = $1 AND referrer_id = $2 AND bonus_claimed = false',
+                [referralId, playerId]
+            );
+            if (!referral.rows[0]) throw { message: 'Бонус уже получен или реферал не найден', code: 'BONUS_ALREADY_CLAIMED' };
+
+            const BONUS_COINS = 50;
+            await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [BONUS_COINS, playerId]);
+            await client.query('UPDATE referrals SET bonus_claimed = true WHERE id = $1', [referralId]);
+
+            return { coins: player.rows[0].coins + BONUS_COINS };
+        });
+
+        res.json({ success: true, data: result });
+    } catch (err) {
+        if (err.code === 'BONUS_ALREADY_CLAIMED') {
+            return res.status(400).json({ error: err.message, code: err.code });
+        }
+        handleError(res, err, 'claim_referral_bonus');
+    }
+});
+
+/**
+ * GET /achievements — достижения игрока
  */
 router.get('/achievements', async (req, res) => {
     try {
         const playerId = req.player?.id;
-        
-        if (!playerId) {
-            return res.status(401).json({ error: 'Требуется авторизация' });
-        }
-        
         const achievements = await getPlayerAchievements(playerId);
-        
-        res.json({
-            success: true,
-            achievements
-        });
+        res.json({ success: true, data: achievements || [] });
     } catch (err) {
-        res.status(500).json({ error: 'Ошибка получения достижений' });
+        handleError(res, err, 'get_achievements');
     }
 });
 
 /**
- * Получить прогресс достижений
- * GET /player/achievements/progress → GET /api/game/player/achievements/progress
+ * GET /progress — прогресс игрока
  */
-router.get('/achievements/progress', async (req, res) => {
+router.get('/progress', async (req, res) => {
     try {
         const playerId = req.player?.id;
-        
-        if (!playerId) {
-            return res.status(401).json({ error: 'Требуется авторизация' });
-        }
-        
         const progress = await getPlayerProgress(playerId);
-        
-        if (!progress) {
-            return res.status(404).json({ error: 'Игрок не найден' });
-        }
-        
-        res.json({
-            success: true,
-            progress
-        });
+        res.json({ success: true, data: progress || {} });
     } catch (err) {
-        res.status(500).json({ error: 'Ошибка получения прогресса' });
+        handleError(res, err, 'get_progress');
     }
 });
 
-
-
-// =============================================================================
-// РЕФЕРАЛЬНАЯ СИСТЕМА
-// =============================================================================
-
 /**
- * Получение реферального кода
- * GET /player/referral/code → GET /api/game/player/referral/code
+ * GET /referral/code — получить реферальный код
  */
 router.get('/referral/code', async (req, res) => {
     try {
         const playerId = req.player?.id;
-        const player = await queryOne(
-            'SELECT referral_code, referral_code_changed FROM players WHERE id = $1',
-            [playerId]
-        );
+        const player = await queryOne('SELECT referral_code FROM players WHERE id = $1', [playerId]);
+        if (!player) return res.status(404).json({ error: 'Игрок не найден' });
 
-        if (!player) {
-            return res.status(404).json({ success: false, error: 'Игрок не найден' });
-        }
-
-        let code = player.referral_code;
-        if (!code) {
-            code = await createReferralCode(playerId);
-        }
-
-        res.json({
-            success: true,
-            code,
-            can_change: player.referral_code_changed !== true
-        });
-        
-    } catch (error) {
-        logger.error('[player] Ошибка /referral/code:', error);
-        res.status(500).json({ error: 'Ошибка' });
+        const canChange = player.referral_code && player.referral_code.startsWith('LH-');
+        res.json({ success: true, code: player.referral_code, can_change: canChange });
+    } catch (err) {
+        handleError(res, err, 'referral_code_get');
     }
 });
 
 /**
- * Изменение реферального кода
- * PUT /player/referral/code → PUT /api/game/player/referral/code
- */
-router.put('/referral/code', async (req, res) => {
-    try {
-        const newCode = String(req.body?.new_code || '').trim().toUpperCase();
-        const result = await changeReferralCode(req.player.id, newCode);
-        res.status(result.success ? 200 : 400).json(result);
-    } catch (error) {
-        logger.error('[player] Ошибка PUT /referral/code:', error);
-        res.status(500).json({ error: 'Ошибка' });
-    }
-});
-
-/**
- * Статистика рефералов
- * GET /player/referral/stats → GET /api/game/player/referral/stats
+ * GET /referral/stats — статистика рефералов
  */
 router.get('/referral/stats', async (req, res) => {
     try {
-        const stats = await getReferralStats(req.player.id);
+        const playerId = req.player?.id;
+        const referrals = await queryAll(
+            'SELECT id FROM referrals WHERE referrer_id = $1 AND bonus_claimed = true',
+            [playerId]
+        );
+        const totalReferrals = referrals.length;
+        const totalCoins = totalReferrals * 50;
+        const totalStars = 0;
 
         res.json({
             success: true,
-            stats
+            stats: {
+                total_referrals: totalReferrals,
+                total_coins_earned: totalCoins,
+                total_stars_earned: totalStars
+            }
         });
-        
-    } catch (error) {
-        logger.error({ type: 'referral_stats_error', message: error.message });
-        res.status(500).json({ error: 'Ошибка' });
+    } catch (err) {
+        handleError(res, err, 'referral_stats');
     }
 });
 
 /**
- * Использование реферального кода
- * POST /player/referral/use → POST /api/game/player/referral/use
- */
-router.post('/referral/use', async (req, res) => {
-    try {
-        const code = String(req.body?.code || '').trim().toUpperCase();
-        const result = await applyReferralCode(req.player.id, code);
-        res.status(result.success ? 200 : 400).json(result);
-    } catch (error) {
-        logger.error({ type: 'referral_use_error', message: error.message });
-        res.status(500).json({ error: 'Ошибка' });
-    }
-});
-
-/**
- * Список рефералов
- * GET /player/referral/list → GET /api/game/player/referral/list
+ * GET /referral/list — список рефералов
  */
 router.get('/referral/list', async (req, res) => {
     try {
-        const referrals = await getReferralsList(req.player.id);
-        
+        const playerId = req.player?.id;
+        const referrals = await queryAll(`
+            SELECT r.id, r.referred_id, r.bonus_claimed, r.created_at,
+                   p.username, p.first_name, p.level
+            FROM referrals r
+            LEFT JOIN players p ON p.id = r.referred_id
+            WHERE r.referrer_id = $1
+            ORDER BY r.created_at DESC
+        `, [playerId]);
+
         res.json({
             success: true,
-            referrals: referrals
+            referrals: referrals.map(r => ({
+                id: r.id,
+                player_id: r.referred_id,
+                first_name: r.first_name,
+                username: r.username,
+                level: r.level || 1,
+                joined_at: r.created_at,
+                bonuses: { level_5: r.bonus_claimed, level_10: false, level_20: false }
+            }))
         });
-        
-    } catch (error) {
-        logger.error({ type: 'referral_list_error', message: error.message });
-        res.status(500).json({ error: 'Ошибка' });
+    } catch (err) {
+        handleError(res, err, 'referral_list');
     }
 });
 
 /**
- * Получение бонуса за реферала
- * POST /player/referral/claim-bonus → POST /api/game/player/referral/claim-bonus
+ * PUT /referral/code — изменить реферальный код
  */
-router.post('/referral/claim-bonus', async (req, res) => {
+router.put('/referral/code', async (req, res) => {
     try {
-        const result = await giveReferralRegistrationBonus(req.player.id);
-        res.status(result.success ? 200 : 400).json(result);
-        
-    } catch (error) {
-        logger.error({ type: 'referral_claim_error', message: error.message });
-        res.status(500).json({ error: 'Ошибка' });
+        const playerId = req.player?.id;
+        const { new_code } = req.body;
+
+        if (!new_code || new_code.length < 3 || new_code.length > 20 || !/^[A-Z0-9_]+$/i.test(new_code)) {
+            return res.status(400).json({ error: 'Некорректный код' });
+        }
+
+        const existing = await queryOne('SELECT id FROM players WHERE referral_code = $1 AND id != $2', [new_code, playerId]);
+        if (existing) {
+            return res.status(400).json({ error: 'Код уже занят' });
+        }
+
+        await query('UPDATE players SET referral_code = $1 WHERE id = $2', [new_code, playerId]);
+        res.json({ success: true, code: new_code });
+    } catch (err) {
+        handleError(res, err, 'referral_code_put');
     }
 });
 
-
-
-// =============================================================================
-// ЭНЕРГИЯ
-// =============================================================================
-
 /**
- * Покупка энергии за Stars
- * POST /player/buy-energy → POST /api/game/player/buy-energy
- * @deprecated Используйте EnergyAPI.buyEnergy()
+ * POST /referral/use — использовать реферальный код
  */
-router.post('/buy-energy', async (req, res) => {
+router.post('/referral/use', async (req, res) => {
     try {
-        let amount = req.body.amount;
-        if (amount !== undefined && amount !== null) {
-            amount = parseInt(amount);
-            if (!Number.isInteger(amount) || amount < 1 || amount > 100) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'amount должен быть числом от 1 до 100',
-                    code: 'INVALID_AMOUNT'
-                });
-            }
-        } else {
-            amount = 50;
-        }
-        
-        const player = req.player;
-        const playerId = player.id;
-        
-        if (player.energy >= player.max_energy) {
-            return res.status(400).json({
-                success: false,
-                message: 'Энергия уже полная',
-                code: 'ENERGY_FULL'
-            });
-        }
-        
-        const result = await tx(async (client) => {
-            const lockResult = await client.query(
-                `SELECT energy, stars, max_energy FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
+        const playerId = req.player?.id;
+        const { code } = req.body;
+
+        if (!code) return res.status(400).json({ error: 'Введите код' });
+
+        const referrer = await queryOne('SELECT id FROM players WHERE referral_code = $1', [code]);
+        if (!referrer) return res.status(400).json({ error: 'Код не найден' });
+        if (referrer.id === playerId) return res.status(400).json({ error: 'Нельзя использовать свой код' });
+
+        const existing = await queryOne('SELECT id FROM referrals WHERE referrer_id = $1 AND referred_id = $2', [referrer.id, playerId]);
+        if (existing) return res.status(400).json({ error: 'Код уже использован' });
+
+        const BONUS_COINS = 50;
+        const BONUS_ENERGY = 20;
+
+        await tx(async (client) => {
+            await client.query(
+                'UPDATE players SET coins = coins + $1 WHERE id = $2',
+                [BONUS_COINS, playerId]
             );
-
-            if (!lockResult.rows.length) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-            }
-
-            const current = lockResult.rows[0];
-
-            if (current.energy >= current.max_energy) {
-                throw { message: 'Энергия уже полная', code: 'ENERGY_FULL', statusCode: 400 };
-            }
-
-            const actualAmount = Math.min(amount, current.max_energy - current.energy);
-            const actualCost = Math.ceil(actualAmount * 0.1);
-
-            if (current.stars < actualCost) {
-                throw { message: 'Недостаточно Stars', code: 'NOT_ENOUGH_STARS', statusCode: 400 };
-            }
-
-            const updateResult = await client.query(
-                `UPDATE players
-                 SET energy = LEAST(max_energy, energy + $1),
-                     stars = GREATEST(0, stars - $2),
-                     last_energy_update = NOW()
-                 WHERE id = $3
-                 RETURNING energy, stars, max_energy, last_energy_update`,
-                [actualAmount, actualCost, playerId]
+            await client.query(
+                'INSERT INTO referrals (referrer_id, referred_id) VALUES ($1, $2)',
+                [referrer.id, playerId]
             );
-
-            await logPlayerActionSimple(client, playerId, 'buy_energy', {
-                amount: actualAmount,
-                stars_spent: actualCost,
-                cost_per_unit: 0.1
-            });
-
-            return {
-                success: true,
-                energy: updateResult.rows[0].energy,
-                max_energy: updateResult.rows[0].max_energy,
-                energy_restored: actualAmount,
-                stars_spent: actualCost,
-                stars_remaining: updateResult.rows[0].stars,
-                last_energy_update: updateResult.rows[0].last_energy_update
-            };
         });
-        
+
         res.json({
-            message: 'Энергия куплена!',
-            ...result
+            success: true,
+            bonus: { coins: BONUS_COINS, energy: BONUS_ENERGY }
         });
-        
-    } catch (error) {
-        if (error.code === 'NOT_ENOUGH_STARS') {
-            return res.status(400).json({
-                success: false,
-                message: 'Недостаточно Stars',
-                code: 'NOT_ENOUGH_STARS'
-            });
-        }
-        if (error.code === 'ENERGY_FULL') {
-            return res.status(400).json({
-                success: false,
-                message: 'Энергия уже полная',
-                code: 'ENERGY_FULL'
-            });
-        }
-        handleError(res, error, 'BUY_ENERGY');
+    } catch (err) {
+        handleError(res, err, 'referral_use');
     }
 });
-
-// ЭКСПОРТ
 
 module.exports = router;

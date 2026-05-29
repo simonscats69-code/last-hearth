@@ -205,7 +205,7 @@ async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAtta
         
         // Обновляем матч
         await client.query(
-            `UPDATE pvp_matches SET 
+            `UPDATE pvp_battles SET 
                 winner_id = $1, 
                 loser_id = $2,
                 coins_stolen = $3,

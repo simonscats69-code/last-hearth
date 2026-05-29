@@ -554,10 +554,12 @@ router.post('/attack-hit', async (req, res) => {
                     SET pvp_wins = pvp_wins + 1,
                         pvp_streak = pvp_streak + 1,
                         pvp_max_streak = GREATEST(pvp_max_streak, pvp_streak + 1),
-                        pvp_rating = pvp_rating + 25,
-                        experience = experience + $2
-                    WHERE id = $3
-                `, [damage, pvpExpReward, attackerId]);
+                        pvp_rating = pvp_rating + 25
+                    WHERE id = $2
+                `, [damage, attackerId]);
+                
+                // Используем playerHelper.addExperience для корректного level-up
+                await playerHelper.addExperience(attackerId, pvpExpReward, client);
 
                 // Обновляем PvP статистику проигравшего
                 await client.query(`
@@ -698,15 +700,6 @@ router.get('/stats', async (req, res) => {
                 coinsStolenFromMe: stats?.coins_stolen_from_me || 0,
                 itemsStolenFromMe: stats?.items_stolen_from_me || 0
             },
-            wins: stats?.pvp_wins || 0,
-            losses: stats?.pvp_losses || 0,
-            damage_dealt: stats?.pvp_total_damage_dealt || 0,
-            damage_taken: stats?.pvp_total_damage_taken || 0,
-            rating: stats?.pvp_rating || 1000,
-            streak: stats?.pvp_streak || 0,
-            maxStreak: stats?.pvp_max_streak || 0,
-            coinsStolenFromMe: stats?.coins_stolen_from_me || 0,
-            itemsStolenFromMe: stats?.items_stolen_from_me || 0,
             recentMatches,
             cooldown: cooldown
                 ? {

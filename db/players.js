@@ -74,16 +74,8 @@ const tx = async (fn, retries = 2) => {
     }
 };
 
-async function logPlayerAction(playerId, action, meta = {}, client = null) {
-    const exec = getExecutor(client);
-    try {
-        await exec('INSERT INTO player_logs (player_id, action, metadata, created_at) VALUES ($1, $2, $3, NOW())',
-            [playerId, action, serializeJSONField(meta)]);
-    } catch (err) {
-        // Логирование ошибок в консоль для диагностики, но не блокируем основной поток
-        console.error(`Ошибка логирования действия игрока ${playerId}: ${action}`, err.message);
-    }
-}
+// Импортируем унифицированную функцию из serverApi
+const { logPlayerAction } = require('../utils/serverApi');
 
 async function getPlayerById(playerId, client = null) {
     return getQueryOneFunc(client)('SELECT * FROM players WHERE id = $1', [validateId(playerId, 'playerId')]);
@@ -132,8 +124,7 @@ async function getTopPlayers(limit = 10, offset = 0) {
     )};
 }
 
-async function updatePlayerLocation(playerId, locationId) {
-    const client = arguments[2] || null;
+async function updatePlayerLocation(playerId, locationId, client = null) {
     playerId = validateId(playerId, 'playerId');
     locationId = validateId(locationId, 'locationId');
     const exec = getExecutor(client);

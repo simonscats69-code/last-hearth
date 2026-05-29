@@ -327,7 +327,10 @@ async function loadItemTemplates(client, rewardItems) {
              FROM items WHERE id = ANY($1::int[])`,
             [ids]
         );
-        itemMap = Object.fromEntries(result.rows.map(r => [r.id, r]));
+        itemMap = {};
+        for (const r of result.rows) {
+            itemMap[r.id] = r; // числовые ключи для точного поиска
+        }
     }
 
     for (const reward of rewardItems) {
@@ -629,7 +632,8 @@ router.get('/bonuses', async (req, res) => {
         const playerId = req.player.id;
         const player = await getPlayerBaseState(client, playerId);
         const masteries = await getBossMasteries(client, playerId);
-        const masteryMap = Object.fromEntries(masteries.map((m) => [m.boss_id, m.kills]));
+        const masteryMap = {};
+        for (const m of masteries) masteryMap[m.boss_id] = m.kills;
         const bossesResult = await client.query('SELECT id, name FROM bosses ORDER BY id');
 
         res.json({
@@ -669,7 +673,8 @@ router.get('/', async (req, res) => {
         const player = await getPlayerBaseState(client, playerId);
         const activeBattle = await resolveActiveBattle(client, playerId);
         const masteries = await getBossMasteries(client, playerId);
-        const masteryMap = Object.fromEntries(masteries.map((m) => [m.boss_id, m.kills]));
+        const masteryMap = {};
+        for (const m of masteries) masteryMap[m.boss_id] = m.kills;
 
         const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
 
@@ -678,12 +683,13 @@ router.get('/', async (req, res) => {
             'SELECT boss_id, quantity FROM boss_keys WHERE player_id = $1',
             [playerId]
         );
-        const keysMap = Object.fromEntries(keysResult.rows.map(r => [r.boss_id, r.quantity]));
+        const keysMap = {};
+        for (const r of keysResult.rows) keysMap[String(r.boss_id)] = r.quantity;
 
         const bossList = [];
         for (const boss of bossesResult.rows) {
             const keysRequired = boss.keys_required || 3;
-            const ownedKeys = boss.id === 1 ? 0 : (keysMap[boss.id - 1] || 0);
+            const ownedKeys = boss.id === 1 ? 0 : (keysMap[String(boss.id - 1)] || 0);
             const isUnlocked = boss.id === 1 || ownedKeys >= keysRequired;
             const soloProgress = activeBattle?.type === 'solo' && activeBattle.boss_id === boss.id
                 ? activeBattle.boss.hp

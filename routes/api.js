@@ -392,7 +392,7 @@ router.post('/achievements/claim', async (req, res) => {
 
             const achievementData = playerAchievement.rows[0];
             
-            const achievementRuntimeContext = await getAchievementRuntimeContext(player.id, client);
+            const achievementRuntimeContext = await getAchievementRuntimeContext(client, player.id);
             const currentValue = getAchievementCurrentValue(condition, lockedPlayer.rows[0], achievementRuntimeContext);
             const targetValue = getAchievementTargetValue(condition, achievementRuntimeContext);
 

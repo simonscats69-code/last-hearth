@@ -4,7 +4,9 @@
 
 const { validateTelegramInitData, isAdmin } = require('./utils/serverApi');
 const { getMetrics, resetMetrics } = require('./utils/realtime');
-const { ACHIEVEMENTS } = require('./utils/game-helpers');
+// ACHIEVEMENTS was removed — achievements are now stored in DB with schema seed
+// Tests for static achievements have been migrated to schema tests
+const ACHIEVEMENTS = null;
 const { calculateLocationRiskProfile } = require('./utils/gameConstants');
 const { calculateCoinsToSteal, calculatePVPRewardExperience } = require('./db/pvp');
 const { normalizeInventory, createInventoryItem, getInventoryItemCategory, getActiveBuffs, isBuffActive } = require('./utils/game-helpers');
@@ -77,35 +79,9 @@ describe('metrics', () => {
 // Тесты achievements
 // =============================================================================
 
-describe('achievements', () => {
-    describe('ACHIEVEMENTS', () => {
-        test('должен содержать достижения уровня', () => {
-            expect(ACHIEVEMENTS).toHaveProperty('level_5');
-            expect(ACHIEVEMENTS).toHaveProperty('level_10');
-            expect(ACHIEVEMENTS.level_5.type).toBe('level');
-        });
-        
-        test('должен содержать достижения боссов', () => {
-            expect(ACHIEVEMENTS).toHaveProperty('boss_1');
-            expect(ACHIEVEMENTS).toHaveProperty('boss_5');
-            expect(ACHIEVEMENTS.boss_1.type).toBe('boss');
-        });
-        
-        test('должен содержать PvP достижения', () => {
-            expect(ACHIEVEMENTS).toHaveProperty('pvp_1');
-            expect(ACHIEVEMENTS.pvp_1.type).toBe('pvp');
-        });
-        
-        test('все достижения должны иметь required и reward', () => {
-            for (const [key, ach] of Object.entries(ACHIEVEMENTS)) {
-                expect(ach).toHaveProperty('req');
-                expect(ach).toHaveProperty('reward');
-                expect(typeof ach.req).toBe('number');
-                expect(typeof ach.reward).toBe('number');
-            }
-        });
-    });
-});
+// Достижения теперь хранятся в БД (таблица achievements)
+// Статические тесты ACHIEVEMENTS больше не актуальны
+// Все тесты достижений перенесены в schema.test.js
 
 // =============================================================================
 // Тесты игровой логики

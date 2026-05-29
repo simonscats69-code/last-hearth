@@ -283,7 +283,7 @@ const endpoints = {
     move: { endpoint: '/game/locations/move', method: 'POST' },
     
     // Предметы
-    useItem: { endpoint: '/game/inventory/use-item', method: 'POST' },
+    useItem: { endpoint: '/game/items/use', method: 'POST' },
     
     // Боссы
     attackBoss: { endpoint: '/game/bosses/attack-boss', method: 'POST' },
@@ -311,9 +311,9 @@ const endpoints = {
     // PvP
     pvpAttack: { endpoint: '/game/pvp/attack', method: 'POST' },
     
-    // Рефералы
-    referralCode: { endpoint: '/game/referral/code', method: 'GET' },
-    referralUse: { endpoint: '/game/referral/use', method: 'POST' },
+    // Рефералы (алиасы на /player/referrals)
+    referralCode: { endpoint: '/game/player/referrals', method: 'GET' },
+    referralUse: { endpoint: '/game/player/referrals/use', method: 'POST' },
     
     // Рейдовые боссы
     clanBoss: { endpoint: '/game/bosses/raids', method: 'GET' },
@@ -1378,7 +1378,8 @@ const SCREENS = [
     'clans-list',     // Список кланов
     'clan-create',    // Создание клана
     'clan-chat',      // Чат клана
-    'shop',           // Магазин
+    'shop',           // Магазин (Stars)
+    'market',         // Магазин за монеты
     'wheel',          // Колесо удачи
     'rating',         // Рейтинг
     'pvp',            // PvP
@@ -3168,10 +3169,9 @@ function switchBossesTab(tabName = 'solo') {
     }
 }
 
-// Обработчик переключателя режима боссов
-document.getElementById('boss-mode-switch')?.addEventListener('change', function() {
-    switchBossesTab(this.checked ? 'mass' : 'solo');
-});
+// Обработчик переключателя режима боссов (перенесён в startGame)
+// document.getElementById('boss-mode-switch')?.addEventListener('change', ...)
+// теперь вызывается внутри startGame() после generateScreens()
 
 /**
  * Отрисовка боссов с новой механикой "Война с боссами"
@@ -5441,12 +5441,32 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
+        // Генерируем все экраны (.screen) динамически
+        if (typeof generateScreens === 'function') {
+            generateScreens();
+        }
+        
+        // Инициализируем фильтры инвентаря
+        if (typeof initInventoryControls === 'function') {
+            setTimeout(initInventoryControls, 200);
+        }
+        
         initGame();
         initReferralHandlers();
         
         // Инициализация навигации из game-core.js
         if (typeof initNavigationHandlers === 'function') {
             initNavigationHandlers();
+        }
+        
+        // Обработчик переключателя режима боссов
+        const bossModeSwitch = document.getElementById('boss-mode-switch');
+        if (bossModeSwitch) {
+            bossModeSwitch.addEventListener('change', function() {
+                if (typeof switchBossesTab === 'function') {
+                    switchBossesTab(this.checked ? 'mass' : 'solo');
+                }
+            });
         }
     }
     
@@ -5486,6 +5506,613 @@ window.copyReferralCode = copyReferralCode;
 window.changeReferralCode = changeReferralCode;
 window.useReferralCode = useReferralCode;
 window.initReferralHandlers = initReferralHandlers;
+// ============================================================================
+// ГЕНЕРАЦИЯ ЭКРАНОВ (Screen Generator)
+// ============================================================================
+
+/**
+ * Создаёт контейнеры экранов (.screen) в #game-content
+ * Каждый экран: <div class="screen" id="main-screen">...</div>
+ * Вызывается перед initGame()
+ */
+function generateScreens() {
+    const gameContent = document.getElementById('game-content');
+    if (!gameContent) return;
+
+    // Удаляем старые screen'ы, если есть (кроме навигации)
+    gameContent.querySelectorAll('.screen').forEach(el => el.remove());
+
+    // Шаблон экрана с кнопкой "назад" для под-экранов
+    function subScreen(id, title) {
+        return `
+            <div class="screen" id="${id}-screen">
+                <div class="screen-header">
+                    <button class="back-btn" data-screen="main">← Назад</button>
+                    <h2>${title}</h2>
+                </div>
+                <div class="screen-content" id="${id}-content"></div>
+            </div>
+        `;
+    }
+
+    // Шаблон экрана для основных разделов
+    function fullScreen(id, title) {
+        return `
+            <div class="screen" id="${id}-screen">
+                <div class="screen-content" id="${id}-content"></div>
+            </div>
+        `;
+    }
+
+    const screensHtml = `
+        <!-- Главный экран -->
+        <div class="screen active" id="main-screen">
+            <div id="main-content">
+                <!-- Хедер -->
+                <div class="game-header" id="game-header">
+                    <div class="header-top">
+                        <div class="player-info">
+                            <span class="player-avatar" id="player-avatar">👤</span>
+                            <div class="player-details">
+                                <span class="player-name" id="player-name">Загрузка...</span>
+                                <span class="player-level" id="player-level">1</span>
+                            </div>
+                        </div>
+                        <div class="header-balance">
+                            <span class="balance-stars" id="main-stars-value">0</span>
+                            <span class="balance-coins" id="main-coins-value">0</span>
+                        </div>
+                    </div>
+
+                    <!-- Полоски здоровья, энергии, опыта -->
+                    <div class="player-stats">
+                        <div class="stat-bar health-bar-container">
+                            <span class="stat-label">❤️</span>
+                            <div class="bar-track">
+                                <div class="bar-fill health-fill" id="health-bar" style="width:100%"></div>
+                            </div>
+                            <span class="stat-text" id="health-text">0/0</span>
+                        </div>
+                        <div class="stat-bar energy-bar-container">
+                            <span class="stat-label">⚡</span>
+                            <div class="bar-track">
+                                <div class="bar-fill energy-fill" id="energy-bar" style="width:100%"></div>
+                            </div>
+                            <span class="stat-text" id="energy-text">0/0</span>
+                        </div>
+                        <div class="stat-bar exp-bar-container">
+                            <span class="stat-label">⬆️</span>
+                            <div class="bar-track">
+                                <div class="bar-fill exp-fill" id="exp-bar" style="width:0%"></div>
+                            </div>
+                            <span class="stat-text" id="exp-text">0/0</span>
+                        </div>
+                    </div>
+
+                    <!-- Статусы (радиация, инфекция) -->
+                    <div class="status-grid" id="conditions-grid" style="display:none">
+                        <div class="status-item" id="radiation-display">
+                            <span>☢️</span>
+                            <span id="radiation-value">0</span>
+                        </div>
+                        <div class="status-item" id="infections-display" style="display:none">
+                            <span>🤒</span>
+                            <span id="infection-value">0</span>
+                        </div>
+                    </div>
+
+                    <!-- Статус монет -->
+                    <div class="coins-display" id="coins-value">0</div>
+
+                    <!-- Локация -->
+                    <div class="location-badge">
+                        <span id="location-icon">🏠</span>
+                        <span id="location-name">Спальный район</span>
+                        <span id="location-desc" style="display:none"></span>
+                        <span id="location-infection" style="display:none"></span>
+                    </div>
+                </div>
+
+                <!-- Карточка рекомендаций -->
+                <div class="guidance-card" id="main-guidance-card" data-tone="ready">
+                    <div class="guidance-header">
+                        <span class="guidance-state" id="guidance-state">Фарм</span>
+                    </div>
+                    <div class="guidance-title" id="guidance-title">Лучший ход — искать припасы</div>
+                    <div class="guidance-text" id="guidance-text">...</div>
+                    <div class="guidance-meta">
+                        <span id="guidance-meta-primary"></span>
+                        <span id="guidance-meta-secondary"></span>
+                    </div>
+                    <button class="guidance-action-btn" id="guidance-action-btn">Действие</button>
+                </div>
+
+                <!-- Быстрые действия -->
+                <div class="quick-actions">
+                    <button class="action-btn" id="search-btn">🔍 Искать</button>
+                    <button class="action-btn" id="map-btn">🗺️ Карта</button>
+                    <button class="action-btn" id="inventory-btn">🎒 Инвентарь</button>
+                    <button class="action-btn" id="bosses-btn">👹 Боссы</button>
+                    <button class="action-btn" id="shop-btn">🏪 Магазин</button>
+                    <button class="action-btn" id="rating-btn">🏆 Рейтинг</button>
+                    <button class="action-btn" id="pvp-btn">⚔️ PvP</button>
+                </div>
+
+                <!-- Прогресс-карточки -->
+                <div class="progress-cards" id="main-progress-cards">
+                    <div class="progress-card">
+                        <span class="progress-card-icon">⬆️</span>
+                        <span class="progress-card-value" id="next-level-value">0 XP</span>
+                        <span class="progress-card-label" id="next-level-desc">До уровня 2</span>
+                    </div>
+                    <div class="progress-card">
+                        <span class="progress-card-icon">👹</span>
+                        <span class="progress-card-value" id="next-boss-value">Все открыты</span>
+                        <span class="progress-card-label" id="next-boss-desc">Боссы</span>
+                    </div>
+                    <div class="progress-card">
+                        <span class="progress-card-icon">🏆</span>
+                        <span class="progress-card-value" id="next-reward-value">Нет задач</span>
+                        <span class="progress-card-label" id="next-reward-desc">Достижения</span>
+                    </div>
+                </div>
+
+                <!-- Бонусы -->
+                <div class="bonuses-section" id="main-bonuses">
+                    <div class="bonus-item">
+                        <span>⚔️ Урон:</span>
+                        <span id="player-damage-preview">+1</span>
+                    </div>
+                    <div class="bonus-item">
+                        <span>📦 Шанс дропа:</span>
+                        <span id="player-drop-chance">10%</span>
+                    </div>
+                    <div class="bonus-item">
+                        <span>🛡️ Выживаемость:</span>
+                        <span id="player-survival-preview">Стабильно</span>
+                    </div>
+                </div>
+
+                <!-- Активные баффы -->
+                <div class="active-buffs-section" id="active-buffs-section" style="display:none">
+                    <span class="section-title">Активные баффы</span>
+                    <div class="active-buffs-list" id="active-buffs-list"></div>
+                </div>
+
+                <!-- Journey Progress -->
+                <div class="journey-section" id="journey-section">
+                    <div class="journey-grid">
+                        <div class="journey-item">
+                            <span class="journey-icon">👹</span>
+                            <span class="journey-value" id="journey-bosses-killed">0</span>
+                            <span class="journey-label">Боссов убито</span>
+                        </div>
+                        <div class="journey-item">
+                            <span class="journey-icon">🎯</span>
+                            <span class="journey-value" id="journey-main-boss">Нет цели</span>
+                            <span class="journey-label" id="journey-main-boss-desc">Главный босс</span>
+                        </div>
+                        <div class="journey-item">
+                            <span class="journey-icon">🗺️</span>
+                            <span class="journey-value" id="journey-next-zone">Все открыты</span>
+                            <span class="journey-label" id="journey-next-zone-desc">Следующая зона</span>
+                        </div>
+                        <div class="journey-item">
+                            <span class="journey-icon">⚠️</span>
+                            <span class="journey-value" id="journey-risk-label">Стабильно</span>
+                            <span class="journey-label" id="journey-risk-desc">Освоенный риск</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Карта -->
+        <div class="screen" id="map-screen">
+            <div class="screen-header">
+                <h2>🗺️ Карта города</h2>
+            </div>
+            <div class="map-content">
+                <div class="map-info">
+                    <span class="map-location-name">Выберите локацию</span>
+                </div>
+                <canvas id="city-map" width="350" height="400"></canvas>
+                <div class="location-preparation-panel" id="location-preparation-panel">
+                    <span class="risk-label" id="location-risk-label">—</span>
+                    <span>☢️ Защита: <span id="location-rad-defense">0</span></span>
+                    <span>🦠 Защита: <span id="location-inf-defense">0</span></span>
+                    <span class="risk-hint" id="location-risk-hint">Выберите локацию для просмотра рисков</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Инвентарь -->
+        <div class="screen" id="inventory-screen">
+            <div class="screen-header">
+                <h2>🎒 Инвентарь</h2>
+                <div class="inventory-balance">
+                    <span>⭐ <span id="inv-stars">0</span></span>
+                    <span>💰 <span id="inv-coins">0</span></span>
+                </div>
+            </div>
+            <div class="screen-content">
+                <div class="inventory-filters" id="inventory-filters">
+                    <button class="filter-btn active" data-filter="all">Все</button>
+                    <button class="filter-btn" data-filter="weapon">⚔️</button>
+                    <button class="filter-btn" data-filter="food">🍞</button>
+                    <button class="filter-btn" data-filter="medicine">💊</button>
+                    <button class="filter-btn" data-filter="armor">🛡️</button>
+                    <button class="filter-btn" data-filter="resource">📦</button>
+                </div>
+                <div class="inventory-grid" id="inventory-grid"></div>
+            </div>
+        </div>
+
+        <!-- Боссы -->
+        <div class="screen" id="bosses-screen">
+            <div class="screen-header">
+                <h2>👹 Боссы</h2>
+            </div>
+            <div class="screen-content">
+                <div class="bosses-info" id="bosses-info"></div>
+                <div class="boss-mode-toggle">
+                    <span class="toggle-label">Соло</span>
+                    <label class="switch">
+                        <input type="checkbox" id="boss-mode-switch">
+                        <span class="slider"></span>
+                    </label>
+                    <span class="toggle-label">Массовый</span>
+                </div>
+                <div id="bosses-list"></div>
+                <div id="raids-list" style="display:none"></div>
+            </div>
+        </div>
+
+        <!-- Бой с боссом -->
+        <div class="screen" id="boss-fight-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="bosses">← Назад</button>
+                <h2>⚔️ Бой с боссом</h2>
+            </div>
+            <div class="boss-fight-container">
+                <div class="boss-fight-header">
+                    <div class="boss-icon-large" id="boss-icon">👹</div>
+                    <div class="boss-name-large" id="boss-name">Босс</div>
+                </div>
+                <div class="boss-hp-section">
+                    <div class="boss-hp-bar">
+                        <div class="boss-hp-fill" id="boss-health-bar" style="width:100%"></div>
+                    </div>
+                    <div class="boss-hp-text" id="boss-health-text">0/0</div>
+                </div>
+                <div class="boss-timer" id="boss-fight-timer" style="display:none">
+                    <span>⏱️</span>
+                    <span id="boss-timer-text">00:00:00</span>
+                </div>
+                <div class="fight-log" id="fight-log"></div>
+                <div class="boss-actions">
+                    <button class="btn attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать</button>
+                    <div class="attack-progress" id="attack-progress-container" style="display:none"></div>
+                    <button class="btn weapon-btn" id="boss-fight-inventory-btn">🔧 Выбрать оружие</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Выбор оружия -->
+        ${subScreen('weapon-select', 'Выбор оружия')}
+
+        <!-- Клан -->
+        <div class="screen" id="clan-screen">
+            <div class="screen-header">
+                <h2>🏰 Клан</h2>
+            </div>
+            <div class="screen-content" id="clan-content"></div>
+        </div>
+
+        <!-- Список кланов -->
+        <div class="screen" id="clans-list-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="clan">← Назад</button>
+                <h2>🏰 Список кланов</h2>
+            </div>
+            <div class="screen-content">
+                <div class="clans-search">
+                    <input type="text" id="clans-search-input" placeholder="Поиск клана...">
+                    <button class="btn" id="clans-search-btn">🔍</button>
+                </div>
+                <div id="clans-list"></div>
+            </div>
+        </div>
+
+        <!-- Создание клана -->
+        <div class="screen" id="clan-create-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="clan">← Назад</button>
+                <h2>🏰 Создать клан</h2>
+            </div>
+            <div class="screen-content">
+                <div class="form-group">
+                    <label>Название клана</label>
+                    <input type="text" id="clan-name-input" placeholder="Введите название" maxlength="20">
+                </div>
+                <div class="form-group">
+                    <label>Описание</label>
+                    <textarea id="clan-desc-input" placeholder="Описание клана" rows="3"></textarea>
+                </div>
+                <div class="form-group checkbox-group">
+                    <label>
+                        <input type="checkbox" id="clan-public-input" checked>
+                        Открытый клан
+                    </label>
+                </div>
+                <button class="btn btn-primary" id="create-clan-btn">Создать клан</button>
+            </div>
+        </div>
+
+        <!-- Чат клана -->
+        <div class="screen" id="clan-chat-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="clan">← Назад</button>
+                <h2>💬 Чат клана</h2>
+            </div>
+            <div class="screen-content">
+                <div class="clan-chat-messages" id="clan-chat-messages"></div>
+                <div class="clan-chat-input">
+                    <input type="text" id="clan-message-input" placeholder="Сообщение...">
+                    <button class="btn" id="clan-send-btn">Отправить</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Магазин (Stars) -->
+        <div class="screen" id="shop-screen">
+            <div class="screen-header">
+                <h2>🏪 Магазин</h2>
+            </div>
+            <div class="screen-content">
+                <div class="shop-tabs">
+                    <button class="shop-tab active" data-tab="buffs">💪 Баффы</button>
+                    <button class="shop-tab" data-tab="minigames">🎮 Мини-игры</button>
+                    <button class="shop-tab" data-tab="cosmetics">✨ Косметика</button>
+                </div>
+                <div class="shop-items" id="shop-items"></div>
+            </div>
+        </div>
+
+        <!-- Магазин за монеты -->
+        <div class="screen" id="market-screen">
+            <div class="screen-header">
+                <h2>💰 Магазин</h2>
+                <span>💰 <span id="shop-coins-balance">0</span></span>
+            </div>
+            <div class="screen-content">
+                <div class="shop-categories">
+                    <button class="shop-category-btn active" data-category="all">Все</button>
+                    <button class="shop-category-btn" data-category="weapon">⚔️ Оружие</button>
+                    <button class="shop-category-btn" data-category="armor">🛡️ Броня</button>
+                    <button class="shop-category-btn" data-category="medicine">💊 Медицина</button>
+                    <button class="shop-category-btn" data-category="food">🍞 Еда</button>
+                </div>
+                <div class="shop-items-list" id="shop-items-list"></div>
+            </div>
+        </div>
+
+        <!-- Колесо удачи -->
+        <div class="screen" id="wheel-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="shop">← Назад</button>
+                <h2>🎡 Колесо удачи</h2>
+            </div>
+            <div class="screen-content">
+                <div class="wheel-container">
+                    <div class="wheel" id="wheel">
+                        <div class="wheel-prizes">
+                            <span class="prize">10</span><span class="prize">25</span><span class="prize">50</span>
+                            <span class="prize">100</span><span class="prize">x2</span><span class="prize">⚡20</span>
+                        </div>
+                    </div>
+                    <button class="btn" id="wheel-free-btn">🎡 Бесплатно</button>
+                    <button class="btn" id="wheel-paid-btn">⭐ За 1 Star</button>
+                    <p id="wheel-free-info">Загрузка...</p>
+                    <p id="wheel-paid-info">Платное вращение доступно всегда.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Рейтинг -->
+        <div class="screen" id="rating-screen">
+            <div class="screen-header">
+                <h2>🏆 Рейтинг</h2>
+            </div>
+            <div class="screen-content">
+                <div class="rating-tabs">
+                    <button class="rating-tab active" data-tab="players">👤 Игроки</button>
+                    <button class="rating-tab" data-tab="clans">🏰 Кланы</button>
+                </div>
+                <div class="rating-list" id="rating-list"></div>
+            </div>
+        </div>
+
+        <!-- PvP игроки -->
+        <div class="screen" id="pvp-players-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>⚔️ PvP</h2>
+                <button class="btn small" id="pvp-stats-btn">📊 Статистика</button>
+            </div>
+            <div class="screen-content">
+                <div class="pvp-info"></div>
+                <div class="pvp-players-list" id="pvp-players-list"></div>
+                <button class="btn" id="pvp-refresh-btn">🔄 Обновить</button>
+            </div>
+        </div>
+
+        <!-- PvP бой -->
+        <div class="screen" id="pvp-fight-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="pvp-players">← Назад</button>
+                <h2>⚔️ PvP Бой</h2>
+            </div>
+            <div class="pvp-fight-container" id="pvp-fight-container">
+                <div class="pvp-battle-arena">
+                    <div class="pvp-combatant attacker">
+                        <div class="pvp-combatant-name" id="pvp-attacker-name">Вы</div>
+                        <div class="pvp-combatant-level" id="pvp-attacker-level">Уровень: 1</div>
+                        <div class="pvp-health-bar">
+                            <div class="pvp-health-fill" id="pvp-attacker-health" style="width:100%"></div>
+                        </div>
+                        <div class="pvp-health-text" id="pvp-attacker-health-text">0/0</div>
+                    </div>
+                    <div class="pvp-vs">⚔️</div>
+                    <div class="pvp-combatant defender">
+                        <div class="pvp-combatant-name" id="pvp-defender-name">Противник</div>
+                        <div class="pvp-combatant-level" id="pvp-defender-level">Уровень: 1</div>
+                        <div class="pvp-health-bar">
+                            <div class="pvp-health-fill" id="pvp-defender-health" style="width:100%"></div>
+                        </div>
+                        <div class="pvp-health-text" id="pvp-defender-health-text">0/0</div>
+                    </div>
+                </div>
+                <div class="pvp-battle-log" id="pvp-battle-log">
+                    <p>⚔️ Приготовьтесь к бою!</p>
+                </div>
+                <div class="pvp-actions">
+                    <button class="btn attack-btn" id="pvp-attack-btn">👊 АТАКОВАТЬ</button>
+                </div>
+                <div class="pvp-rewards" id="pvp-rewards" style="display:none">
+                    <h3>Награды</h3>
+                    <div id="pvp-rewards-content"></div>
+                    <button class="btn" id="pvp-claim-rewards-btn">Забрать</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PvP статистика -->
+        <div class="screen" id="pvp-stats-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="pvp-players">← Назад</button>
+                <h2>📊 PvP Статистика</h2>
+            </div>
+            <div class="pvp-stats-content" id="pvp-stats-content">
+                <div class="pvp-stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-rating-value">1000</span>
+                        <span class="stat-label">Рейтинг</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-wins">0</span>
+                        <span class="stat-label">Побед</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-losses">0</span>
+                        <span class="stat-label">Поражений</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-streak">0</span>
+                        <span class="stat-label">Текущая серия</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-max-streak">0</span>
+                        <span class="stat-label">Лучшая серия</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-damage-dealt">0</span>
+                        <span class="stat-label">Урона нанесено</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-damage-taken">0</span>
+                        <span class="stat-label">Урона получено</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-coins-lost">0</span>
+                        <span class="stat-label">Потеряно монет</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="pvp-items-lost">0</span>
+                        <span class="stat-label">Потеряно предметов</span>
+                    </div>
+                </div>
+                <div class="pvp-cooldown" id="pvp-cooldown" style="display:none">
+                    <span>⏱️ Кулдаун: </span>
+                    <span id="pvp-cooldown-timer">0:00</span>
+                </div>
+                <h3>Последние бои</h3>
+                <div class="pvp-recent-matches-list" id="pvp-recent-matches-list"></div>
+            </div>
+        </div>
+
+        <!-- Достижения -->
+        <div class="screen" id="achievements-screen">
+            <div class="screen-header">
+                <h2>🏆 Достижения</h2>
+            </div>
+            <div class="screen-content">
+                <div class="achievements-stats" id="achievements-stats"></div>
+                <div class="achievement-categories" id="achievement-categories"></div>
+                <div class="achievements-list" id="achievements-list"></div>
+            </div>
+        </div>
+
+        <!-- Рефералы -->
+        <div class="screen" id="referral-screen">
+            <div class="screen-header">
+                <h2>📨 Рефералы</h2>
+            </div>
+            <div class="screen-content">
+                <div class="referral-code-box" id="referral-code-box">
+                    <div class="referral-code-section">
+                        <h3>Твой реферальный код</h3>
+                        <div class="referral-code-display">
+                            <span id="referral-code">ЗАГРУЗКА...</span>
+                            <button class="btn small" id="copy-referral-code">📋 Копировать</button>
+                        </div>
+                    </div>
+                    <div class="referral-change-section" id="referral-change-section" style="display:none">
+                        <h4>Изменить код</h4>
+                        <input type="text" id="new-referral-code" placeholder="Новый код" maxlength="20">
+                        <button class="btn small" id="change-referral-code-btn">Изменить</button>
+                    </div>
+                    <div class="referral-use-section">
+                        <h4>Использовать код друга</h4>
+                        <input type="text" id="use-referral-code" placeholder="Введи код друга">
+                        <button class="btn small" id="use-referral-code-btn">Активировать</button>
+                    </div>
+                </div>
+                <div class="referral-stats" id="referral-stats">
+                    <div class="stat-card">
+                        <span class="stat-value" id="total-referrals">0</span>
+                        <span class="stat-label">Рефералов</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="total-coins-earned">0</span>
+                        <span class="stat-label">Монет заработано</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="total-stars-earned">0</span>
+                        <span class="stat-label">Stars заработано</span>
+                    </div>
+                </div>
+                <div class="referral-list" id="referrals-list"></div>
+            </div>
+        </div>
+    `;
+
+    // Добавляем модальное окно и уведомления после экранов
+    const modalsHtml = `
+        <!-- Модальное окно -->
+        <div class="modal" id="modal" style="display:none">
+            <div class="modal-content">
+                <span class="modal-close" id="modal-close">&times;</span>
+                <h3 id="modal-title">Заголовок</h3>
+                <p id="modal-message">Сообщение</p>
+            </div>
+        </div>
+    `;
+
+    gameContent.insertAdjacentHTML('beforeend', screensHtml + modalsHtml);
+    console.log('[Screens] Все экраны и модальное окно сгенерированы');
+}
+
 /**
  * ============================================
  * МАГАЗИН (Store)
@@ -5964,13 +6591,15 @@ function renderCoinShop() {
     }
     
     container.innerHTML = filtered.map(item => {
-        const rarityClass = item.rarity || 'common';
+        const escapedRarity = escapeHtml(item.rarity || 'common');
+        const escapedIcon = escapeHtml(item.icon || '📦');
+        const safeItemId = parseInt(item.id) || 0;
         const prepTag = item.stats?.radiation_cure || item.stats?.infection_cure || item.stats?.radiation_resist || item.stats?.infection_resist
             ? '<div class="shop-item-role">Подготовка к опасной зоне</div>'
             : '';
         return `
-            <div class="shop-item-card ${rarityClass}" data-item-id="${item.id}">
-                <div class="shop-item-icon">${item.icon || '📦'}</div>
+            <div class="shop-item-card ${escapedRarity}" data-item-id="${safeItemId}">
+                <div class="shop-item-icon">${escapedIcon}</div>
                 <div class="shop-item-info">
                     <div class="shop-item-name">${escapeHtml(item.name)}</div>
                     <div class="shop-item-desc">${escapeHtml(item.description || '')}</div>
@@ -5981,7 +6610,7 @@ function renderCoinShop() {
                 </div>
                 <div class="shop-item-buy">
                     <div class="shop-item-price">💰 ${formatNumber(item.price || 0)}</div>
-                    <button class="buy-btn" onclick="buyCoinItem(${item.id})">Купить</button>
+                    <button class="buy-btn" onclick="buyCoinItem(${safeItemId})">Купить</button>
                 </div>
             </div>
         `;
@@ -6001,14 +6630,14 @@ function renderCoinShop() {
 function renderItemStats(stats) {
     if (!stats) return '';
     const statLines = [];
-    if (stats.damage) statLines.push(`⚔️ Урон: +${stats.damage}`);
-    if (stats.defense) statLines.push(`🛡️ Защита: +${stats.defense}`);
-    if (stats.health) statLines.push(`❤️ Здоровье: +${stats.health}`);
-    if (stats.energy) statLines.push(`⚡ Энергия: +${stats.energy}`);
-    if (stats.radiation_cure) statLines.push(`☢️ Лечение радиации: ${stats.radiation_cure}`);
-    if (stats.infection_cure) statLines.push(`🦠 Лечение инфекции: ${stats.infection_cure}`);
-    if (stats.radiation_resist) statLines.push(`🛡️ Защита от радиации: ${stats.radiation_resist}`);
-    if (stats.infection_resist) statLines.push(`🧪 Защита от инфекции: ${stats.infection_resist}`);
+    if (stats.damage) statLines.push(`⚔️ Урон: +${Number(stats.damage)}`);
+    if (stats.defense) statLines.push(`🛡️ Защита: +${Number(stats.defense)}`);
+    if (stats.health) statLines.push(`❤️ Здоровье: +${Number(stats.health)}`);
+    if (stats.energy) statLines.push(`⚡ Энергия: +${Number(stats.energy)}`);
+    if (stats.radiation_cure) statLines.push(`☢️ Лечение радиации: ${Number(stats.radiation_cure)}`);
+    if (stats.infection_cure) statLines.push(`🦠 Лечение инфекции: ${Number(stats.infection_cure)}`);
+    if (stats.radiation_resist) statLines.push(`🛡️ Защита от радиации: ${Number(stats.radiation_resist)}`);
+    if (stats.infection_resist) statLines.push(`🧪 Защита от инфекции: ${Number(stats.infection_resist)}`);
     return statLines.join('<br>');
 }
 
@@ -6748,10 +7377,16 @@ function showLootAnimation(item) {
 
     const lootEl = document.createElement('div');
     lootEl.className = 'loot-animation';
-    lootEl.innerHTML = `
-        <div class="loot-icon">${item.icon || '📦'}</div>
-        <div class="loot-name">${item.name || 'Предмет'}</div>
-    `;
+    
+    const iconEl = document.createElement('div');
+    iconEl.className = 'loot-icon';
+    iconEl.textContent = item.icon || '📦';
+    lootEl.appendChild(iconEl);
+    
+    const nameEl = document.createElement('div');
+    nameEl.className = 'loot-name';
+    nameEl.textContent = item.name || 'Предмет';
+    lootEl.appendChild(nameEl);
 
     app.appendChild(lootEl);
     lootEl.style.animation = 'slideUp 1s ease-out forwards';
@@ -6802,14 +7437,20 @@ function playSound(type) {
 
 /**
  * Обновление отображения баланса игрока
+ * @param {number|Object} newCoins - число монет или объект {coins, stars}
  */
 function updateBalanceDisplay(newCoins) {
     if (newCoins && typeof newCoins === 'object') {
         const coins = Number(newCoins.coins ?? 0);
         const stars = Number(newCoins.stars ?? 0);
 
-        updateBalanceDisplay(coins);
+        // Обновляем монеты (без рекурсии - напрямую)
+        const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display, #main-coins-value, #inv-coins, #coins-value');
+        balanceElements.forEach(el => {
+            if (el) el.textContent = formatNumber(coins);
+        });
 
+        // Обновляем звёзды
         const starsElements = document.querySelectorAll('#inv-stars, #main-stars-value, .stars-display');
         starsElements.forEach(el => {
             if (el) el.textContent = formatNumber(stars);
@@ -6823,7 +7464,7 @@ function updateBalanceDisplay(newCoins) {
         return;
     }
 
-    const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display');
+    const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display, #main-coins-value, #inv-coins, #coins-value');
     balanceElements.forEach(el => {
         if (el) el.textContent = formatNumber(newCoins);
     });
@@ -7085,3 +7726,4 @@ window.showLootAnimation = showLootAnimation;
 window.showDamageEffect = showDamageEffect;
 window.playSound = playSound;
 window.updateBalanceDisplay = updateBalanceDisplay;
+window.generateScreens = generateScreens;

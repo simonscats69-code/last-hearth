@@ -11,7 +11,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool, query } = require('../../db/database');
-const { logger, handleError } = require('../../utils/serverApi');
+const { logger, handleError, safeJsonParse } = require('../../utils/serverApi');
 
 // ==========================================
 // КОЛЕСО УДАЧИ (из wheel.js)
@@ -294,19 +294,7 @@ async function grantPlayerCosmetic(client, playerId, effect, existingCosmetics) 
     );
 }
 
-/**
- * Парсинг JSON поля с fallback
- */
-function parseJsonField(value, fallback) {
-    if (!value) return fallback;
-    if (typeof value === 'object') return value;
-    try {
-        return JSON.parse(value);
-    } catch {
-        return fallback;
-    }
-}
-
+const parseJsonField = safeJsonParse;
 /**
  * POST /purchase - покупка товара за Stars
  */

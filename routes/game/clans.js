@@ -87,28 +87,27 @@ router.get('/clan', wrap(async (req, res) => {
         clan_id: player.clan_id
     });
     
-    ok(res, {
-        in_clan: true,
-        is_leader: player.clan_role === 'leader',
-        clan: { 
-            id: data.id, 
-            name: data.name, 
-            description: data.description, 
-            leader_id: data.leader_id, 
-            level: Number(data.level || 1),
-            coins: Number(data.coins || 0),
-            loot_bonus: Number(data.loot_bonus || 0),
-            invite_code: data.invite_code || '—',
-            is_open: data.is_open !== false,
-            is_public: data.is_public !== false,
-            total_members: Number(data.members_count || data.total_members || 0),
-            members_count: Number(data.members_count || 0), 
-            total_donated: data.total_donated, 
-            created_at: data.created_at 
-        },
-        members: data.members || [],
-        player_role: player.clan_role
-    });
+        ok(res, {
+            in_clan: true,
+            is_leader: player.clan_role === 'leader',
+            clan: { 
+                id: data.id, 
+                name: data.name, 
+                description: data.description, 
+                leader_id: data.leader_id, 
+                level: Number(data.level || 1),
+                coins: Number(data.coins || 0),
+                loot_bonus: Number(data.loot_bonus || 0),
+                invite_code: data.invite_code || '—',
+                is_open: data.is_open !== false,
+                is_public: data.is_public !== false,
+                members_count: Number(data.members_count || 0), 
+                total_donated: data.total_donated, 
+                created_at: data.created_at 
+            },
+            members: data.members || [],
+            player_role: player.clan_role
+        });
 }));
 
 /**
@@ -360,7 +359,6 @@ router.get('/', wrap(async (req, res) => {
             name: c.name, 
             description: c.description, 
             level: Number(c.level || 1),
-            member_count: Number(c.members_count),
             members_count: Number(c.members_count), 
             total_donated: c.total_donated, 
             is_open: c.is_open 

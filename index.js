@@ -3,18 +3,21 @@
  * 
  * Точка входа сервера
  */
+require('express-async-errors');
 
 // Сначала загружаем dotenv - ДО любых других require
 try {
     require('dotenv').config();
 } catch (e) {
-    if (e.code !== 'MODULE_NOT_FOUND') {
+    if (e.code !== 'MODULE_NOT_FOUND' && e.code !== 'ENOENT') {
         throw e; // Перебрасываем неизвестные ошибки
     }
 }
 
 // ADMIN_IDS парсится один раз при старте
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+const DEV_MODE = process.env.DEV_MODE === 'true';
+const MAX_INIT_DATA_AGE_SECONDS = parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '172800', 10); // 48 часов по умолчанию
 
 const { logger, requestMiddleware, telegramAuthMiddleware, getTelegramIdFromHeaders } = require('./utils/serverApi');
 
@@ -22,8 +25,6 @@ let server;
 let isShuttingDown = false;
 
 function handleFatalRuntimeError(kind, error) {
-    console.error(kind, error?.message, error?.stack || error);
-
     try {
         logger.error({
             type: 'fatal_runtime_error',
@@ -32,7 +33,7 @@ function handleFatalRuntimeError(kind, error) {
             stack: error?.stack || null
         });
     } catch {
-        // Ничего не делаем — в аварийном режиме логгер тоже может быть недоступен.
+        console.error(kind, error?.message);
     }
 
     if (server && !isShuttingDown) {
@@ -57,7 +58,7 @@ const path = require('path');
 const compression = require('compression');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { randomUUID } = require('crypto');
+const crypto = require('crypto');
 
 const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/game-helpers');
@@ -97,13 +98,12 @@ const jsonParser = express.json({ limit: '1mb' });
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
-    'https://t.me',
-    'null'
+    'https://t.me'
 ];
 
 // Проверка CORS с поддержкой telegram поддоменов
 function isOriginAllowed(origin) {
-    if (!origin || origin === 'null') return true;
+    if (!origin || origin === 'null') return false;
     
     // Точное совпадение
     if (ALLOWED_ORIGINS.includes(origin)) return true;
@@ -123,9 +123,14 @@ function isOriginAllowed(origin) {
     return false;
 }
 
+// Генератор nonce для CSP
+app.use((req, res, next) => {
+    res.locals.nonce = crypto.randomBytes(16).toString('hex');
+    next();
+});
+
 // Таймаут для всех запросов - защита от зависаний
 app.use((req, res, next) => {
-    // Устанавливаем таймаут на ответ (15 секунд)
     res.setTimeout(15000, () => {
         logger.error(`[TIMEOUT] Запрос превысил время ожидания: ${req.method} ${req.path}`);
         if (!res.headersSent) {
@@ -140,12 +145,17 @@ app.use((req, res, next) => {
 });
 
 app.use(helmet({
-    // CSP для Telegram Mini App - разрешаем unsafe-inline для совместимости
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-hashes'", 'https://cdn.jsdelivr.net', 'https://telegram.org', 'https://sad.adsgram.ai'],
-            scriptSrcAttr: ["'unsafe-inline'"],
+            scriptSrc: [
+                "'self'",
+                (req, res) => `'nonce-${res.locals.nonce}'`,
+                'https://cdn.jsdelivr.net',
+                'https://telegram.org',
+                'https://sad.adsgram.ai'
+            ],
+            scriptSrcAttr: [(req, res) => `'nonce-${res.locals.nonce}'`],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
             connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
@@ -162,21 +172,12 @@ app.use(helmet({
         },
     },
     crossOriginEmbedderPolicy: false,
-    frameguard: false  // X-Frame-Options отключён — frameAncestors его заменяет
+    frameguard: false
 }));
-
-const limiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 120,
-    message: { error: 'Слишком много запросов. Попробуй позже.' },
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: getRateLimitKey
-});
 
 const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 1000, // Убрали лимит - игра требует много кликов
+    max: 1000,
     message: { error: 'API лимит превышен' },
     keyGenerator: getRateLimitKey
 });
@@ -187,13 +188,11 @@ const healthLimiter = rateLimit({
     message: { error: 'Слишком много запросов' }
 });
 
-app.use(limiter);
 app.use('/api', apiLimiter);
 app.use(compression({ threshold: 1024 }));
 
 app.use((req, res, next) => {
     if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-        // Парсим JSON
         return jsonParser(req, res, (err) => {
             if (err) {
                 logger.error('[JSON PARSER ERROR]', err.message);
@@ -209,15 +208,12 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    // Разрешаем только конкретный frontend для Mini App
     if (!origin) {
-        // Нет origin (прямой запрос) - разрешаем
         return next();
     }
     const isAllowed = isOriginAllowed(origin);
     if (!isAllowed) {
         logger.warn({ type: 'cors_rejected', origin, ip: req.ip, method: req.method });
-        // Для запрещённых origin не отправляем CORS заголовки - браузер сам заблокирует
         return res.status(403).json({ error: 'Origin не разрешён', origin });
     }
     res.header('Access-Control-Allow-Origin', origin);
@@ -236,10 +232,7 @@ if (gameRouter?.stack) {
 }
 app.use('/api/game', gameRouter);
 app.use('/api/admin', adminRouter);
-// Leaderboard теперь доступен через game router: /api/game/minigames/leaderboard/*
-// Для обратной совместимости добавляем алиас
 app.use('/api/leaderboard', (req, res, next) => {
-    // Перенаправляем на game router с префиксом minigames/leaderboard
     req.url = '/minigames' + req.url;
     gameRouter(req, res, next);
 });
@@ -276,28 +269,24 @@ app.get('/ready', healthLimiter, async (req, res) => {
 });
 
 // Метрики сервера (только для админов)
-// Требуется валидная авторизация Telegram через x-init-data
 app.get('/metrics', telegramAuthMiddleware, (req, res) => {
-    // telegramAuthMiddleware гарантирует наличие req.telegramUser
     const telegramId = String(req.telegramUser.id);
     
-    // Разрешаем только админам по их Telegram ID
     if (!ADMIN_IDS.includes(telegramId)) {
         logger.warn({ type: 'metrics_access_denied', telegramId, ip: req.ip });
         return res.status(403).json({ error: 'Доступ запрещён' });
     }
     
-    // Получаем метрики
     const metrics = getMetrics();
-    
     res.json(metrics);
 });
 
-// 404 обработчик - В САМОМ КОНЦЕ
+// 404 обработчик
 app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
 });
 
+// Глобальный обработчик ошибок
 app.use((err, req, res, next) => {
     logger.error({
         type: 'server_error',
@@ -322,7 +311,6 @@ function shutdown(signal) {
     }
     isShuttingDown = true;
     
-    // Останавливаем heartbeat
     try {
         stopHeartbeat();
         logger.info('WebSocket heartbeat остановлен');
@@ -330,7 +318,6 @@ function shutdown(signal) {
         logger.warn('Ошибка остановки heartbeat:', err.message);
     }
 
-    // Останавливаем Telegram bot polling
     try {
         if (bot && typeof bot.stop === 'function') {
             bot.stop(signal);
@@ -343,7 +330,6 @@ function shutdown(signal) {
     if (server) {
         server.close(async () => {
             logger.info('HTTP сервер остановлен');
-            // Закрываем подключение к БД
             try {
                 await closePool();
                 logger.info('Подключение к БД закрыто');
@@ -357,7 +343,6 @@ function shutdown(signal) {
             process.exit(1);
         }, 10000);
     } else {
-        // Сервер ещё не запущен - штатная ситуация
         logger.warn('SIGTERM получен до старта сервера');
         process.exit(0);
     }
@@ -368,7 +353,6 @@ process.on('SIGTERM', shutdown);
 
 async function startServer() {
     try {
-        // Устанавливаем логгер для базы данных (решение циклической зависимости)
         setLogger(logger);
         
         try {
@@ -378,21 +362,17 @@ async function startServer() {
             logger.error('Ошибка инициализации БД, продолжаем без БД:', dbError.message);
         }
         
-        // Инициализация таблицы достижений
         await initAchievementsTable();
         logger.info('Таблица достижений инициализирована');
         
         await setupWebhook(app);
         logger.info('Webhook настроен');
         
-        // Запуск планировщика задач
         startScheduler();
         logger.info('Планировщик задач запущен');
         
         server = app.listen(PORT, '0.0.0.0', () => {
             logger.info(`Сервер запущен на порту ${PORT}`);
-            
-            // Инициализация WebSocket
             initWebSocket(server);
         }).on('error', (err) => {
             if (err.code === 'EADDRINUSE') {

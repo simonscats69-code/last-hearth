@@ -343,7 +343,7 @@ function initWebSocket(server) {
         }
         
         const requireToken = process.env.WS_REQUIRE_TOKEN === 'true';
-        if (requireToken && !verifyToken(playerId, token)) {
+        if (requireToken && !verifyToken(playerId, token, Date.now().toString())) {
             ws.close(4003, 'Неверный токен');
             return;
         }
@@ -526,22 +526,20 @@ function sendToPlayer(playerId, data) {
 /**
  * Отправить сообщение всем подключённым игрокам (broadcast)
  */
-async function broadcast(data, eventFilter = null) {
+function broadcast(data, eventFilter = null) {
     const message = JSON.stringify(data);
     let count = 0;
-    let failed = 0;
-    
+
     const clientsList = [...clients.values()]
         .filter(ws => ws.readyState === WebSocket.OPEN)
         .filter(ws => !eventFilter || isSubscribed(ws, eventFilter));
-    
-    const results = await Promise.allSettled(
-        clientsList.map(ws => safeSend(ws, message))
-    );
-    
-    count = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
-    failed = results.filter(r => r.status === 'rejected').length;
-    
+
+    for (const ws of clientsList) {
+        if (safeSend(ws, message)) {
+            count++;
+        }
+    }
+
     return count;
 }
 
