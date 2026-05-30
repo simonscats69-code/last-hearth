@@ -5432,7 +5432,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') sendClanMessage();
     });
     
-    // Инициализация - ждём загрузки всех модулей
+    // Инициализация - определяем startGame и сразу запускаем
     function startGame() {
         // Проверяем, что экранный слой загружен
         if (typeof showScreen !== 'function') {
@@ -5470,12 +5470,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // Запускаем игру после полной загрузки DOM
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startGame);
-    } else {
-        startGame();
-    }
+    // Запускаем игру (DOMContentLoaded уже произошёл, вызываем напрямую)
+    startGame();
 });
 
 // ============================================================================
