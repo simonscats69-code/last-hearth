@@ -564,7 +564,7 @@ async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
         await client.query('SET LOCAL statement_timeout = $1', [timeoutMs]);
 
         const lockedPlayer = await client.query(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE SKIP LOCKED',
+            'SELECT * FROM players WHERE id = $1 FOR UPDATE',
             [playerId]
         );
 

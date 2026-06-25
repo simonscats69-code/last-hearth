@@ -175,7 +175,7 @@ router.post('/buy-energy', async (req, res) => {
             const newEnergy = Math.min(p.energy + ENERGY_PER_PURCHASE, p.max_energy);
 
             await client.query(
-                'UPDATE players SET stars = stars - $1, energy = $2, last_energy_update = NOW() WHERE id = $3',
+                'UPDATE players SET stars = GREATEST(0, stars - $1), energy = $2, last_energy_update = NOW() WHERE id = $3',
                 [STARS_COST, newEnergy, playerId]
             );
 
@@ -233,6 +233,10 @@ router.post('/claim-referral-bonus', async (req, res) => {
     try {
         const playerId = req.player?.id;
         const { referralId } = req.body;
+
+        if (!referralId || !Number.isInteger(Number(referralId)) || Number(referralId) <= 0) {
+            return res.status(400).json({ success: false, error: 'Укажите корректный ID реферала', code: 'INVALID_REFERRAL_ID' });
+        }
 
         const result = await tx(async (client) => {
             const player = await client.query('SELECT * FROM players WHERE id = $1 FOR UPDATE', [playerId]);
@@ -393,25 +397,41 @@ router.post('/referral/use', async (req, res) => {
 
         if (!code) return res.status(400).json({ error: 'Введите код' });
 
-        const referrer = await queryOne('SELECT id FROM players WHERE referral_code = $1', [code]);
-        if (!referrer) return res.status(400).json({ error: 'Код не найден' });
-        if (referrer.id === playerId) return res.status(400).json({ error: 'Нельзя использовать свой код' });
-
-        const existing = await queryOne('SELECT id FROM referrals WHERE referrer_id = $1 AND referred_id = $2', [referrer.id, playerId]);
-        if (existing) return res.status(400).json({ error: 'Код уже использован' });
-
         const BONUS_COINS = 50;
         const BONUS_ENERGY = 20;
 
-        await tx(async (client) => {
+        const result = await tx(async (client) => {
+            // Блокируем referrer и ищем по коду внутри транзакции
+            const referrerResult = await client.query(
+                'SELECT id FROM players WHERE referral_code = $1 FOR UPDATE',
+                [code]
+            );
+            if (!referrerResult.rows[0]) {
+                throw { message: 'Код не найден', code: 'NOT_FOUND', statusCode: 400 };
+            }
+            if (referrerResult.rows[0].id === playerId) {
+                throw { message: 'Нельзя использовать свой код', code: 'SELF_REFERRAL', statusCode: 400 };
+            }
+
+            // Проверяем существование реферала в той же транзакции
+            const existingResult = await client.query(
+                'SELECT id FROM referrals WHERE referrer_id = $1 AND referred_id = $2',
+                [referrerResult.rows[0].id, playerId]
+            );
+            if (existingResult.rows[0]) {
+                throw { message: 'Код уже использован', code: 'ALREADY_USED', statusCode: 400 };
+            }
+
             await client.query(
-                'UPDATE players SET coins = coins + $1 WHERE id = $2',
-                [BONUS_COINS, playerId]
+                'UPDATE players SET coins = coins + $1, energy = LEAST(energy + $2, max_energy), last_energy_update = NOW() WHERE id = $3',
+                [BONUS_COINS, BONUS_ENERGY, playerId]
             );
             await client.query(
                 'INSERT INTO referrals (referrer_id, referred_id) VALUES ($1, $2)',
-                [referrer.id, playerId]
+                [referrerResult.rows[0].id, playerId]
             );
+
+            return { coins: BONUS_COINS, energy: BONUS_ENERGY };
         });
 
         res.json({
@@ -419,6 +439,9 @@ router.post('/referral/use', async (req, res) => {
             bonus: { coins: BONUS_COINS, energy: BONUS_ENERGY }
         });
     } catch (err) {
+        if (err.code === 'NOT_FOUND' || err.code === 'SELF_REFERRAL' || err.code === 'ALREADY_USED') {
+            return res.status(400).json({ error: err.message, code: err.code });
+        }
         handleError(res, err, 'referral_use');
     }
 });

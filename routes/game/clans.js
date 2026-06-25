@@ -209,7 +209,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         return notFound(res, 'Клан не найден', 'CLAN_NOT_FOUND');
     }
     
-    if (clan.is_open === false) {
+    if (clan.is_open !== true) {
         return fail(res, 'Клан закрытый', 'CLAN_CLOSED');
     }
     

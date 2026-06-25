@@ -260,11 +260,12 @@ async function getBossMasteries(client, playerId) {
     return result.rows;
 }
 
-async function getPlayerKeyCount(client, playerId, previousBossId) {
+async function getPlayerKeyCount(client, playerId, previousBossId, forUpdate = false) {
     if (previousBossId <= 0) return 0;
 
+    const lock = forUpdate ? ' FOR UPDATE' : '';
     const result = await client.query(
-        'SELECT quantity FROM boss_keys WHERE player_id = $1 AND boss_id = $2',
+        `SELECT quantity FROM boss_keys WHERE player_id = $1 AND boss_id = $2${lock}`,
         [playerId, previousBossId]
     );
 
@@ -275,23 +276,33 @@ async function spendBossKeys(client, playerId, previousBossId) {
     if (previousBossId <= 0) return;
 
     const keysRequired = await getKeysRequiredForBoss(client, previousBossId);
-    const keyCount = await getPlayerKeyCount(client, playerId, previousBossId);
-    if (keyCount < keysRequired) {
+    // Блокируем строку ключей для предотвращения race condition
+    const nowOwned = await getPlayerKeyCount(client, playerId, previousBossId, true);
+    if (nowOwned < keysRequired) {
         throw {
             message: `Нужно ${keysRequired} ключей от босса ${previousBossId}`,
             code: 'INSUFFICIENT_KEYS',
             statusCode: 400,
-            keys_owned: keyCount,
+            keys_owned: nowOwned,
             keys_required: keysRequired
         };
     }
 
-    await client.query(
+    const updateResult = await client.query(
         `UPDATE boss_keys
          SET quantity = quantity - $1
-         WHERE player_id = $2 AND boss_id = $3`,
+         WHERE player_id = $2 AND boss_id = $3 AND quantity >= $1`,
         [keysRequired, playerId, previousBossId]
     );
+    if (updateResult.rowCount === 0) {
+        throw {
+            message: `Недостаточно ключей от босса ${previousBossId}`,
+            code: 'INSUFFICIENT_KEYS',
+            statusCode: 400,
+            keys_owned: await getPlayerKeyCount(client, playerId, previousBossId),
+            keys_required: keysRequired
+        };
+    }
 }
 
 async function grantNextBossKey(client, playerId, bossId) {
@@ -496,6 +507,9 @@ async function validateSoloAttack(client, playerId, bossId) {
     }
 
     const player = await getPlayerBaseState(client, playerId);
+    if (!player) {
+        return { error: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' }, status: 404 };
+    }
     const activeBuffs = getActiveBuffs(player.buffs);
 
     if (!activeBuffs.free_energy && player.energy < 1) {
@@ -530,6 +544,9 @@ router.post('/start', async (req, res) => {
     }
 
     try {
+        if (!req.player || !req.player.id) {
+            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+        }
         const bossId = Number(req.body?.boss_id);
         const playerId = req.player.id;
         logger.info('[bosses/start] Валидация данных', { bossId, playerId });

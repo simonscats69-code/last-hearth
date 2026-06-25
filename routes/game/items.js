@@ -9,7 +9,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
 const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
-const { normalizeInventory, createInventoryItem } = require('../../utils/game-helpers');
+const { normalizeInventory, createInventoryItem, normalizeRadiation, normalizeInfections } = require('../../utils/game-helpers');
 
 /**
  * Получить список предметов в магазине
@@ -204,6 +204,8 @@ router.post('/use', async (req, res) => {
             const stats = item.stats || {};
             const updates = [];
             const params = [playerId];
+            const playerRadiation = normalizeRadiation(player.rows[0].radiation);
+            const playerInfections = normalizeInfections(player.rows[0].infections);
 
             if (stats.healing || stats.health) {
                 const healAmount = Number(stats.healing || stats.health || 0);
@@ -216,7 +218,7 @@ router.post('/use', async (req, res) => {
 
             if (stats.radiation_cure) {
                 const cureAmount = Number(stats.radiation_cure);
-                const curRad = Number(player.rows[0].radiation || 0);
+                const curRad = playerRadiation.level;
                 const newRad = Math.max(0, curRad - cureAmount);
                 updates.push(`radiation = $${params.length + 1}`);
                 params.push(newRad);
@@ -224,7 +226,7 @@ router.post('/use', async (req, res) => {
 
             if (stats.infection_cure) {
                 const cureAmount = Number(stats.infection_cure);
-                const curInf = Number(player.rows[0].infections || 0);
+                const curInf = playerInfections.reduce((sum, inf) => sum + (inf.level || 0), 0);
                 const newInf = Math.max(0, curInf - cureAmount);
                 updates.push(`infections = $${params.length + 1}`);
                 params.push(newInf);

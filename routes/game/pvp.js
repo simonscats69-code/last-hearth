@@ -290,7 +290,7 @@ router.post('/attack', async (req, res) => {
             const startBuffs = getActiveBuffs(lockedPlayer.buffs);
 
             // Проверяем наличие энергии ДО списания
-            if (!lockedPlayer || (!startBuffs.free_energy && lockedPlayer.energy < 1)) {
+            if (!lockedPlayer || (!startBuffs.free_energy && Number(lockedPlayer.energy || 0) < 1)) {
                 throw new Error('Нужна энергия для атаки');
             }
 
@@ -506,7 +506,7 @@ router.post('/attack-hit', async (req, res) => {
                 // Ограничиваем максимальную награду
                 const MAX_PVP_COINS = 10000;
                 const coinsReward = Math.min(
-                    Math.floor(defender.coins * 0.1),
+                    Math.floor((defender.coins || 0) * 0.1),
                     MAX_PVP_COINS
                 );
 
@@ -549,14 +549,15 @@ router.post('/attack-hit', async (req, res) => {
 
                 // Обновляем PvP статистику победителя и даём опыт
                 const pvpExpReward = 50; // 50 XP за победу в PvP
-                await client.query(`
-                    UPDATE players
-                    SET pvp_wins = pvp_wins + 1,
-                        pvp_streak = pvp_streak + 1,
-                        pvp_max_streak = GREATEST(pvp_max_streak, pvp_streak + 1),
-                        pvp_rating = pvp_rating + 25
-                    WHERE id = $2
-                `, [damage, attackerId]);
+                await client.query(
+                    `UPDATE players
+                     SET pvp_wins = pvp_wins + 1,
+                         pvp_streak = pvp_streak + 1,
+                         pvp_max_streak = GREATEST(pvp_max_streak, pvp_streak + 1),
+                         pvp_rating = pvp_rating + 25
+                     WHERE id = $1`,
+                    [attackerId]
+                );
                 
                 // Используем playerHelper.addExperience для корректного level-up
                 await playerHelper.addExperience(attackerId, pvpExpReward, client);

@@ -4,6 +4,23 @@
  */
 
 const { query } = require('./database');
+const pg = require('pg');
+
+/**
+ * Безопасное экранирование идентификаторов PostgreSQL
+ * Использует pg.escapeIdentifier с fallback-валидацией
+ */
+function safeId(name) {
+    try {
+        return pg.escapeIdentifier(name);
+    } catch {
+        // Если escapeIdentifier недоступен, валидируем вручную
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+            throw new Error(`Invalid SQL identifier: ${name}`);
+        }
+        return `"${name}"`;
+    }
+}
 
 /**
  * Создание всех таблиц
@@ -941,7 +958,14 @@ async function runMigrations() {
     ];
 
     for (const [tableName, constraintName, definition, requiredColumns] of checkConstraints) {
-        const requiredColumnsList = requiredColumns.map((columnName) => `'${columnName}'`).join(', ');
+        const safeTableName = safeId(tableName);
+        const safeConstraintName = safeId(constraintName);
+        const requiredColumnsList = requiredColumns
+            .map((columnName) => {
+                // Для IN-списка нужны строковые литералы имён колонок, а не идентификаторы
+                return `'${columnName}'`;
+            })
+            .join(', ');
 
         await query(`
             DO $do$
@@ -950,17 +974,17 @@ async function runMigrations() {
                     SELECT COUNT(*)
                     FROM information_schema.columns
                     WHERE table_schema = current_schema()
-                      AND table_name = '${tableName}'
+                      AND table_name = ${safeTableName}
                       AND column_name IN (${requiredColumnsList})
                 ) = ${requiredColumns.length}
                 AND NOT EXISTS (
                     SELECT 1
                     FROM information_schema.table_constraints
                     WHERE table_schema = current_schema()
-                      AND table_name = '${tableName}'
-                      AND constraint_name = '${constraintName}'
+                      AND table_name = ${safeTableName}
+                      AND constraint_name = ${safeConstraintName}
                 ) THEN
-                    ALTER TABLE ${tableName} ADD CONSTRAINT ${constraintName} ${definition};
+                    ALTER TABLE ${safeTableName} ADD CONSTRAINT ${safeConstraintName} ${definition};
                 END IF;
             END $do$
         `);

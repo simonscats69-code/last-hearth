@@ -429,13 +429,6 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         ...options
     };
 
-    console.log('[apiRequest] Отправка запроса', {
-        url,
-        method: options.method || 'GET',
-        hasInitData: !!initData,
-        initDataLength: initData?.length || 0
-    });
-
     if (config.body && typeof config.body === 'object') {
         config.body = JSON.stringify(config.body);
     }
@@ -1127,9 +1120,11 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
             .then((registration) => {
-                })
+                console.debug('[SW] Service Worker зарегистрирован');
+            })
             .catch((error) => {
-                });
+                console.warn('[SW] Ошибка регистрации Service Worker:', error.message);
+            });
     });
 }
 
@@ -1147,6 +1142,7 @@ if (window.Adsgram && ADSGRAM_APP_ID) {
             blockId: ADSGRAM_APP_ID
         });
     } catch (e) {
+        console.warn('[AdsGram] Ошибка инициализации:', e);
     }
 }
 
@@ -1179,10 +1175,10 @@ async function watchAd() {
                 showModal('⚠️ Ошибка', 'Не удалось показать рекламу');
             },
             onEnd: () => {
-                console.log('Реклама завершена');
             }
         });
     } catch (error) {
+        console.warn('[watchAd] Ошибка показа рекламы:', error);
     }
 }
 
@@ -1356,7 +1352,6 @@ async function updateDamagePreviewUI(bossId) {
 
 // Экспорт новых функций
 window.getTimeToNextEnergy = getTimeToNextEnergy;
-console.log('[DEBUG] Второе присваивание window.formatTimeMs:', typeof window.formatTimeMs, '-> formatTimeMs:', typeof formatTimeMs);
 window.formatTimeMs = formatTimeMs;
 window.updateEnergyTimer = updateEnergyTimer;
 window.getDamagePreview = getDamagePreview;
@@ -1558,7 +1553,6 @@ function renderMain() {
         refreshPlayerEnergyUI();
     }
 
-    console.log('[renderMain] Главный экран обновлён');
 }
 
 /**
@@ -1686,7 +1680,6 @@ async function waitForTelegramWebApp(maxWait = 5000) {
     return new Promise((resolve) => {
         // Если уже загружен - сразу разрешаем
         if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
-            console.log('[waitForTelegramWebApp] Telegram WebApp уже загружен');
             resolve();
             return;
         }
@@ -1694,7 +1687,6 @@ async function waitForTelegramWebApp(maxWait = 5000) {
         // Функция проверки
         const check = () => {
             if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
-                console.log('[waitForTelegramWebApp] Telegram WebApp загружен');
                 resolve();
                 return;
             }
@@ -1766,8 +1758,31 @@ async function initGame() {
             // Продолжаем - локации могут быть загружены позже
         }
 
-        // Показываем главный экран
+        // Проверяем, успешно ли загрузился профиль
+        if (!gameState.player) {
+            console.error('[initGame] Профиль не загружен, прерываем инициализацию');
+            const loadingScreen = document.getElementById('loading-screen');
+            if (loadingScreen) {
+                loadingScreen.innerHTML = `
+                    <div class="loader">
+                        <div class="loader-icon">😿</div>
+                        <h1>Ошибка загрузки</h1>
+                        <p>Не удалось загрузить профиль. Попробуй перезапустить игру.</p>
+                        <button class="btn" onclick="location.reload()">🔄 Перезапустить</button>
+                    </div>
+                `;
+            }
+            return;
+        }
+
+        // Показываем главный экран только после успешной загрузки профиля
         showScreen('main');
+
+        // Скрываем экран загрузки
+        const loadingScreen = document.getElementById('loading-screen');
+        if (loadingScreen) {
+            loadingScreen.classList.remove('active');
+        }
 
         // Запускаем обновление энергии
         safeSetInterval(updateEnergyDisplay, 60000); // Каждую минуту
@@ -1798,12 +1813,6 @@ async function initGame() {
                 </div>
             `;
         }
-    }
-
-    // Всегда скрываем экран загрузки в конце
-    const finalLoadingScreen = document.getElementById('loading-screen');
-    if (finalLoadingScreen) {
-        finalLoadingScreen.classList.remove('active');
     }
 }
 
@@ -2914,7 +2923,6 @@ async function checkPlayerStatus() {
         await loadProfile();
         
     } catch (error) {
-        console.log('Ошибка проверки статуса:', error);
     }
 }
 
@@ -3350,10 +3358,20 @@ function startBossFight(boss, timeRemainingMs = null) {
     const attackMultiBtn = document.getElementById('attack-boss-multiple-btn');
     if (attackMultiBtn) attackMultiBtn.style.display = 'none';
     
-    // Добавляем обработчики кнопок если ещё не добавлены
-    if (attackSingleBtn && !attackSingleBtn.hasAttribute('data-handler')) {
-        attackSingleBtn.setAttribute('data-handler', 'true');
-        attackSingleBtn.addEventListener('click', attackBoss);
+    // Удаляем старый обработчик и атрибут data-handler перед добавлением нового
+    if (attackSingleBtn) {
+        if (attackSingleBtn.hasAttribute('data-handler')) {
+            attackSingleBtn.removeAttribute('data-handler');
+        }
+        // Клонируем элемент, чтобы снять все старые обработчики
+        const newBtn = attackSingleBtn.cloneNode(true);
+        attackSingleBtn.parentNode.replaceChild(newBtn, attackSingleBtn);
+        const freshBtn = document.getElementById('attack-boss-btn');
+        if (freshBtn) {
+            freshBtn.setAttribute('data-handler', 'true');
+            freshBtn.addEventListener('click', attackBoss);
+            freshBtn.style.display = 'inline-flex';
+        }
     }
     
     // Показываем экран боя
@@ -3385,7 +3403,7 @@ function updateBossFightTimer() {
     };
     
     updateTimer();
-    if (window.bossFightTimerId) clearInterval(window.bossFightTimerId);
+    if (window.bossFightTimerId) safeClearInterval(window.bossFightTimerId);
     window.bossFightTimerId = safeSetInterval(updateTimer, 1000);
 }
 
@@ -3510,9 +3528,12 @@ async function attackWithWeapon(itemIndex) {
                 showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', result.data.rewards || {}, result.data.mastery ?? null);
                 gameState.currentBoss = null;
                 gameState.activeBattle = null;
+                // Держим блокировку loadBosses до завершения перезагрузки списка
+                actionLocks.loadBosses = true;
                 setTimeout(() => {
                     loadBosses().catch((loadError) => {
                         console.error('Boss reload error:', loadError);
+                        actionLocks.loadBosses = false;
                     });
                 }, 2200);
             }
@@ -3630,9 +3651,12 @@ async function attackBoss() {
                 }
                 
                 // Загружаем новых боссов
+                // Держим блокировку loadBosses до завершения перезагрузки списка
+                actionLocks.loadBosses = true;
                 setTimeout(() => {
                     loadBosses().catch((loadError) => {
                         console.error('Boss reload error:', loadError);
+                        actionLocks.loadBosses = false;
                     });
                 }, 2200);
             }
@@ -5105,8 +5129,8 @@ async function loadPVPStats() {
                     const diff = expiresAt - now;
                     if (diff <= 0) {
                         cooldownDiv.style.display = 'none';
-                        if (window.pvpCooldownTimerId) {
-                            clearInterval(window.pvpCooldownTimerId);
+                if (window.pvpCooldownTimerId) {
+                            safeClearInterval(window.pvpCooldownTimerId);
                             window.pvpCooldownTimerId = null;
                         }
                         return;
@@ -5117,12 +5141,12 @@ async function loadPVPStats() {
                 };
                 
                 updateTimer();
-                if (window.pvpCooldownTimerId) clearInterval(window.pvpCooldownTimerId);
+                if (window.pvpCooldownTimerId) safeClearInterval(window.pvpCooldownTimerId);
                 window.pvpCooldownTimerId = safeSetInterval(updateTimer, 1000);
             } else if (cooldownDiv) {
                 cooldownDiv.style.display = 'none';
                 if (window.pvpCooldownTimerId) {
-                    clearInterval(window.pvpCooldownTimerId);
+                    safeClearInterval(window.pvpCooldownTimerId);
                     window.pvpCooldownTimerId = null;
                 }
             }
@@ -5432,6 +5456,47 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') sendClanMessage();
     });
     
+    // Функция для повторной инициализации обработчиков после generateScreens
+    function initEventHandlers() {
+        // Основные кнопки
+        document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
+        document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
+        document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
+        document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => openWeaponSelect());
+        document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
+        document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
+        document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
+        document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
+        
+        // Лечение инфекций
+        document.getElementById('heal-infections-btn')?.addEventListener('click', healInfections);
+        
+        // PvP
+        document.getElementById('pvp-refresh-btn')?.addEventListener('click', loadPVPGamePlayers);
+        document.getElementById('pvp-stats-btn')?.addEventListener('click', () => showScreen('pvp-stats'));
+        document.getElementById('pvp-attack-btn')?.addEventListener('click', attackPVPTarget);
+        document.getElementById('pvp-claim-rewards-btn')?.addEventListener('click', claimPVPRewards);
+        
+        // Боссы
+        document.getElementById('attack-boss-btn')?.addEventListener('click', attackBoss);
+        
+        // Кланы
+        document.getElementById('create-clan-btn')?.addEventListener('click', createClan);
+        document.getElementById('clans-search-btn')?.addEventListener('click', () => {
+            const search = document.getElementById('clans-search-input')?.value;
+            loadClansList(search);
+        });
+        document.getElementById('clans-search-input')?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loadClansList(e.target.value);
+            }
+        });
+        document.getElementById('clan-send-btn')?.addEventListener('click', sendClanMessage);
+        document.getElementById('clan-message-input')?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendClanMessage();
+        });
+    }
+
     // Инициализация - определяем startGame и сразу запускаем
     function startGame() {
         // Проверяем, что экранный слой загружен
@@ -5445,6 +5510,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof generateScreens === 'function') {
             generateScreens();
         }
+        
+        // Навешиваем обработчики на свежесозданные DOM-элементы
+        initEventHandlers();
         
         // Инициализируем фильтры инвентаря
         if (typeof initInventoryControls === 'function') {
@@ -6106,7 +6174,6 @@ function generateScreens() {
     `;
 
     gameContent.insertAdjacentHTML('beforeend', screensHtml + modalsHtml);
-    console.log('[Screens] Все экраны и модальное окно сгенерированы');
 }
 
 /**
@@ -7123,7 +7190,7 @@ function drawCityBackground(ctx, width, height) {
         window.cityBackgroundWidth = width;
         window.cityBackgroundHeight = height;
     }
-    if (!window.cityBackgroundBuildings || !window.cityBackgroundWidth || window.cityBackgroundWidth !== width) {
+    if (!window.cityBackgroundBuildings || !window.cityBackgroundWidth || window.cityBackgroundWidth !== width || window.cityBackgroundHeight !== height) {
         window.cityBackgroundBuildings = [];
         for (let i = 0; i < 15; i++) {
             window.cityBackgroundBuildings.push({
@@ -7460,11 +7527,13 @@ function updateBalanceDisplay(newCoins) {
         return;
     }
 
-    const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display, #main-coins-value, #inv-coins, #coins-value');
-    balanceElements.forEach(el => {
-        if (el) el.textContent = formatNumber(newCoins);
-    });
-    if (gameState?.player) gameState.player.coins = newCoins;
+    if (newCoins !== undefined && newCoins !== null) {
+        const balanceElements = document.querySelectorAll('.balance-value, #user-balance, .coins-display, #main-coins-value, #inv-coins, #coins-value');
+        balanceElements.forEach(el => {
+            if (el) el.textContent = formatNumber(Number(newCoins));
+        });
+        if (gameState?.player) gameState.player.coins = Number(newCoins);
+    }
 }
 
 

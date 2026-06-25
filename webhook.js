@@ -5,6 +5,7 @@
 const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('./db/database');
 const { logger } = require('./utils/serverApi');
+const { MINI_APP_URL, PLAYER_NAME_MAX_LENGTH } = require('./utils/config');
 
 // Проверка наличия токена бота
 const BOT_TOKEN = process.env.TG_BOT_TOKEN;
