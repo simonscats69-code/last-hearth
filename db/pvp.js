@@ -372,9 +372,12 @@ function calculatePVPDamage(attacker, defender) {
  * @returns {Array} Массив предметов для кражи
  */
 function getRandomItemsToSteal(inventory, maxItems = 3) {
-    const items = Object.entries(inventory)
-        .filter(([itemId, qty]) => qty > 0)
-        .map(([itemId, quantity]) => ({ itemId: parseInt(itemId), quantity }));
+    // Инвентарь - массив предметов, а не объект
+    const items = Array.isArray(inventory)
+        ? inventory
+            .filter(item => Number(item?.quantity || 0) > 0)
+            .map(item => ({ itemId: Number(item.id), quantity: Number(item.quantity) }))
+        : [];
     
     // Fisher-Yates shuffle
     const shuffled = [...items];

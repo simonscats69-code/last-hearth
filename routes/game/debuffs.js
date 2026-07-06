@@ -85,11 +85,11 @@ const DebuffAPI = {
                     }), playerId]
                 );
                 
-                await logPlayerAction(client, playerId, 'debuff_radiation_apply', {
+                await logPlayerAction(playerId, 'debuff_radiation_apply', {
                     oldLevel: currentRadiation.level,
                     newLevel,
                     source: options.source
-                });
+                }, client);
                 
                 return { type, oldLevel: currentRadiation.level, newLevel, expiresAt };
                 
@@ -128,12 +128,12 @@ const DebuffAPI = {
                     [JSON.stringify(newInfections), playerId]
                 );
                 
-                await logPlayerAction(client, playerId, 'debuff_infection_apply', {
+                await logPlayerAction(playerId, 'debuff_infection_apply', {
                     type,
                     level,
                     totalInfections: newInfections.reduce((s, i) => s + i.level, 0),
                     source: options.source
-                });
+                }, client);
                 
                 return { type, level, newInfections, expiresAt };
             }
@@ -385,11 +385,11 @@ const DebuffAPI = {
                     }), playerId]
                 );
                 
-                await logPlayerAction(client, playerId, 'debuff_cure_radiation', {
+                await logPlayerAction(playerId, 'debuff_cure_radiation', {
                     cureType: resolvedCureType,
                     oldLevel: radiation.level,
                     newLevel
-                });
+                }, client);
             }
             
             // Лечим инфекции
@@ -419,10 +419,10 @@ const DebuffAPI = {
                     [JSON.stringify(remaining), playerId]
                 );
                 
-                await logPlayerAction(client, playerId, 'debuff_cure_infection', {
+                await logPlayerAction(playerId, 'debuff_cure_infection', {
                     cureType: resolvedCureType,
                     removed: infections.length - remaining.length
-                });
+                }, client);
             }
             
             // Удаляем использованный предмет (по умолчанию),

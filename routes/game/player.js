@@ -179,7 +179,7 @@ router.post('/buy-energy', async (req, res) => {
                 [STARS_COST, newEnergy, playerId]
             );
 
-            await logPlayerAction(client, playerId, 'buy_energy', { cost: STARS_COST, gained: ENERGY_PER_PURCHASE });
+            await logPlayerAction(playerId, 'buy_energy', { cost: STARS_COST, gained: ENERGY_PER_PURCHASE }, client);
 
             return { energy: newEnergy, stars: p.stars - STARS_COST };
         });

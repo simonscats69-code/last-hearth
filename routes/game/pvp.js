@@ -535,17 +535,17 @@ router.post('/attack-hit', async (req, res) => {
                 const safeLocationId = Number(safeLocationResult.rows[0]?.id || 1);
 
                 // Завершаем бой
-                await client.query(`
-                    UPDATE pvp_battles
-                    SET status = 'completed',
-                        winner_id = $1,
-                        loser_id = $2,
-                        attacker_reward = CASE WHEN attacker_id = $1 THEN $3 ELSE 0 END,
-                        defender_reward = CASE WHEN defender_id = $1 THEN $3 ELSE 0 END,
-                        ended_at = NOW(),
-                        battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
-                    WHERE id = $4
-                `, [attackerId, defenderId, coinsReward, battle_id]);
+await client.query(`
+                     UPDATE pvp_battles
+                     SET status = 'completed',
+                         winner_id = $1,
+                         loser_id = $2,
+                         attacker_reward = CASE WHEN attacker_id = $1 THEN $3 ELSE 0 END,
+                         defender_reward = CASE WHEN defender_id = $1 THEN $3 ELSE 0 END,
+                         ended_at = NOW(),
+                         battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
+                     WHERE id = $4
+                 `, [attackerId, defenderId, coinsReward, battle_id]);
 
                 // Обновляем PvP статистику победителя и даём опыт
                 const pvpExpReward = 50; // 50 XP за победу в PvP

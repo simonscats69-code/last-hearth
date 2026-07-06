@@ -526,8 +526,10 @@ async function resetDailyTasks() {
     } finally {
         isRunning.dailyTasks = false;
         
-        // Запускаем следующую итерацию через 6 часов
-        setTimeout(resetDailyTasks, 6 * 60 * 60 * 1000);
+        // Запускаем следующую итерацию через 6 часов (если планировщик не остановлен)
+        if (schedulerEnabled) {
+            setTimeout(resetDailyTasks, 6 * 60 * 60 * 1000);
+        }
     }
 }
 

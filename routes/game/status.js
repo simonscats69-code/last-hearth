@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, transaction: tx } = require('../../db/database');
 const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
+const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { DebuffAPI } = require('./debuffs');
 const { buildPlayerStatus, normalizeInventory } = require('../../utils/game-helpers');
 
@@ -142,7 +142,7 @@ router.post('/check', async (req, res) => {
         const result = await tx(async (client) => runStatusCheck(client, playerId));
         
         // Логируем действие
-        await logPlayerActionSimple(query, playerId, 'status_check', {
+        await logPlayerAction(playerId, 'status_check', {
             damage: result.totalDamage,
             effects: result.effects
         });
@@ -285,20 +285,20 @@ router.post('/heal', async (req, res) => {
                     healed = true;
                 }
                 
-                if (healed) {
-                    // Удаляем использованный предмет
-                    const newInventory = [...inventory];
-                    newInventory.splice(resolvedItemIndex, 1);
-                    await client.query(`
-                        UPDATE players SET inventory = $1 WHERE id = $2
-                    `, [JSON.stringify(newInventory), playerId]);
-                    
-                    // Логируем действие
-                    await logPlayerActionSimple(client, playerId, 'status_heal', {
-                        type,
-                        item_id: item.id ?? item_id ?? null,
-                        amount: healAmount
-                    });
+                    if (healed) {
+                     // Удаляем использованный предмет
+                     const newInventory = [...inventory];
+                     newInventory.splice(resolvedItemIndex, 1);
+                     await client.query(`
+                         UPDATE players SET inventory = $1 WHERE id = $2
+                     `, [JSON.stringify(newInventory), playerId]);
+                     
+                     // Логируем действие
+                     await logPlayerAction(playerId, 'status_heal', {
+                         type,
+                         item_id: item.id ?? item_id ?? null,
+                         amount: healAmount
+                     }, client);
                     
                     return {
                         success: true,

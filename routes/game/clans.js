@@ -16,10 +16,6 @@ const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, badRequest, wrap, logPlayerAction, serializeJSONField, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
 
-
-
-const { pool } = require('../../db/database');
-
 const crypto = require('crypto');
 
 function generateClanInviteCode() {
@@ -83,11 +79,11 @@ router.get('/clan', wrap(async (req, res) => {
     }
     
     // Логируем действие
-    await logPlayerAction(pool, playerId, 'view_clan', {
+    await logPlayerAction(playerId, 'view_clan', {
         clan_id: player.clan_id
     });
-    
-        ok(res, {
+
+    ok(res, {
             in_clan: true,
             is_leader: player.clan_role === 'leader',
             clan: { 
@@ -347,7 +343,7 @@ router.get('/', wrap(async (req, res) => {
         : await queryAll(clansQuery, [limit, offset]);
 
     // Логируем
-    await logPlayerAction(pool, playerId, 'view_clans', {
+    await logPlayerAction(playerId, 'view_clans', {
         limit,
         offset,
         total
@@ -424,7 +420,7 @@ router.get('/clan/chat', wrap(async (req, res) => {
         `, [player.clan_id]);
         
         // Логируем просмотр чата
-        await logPlayerAction(pool, playerId, 'clan_chat_view', {
+        await logPlayerAction(playerId, 'clan_chat_view', {
             clan_id: player.clan_id,
             messages_count: messages.length
         });
@@ -473,7 +469,7 @@ router.post('/clan/chat', wrap(async (req, res) => {
         );
         
         // Логируем отправку сообщения
-        await logPlayerAction(pool, playerId, 'clan_chat_send', {
+        await logPlayerAction(playerId, 'clan_chat_send', {
             clan_id: player.clan_id,
             message_length: trimmedMessage.length
         });

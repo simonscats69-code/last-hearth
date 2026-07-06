@@ -895,14 +895,22 @@ async function runMigrations() {
     // ==========================================
     // ИНДЕКСЫ ДЛЯ ПРОИЗВОДИТЕЛЬНОСТИ (H-10)
     // ==========================================
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs(player_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_created_at ON player_logs(created_at)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_clans_owner_id ON clans(owner_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_boss_sessions_raid_id ON boss_sessions(raid_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_players_clan_id ON players(clan_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_players_telegram_id ON players(telegram_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_achievements_player_id ON player_achievements(player_id)`);
+    // Таблица игроков-логов (для логирования действий)
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_logs (
+            id SERIAL PRIMARY KEY,
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            action VARCHAR(100) NOT NULL,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `);
+    
+await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs(player_id)`);
+     await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_created_at ON player_logs(created_at)`);
+     await query(`CREATE INDEX IF NOT EXISTS idx_clans_leader_id ON clans(leader_id)`);
+     // Индексы idx_players_telegram_id и idx_players_clan_id уже созданы в createTables()
+     await query(`CREATE INDEX IF NOT EXISTS idx_player_achievements_player_id ON player_achievements(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_mastery_player_id ON boss_mastery(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_id ON daily_tasks(player_id)`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);

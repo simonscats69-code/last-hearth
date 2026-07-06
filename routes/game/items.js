@@ -8,7 +8,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
-const { logger, safeJsonParse, handleError, logPlayerActionSimple } = require('../../utils/serverApi');
+const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { normalizeInventory, createInventoryItem, normalizeRadiation, normalizeInfections } = require('../../utils/game-helpers');
 
 /**
@@ -122,12 +122,12 @@ router.post('/buy', async (req, res) => {
                 [totalPrice, JSON.stringify(inventory), playerId]
             );
 
-            await logPlayerActionSimple(client, playerId, 'item_bought', {
+            await logPlayerAction(playerId, 'item_bought', {
                 item_id: itemId,
                 item_name: shopItem.name,
                 quantity,
                 price: totalPrice
-            });
+            }, client);
 
             return {
                 success: true,
@@ -195,7 +195,7 @@ router.post('/use', async (req, res) => {
                     [JSON.stringify(equipment), JSON.stringify(inventory), playerId]
                 );
 
-                await logPlayerActionSimple(client, playerId, 'item_equip', { slot, item_id: item.id });
+                await logPlayerAction(playerId, 'item_equip', { slot, item_id: item.id }, client);
 
                 return { success: true, message: 'Предмет экипирован', item: { id: item.id, name: item.name } };
             }
@@ -242,7 +242,7 @@ router.post('/use', async (req, res) => {
                 return { success: false, message: 'Этот предмет нельзя использовать' };
             }
 
-            await logPlayerActionSimple(client, playerId, 'item_use', { item_id: item.id, item_name: item.name });
+            await logPlayerAction(playerId, 'item_use', { item_id: item.id, item_name: item.name }, client);
 
             return { success: true, message: 'Предмет использован', item: { id: item.id, name: item.name } };
         });
