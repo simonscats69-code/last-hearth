@@ -1837,14 +1837,15 @@ async function loadProfile() {
         return;
     }
     
-    // Гарантируем наличие объекта статуса
+// Гарантируем наличие объекта статуса
     if (!data.status || typeof data.status !== 'object') {
         data.status = {};
     }
     
     // Также дублируем energy на верхний уровень для совместимости
-    data.energy = data.status.energy;
-    data.max_energy = data.status.max_energy;
+    // Добавляем fallback значения для защиты от undefined
+    data.energy = data.status.energy ?? 0;
+    data.max_energy = data.status.max_energy ?? 100;
     
     gameState.player = data;
     gameState.buffs = data.buffs || {};
