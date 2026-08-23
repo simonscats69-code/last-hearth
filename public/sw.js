@@ -1,12 +1,15 @@
 // Last Hearth - Service Worker
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_NAME = `last-hearth-cache-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',
     '/index.html',
     '/styles.css',
     '/game.js',
-    '/sw.js'
+    '/sw.js',
+    '/manifest.json',
+    '/icon-192.png',
+    '/icon-512.png'
 ];
 
 // Установка - кэшируем статику
