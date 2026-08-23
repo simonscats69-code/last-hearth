@@ -411,7 +411,7 @@ router.post('/referral/use', async (req, res) => {
         const BONUS_COINS = 50;
         const BONUS_ENERGY = 20;
 
-        const result = await tx(async (client) => {
+        await tx(async (client) => {
             // Игрок может активировать только ОДИН реферальный код за всё время
             // (UNIQUE(referred_id) в таблице referrals)
             const alreadyReferred = await client.query(

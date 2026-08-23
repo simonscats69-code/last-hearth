@@ -216,6 +216,15 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 params.push(newHealth);
             }
 
+            // Еда/вода восстанавливают энергию (стартовый инвентарь содержит stats.energy)
+            if (stats.energy) {
+                const energyAmount = Number(stats.energy);
+                if (energyAmount > 0) {
+                    updates.push(`energy = LEAST(max_energy, energy + $${params.length + 1})`);
+                    params.push(energyAmount);
+                }
+            }
+
             if (stats.radiation_cure) {
                 const cureAmount = Number(stats.radiation_cure);
                 const curRad = playerRadiation.level;
