@@ -3828,7 +3828,7 @@ function renderClanScreen(data) {
             <div class="clan-stats">
                 <div class="clan-stat">
                     <span class="stat-icon">👥</span>
-                    <span class="stat-value">${clan.total_members}</span>
+                    <span class="stat-value">${Number(clan.members_count || 0)}</span>
                     <span class="stat-label">Участников</span>
                 </div>
                 <div class="clan-stat">

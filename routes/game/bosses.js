@@ -1152,7 +1152,7 @@ router.post('/raid/start', async (req, res) => {
                         hp: boss.max_health,
                         max_hp: boss.max_health
                     },
-                    keys_spent: bossId > 1 ? (boss.keys_required || 3) : 0,
+                    keys_spent: bossId > 1 ? await getKeysRequiredForBoss(client, bossId - 1) : 0,
                     expires_at: expiresAt,
                     time_remaining_ms: MASS_FIGHT_DURATION_MS
                 }
