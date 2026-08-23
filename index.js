@@ -372,8 +372,14 @@ async function startServer() {
             logger.error('Ошибка инициализации БД, продолжаем без БД:', dbError.message);
         }
         
-        await initAchievementsTable();
-        logger.info('Таблица достижений инициализирована');
+        try {
+            await initAchievementsTable();
+            logger.info('Таблица достижений инициализирована');
+        } catch (achError) {
+            // Сбой инициализации достижений не должен мешать старту HTTP-сервера:
+            // иначе процесс не поднимается и прокси отдаёт 404 на весь сайт.
+            logger.error('Ошибка инициализации таблицы достижений (продолжаем):', achError.message);
+        }
         
         await setupWebhook(app);
         logger.info('Webhook настроен');
