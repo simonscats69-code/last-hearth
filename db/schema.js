@@ -966,8 +966,12 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
     ];
 
     for (const [tableName, constraintName, definition, requiredColumns] of checkConstraints) {
-        const safeTableName = safeId(tableName);
-        const safeConstraintName = safeId(constraintName);
+        // ВАЖНО: внутри WHERE это СТРОКОВЫЕ литералы, а не идентификаторы.
+        // pg.escapeIdentifier даёт "name" (двойные кавычки), что Postgres
+        // парсит как ссылку на колонку -> 'column "players" does not exist'.
+        const sqlLiteral = (value) => `'${String(value).replace(/'/g, "''")}'`;
+        const safeTableName = sqlLiteral(tableName);
+        const safeConstraintName = sqlLiteral(constraintName);
         const requiredColumnsList = requiredColumns
             .map((columnName) => {
                 // Для IN-списка нужны строковые литералы имён колонок, а не идентификаторы
@@ -992,7 +996,7 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
                       AND table_name = ${safeTableName}
                       AND constraint_name = ${safeConstraintName}
                 ) THEN
-                    ALTER TABLE ${safeTableName} ADD CONSTRAINT ${safeConstraintName} ${definition};
+                    ALTER TABLE ${safeId(tableName)} ADD CONSTRAINT ${safeId(constraintName)} ${definition};
                 END IF;
             END $do$
         `);

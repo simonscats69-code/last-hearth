@@ -49,8 +49,18 @@ process.on('uncaughtException', (err) => {
     handleFatalRuntimeError('UNCAUGHT EXCEPTION', err);
 });
 
+// unhandledRejection НЕ убивает сервер: одиночный отклонённый промис
+// (например, ошибка БД при деплое) не должен ронять весь игровой процесс.
 process.on('unhandledRejection', (reason) => {
-    handleFatalRuntimeError('UNHANDLED REJECTION', reason);
+    try {
+        logger.error({
+            type: 'unhandled_rejection',
+            message: reason?.message || String(reason),
+            stack: reason?.stack || null
+        });
+    } catch {
+        console.error('UNHANDLED REJECTION:', reason?.message || reason);
+    }
 });
 
 const express = require('express');
