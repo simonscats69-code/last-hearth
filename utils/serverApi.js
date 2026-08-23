@@ -204,6 +204,15 @@ function requestMiddleware(req, res, next) {
             const duration = Date.now() - start;
             const isProd = process.env.NODE_ENV === 'production';
 
+            // Ленивый require — realtime.js сам импортирует serverApi (logger),
+            // прямой импорт наверху создал бы циклическую зависимость.
+            try {
+                const { recordRequest } = require('./realtime');
+                recordRequest(req.originalUrl || req.url || 'unknown', res.statusCode, duration);
+            } catch {
+                // метрики не должны ломать обработку запроса
+            }
+
             logger.info({
                 type: 'http_request',
                 requestId: req.requestId,
@@ -746,46 +755,14 @@ async function logPlayerAction(playerId, action, metadata = {}, client = null) {
             [playerId, action, serializeJSONField(metadata)]
         );
     } catch (error) {
+        // Внутри транзакции (client передан) — пробрасываем ошибку,
+        // чтобы транзакция откатилась и операция+лог были атомарны.
+        // Вне транзакции — глотаем ошибку, чтобы логирование не ломало игровые операции.
+        if (client) {
+            throw error;
+        }
         handleLogError(error, 'logPlayerAction');
     }
-}
-
-/**
- * @deprecated Используйте logPlayerAction() вместо этой функции
- * Устаревшая версия с queryFn первым параметром
- */
-async function logPlayerActionWithQuery(queryFn, playerId, action, metadata = {}) {
-    if (!queryFn || !playerId || !action) {
-        logger.error('[logPlayerActionWithQuery] Некорректные параметры');
-        return;
-    }
-
-    try {
-        let execFn;
-        if (typeof queryFn === 'function') {
-            execFn = queryFn;
-        } else if (queryFn && typeof queryFn.query === 'function') {
-            execFn = queryFn.query.bind(queryFn);
-        } else {
-            logger.warn('[logPlayerActionWithQuery] Некорректный параметр queryFn');
-            return;
-        }
-
-        await execFn(
-            `INSERT INTO ${TABLES.PLAYER_ACTIONS} (player_id, action, metadata, created_at) VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, serializeJSONField(metadata)]
-        );
-    } catch (error) {
-        handleLogError(error, 'logPlayerActionWithQuery');
-    }
-}
-
-/**
- * @deprecated Используйте logPlayerAction() вместо этой функции
- * Старая сигнатура: (queryFn, playerId, action, metadata)
- */
-async function logPlayerActionSimple(...args) {
-    return logPlayerActionWithQuery(...args);
 }
 
 /**
@@ -1006,12 +983,8 @@ module.exports = {
     checkResources,
     checkClanMembersLimit,
 
-    // Логирование игроков (унифицировано) — новая версия (playerId, action, metadata, client?)
+    // Логирование игроков (унифицировано): (playerId, action, metadata, client?)
     logPlayerAction,
-    // Старая версия для обратной совместимости (queryFn, playerId, action, metadata)
-    logPlayerActionWithQuery,
-    // Алиас для обратной совместимости
-    logPlayerActionSimple,
 
     TABLES,
 

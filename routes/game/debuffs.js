@@ -10,7 +10,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, transaction: tx } = require('../../db/database');
+const { transaction: tx } = require('../../db/database');
 const { logger, safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
 const { normalizeInventory } = require('../../utils/game-helpers');
 const { 
@@ -27,34 +27,26 @@ function createDebuffError(message, code, statusCode = 400) {
 
 
 
-/**
- * Safe JSON parse с fallback
- * Теперь импортируется из utils/jsonHelper.js
- */
-// safeJsonParse теперь импортируется
-
-
-
-
 const DebuffAPI = {
     /**
      * Применить дебафф к игроку
      * @param {number} playerId - ID игрока
      * @param {string} type - тип дебаффа (radiation, zombie_infection)
      * @param {number} level - уровень дебаффа
-     * @param {object} options - дополнительные опции {source}
+     * @param {object} options - дополнительные опции {source, client}
+     *   client — внешний клиент транзакции; если передан, новая транзакция
+     *   не открывается (защита от вложенных блокировок строки игрока)
      */
     async apply(playerId, type, level, options = {}) {
         const config = DEBUFF_CONFIG[type];
         if (!config) {
             throw new Error(`Неизвестный тип дебаффа: ${type}`);
         }
-        
+
         // Ограничиваем уровень
         level = Math.min(config.maxLevel, Math.max(config.minLevel, level));
-        
-        // playerId здесь - это внутренний id игрока (не telegram_id)
-        return await tx(async (client) => {
+
+        const executor = async (client) => {
             // Блокируем строку игрока по внутреннему id
             const playerResult = await client.query(
                 `SELECT radiation, infections FROM players WHERE id = $1 FOR UPDATE`,
@@ -137,7 +129,13 @@ const DebuffAPI = {
                 
                 return { type, level, newInfections, expiresAt };
             }
-        });
+        };
+
+        if (options.client) {
+            return executor(options.client);
+        }
+
+        return await tx(executor);
     },
     
     /**

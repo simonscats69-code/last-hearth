@@ -137,18 +137,6 @@ function resetMetrics() {
     metrics.startTime = Date.now();
 }
 
-/**
- * Обновить WebSocket метрики
- */
-function updateWebSocketMetrics(wsMetrics) {
-    metrics.websocket = {
-        messagesSent: wsMetrics.messagesSent || 0,
-        messagesFailed: wsMetrics.messagesFailed || 0,
-        connectionsActive: wsMetrics.connectionsActive || 0,
-        connectionsTotal: wsMetrics.connectionsTotal || 0,
-        roomsCount: wsMetrics.roomsCount || 0
-    };
-}
 
 
 
@@ -639,7 +627,6 @@ module.exports = {
     recordRequest,
     getMetrics,
     resetMetrics,
-    updateWebSocketMetrics,
     
     // WebSocket
     initWebSocket,

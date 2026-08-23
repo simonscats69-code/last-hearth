@@ -5,13 +5,13 @@
 const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('./db/database');
 const { logger } = require('./utils/serverApi');
-const { MINI_APP_URL, PLAYER_NAME_MAX_LENGTH } = require('./utils/config');
+const { MINI_APP_URL } = require('./utils/config');
 
 // Проверка наличия токена бота
 const BOT_TOKEN = process.env.TG_BOT_TOKEN;
 if (!BOT_TOKEN) {
-    logger.error('TELEGRAM_BOT_TOKEN не найден в переменных окружения!');
-    logger.error('Пожалуйста, настройте переменную TELEGRAM_BOT_TOKEN на BotHost');
+    logger.error('TG_BOT_TOKEN не найден в переменных окружения!');
+    logger.error('Пожалуйста, настройте переменную TG_BOT_TOKEN на BotHost');
 }
 
 // Создаём бота только если токен существует
@@ -25,7 +25,7 @@ const bot = BOT_TOKEN ? new Telegraf(BOT_TOKEN, {
 async function setupWebhook(app) {
     // Проверяем наличие токена и бота перед запуском
     if (!BOT_TOKEN || !bot) {
-        logger.error('Бот не может быть запущен: отсутствует токен TELEGRAM_BOT_TOKEN');
+        logger.error('Бот не может быть запущен: отсутствует токен TG_BOT_TOKEN');
         return;
     }
     
@@ -108,8 +108,8 @@ async function setupWebhook(app) {
             }
 
             // URL Mini App - без telegram_id (безопасность)
-            const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
-            
+            const miniAppUrl = MINI_APP_URL;
+
             // Приветственное сообщение
             await ctx.reply(
                 `🏚️ <b>Последний Очаг</b>\n\n` +
@@ -137,8 +137,8 @@ async function setupWebhook(app) {
 
     // Команда /profile - открывает Mini App
     bot.command('profile', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
-        
+        const miniAppUrl = MINI_APP_URL;
+
         await ctx.reply(
             '👤 Открой Mini App для просмотра профиля:',
             { 
@@ -154,8 +154,8 @@ async function setupWebhook(app) {
 
     // Команда /locations - открывает Mini App
     bot.command('locations', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
-        
+        const miniAppUrl = MINI_APP_URL;
+
         await ctx.reply(
             '🗺️ Открой Mini App для просмотра карты:',
             { 
@@ -171,8 +171,8 @@ async function setupWebhook(app) {
 
     // Команда /shop - магазин
     bot.command('shop', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
-        
+        const miniAppUrl = MINI_APP_URL;
+
         await ctx.reply(
             '🏪 Открой Mini App для доступа к магазину:',
             { 
@@ -188,8 +188,8 @@ async function setupWebhook(app) {
 
     // Команда /help - помощь
     bot.command('help', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
-        
+        const miniAppUrl = MINI_APP_URL;
+
         await ctx.reply(
             '❓ <b>Помощь</b>\n\n' +
             '<b>Основные команды:</b>\n' +
@@ -212,8 +212,8 @@ async function setupWebhook(app) {
 
     // Команда /play - быстрый запуск игры
     bot.command('play', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
-        
+        const miniAppUrl = MINI_APP_URL;
+
         await ctx.reply(
             '🎮 <b>Последний Очаг</b>\n\nВся игра в Mini App!',
             { 
@@ -229,8 +229,8 @@ async function setupWebhook(app) {
 
     // Команда /daily - ежедневный бонус
     bot.command('daily', async (ctx) => {
-        const miniAppUrl = process.env.MINI_APP_URL || 'https://last-hearth.bothost.ru';
-        
+        const miniAppUrl = MINI_APP_URL;
+
         await ctx.reply(
             '🎁 Открой Mini App для получения ежедневного бонуса:',
             { 

@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
-const { getExpForLevel, getTotalExpForLevel } = require('../../utils/gameConstants');
+const { getExpForLevel } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress } = require('../../utils/game-helpers');
 
@@ -26,8 +26,9 @@ function filterAllowedUpdateFields(body) {
 
 /**
  * GET /profile — полный профиль игрока
+ * Поддерживает и /profile (через алиас /profile), и корневой путь (через /player)
  */
-router.get('/profile', async (req, res) => {
+router.get(['/', '/profile'], async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) {
@@ -72,7 +73,17 @@ router.get('/profile', async (req, res) => {
                     pvp_losses: player.pvp_losses,
                     pvp_rating: player.pvp_rating,
                     created_at: player.created_at,
-                    last_daily_bonus: player.last_daily_bonus
+                    last_daily_bonus: player.last_daily_bonus,
+                    // Поля, используемые клиентом для UI (статы, энергия, локация)
+                    last_energy_update: player.last_energy_update,
+                    current_location_id: player.current_location_id,
+                    strength: player.strength,
+                    endurance: player.endurance,
+                    agility: player.agility,
+                    intelligence: player.intelligence,
+                    luck: player.luck,
+                    items_collected: player.items_collected,
+                    referrals: player.referrals
                 },
                 achievements: achievements || [],
                 progress: progress || {},
@@ -401,6 +412,16 @@ router.post('/referral/use', async (req, res) => {
         const BONUS_ENERGY = 20;
 
         const result = await tx(async (client) => {
+            // Игрок может активировать только ОДИН реферальный код за всё время
+            // (UNIQUE(referred_id) в таблице referrals)
+            const alreadyReferred = await client.query(
+                'SELECT id FROM referrals WHERE referred_id = $1',
+                [playerId]
+            );
+            if (alreadyReferred.rows[0]) {
+                throw { message: 'Вы уже использовали реферальный код', code: 'ALREADY_USED', statusCode: 400 };
+            }
+
             // Блокируем referrer и ищем по коду внутри транзакции
             const referrerResult = await client.query(
                 'SELECT id FROM players WHERE referral_code = $1 FOR UPDATE',
@@ -441,6 +462,10 @@ router.post('/referral/use', async (req, res) => {
     } catch (err) {
         if (err.code === 'NOT_FOUND' || err.code === 'SELF_REFERRAL' || err.code === 'ALREADY_USED') {
             return res.status(400).json({ error: err.message, code: err.code });
+        }
+        // Коллизия UNIQUE(referred_id) при гонке двух параллельных запросов
+        if (err.code === '23505') {
+            return res.status(400).json({ error: 'Вы уже использовали реферальный код', code: 'ALREADY_USED' });
         }
         handleError(res, err, 'referral_use');
     }

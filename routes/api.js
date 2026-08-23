@@ -9,20 +9,32 @@ const { logger, safeJsonParse, safeJsonParse: parseAchievementCondition, validat
 const { getAchievementCurrentValue, getAchievementTargetValue, getAchievementRuntimeContext } = require('../utils/game-helpers');
 
 /**
- * Извлечь Telegram ID из initData
+ * Определить Telegram ID из запроса.
+ *
+ * БЕЗОПАСНОСТЬ: доверяем ТОЛЬКО подписанному initData.
+ * Заголовок x-telegram-id и query-параметры игнорируются —
+ * иначе любой клиент мог бы выдавать себя за другого игрока
+ * (например, забирать чужие награды за достижения).
  */
-function extractTelegramIdFromInitData(initData) {
+function resolveTelegramId(req) {
+    const initData =
+        req.headers['x-telegram-init-data'] ||
+        req.headers['x-init-data'] ||
+        req.body?.initData ||
+        req.body?.init_data ||
+        '';
+
     if (!initData) return null;
 
     const botToken = process.env.TG_BOT_TOKEN;
-    const isDevelopment = process.env.NODE_ENV !== 'production';
 
     if (botToken) {
         const validated = validateTelegramInitData(initData, botToken);
         return validated?.user?.id ? Number(validated.user.id) : null;
     }
 
-    if (!isDevelopment) {
+    // Fallback только для разработки (без bot token подпись проверить невозможно)
+    if (process.env.NODE_ENV === 'production') {
         return null;
     }
 
@@ -33,23 +45,6 @@ function extractTelegramIdFromInitData(initData) {
     } catch {
         return null;
     }
-}
-
-/**
- * Определить Telegram ID из запроса
- */
-function resolveTelegramId(req) {
-    const headerTelegramId = req.headers['x-telegram-id'];
-    if (headerTelegramId) {
-        return Number(headerTelegramId);
-    }
-
-    const queryTelegramId = req.query.telegram_id;
-    if (queryTelegramId) {
-        return Number(queryTelegramId);
-    }
-
-    return extractTelegramIdFromInitData(req.headers['x-init-data']);
 }
 
 router.get('/shop/items', async (req, res) => {
@@ -502,22 +497,34 @@ router.options('/verify-telegram', (req, res) => {
 
 router.post('/verify-telegram', async (req, res) => {
     try {
-        logger.debug('[verify-telegram] req.body:', JSON.stringify(req.body).substring(0, 200));
-        const { telegram_id, hash, auth_date } = req.body;
+        const { telegram_id } = req.body;
 
         if (!telegram_id) {
             return res.status(400).json({ error: 'Отсутствует telegram_id' });
         }
 
-        // Проверка подписи Telegram (если есть hash и bot token)
+        // БЕЗОПАСНОСТЬ: при наличии bot token подпись initData ОБЯЗАТЕЛЬНА,
+        // а telegram_id должен совпадать с подписанным пользователем.
         const botToken = process.env.TG_BOT_TOKEN;
-        const initDataStr = req.body.initData || req.body.init_data || '';
-        if (hash && botToken && initDataStr) {
-            const isValid = validateTelegramInitData(initDataStr, botToken);
-            if (!isValid) {
+        const isDevelopment = process.env.NODE_ENV !== 'production';
+        const initDataStr = req.body.initData || req.body.init_data || req.headers['x-init-data'] || '';
+
+        if (botToken) {
+            if (!initDataStr) {
+                return res.status(401).json({ error: 'Требуется initData' });
+            }
+            const validated = validateTelegramInitData(initDataStr, botToken);
+            if (!validated) {
                 logger.warn({ type: 'telegram_hash_mismatch', telegram_id });
                 return res.status(401).json({ error: 'Неверная подпись Telegram' });
             }
+            if (Number(validated.user.id) !== Number(telegram_id)) {
+                logger.warn({ type: 'telegram_id_mismatch', telegram_id, signedId: validated.user.id });
+                return res.status(403).json({ error: 'telegram_id не соответствует подписанным данным' });
+            }
+        } else if (!isDevelopment) {
+            logger.error('TG_BOT_TOKEN не настроен в production!');
+            return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
         }
 
         // Проверяем, существует ли игрок

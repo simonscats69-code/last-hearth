@@ -14,8 +14,6 @@ const { logger } = require('./serverApi');
 // ФУНКЦИИ СОСТОЯНИЯ ИГРОКА (из playerState.js)
 // ==========================================
 
-const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
-
 /**
  * Безопасный парсинг JSON с fallback значением
  * Импортируется из serverApi для единообразия
@@ -199,6 +197,53 @@ function buildPlayerStatus(player) {
         infections_list: infectionsList,
         last_energy_update: player.last_energy_update || null
     };
+}
+
+/**
+ * Пересчёт энергии на основе реально прошедшего времени.
+ * НЕ сбрасывает таймер при трате — реген идёт непрерывно.
+ * @param {object} client - клиент БД (транзакция)
+ * @param {object} player - объект игрока (мутирует energy/last_energy_update)
+ * @returns {object} тот же player с обновлённой энергией
+ */
+async function recalcEnergy(client, player) {
+    const now = Date.now();
+    const last = new Date(player.last_energy_update).getTime();
+    if (!Number.isFinite(last)) return player;
+
+    const elapsedSec = Math.max(0, Math.floor((now - last) / 1000));
+    const regen = Math.floor(elapsedSec / 60); // 1 энергия в минуту
+    if (regen <= 0) return player;
+
+    const newEnergy = Math.min(Number(player.max_energy || 50), Number(player.energy || 0) + regen);
+    if (newEnergy === Number(player.energy || 0)) return player;
+
+    // Сдвигаем метку на фактически восстановленное время
+    const newLast = new Date(last + regen * 60000).toISOString();
+    await client.query(
+        `UPDATE players SET energy = $1, last_energy_update = $2 WHERE id = $3`,
+        [newEnergy, newLast, player.id]
+    );
+    player.energy = newEnergy;
+    player.last_energy_update = newLast;
+    return player;
+}
+
+/**
+ * Нормализация экипировки с валидацией слотов
+ */
+function normalizeEquipment(raw) {
+    const eq = safeParseJson(raw, {});
+    if (!eq || typeof eq !== 'object') return {};
+
+    const VALID_SLOTS = ['weapon', 'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
+    const out = {};
+    for (const slot of VALID_SLOTS) {
+        if (eq[slot] && typeof eq[slot] === 'object' && !Array.isArray(eq[slot])) {
+            out[slot] = eq[slot];
+        }
+    }
+    return out;
 }
 
 // ==========================================
@@ -516,49 +561,19 @@ async function getPlayerProgress(playerId) {
 }
 
 /**
- * Инициализировать таблицу достижений
- * Используется только для миграции из старой системы
+ * Инициализировать таблицу достижений.
+ * P2-12: единый источник теперь schema.js (4 базовых ачивки).
+ * Старый набор из 19 записей больше не вставляется, чтобы не дублировать
+ * и не путать UI. Функция оставлена для обратной совместимости вызовов.
  */
 async function initAchievementsTable() {
-    // Проверяем, есть ли записи в таблице achievements
     const countResult = await query('SELECT COUNT(*) as cnt FROM achievements');
     const count = Number(countResult.rows[0]?.cnt || 0);
 
     if (count === 0) {
-        // Мигрируем данные из старой системы (ACHIEVEMENTS) в новую таблицу
-        const oldAchievements = [
-            { name: 'Выживший', desc: 'Достигни 5 уровня', type: 'level', req: 5, reward: 10 },
-            { name: 'Опытный выживший', desc: 'Достигни 10 уровня', type: 'level', req: 10, reward: 25 },
-            { name: 'Ветеран', desc: 'Достигни 25 уровня', type: 'level', req: 25, reward: 50 },
-            { name: 'Мастер выживания', desc: 'Достигни 50 уровня', type: 'level', req: 50, reward: 100 },
-            { name: 'Первый враг', desc: 'Убей 1 босса', type: 'boss', req: 1, reward: 15 },
-            { name: 'Охотник на монстров', desc: 'Убей 5 боссов', type: 'boss', req: 5, reward: 30 },
-            { name: 'Убийца гигантов', desc: 'Убей 10 боссов', type: 'boss', req: 10, reward: 50 },
-            { name: 'Герой', desc: 'Убей 25 боссов', type: 'boss', req: 25, reward: 100 },
-            { name: 'Первая кровь', desc: 'Выиграй 1 PvP бой', type: 'pvp', req: 1, reward: 10 },
-            { name: 'Боец', desc: 'Выиграй 10 PvP боёв', type: 'pvp', req: 10, reward: 40 },
-            { name: 'Воин', desc: 'Выиграй 50 PvP боёв', type: 'pvp', req: 50, reward: 100 },
-            { name: 'Собиратель', desc: 'Собери 100 предметов', type: 'loot', req: 100, reward: 20 },
-            { name: 'Кладовщик', desc: 'Собери 500 предметов', type: 'loot', req: 500, reward: 50 },
-            { name: 'Король добычи', desc: 'Собери 1000 предметов', type: 'loot', req: 1000, reward: 100 },
-            { name: 'Начинающий', desc: 'Играй 3 дня подряд', type: 'streak', req: 3, reward: 20 },
-            { name: 'Постоянный', desc: 'Играй 7 дней подряд', type: 'streak', req: 7, reward: 50 },
-            { name: 'Преданный', desc: 'Играй 30 дней подряд', type: 'streak', req: 30, reward: 200 },
-            { name: 'Командор', desc: 'Пригласи 1 друга', type: 'referral', req: 1, reward: 30 },
-            { name: 'Лидер отряда', desc: 'Пригласи 5 друзей', type: 'referral', req: 5, reward: 100 }
-        ];
-
-        for (const ach of oldAchievements) {
-            const condition = JSON.stringify({ type: ach.type, count: ach.req });
-            const reward = JSON.stringify({ stars: ach.reward });
-
-            await query(`
-                INSERT INTO achievements (name, description, category, condition, reward, icon, rarity)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (name, category) DO NOTHING
-            `, [ach.name, ach.desc, ach.type, condition, reward, '🏆', 'common']);
-        }
+        logger.warn('[achievements] таблица achievements пуста — ожидается наполнение через db/schema.js (миграции). Старый набор не вставляется во избежание дублей.');
     }
+    return count;
 }
 
 // ==========================================
@@ -566,8 +581,7 @@ async function initAchievementsTable() {
 // ==========================================
 
 module.exports = {
-    // Функции состояния игрока (playerState.js)
-    ENERGY_REGEN_INTERVAL_MS,
+    // Функции состояния игрока
     safeParseJson,
     normalizeInventory,
     normalizeItemStats,
@@ -580,6 +594,8 @@ module.exports = {
     isBuffActive,
     getInfectionLevel,
     buildPlayerStatus,
+    recalcEnergy,
+    normalizeEquipment,
     
     // Функции достижений (achievements.js)
     getAchievementCurrentValue,

@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db/database');
-const { isAdmin, telegramAuthMiddleware, logger } = require('../utils/serverApi');
+const { telegramAuthMiddleware, logger } = require('../utils/serverApi');
 
 // Применяем telegramAuthMiddleware ко всем admin роутам
 // Это устанавливает req.telegramUser после валидации подписи Telegram
@@ -102,11 +102,7 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
             return res.status(400).json({ error: 'Некорректный Telegram ID' });
         }
         
-        const { energy, health, experience, items } = req.body;
-        
-        // Whitelist допустимых полей для обновления
-        const ALLOWED_FIELDS = ['energy', 'health', 'experience'];
-        
+        const { energy, health, experience } = req.body;
         // Валидация входных данных
         if (energy !== undefined) {
             if (!Number.isInteger(energy) || energy < 0 || energy > 10000) {
@@ -164,7 +160,7 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
             type: 'admin_resource_change', 
             telegramId, 
             changes: { energy, health, experience },
-            admin: req.headers['x-telegram-id']
+            admin: req.telegramUser?.id
         });
         
         res.json({ success: true, player: result.rows[0] });
@@ -199,7 +195,7 @@ router.post('/player/:telegramId/ban', requireAdmin, async (req, res) => {
             type: 'player_banned', 
             telegramId, 
             reason,
-            admin: req.headers['x-telegram-id']
+            admin: req.telegramUser?.id
         });
         
         res.json({ success: true, message: 'Игрок заблокирован' });
@@ -231,7 +227,7 @@ router.post('/player/:telegramId/unban', requireAdmin, async (req, res) => {
         logger.info({ 
             type: 'player_unbanned', 
             telegramId,
-            admin: req.headers['x-telegram-id']
+            admin: req.telegramUser?.id
         });
         
         res.json({ success: true, message: 'Игрок разблокирован' });
@@ -336,7 +332,7 @@ router.put('/bosses/:id', requireAdmin, async (req, res) => {
             type: 'boss_updated', 
             bossId: id, 
             changes: req.body,
-            admin: req.headers['x-telegram-id']
+            admin: req.telegramUser?.id
         });
         
         res.json({ success: true, boss: result.rows[0] });

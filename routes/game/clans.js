@@ -14,7 +14,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
-const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, badRequest, wrap, logPlayerAction, serializeJSONField, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
+const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, wrap, logPlayerAction, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
 
 const crypto = require('crypto');
 
@@ -164,11 +164,11 @@ router.post('/clan/create', wrap(async (req, res) => {
         );
 
         // Логируем создание клана
-        await logPlayerAction(client, playerId, 'clan_create', {
+        await logPlayerAction(playerId, 'clan_create', {
             clan_id: clanId,
             clan_name: nameValidation.value,
             cost: 1000
-        });
+        }, client);
 
         return { message: `Клан "${nameValidation.value}" создан!`, clan: { id: clanId, name: nameValidation.value } };
     });
@@ -247,10 +247,10 @@ router.post('/clan/join', wrap(async (req, res) => {
         }
 
         // Логируем вступление
-        await logPlayerAction(client, playerId, 'clan_join', {
+        await logPlayerAction(playerId, 'clan_join', {
             clan_id,
             clan_name: clan.name
-        });
+        }, client);
 
         return { message: `Вы вступили в клан ${clan.name}`, clan: { id: clan.id, name: clan.name } };
     });
@@ -285,9 +285,9 @@ router.post('/clan/leave', wrap(async (req, res) => {
         );
 
         // Логируем выход из клана
-        await logPlayerAction(client, playerId, 'clan_leave', {
+        await logPlayerAction(playerId, 'clan_leave', {
             clan_id: player.clan_id
-        });
+        }, client);
     });
     
     ok(res, { message: 'Вы покинули клан' });
@@ -535,12 +535,12 @@ router.post('/clan/donate', wrap(async (req, res) => {
             [player.clan_id]
         );
 
-        // Логируем пожертвование
-        await logPlayerAction(client, playerId, 'clan_donate', {
+        // Логируем пожертвование (внутри транзакции — передаём client)
+        await logPlayerAction(playerId, 'clan_donate', {
             clan_id: player.clan_id,
             amount: donation,
             new_balance: lockedPlayer.coins - donation
-        });
+        }, client);
 
         return { 
             success: true,

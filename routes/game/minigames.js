@@ -215,7 +215,7 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
         
         await client.query('COMMIT');
         
-        logger.info({ playerId, prize: prize.type, value: prize.value, is_paid }, 'wheel_spin');
+        logger.info('wheel_spin', { playerId, prize: prize.type, value: prize.value, is_paid });
         
         res.json({
             success: true,
@@ -298,7 +298,7 @@ const parseJsonField = safeJsonParse;
 /**
  * POST /purchase - покупка товара за Stars
  */
-router.post('/purchase', async (req, res) => {
+router.post(['/purchase', '/'], async (req, res) => {
     // Валидируем до получения клиента из пула
     const { item_id, currency = 'stars' } = req.body;
     const playerId = req.player.id;
@@ -528,11 +528,17 @@ router.get('/leaderboard/clans', async (req, res) => {
     }
 });
 
-// Получить позицию игрока в рейтингах - оптимизированная версия
-router.get('/leaderboard/my-position/:telegramId', async (req, res) => {
+// Получить позицию игрока в рейтингах - оптимизированная версия.
+// БЕЗОПАСНОСТЬ: позиция считается только для авторизованного игрока из req.player,
+// параметр :telegramId игнорируется, чтобы нельзя было смотреть чужие позиции.
+router.get('/leaderboard/my-position/:telegramId?', async (req, res) => {
     try {
-        const { telegramId } = req.params;
-        
+        const telegramId = req.player?.telegram_id;
+
+        if (!telegramId) {
+            return res.status(401).json({ success: false, error: 'Требуется авторизация' });
+        }
+
         // Сначала получаем статы целевого игрока одним запросом
         const playerResult = await query(
             'SELECT level, experience, strength, bosses_killed FROM players WHERE telegram_id = $1',

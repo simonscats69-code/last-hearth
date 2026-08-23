@@ -78,10 +78,11 @@ async function initDatabase() {
     try {
         await pool.query('SELECT 1');
         logger.info('Подключение к БД установлено');
-        const { createTables, runMigrations, seedDatabase } = require('./schema');
+        const { createTables, runMigrations, seedDatabase, seedAchievements } = require('./schema');
         await createTables();
         await runMigrations();
         await seedDatabase();
+        await seedAchievements();
         return true;
     } catch (error) {
         logger.error('Ошибка инициализации БД:', { message: error.message, code: error.code });

@@ -123,7 +123,8 @@ async function getBossById(client, bossId) {
 async function getPlayerBaseState(client, playerId) {
     const result = await client.query(
         `SELECT id, first_name, level, health, max_health, energy, max_energy, equipment,
-                active_boss_id, active_boss_started_at, active_boss_mode, active_raid_id, buffs
+                inventory, active_boss_id, active_boss_started_at, active_boss_mode,
+                active_raid_id, buffs
          FROM players
          WHERE id = $1
          FOR UPDATE`,
@@ -788,8 +789,7 @@ router.post('/attack-boss', async (req, res) => {
 
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1),
-                      last_energy_update = NOW()
+                 SET energy = GREATEST(0, energy - $1)
                  WHERE id = $2
                  RETURNING energy`,
                 [energyCost, playerId]
@@ -917,8 +917,7 @@ router.post('/attack-with-weapon', async (req, res) => {
             const energyResult = await client.query(`
                 UPDATE players
                 SET energy = GREATEST(0, energy - $1),
-                    inventory = $2,
-                    last_energy_update = NOW()
+                    inventory = $2
                 WHERE id = $3
                 RETURNING energy
             `, [energyCost, JSON.stringify(newInventory), playerId]);
@@ -1335,8 +1334,7 @@ router.post('/raid/:id/attack', async (req, res) => {
 
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1),
-                      last_energy_update = NOW()
+                 SET energy = GREATEST(0, energy - $1)
                  WHERE id = $2
                  RETURNING energy`,
                 [energyCost, playerId]

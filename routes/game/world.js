@@ -14,8 +14,32 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, normalizeEquipment } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
+
+// Кэш пула предметов по rarity:type для быстрого случайного выбора (P2-9)
+const lootPoolCache = {};
+let lootCacheReady = false;
+
+async function buildLootCache() {
+    try {
+        const rows = await queryAll(`SELECT id, rarity, type FROM items WHERE type != 'key'`);
+        for (const r of rows) {
+            const key = `${r.rarity}:${r.type}`;
+            if (!lootPoolCache[key]) lootPoolCache[key] = [];
+            lootPoolCache[key].push(r.id);
+        }
+        lootCacheReady = true;
+        logger.info('[world] loot pool cache built', { size: rows.length });
+    } catch (err) {
+        logger.error('[world] loot cache build failed', { error: err.message });
+    }
+}
+
+// Строим кэш при загрузке модуля
+buildLootCache();
+
+const MAX_INVENTORY_SLOTS = 100;
 
 // =============================================================================
 // УТИЛИТЫ
@@ -44,8 +68,30 @@ function getLootTypePool(locationId) {
 }
 
 async function getRandomLootItem(client, rarity, locationId) {
-    const preferredTypes = getLootTypePool(locationId);
+    // P2-9: используем кэш пула ID вместо ORDER BY random() на всей таблице
+    if (lootCacheReady) {
+        const preferredTypes = getLootTypePool(locationId);
+        const candidates = [];
+        for (const t of preferredTypes) {
+            const pool = lootPoolCache[`${rarity}:${t}`];
+            if (pool && pool.length) candidates.push(...pool);
+        }
+        const pool = candidates.length ? candidates : (lootPoolCache[`${rarity}:weapon`] || []);
+        if (pool.length) {
+            const randId = pool[Math.floor(Math.random() * pool.length)];
+            const res = await client.query(
+                `SELECT id, name, type, category, rarity, icon, slot, durability, stats,
+                        COALESCE((stats->>'damage')::integer, 0) AS damage,
+                        COALESCE((stats->>'defense')::integer, 0) AS defense
+                 FROM items WHERE id = $1`,
+                [randId]
+            );
+            return res.rows[0] || null;
+        }
+    }
 
+    // Fallback на случай, если кэш ещё не готов
+    const preferredTypes = getLootTypePool(locationId);
     const baseSelect = `
         SELECT
             id,
@@ -199,6 +245,21 @@ router.post('/search', async (req, res) => {
             });
         }
         
+        // P0-2: запрет поиска при нулевом здоровье
+        if (Number(updatedPlayer.health || 0) <= 0) {
+            await client.query('ROLLBACK');
+            return res.json({
+                success: false,
+                error: 'Вы истощены. Сначала восстановите здоровье.',
+                code: 'NO_HEALTH',
+                health: 0,
+                max_health: updatedPlayer.max_health
+            });
+        }
+
+        // P0-1: пересчитываем энергию по реальному времени (не сбрасывая таймер)
+        await recalcEnergy(client, updatedPlayer);
+
         const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
         const energyCost = activeBuffs.free_energy ? 0 : 1;
         if (updatedPlayer.energy < energyCost) {
@@ -234,9 +295,9 @@ router.post('/search', async (req, res) => {
         let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         
         if (locationData.radiation > 0 && !activeBuffs.no_radiation) {
-            const baseRadiation = Math.ceil(locationData.radiation / 10);
+            // P1-7: используем уже посчитанное давление радиации (с учётом защиты)
             const randomFactor = 0.7 + Math.random() * 0.6;
-            radiationGain = Math.max(0, Math.ceil((baseRadiation - radiationDefense) * randomFactor));
+            radiationGain = Math.max(0, Math.ceil(riskProfile.radiationPressure * randomFactor));
             
             if (radiationGain > 0) {
                 const currentRadiation = normalizeRadiation(updatedPlayer.radiation);
@@ -270,9 +331,12 @@ router.post('/search', async (req, res) => {
             
             if (infectionGain > 0) {
                 try {
+                    // Передаём client текущей транзакции, чтобы не открывать
+                    // вложенную транзакцию с блокировкой той же строки игрока
                     await DebuffAPI.apply(playerId, 'zombie_infection', infectionGain, {
                         source: locationData.name,
-                        locationId: locationData.id
+                        locationId: locationData.id,
+                        client
                     });
                 } catch (err) {
                     logger.error('Ошибка применения инфекции', { playerId, error: err.message });
@@ -294,17 +358,17 @@ router.post('/search', async (req, res) => {
         let inventoryUpdate = null;
         
         if (rolled <= dropChance) {
-            // Ключевые шансы от общего дропа
+            // P1-8: ключевые шансы привязаны к boss_id (без хрупкого LIKE по имени)
             const keyChances = [
-                { bossLevel: 2, chance: 2.5, name: 'Бездомного психа' },
-                { bossLevel: 3, chance: 1.25, name: 'Медведя-мутанта' },
-                { bossLevel: 4, chance: 0.625, name: 'Военного дрона' },
-                { bossLevel: 5, chance: 0.3125, name: 'Главаря мародёров' },
-                { bossLevel: 6, chance: 0.15625, name: 'Биологического ужаса' },
-                { bossLevel: 7, chance: 0.078125, name: 'Офицера-нежить' },
-                { bossLevel: 8, chance: 0.0390625, name: 'Гигантского монстра' },
-                { bossLevel: 9, chance: 0.01953125, name: 'Профессора безумия' },
-                { bossLevel: 10, chance: 0.009765625, name: 'Последнего стража' }
+                { bossId: 2, chance: 2.5 },
+                { bossId: 3, chance: 1.25 },
+                { bossId: 4, chance: 0.625 },
+                { bossId: 5, chance: 0.3125 },
+                { bossId: 6, chance: 0.15625 },
+                { bossId: 7, chance: 0.078125 },
+                { bossId: 8, chance: 0.0390625 },
+                { bossId: 9, chance: 0.01953125 },
+                { bossId: 10, chance: 0.009765625 }
             ].map((key) => ({
                 ...key,
                 chance: Math.round((key.chance * riskProfile.keyChanceMultiplier) * 100000) / 100000
@@ -325,11 +389,12 @@ router.post('/search', async (req, res) => {
             
             if (foundKey) {
                 const keyResult = await client.query(`
-                    SELECT id, name, type, rarity, icon
-                    FROM items 
-                    WHERE type = 'key' AND name LIKE '%' || $1 || '%'
+                    SELECT i.id, i.name, i.type, i.rarity, i.icon
+                    FROM items i
+                    JOIN bosses b ON b.required_key_id = i.id
+                    WHERE b.id = $1
                     LIMIT 1
-                `, [foundKey.name]);
+                `, [foundKey.bossId]);
                 
                 foundItem = keyResult.rows[0] ? {
                     ...keyResult.rows[0],
@@ -345,6 +410,17 @@ router.post('/search', async (req, res) => {
             
             if (foundItem) {
                 const inventory = normalizeInventory(updatedPlayer.inventory);
+
+                // P2-10: лимит слотов инвентаря
+                if (inventory.length >= MAX_INVENTORY_SLOTS) {
+                    await client.query('ROLLBACK');
+                    return res.json({
+                        success: false,
+                        error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Продайте лишнее.`,
+                        code: 'INVENTORY_FULL'
+                    });
+                }
+
                 const newItem = buildInventoryItem(foundItem, itemRarity);
                 
                 inventory.push(newItem);
@@ -358,7 +434,11 @@ router.post('/search', async (req, res) => {
 
                 inventoryUpdate = JSON.stringify(inventory);
                 
-                const baseExpReward = Math.floor(6 + (itemRarity === 'common' ? 0 : itemRarity === 'uncommon' ? 3 : itemRarity === 'rare' ? 7 : itemRarity === 'epic' ? 11 : 15));
+                // P0-3: XP с бонусом локации и комбо за серию действий
+                const rarityExp = itemRarity === 'common' ? 0 : itemRarity === 'uncommon' ? 3 : itemRarity === 'rare' ? 7 : itemRarity === 'epic' ? 11 : 15;
+                const locBonus = 1 + (locationData.id - 1) * 0.15;
+                const comboBonus = (updatedPlayer.total_actions + 1) % 10 === 0 ? 1.5 : 1;
+                const baseExpReward = Math.floor(6 + rarityExp) * locBonus * comboBonus;
                 expGained = Math.max(1, Math.floor(baseExpReward * riskProfile.expMultiplier));
 
                 if (activeBuffs.exp_x2) {
@@ -376,15 +456,16 @@ router.post('/search', async (req, res) => {
             radiationDamage = 10;
         } else if (resultingRadiationLevel >= 5) {
             radiationEffect = 'danger';
-            radiationDamage = DEBUFF_CONFIG.radiation.damagePerLevel || 2;
+            // P1-7: используем константу напрямую (без || 2)
+            radiationDamage = DEBUFF_CONFIG.radiation.damagePerLevel;
         } else if (radiationGain > 0) {
             radiationEffect = 'applied';
         }
         
         // Строим UPDATE динамически с правильными позициями параметров
+        // P0-1: НЕ трогаем last_energy_update — реген идёт от реального времени
         const setParts = [
             'energy = energy - $1',
-            'last_energy_update = NOW()',
             'total_actions = total_actions + 1',
             'health = GREATEST(0, health - $2)'
         ];

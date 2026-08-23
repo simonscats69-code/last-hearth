@@ -1,23 +1,14 @@
 /**
- * Модуль PvP системы
- * Управление PvP боями, кулдаунами и статистикой
+ * Модуль PvP системы — слой доступа к данным и чистые боевые формулы
+ *
+ * Функции доступа к БД используются продакшн-кодом (routes/game/pvp.js),
+ * чистые формулы покрыты unit-тестами (game.test.js).
+ *
+ * Удалены мёртвые функции: isRedZone, getPlayersInLocation, getPVPStats,
+ * finishPVPMatch (использовала несуществующие колонки pvp_battles).
  */
 
-const { query, queryOne, queryAll, pool } = require('./database');
-const { logger } = require('../utils/serverApi');
-
-/**
- * Проверка, является ли локация красной зоной (PvP разрешено)
- * @param {number} locationId - ID локации
- * @returns {Promise<boolean>} true если красная зона
- */
-async function isRedZone(locationId) {
-    const location = await queryOne(
-        'SELECT danger_level FROM locations WHERE id = $1',
-        [locationId]
-    );
-    return location && location.danger_level >= 6;
-}
+const { query, queryOne } = require('./database');
 
 /**
  * Проверка, защищён ли игрок от PvP (уровень < 5)
@@ -37,13 +28,13 @@ async function isProtectedFromPVP(playerId, client = null) {
 }
 
 /**
- * Получение PvP кулдауна игрока
+ * Получение активного PvP кулдауна игрока
  * @param {number} playerId - ID игрока
  * @returns {Promise<object|null>} Информация о кулдауне или null
  */
 async function getPVPCooldown(playerId) {
     return await queryOne(
-        `SELECT * FROM pvp_cooldowns 
+        `SELECT * FROM pvp_cooldowns
          WHERE player_id = $1 AND expires_at > NOW()
          ORDER BY expires_at DESC LIMIT 1`,
         [playerId]
@@ -53,393 +44,143 @@ async function getPVPCooldown(playerId) {
 /**
  * Установка PvP кулдауна игроку
  * @param {number} playerId - ID игрока
- * @param {number} minutes - Длительность в минутах
+ * @param {number} minutes - Длительность в минутах (1-10080)
  * @param {string} type - Тип кулдауна
  * @param {string} reason - Причина
  * @param {object} client - Опциональный клиент БД для использования внутри транзакции
  */
 async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя', client = null) {
-    // Валидация minutes для предотвращения SQL-инъекции
+    // Валидация minutes для предотвращения некорректных значений
     const validatedMinutes = parseInt(minutes);
     if (!Number.isInteger(validatedMinutes) || validatedMinutes <= 0 || validatedMinutes > 10080) {
         throw new Error('Недопустимое значение minutes (должно быть 1-10080)');
     }
-    
-    const executeQuery = client 
+
+    const executeQuery = client
         ? (sql, params) => client.query(sql, params)
         : query;
-    
+
     await executeQuery(
         `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at, reason)
          VALUES ($1, $2, NOW() + make_interval(mins => $3), $4)
-         ON CONFLICT (player_id, cooldown_type) 
+         ON CONFLICT (player_id, cooldown_type)
          DO UPDATE SET expires_at = NOW() + make_interval(mins => $3), reason = $4`,
         [playerId, type, validatedMinutes, reason]
     );
 }
 
 /**
- * Получение игроков в текущей локации (для PvP)
- * @param {number} locationId - ID локации
- * @param {number} excludePlayerId - ID игрока для исключения
- * @returns {Promise<Array>} Массив игроков в локации
- */
-async function getPlayersInLocation(locationId, excludePlayerId = null) {
-    let sql = `
-        SELECT p.id, p.telegram_id, p.username, p.first_name, p.last_name,
-               p.level, p.health, p.max_health, p.energy, p.max_energy,
-               p.current_location_id, p.pvp_wins, p.pvp_losses, p.pvp_streak,
-               p.pvp_rating, p.equipment
-        FROM players p
-        WHERE p.current_location_id = $1 
-        AND p.health > 0
-    `;
-    
-    const params = [locationId];
-    
-    if (excludePlayerId) {
-        sql += ' AND p.id != $2';
-        params.push(excludePlayerId);
-    }
-    
-    sql += ' ORDER BY p.pvp_rating DESC NULLS LAST';
-    
-    return await queryAll(sql, params);
-}
-
-/**
- * Получение статистики PvP игрока
- * @param {number} playerId - ID игрока
- * @returns {Promise<object>} Статистика PvP
- */
-async function getPVPStats(playerId) {
-    const player = await queryOne(
-        `SELECT p.pvp_wins, p.pvp_losses, p.pvp_draws, p.pvp_streak, 
-                p.pvp_max_streak, p.pvp_rating, p.pvp_total_damage_dealt,
-                p.pvp_total_damage_taken, p.coins_stolen_from_me, p.items_stolen_from_me,
-                p.level
-         FROM players p WHERE p.id = $1`,
-        [playerId]
-    );
-    
-    if (!player) return null;
-    
-    // Получаем последние бои
-    const recentMatches = await queryAll(
-        `SELECT pb.*, 
-                attacker.username as attacker_name,
-                attacker.first_name as attacker_first_name,
-                defender.username as defender_name,
-                defender.first_name as defender_first_name,
-                winner.username as winner_name
-         FROM pvp_battles pb
-         LEFT JOIN players attacker ON pb.attacker_id = attacker.id
-         LEFT JOIN players defender ON pb.defender_id = defender.id
-         LEFT JOIN players winner ON pb.winner_id = winner.id
-         WHERE pb.attacker_id = $1 OR pb.defender_id = $1
-         ORDER BY pb.started_at DESC
-         LIMIT 10`,
-        [playerId]
-    );
-    
-    return {
-        wins: player.pvp_wins || 0,
-        losses: player.pvp_losses || 0,
-        draws: player.pvp_draws || 0,
-        streak: player.pvp_streak || 0,
-        maxStreak: player.pvp_max_streak || 0,
-        rating: player.pvp_rating || 1000,
-        totalDamageDealt: player.pvp_total_damage_dealt || 0,
-        totalDamageTaken: player.pvp_total_damage_taken || 0,
-        coinsStolenFromMe: player.coins_stolen_from_me || 0,
-        itemsStolenFromMe: player.items_stolen_from_me || 0,
-        level: player.level,
-        recentMatches: recentMatches || []
-    };
-}
-
-/**
- * Создание нового PvP матча
+ * Создание нового PvP матча (вызывается ВНУТРИ транзакции роута)
  * @param {number} attackerId - ID атакующего
  * @param {number} defenderId - ID защищающегося
  * @param {number} locationId - ID локации
- * @param {object} client - Опциональный клиент БД для использования внутри транзакции
+ * @param {object} client - клиент БД транзакции
  * @returns {Promise<object>} Созданный матч
  */
 async function createPVPMatch(attackerId, defenderId, locationId, client = null) {
     const executeQuery = client
         ? (sql, params) => client.query(sql, params).then(r => r.rows[0] ?? null)
         : (sql, params) => queryOne(sql, params);
-    
+
     const match = await executeQuery(
         `INSERT INTO pvp_battles (attacker_id, defender_id, location_id, started_at, status)
          VALUES ($1, $2, $3, NOW(), 'active')
          RETURNING *`,
         [attackerId, defenderId, locationId]
     );
-    
-    // Устанавливаем кулдаун обоим игрокам
+
+    // Устанавливаем кулдаун обоим игрокам (в той же транзакции)
     await setPVPCooldown(attackerId, 5, 'pvp_battle', 'Участие в PvP бое', client);
     await setPVPCooldown(defenderId, 5, 'pvp_battle', 'Участие в PvP бое', client);
-    
+
     return match;
 }
 
-/**
- * Завершение PvP матча
- * @param {number} matchId - ID матча
- * @param {number} winnerId - ID победителя
- * @param {number} loserId - ID проигравшего
- * @param {object} rewards - Награды
- * @param {boolean} winnerWasAttacker - был ли победитель атакующим
- */
-async function finishPVPMatch(matchId, winnerId, loserId, rewards, winnerWasAttacker = true) {
-    const client = await pool.connect();
-    
-    try {
-        await client.query('BEGIN');
-        
-        const { coinsStolen, itemsStolen, experienceGained, 
-                attackerDamageDealt, attackerDamageTaken,
-                defenderDamageDealt, defenderDamageTaken } = rewards;
-        
-        // Обновляем матч
-        await client.query(
-            `UPDATE pvp_battles SET 
-                winner_id = $1, 
-                loser_id = $2,
-                coins_stolen = $3,
-                items_stolen = $4,
-                experience_gained = $5,
-                attacker_damage_dealt = $6,
-                attacker_damage_taken = $7,
-                defender_damage_dealt = $8,
-                defender_damage_taken = $9,
-                ended_at = NOW()
-             WHERE id = $10`,
-            [winnerId, loserId, coinsStolen, JSON.stringify(itemsStolen), 
-             experienceGained, attackerDamageDealt, attackerDamageTaken,
-             defenderDamageDealt, defenderDamageTaken, matchId]
-        );
-        
-        // Обновляем статистику победителя
-        // Логика подсчёта урона:
-        // - Если победил атакующий: учитываем его урон (attackerDamageDealt)
-        // - Если победил защищающийся: учитываем его урон от контратак (defenderDamageDealt)
-        // Это отражает реальный вклад в победу
-        const winnerDamageDealt = winnerWasAttacker 
-            ? attackerDamageDealt 
-            : defenderDamageDealt;
-        
-        // Логирование для отладки (только в dev режиме)
-        if (process.env.NODE_ENV !== 'production') {
-            logger.debug(`[PvP] Победитель ${winnerId}: урон = ${winnerDamageDealt} (был атакующим: ${winnerWasAttacker})`);
-        }
-        
-        // Формируем правильный запрос для обновления
-        // ВНИМАНИЕ: инвентарь обновляется ниже отдельным запросом
-        let winnerUpdateQuery = `
-            UPDATE players SET 
-                pvp_wins = pvp_wins + 1,
-                pvp_streak = pvp_streak + 1,
-                pvp_max_streak = GREATEST(pvp_max_streak, pvp_streak + 1),
-                pvp_rating = pvp_rating + 25,
-                pvp_total_damage_dealt = pvp_total_damage_dealt + $1,
-                experience = experience + $2,
-                coins = coins + $3
-        `;
-        
-        const winnerParams = [winnerDamageDealt, experienceGained, coinsStolen, winnerId];
-        
-        // Явный параметр вместо интерполяции длины массива
-        const winnerIdParamIndex = winnerParams.length;
-        winnerUpdateQuery += ` WHERE id = ${winnerIdParamIndex} RETURNING *`;
-        
-        const winner = await client.query(winnerUpdateQuery, winnerParams);
-
-        // Вычисляем урон, полученный проигравшим (только урон от атакующего)
-        const loserDamageTaken = winnerWasAttacker ? attackerDamageDealt : defenderDamageDealt;
-
-        // Обновляем статистику проигравшего
-        // Телепортируем в первую безопасную локацию (не красную зону)
-        const loser = await client.query(
-            `UPDATE players SET 
-                pvp_losses = pvp_losses + 1,
-                pvp_streak = 0,
-                pvp_rating = GREATEST(500, pvp_rating - 15),
-                pvp_total_damage_taken = pvp_total_damage_taken + $1,
-                coins = GREATEST(0, coins - $2),
-                coins_stolen_from_me = coins_stolen_from_me + $2,
-                current_location_id = COALESCE(
-                    (SELECT id FROM locations WHERE COALESCE(danger_level, 0) < 6 ORDER BY danger_level ASC, id ASC LIMIT 1),
-                    1
-                )
-             WHERE id = $3
-             RETURNING *`,
-            [loserDamageTaken, coinsStolen, loserId]
-        );
-        
-        // Забираем предмет у проигравшего
-        if (itemsStolen && itemsStolen.length > 0) {
-            const loserInventory = loser.rows[0].inventory || {};
-            for (const item of itemsStolen) {
-                if (loserInventory[item.itemId]) {
-                    const qty = Math.min(loserInventory[item.itemId], item.quantity);
-                    loserInventory[item.itemId] -= qty;
-                    if (loserInventory[item.itemId] <= 0) {
-                        delete loserInventory[item.itemId];
-                    }
-                }
-            }
-            
-            await client.query(
-                'UPDATE players SET inventory = $1 WHERE id = $2',
-                [JSON.stringify(loserInventory), loserId]
-            );
-            
-            // Добавляем предметы победителю
-            const winnerInventory = winner.rows[0].inventory || {};
-            for (const item of itemsStolen) {
-                winnerInventory[item.itemId] = (winnerInventory[item.itemId] || 0) + item.quantity;
-            }
-            
-            await client.query(
-                'UPDATE players SET inventory = $1 WHERE id = $2',
-                [JSON.stringify(winnerInventory), winnerId]
-            );
-        }
-        
-        await client.query('COMMIT');
-        
-        return {
-            matchId,
-            winnerId,
-            loserId,
-            rewards: {
-                coinsStolen,
-                itemsStolen,
-                experienceGained
-            }
-        };
-        
-    } catch (error) {
-        logger.error('[PvP] Ошибка в resolvePvpFight:', error);
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
-    }
-}
+// ==========================================
+// ЧИСТЫЕ БОЕВЫЕ ФОРМУЛЫ (без обращения к БД)
+// ==========================================
 
 /**
- * Расчёт урона в PvP
- * @param {object} attacker - Атакующий игрок
- * @param {object} defender - Защищающийся игрок
- * @returns {object} { damage, isCritical, counterDamage }
+ * Расчёт базового урона в PvP (детерминированный, без уклонения)
+ * Формула совпадает с логикой роута: сила*2 + ловкость*0.8 + оружие,
+ * поправка на разницу уровней ±1% за уровень, снижение от выносливости
+ * защитника (soft cap 60%), минимум 1 урон.
+ * @param {object} attacker - атакующий ({ strength, agility, level, equipment })
+ * @param {object} defender - защищающийся ({ endurance, level, equipment })
+ * @returns {{damage: number}} объект с итоговым уроном
  */
 function calculatePVPDamage(attacker, defender) {
-    // Базовая формула урона
-    const baseDamage = attacker.strength || 1;
-    const weaponBonus = attacker.equipment?.weapon?.stats?.damage || 0;
-    const agilityBonus = Math.floor((attacker.agility || 1) / 5);
-    const luckBonus = Math.floor(Math.random() * (attacker.luck || 1));
-    
-    // Шанс критического удара (ловкость / 100)
-    const critChance = (attacker.agility || 1) / 100;
-    const isCritical = Math.random() < critChance;
-    
-    let damage = baseDamage + weaponBonus + agilityBonus + luckBonus;
-    if (isCritical) {
-        damage = Math.floor(damage * 1.5);
+    const a = attacker || {};
+    const d = defender || {};
+
+    let damage = Number(a.strength || 0) * 2 + Number(a.agility || 0) * 0.8;
+
+    const aEq = a.equipment && typeof a.equipment === 'object' ? a.equipment : {};
+    if (aEq.weapon && aEq.weapon.damage) {
+        damage += Number(aEq.weapon.damage || 0);
     }
-    
-    // Защита брони
-    const defense = (defender.equipment?.body?.stats?.defense || 0) + 
-                    (defender.equipment?.head?.stats?.defense || 0);
-    damage = Math.max(1, damage - defense);
-    
-    // Контратака защищающегося (шанс зависит от ловкости)
-    const counterChance = (defender.agility || 1) / 200;
-    const counterDamage = Math.random() < counterChance ? Math.floor(damage * 0.3) : 0;
-    
-    return { damage, isCritical, counterDamage };
+
+    // Влияние уровня: ±1% за разницу уровней
+    damage *= 1 + (Number(a.level || 1) - Number(d.level || 1)) * 0.01;
+
+    // Защита от выносливости (soft cap 60%)
+    const endurance = Number(d.endurance || 0);
+    const defenseReduction = Math.min(60, endurance / (endurance + 60) * 60);
+    damage = Math.floor(damage * (1 - defenseReduction / 100));
+
+    return { damage: Math.max(1, damage) };
 }
 
 /**
- * Получение списка предметов для кражи
- * @param {object} inventory - Инвентарь игрока
- * @param {number} maxItems - Максимальное количество предметов
- * @returns {Array} Массив предметов для кражи
+ * Расчёт количества монет, которые можно украсть у проигравшего
+ * @param {number} coins - монеты проигравшего
+ * @returns {number} количество украденных монет (10%, максимум 10000)
  */
-function getRandomItemsToSteal(inventory, maxItems = 3) {
-    // Инвентарь - массив предметов, а не объект
-    const items = Array.isArray(inventory)
-        ? inventory
-            .filter(item => Number(item?.quantity || 0) > 0)
-            .map(item => ({ itemId: Number(item.id), quantity: Number(item.quantity) }))
-        : [];
-    
-    // Fisher-Yates shuffle
-    const shuffled = [...items];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    
-    const count = Math.min(maxItems, shuffled.length);
-    const stolenItems = [];
-    for (let i = 0; i < count; i++) {
-        const item = shuffled[i];
-        const stealQty = Math.min(item.quantity, Math.floor(Math.random() * 2) + 1);
-        stolenItems.push({ itemId: item.itemId, quantity: stealQty });
-    }
-    
-    return stolenItems;
-}
-
-/**
- * Расчёт монет для кражи
- * @param {number} loserCoins - Монеты проигравшего
- * @param {number} attackerLuck - Удача атакующего
- * @returns {number} Количество украденных монет
- */
-function calculateCoinsToSteal(loserCoins, attackerLuck) {
-    if (loserCoins <= 0) return 0;
-    
-    // Базовая формула: 10-30% от монет + бонус от удачи
-    const basePercent = 0.1 + Math.random() * 0.2;
-    const luckBonus = (attackerLuck || 1) * 0.005;
-    const percent = Math.min(0.5, basePercent + luckBonus);
-    
-    return Math.floor(loserCoins * percent);
+function calculateCoinsToSteal(coins) {
+    const safeCoins = Math.max(0, Number(coins || 0));
+    return Math.min(Math.floor(safeCoins * 0.1), 10000);
 }
 
 /**
  * Расчёт опыта за победу в PvP
- * @param {number} loserLevel - Уровень проигравшего
- * @param {number} winnerLevel - Уровень победителя
- * @returns {number} Количество опыта
+ * @param {number} winnerLevel - уровень победителя
+ * @param {number} loserLevel - уровень проигравшего
+ * @returns {number} количество опыта (база 50 + 5 за каждый уровень разницы)
  */
-function calculatePVPRewardExperience(loserLevel, winnerLevel) {
-    // Больше опыта за победу над более сильным противником
-    const levelDiff = loserLevel - winnerLevel;
-    const baseExp = 50;
-    const levelBonus = Math.max(0, levelDiff * 10);
-    
-    return baseExp + levelBonus;
+function calculatePVPRewardExperience(winnerLevel, loserLevel) {
+    const diff = Math.abs(Number(winnerLevel || 1) - Number(loserLevel || 1));
+    return 50 + diff * 5;
+}
+
+/**
+ * Выбор случайных предметов для кражи из инвентаря
+ * @param {Array} inventory - инвентарь проигравшего
+ * @param {number} maxItems - максимум предметов
+ * @returns {Array} массив украденных предметов
+ */
+function getRandomItemsToSteal(inventory, maxItems = 1) {
+    if (!Array.isArray(inventory) || inventory.length === 0) return [];
+
+    const available = inventory.filter(item => item && Number(item.quantity || 0) > 0);
+    const shuffled = [...available];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    return shuffled.slice(0, Math.max(0, Number(maxItems) || 0));
 }
 
 module.exports = {
-    isRedZone,
+    // Доступ к данным
     isProtectedFromPVP,
     getPVPCooldown,
     setPVPCooldown,
-    getPlayersInLocation,
-    getPVPStats,
     createPVPMatch,
-    finishPVPMatch,
+
+    // Чистые формулы
     calculatePVPDamage,
-    getRandomItemsToSteal,
     calculateCoinsToSteal,
-    calculatePVPRewardExperience
+    calculatePVPRewardExperience,
+    getRandomItemsToSteal
 };

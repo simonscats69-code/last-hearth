@@ -6,6 +6,11 @@ module.exports = {
   testMatch: [
     '**/*.test.js'
   ],
+  // Игнорировать worktree-директории и node_modules
+  testPathIgnorePatterns: [
+    '/\\.kilo/',
+    '/node_modules/'
+  ],
   // Для CommonJS модулей
   testEnvironment: 'node'
 };

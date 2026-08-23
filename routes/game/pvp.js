@@ -16,7 +16,8 @@ const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError, safeParse, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
-const { getActiveBuffs, normalizeInventory } = require('../../utils/game-helpers');
+const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment } = require('../../utils/game-helpers');
+const realtime = require('../../utils/realtime');
 
 
 
@@ -274,6 +275,17 @@ router.post('/attack', async (req, res) => {
                 throw new Error('COOLDOWN: Противник временно защищён от PvP');
             }
 
+            // P1-5: защита от фарма одной цели (короткий кулдаун на пару)
+            const targetFarmCooldown = await client.query(
+                `SELECT expires_at FROM pvp_cooldowns
+                 WHERE player_id = $1 AND cooldown_type = $2 AND expires_at > NOW()
+                 LIMIT 1`,
+                [playerId, `pvp_target_${target_id}`]
+            );
+            if (targetFarmCooldown.rows[0]) {
+                throw new Error('COOLDOWN: Нельзя атаковать эту цель слишком часто');
+            }
+
             const existingBattleResult = await client.query(
                 `SELECT id, attacker_id, defender_id
                  FROM pvp_battles
@@ -405,34 +417,34 @@ router.post('/attack-hit', async (req, res) => {
             }
 
             const activeBuffs = getActiveBuffs(attacker.buffs);
+            // P0-1: пересчитываем энергию по реальному времени перед тратой
+            await recalcEnergy(client, attacker);
             if (!activeBuffs.free_energy && Number(attacker.energy || 0) < 1) {
                 throw new Error('Нужна энергия для удара');
             }
 
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
+            // P0-1: списываем энергию БЕЗ сброса last_energy_update
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1),
-                     last_energy_update = NOW()
+                 SET energy = GREATEST(0, energy - $1)
                  WHERE id = $2
                  RETURNING energy`,
                 [energyCost, attackerId]
             );
             const energyLeft = Number(energyResult.rows[0]?.energy || 0);
 
-            // Вычисляем урон атакующего
-            let damage = (attacker.strength * 2) + (attacker.agility * 0.5);
+            // P1-6: формулы с насыщением (soft caps) — вынесены в db/pvp.js
+            const attackerEq = normalizeEquipment(attacker.equipment);
+            const defenderEq = normalizeEquipment(defender.equipment);
+            let damage = pvp.calculatePVPDamage(
+                { ...attacker, equipment: attackerEq },
+                { ...defender, equipment: defenderEq }
+            ).damage;
 
-            // Бонус от оружия
-            const equipment = safeParse(attacker.equipment, {});
-            if (equipment.weapon && equipment.weapon.damage) {
-                damage += equipment.weapon.damage;
-            }
-
-            // Проверка на уклонение (agility)
-            // Шанс уклонения = min(25%, agility * 0.5%)
-            const dodgeChance = Math.min(25, defender.agility * 0.5);
+            // Уклонение (soft cap 20%)
+            const dodgeChance = Math.min(20, defender.agility / (defender.agility + 40) * 20);
             const isDodged = Math.random() * 100 < dodgeChance;
             
             if (isDodged) {
@@ -442,6 +454,9 @@ router.post('/attack-hit', async (req, res) => {
                      WHERE id = $1`,
                     [battle_id]
                 );
+
+                // P2-14: уведомляем противника
+                try { realtime.notifyPlayer?.(defenderId, 'pvp_dodge', { battleId: battle_id }); } catch {}
 
                 return {
                     dodged: true,
@@ -456,12 +471,6 @@ router.post('/attack-hit', async (req, res) => {
                     energy_left: energyLeft
                 };
             }
-
-            // Защита от выносливости (endurance)
-            // Уменьшаем урон: min(75%, endurance * 0.5%)
-            const defenseReduction = Math.min(75, defender.endurance * 0.5);
-            damage = Math.floor(damage * (1 - defenseReduction / 100));
-            damage = Math.max(1, damage); // Минимальный урон 1
 
             // Применяем урон
             const newHealth = Math.max(0, defender.health - damage);
@@ -502,26 +511,21 @@ router.post('/attack-hit', async (req, res) => {
             if (newHealth <= 0) {
                 battleEnded = true;
 
-                // Награда победителю
-                // Ограничиваем максимальную награду
-                const MAX_PVP_COINS = 10000;
-                const coinsReward = Math.min(
-                    Math.floor((defender.coins || 0) * 0.1),
-                    MAX_PVP_COINS
-                );
+                // Награда победителю — формулы вынесены в db/pvp.js
+                const coinsReward = pvp.calculateCoinsToSteal(defender.coins);
 
                 // Шанс украсть предмет (снижено с 30% до 10%)
                 const defenderInventory = normalizeInventory(defender.inventory);
                 const attackerInventory = normalizeInventory(attacker.inventory);
                 let stolenItem = null;
 
-                if (Array.isArray(defenderInventory) && defenderInventory.length > 0 && Math.random() < 0.1) {
-                    const stolenIndex = Math.floor(Math.random() * defenderInventory.length);
-                    const [removedItem] = defenderInventory.splice(stolenIndex, 1);
-
-                    if (removedItem) {
-                        stolenItem = removedItem;
-                        attackerInventory.push(removedItem);
+                if (Math.random() < 0.1) {
+                    const [stolen] = pvp.getRandomItemsToSteal(defenderInventory, 1);
+                    if (stolen) {
+                        const stolenIndex = defenderInventory.indexOf(stolen);
+                        defenderInventory.splice(stolenIndex, 1);
+                        stolenItem = stolen;
+                        attackerInventory.push(stolen);
                     }
                 }
 
@@ -548,7 +552,7 @@ await client.query(`
                  `, [attackerId, defenderId, coinsReward, battle_id]);
 
                 // Обновляем PvP статистику победителя и даём опыт
-                const pvpExpReward = 50; // 50 XP за победу в PvP
+                const pvpExpReward = pvp.calculatePVPRewardExperience(attacker.level, defender.level);
                 await client.query(
                     `UPDATE players
                      SET pvp_wins = pvp_wins + 1,
@@ -597,6 +601,41 @@ await client.query(`
                 };
                 winner = { id: attackerId };
                 loser = { id: defenderId };
+
+                // P1-5: устанавливаем кулдаун после боя для обоих + защита от фарма цели
+                const cooldownMin = 5;
+                await client.query(
+                    `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)
+                     VALUES ($1, 'pvp_battle', NOW() + ($2 || ' minutes')::interval)
+                     ON CONFLICT (player_id, cooldown_type)
+                     DO UPDATE SET expires_at = NOW() + ($2 || ' minutes')::interval`,
+                    [attackerId, cooldownMin]
+                );
+                await client.query(
+                    `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)
+                     VALUES ($1, 'pvp_battle', NOW() + ($2 || ' minutes')::interval)
+                     ON CONFLICT (player_id, cooldown_type)
+                     DO UPDATE SET expires_at = NOW() + ($2 || ' minutes')::interval`,
+                    [defenderId, cooldownMin]
+                );
+                // Защита от повторной атаки одной цели (10 мин)
+                await client.query(
+                    `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)
+                     VALUES ($1, 'pvp_target_' || $2, NOW() + '10 minutes'::interval)
+                     ON CONFLICT (player_id, cooldown_type)
+                     DO UPDATE SET expires_at = NOW() + '10 minutes'::interval`,
+                    [attackerId, defenderId]
+                );
+
+                // P2-14: уведомляем противника о поражении/завершении
+                try {
+                    realtime.notifyPlayer?.(defenderId, 'pvp_defeat', {
+                        battleId: battle_id,
+                        by: attackerId,
+                        damage,
+                        coinsLost: coinsReward
+                    });
+                } catch {}
 
                 // Логируем завершение боя
                 await logPlayerAction(playerId, 'pvp_battle_win', {

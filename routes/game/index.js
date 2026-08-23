@@ -154,19 +154,40 @@ function buildRequestPlayer(user, dbPlayer) {
     };
 }
 
+/**
+ * Разбор пользователя из initData без проверки подписи.
+ * Допустим ТОЛЬКО в development (когда нет TG_BOT_TOKEN и проверить подпись невозможно).
+ */
+function parseUserFromInitDataUnsafe(initData) {
+    try {
+        const params = new URLSearchParams(initData);
+        const user = JSON.parse(params.get('user') || '{}');
+        return user?.id ? { user } : null;
+    } catch {
+        return null;
+    }
+}
+
 // Middleware для валидации Telegram данных
 async function validatePlayer(req, res, next) {
-    logger.info('[validatePlayer] Начало валидации', { path: req.path, method: req.method });
     try {
         const initData = req.headers['x-telegram-init-data'] || req.headers['x-init-data'];
         const botToken = process.env.TG_BOT_TOKEN;
-        
+
         if (!initData) {
             logger.warn('[validatePlayer] Отсутствует initData');
             return res.status(401).json({ error: 'Нет данных авторизации' });
         }
 
-        const validated = validateTelegramInitData(initData, botToken);
+        let validated;
+        if (botToken) {
+            validated = validateTelegramInitData(initData, botToken);
+        } else if (process.env.NODE_ENV !== 'production') {
+            // Dev-режим без токена: подпись проверить нечем, разбираем как есть
+            logger.warn('[validatePlayer] TG_BOT_TOKEN не настроен — авторизация без проверки подписи (development)');
+            validated = parseUserFromInitDataUnsafe(initData);
+        }
+
         if (!validated) {
             logger.warn('[validatePlayer] Невалидные данные авторизации', {
                 initDataLength: initData.length,

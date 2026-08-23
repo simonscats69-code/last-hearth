@@ -4,9 +4,9 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, transaction: tx } = require('../../db/database');
+const { transaction: tx } = require('../../db/database');
 const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
+const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { DebuffAPI } = require('./debuffs');
 const { buildPlayerStatus, normalizeInventory } = require('../../utils/game-helpers');
 

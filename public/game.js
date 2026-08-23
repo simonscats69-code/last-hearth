@@ -263,12 +263,8 @@ window.addEventListener('unhandledrejection', function(event) {
  * Оптимизировано со словарём эндпоинтов
  */
 
-// Базовый URL API
-// Сначала пробуем явную конфигурацию окна, затем same-origin для prod/dev,
-// и только потом fallback на основной production endpoint.
-const API_BASE = window.__API_BASE__ || (window.location.origin + '/api')
-    || `${window.location.origin}/api`
-    || 'https://last-hearth.bothost.ru/api';
+// Базовый URL API: явная конфигурация окна либо same-origin /api
+const API_BASE = window.__API_BASE__ || `${window.location.origin}/api`;
 
 // ============================================
 // СЛОВАРЬ ЭНДПОИНТОВ
@@ -311,14 +307,13 @@ const endpoints = {
     // PvP
     pvpAttack: { endpoint: '/game/pvp/attack', method: 'POST' },
     
-    // Рефералы (алиасы на /player/referrals)
+    // Рефералы
     referralCode: { endpoint: '/game/player/referrals', method: 'GET' },
-    referralUse: { endpoint: '/game/player/referrals/use', method: 'POST' },
-    
+    referralUse: { endpoint: '/game/player/referral/use', method: 'POST' },
+
     // Рейдовые боссы
     clanBoss: { endpoint: '/game/bosses/raids', method: 'GET' },
-    clanBossSpawn: { endpoint: '/game/bosses/raid/start', method: 'POST' },
-    clanBossAttack: { endpoint: '/game/bosses/raid/attack', method: 'POST' }
+    clanBossSpawn: { endpoint: '/game/bosses/raid/start', method: 'POST' }
 };
 
 // ============================================
@@ -342,8 +337,7 @@ const cacheInvalidationMap = {
     'clanLeave': ['clan', 'profile'],
     'pvpAttack': ['profile'],
     'referralUse': ['profile'],
-    'clanBossSpawn': ['clanBoss', 'profile'],
-    'clanBossAttack': ['clanBoss', 'profile']
+    'clanBossSpawn': ['clanBoss', 'profile']
 };
 
 function getCached(key) {
@@ -1289,23 +1283,22 @@ function updateEnergyTimer() {
  */
 async function getDamagePreview(bossId) {
     try {
-        const data = await apiRequest('/game/boss-bonuses');
-        
+        // Серверный эндпоинт: GET /api/game/bosses/bonuses
+        const data = await apiRequest('/game/bosses/bonuses');
+
         if (data?.success && data?.data?.bonuses) {
             const bonus = data.data.bonuses.find(b => b.boss_id === bossId);
-            if (bonus && gameState?.player) {
-                const playerLevel = gameState.player.level || 1;
-                const baseDamage = 1;
-                const masteryBonus = bonus.kill_bonus || 0;
-                const levelBonus = playerLevel;
-                const totalDamage = baseDamage + masteryBonus + levelBonus;
-                
+            if (bonus) {
+                const totalDamage = Number(bonus.current_damage || 0);
+                const masteryBonus = Number(bonus.mastery_bonus || 0);
+                const baseDamage = Math.max(1, totalDamage - masteryBonus);
+
                 return {
                     baseDamage,
                     masteryBonus,
-                    levelBonus,
+                    levelBonus: 0,
                     totalDamage,
-                    kills: bonus.kills || 0
+                    kills: bonus.defeated_count || 0
                 };
             }
         }
@@ -1623,13 +1616,6 @@ function goToMain() {
 }
 
 /**
- * Показать экран профиля
- */
-function showProfile() {
-    showScreen('profile');
-}
-
-/**
  * Показать экран боя с боссом
  * @param {number} bossId - ID босса
  */
@@ -1654,7 +1640,6 @@ window.showScreen = showScreen;
 window.onScreenOpen = onScreenOpen;
 window.renderMain = renderMain;
 window.goToMain = goToMain;
-window.showProfile = showProfile;
 window.showBossFight = showBossFight;
 window.backToBosses = backToBosses;
 window.hideLoadingScreen = hideLoadingScreen;
@@ -1736,10 +1721,11 @@ async function initGame() {
             }
         }
 
-        // Проверяем/создаём игрока
-        const verifyResult = await apiRequest('/verify-telegram', {
+        // Проверяем/создаём игрока.
+        // Сервер требует подписанный initData при наличии TG_BOT_TOKEN.
+        await apiRequest('/verify-telegram', {
             method: 'POST',
-            body: { telegram_id: telegramId }
+            body: { telegram_id: telegramId, initData: getInitData() }
         });
         
         // Загружаем профиль с обработкой ошибок
@@ -1818,40 +1804,69 @@ async function initGame() {
 
 /**
  * Загрузка профиля игрока
+ * API возвращает { success, data: { player, achievements, progress, inventory, equipment, active_buffs } }
  */
 async function loadProfile() {
     const response = await apiRequest('/api/game/profile');
-    
-    // Проверяем success
+
     if (!response?.success) {
         console.error('Ошибка загрузки профиля:', response?.message || 'Unknown error');
         return;
     }
-    
-    // API возвращает { success: true, data: { ... } }
-    // Нужно распаковать данные для удобного доступа
-    const data = response?.data || response;
-    
-    if (!data || typeof data !== 'object') {
+
+    const payload = response?.data || response;
+
+    if (!payload || typeof payload !== 'object') {
         console.error('Неверный формат ответа профиля:', response);
         return;
     }
-    
-// Гарантируем наличие объекта статуса
-    if (!data.status || typeof data.status !== 'object') {
-        data.status = {};
+
+    // Распаковываем вложенный объект player в плоскую структуру,
+    // которую ожидает остальной UI
+    const rawPlayer = payload.player || {};
+    const playerData = { ...rawPlayer };
+
+    // Статус для getEffectivePlayerStatus / updateProfileUI
+    playerData.status = {
+        health: Number(playerData.health || 0),
+        max_health: Number(playerData.max_health || 100),
+        radiation: Number(playerData.radiation || 0),
+        infections: Number(playerData.infections || 0),
+        infections_list: playerData.infections_list || [],
+        energy: Number(playerData.energy || 0),
+        max_energy: Number(playerData.max_energy || 100),
+        last_energy_update: playerData.last_energy_update || null
+    };
+    playerData.energy = playerData.status.energy;
+    playerData.max_energy = playerData.status.max_energy;
+
+    // Прогресс опыта по формуле сервера: 500 * lvl * (1 + lvl / 25)
+    const level = Math.max(1, Number(playerData.level || 1));
+    const expNeeded = Math.round(500 * level * (1 + level / 25));
+    const expCurrent = Number(playerData.experience || 0);
+    playerData.exp_progress = {
+        current: expCurrent,
+        needed: expNeeded,
+        percent: Math.min(100, Math.floor((expCurrent / expNeeded) * 100))
+    };
+
+    // Экипировка, баффы и инвентарь из ответа
+    playerData.equipment = payload.equipment || {};
+    gameState.inventory = Array.isArray(payload.inventory) ? payload.inventory : [];
+    gameState.buffs = payload.active_buffs || {};
+    playerData.buffs = gameState.buffs;
+
+    // Текущая локация — берём из уже загруженного списка локаций
+    if (Array.isArray(gameState.locations) && gameState.locations.length && playerData.current_location_id) {
+        playerData.location = gameState.locations.find(loc => loc.id === playerData.current_location_id)
+            || playerData.location
+            || null;
     }
-    
-    // Также дублируем energy на верхний уровень для совместимости
-    // Добавляем fallback значения для защиты от undefined
-    data.energy = data.status.energy ?? 0;
-    data.max_energy = data.status.max_energy ?? 100;
-    
-    gameState.player = data;
-    gameState.buffs = data.buffs || {};
-    
+
+    gameState.player = playerData;
+
     // Обновляем UI
-    updateProfileUI(data);
+    updateProfileUI(playerData);
     refreshPlayerEnergyUI();
 }
 
@@ -2733,6 +2748,14 @@ async function loadLocations() {
     const response = await apiRequest('/api/game/locations');
     const data = response.data || response;
     gameState.locations = data.locations || [];
+
+    // Обновляем текущую локацию игрока, если профиль уже загружен
+    if (gameState.player?.current_location_id) {
+        gameState.player.location = gameState.locations.find(
+            loc => loc.id === gameState.player.current_location_id
+        ) || gameState.player.location || null;
+    }
+
     syncUnlockedLocations(false);
 }
 
@@ -2769,6 +2792,9 @@ async function searchLoot() {
         const result = response?.data || response;
         
         if (result.success) {
+            // Сбрасываем кэш рендеринга — инвентарь мог измениться
+            RenderCache.clear();
+            
             // Анимация лута если предмет найден
             if (result.found_item) {
                 showLootAnimation(result.found_item);
@@ -2875,7 +2901,7 @@ async function moveToLocation(locationId) {
             updateProfileUI(gameState.player);
             updateMapRiskPreview();
             showScreen('main');
-            showModal('✅ Успех', result.message || result.data?.message);
+            showModal('✅ Успех', result.data?.message || result.message || `Вы прибыли в ${locationData?.name || 'новую локацию'}`);
             await loadProfile();
         } else {
             showModal('⚠️ Внимание', result.error || result.message);
@@ -2962,6 +2988,9 @@ async function useItem(itemId, options = {}) {
         if (result.success) {
             showModal('✅ Успех', payload.message || result.message || 'Действие выполнено');
             
+            // Сбрасываем кэш рендеринга, т.к. инвентарь изменился
+            RenderCache.clear();
+            
             // Обновляем инвентарь и профиль
             await loadInventory();
             await loadProfile();
@@ -2989,7 +3018,10 @@ async function loadInventory() {
     try {
         const response = await apiRequest('/api/game/inventory');
         const data = response.data || response;
-        const inventoryItems = Array.isArray(data.inventory) ? data.inventory : [];
+        const rawItems = Array.isArray(data.inventory) ? data.inventory : [];
+
+        // Сервер не возвращает индексы — добавляем их для item_index в API
+        const inventoryItems = rawItems.map((item, index) => ({ ...item, index }));
 
         gameState.inventory = inventoryItems;
         
@@ -3632,6 +3664,9 @@ async function attackBoss() {
             
             // Проверка на победу
             if (result.boss_defeated) {
+                // Сбрасываем кэш, т.к. список боссов и инвентарь изменились
+                RenderCache.clear();
+                
                 playSound('victory');
                 showVictoryFlash?.();
                 showBossDeathParticles?.();
@@ -3981,7 +4016,7 @@ function renderClansList(clans) {
                 '<div class="clan-list-icon">🏰</div>' +
                 '<div class="clan-list-info">' +
                     '<div class="clan-list-name">' + escapeHtml(clan.name) + '</div>' +
-                    '<div class="clan-list-stats">👥 ' + (clan.member_count || 1) + ' | Уровень ' + escapeHtml(clan.level) + '</div>' +
+                    '<div class="clan-list-stats">👥 ' + (clan.members_count || 1) + ' | Уровень ' + escapeHtml(clan.level) + '</div>' +
                 '</div>' +
                 '<button class="join-btn" data-clan-id="' + escapeHtml(clan.id) + '">Вступить</button>' +
             '</div>';
@@ -4194,9 +4229,9 @@ function renderClanChat(messages) {
                 '<div class="chat-text">' + escapeHtml(msg.message) + '</div>' +
             '</div>';
         },
-        '<div class="empty-message">Сообщений пока нет</div>'
+        { emptyMessage: 'Сообщений пока нет' }
     );
-    
+
     container.scrollTop = container.scrollHeight;
 }
 
@@ -4232,30 +4267,35 @@ async function sendClanMessage() {
  * Восстановление энергии за Stars
  */
 async function restoreEnergy() {
-    const cost = 1;
-    
+    // Сервер: покупка энергии стоит 5 звёзд (даёт до +25 энергии)
+    const STARS_COST = 5;
+
     if (!gameState.player) {
         showModal('⚠️ Ошибка', 'Данные игрока не загружены');
         return;
     }
-    
+
     const playerStars = gameState.player.stars || 0;
-    if (playerStars < cost) {
-        showModal('⚠️ Внимание', 'Недостаточно звёзд!');
+    if (playerStars < STARS_COST) {
+        showModal('⚠️ Внимание', 'Недостаточно звёзд! Нужно 5 ⭐.');
         return;
     }
-    
+
     try {
         const result = await apiRequest('/api/game/player/buy-energy', {
             method: 'POST',
-            body: { amount: 10 }
+            body: {}
         });
-        
+
         if (result.success) {
-            syncPlayerEnergyState(result.energy, result.max_energy, result.last_energy_update || null);
+            const payload = result?.data || result;
+            syncPlayerEnergyState(payload.energy, gameState.player?.status?.max_energy);
+            if (payload.stars !== undefined) {
+                gameState.player.stars = payload.stars;
+            }
             refreshPlayerEnergyUI();
             await loadProfile();
-            showModal('✅ Успех', `Энергия восстановлена! (-${result.stars_spent} ⭐)`);
+            showModal('✅ Успех', `Энергия восстановлена! (-${STARS_COST} ⭐)`);
         }
     } catch (error) {
         console.error('Restore energy error:', error);
@@ -6341,6 +6381,9 @@ async function buyShopItem(itemId, category) {
         });
         
         if (result.success) {
+            // Сбрасываем кэш, т.к. инвентарь изменился
+            RenderCache.clear();
+            
             // Применяем эффект баффа
             if (category === 'buffs') {
                 applyBuff(item);
@@ -6730,9 +6773,12 @@ async function buyCoinItem(itemId) {
         if (response.success) {
             showModal('✅ Успешно', `Вы купили ${item.name}!`);
             
+            // Сбрасываем кэш, т.к. инвентарь изменился
+            RenderCache.clear();
+            
             // Обновляем баланс
             if (gameState.player) {
-                gameState.player.coins = Number(response.remaining_coins ?? ((gameState.player.coins || 0) - price));
+                gameState.player.coins = Number(response.coins_remaining ?? ((gameState.player.coins || 0) - price));
                 const balanceEl = document.getElementById('shop-coins-balance');
                 if (balanceEl) {
                     balanceEl.textContent = formatNumber(gameState.player.coins);

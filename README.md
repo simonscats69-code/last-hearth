@@ -32,16 +32,16 @@ npm start
 
 ### Переменные окружения (.env)
 
+Полный список смотрите в [.env.example](.env.example):
+
 ```env
 PORT=3000
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=last_hearth
-DB_USER=postgres
-DB_PASSWORD=your_password
-TELEGRAM_BOT_TOKEN=your_bot_token
-MINI_APP_URL=http://localhost:3000
-WEBHOOK_URL=https://your-domain.com/webhook
+DATABASE_URL=postgresql://postgres:[PASSWORD]@host:5432/postgres
+TG_BOT_TOKEN=your_bot_token
+MINI_APP_URL=https://your-app.bothost.ru
+WEBHOOK_URL=https://your-app.bothost.ru/webhook
+ADMIN_IDS=
+WS_TOKEN_SECRET=your_ws_secret_here
 ADSGRAM_APP_ID=your_adsgram_app_id
 SECRET_KEY=your_secret_key
 ```
@@ -50,31 +50,38 @@ SECRET_KEY=your_secret_key
 
 ```
 last-hearth/
-├── index.js                 # Точка входа сервера
-├── bot/
-│   └── webhook.js           # Telegram Webhook
+├── index.js                 # Точка входа сервера (Express + статика)
+├── webhook.js               # Telegram Webhook (Telegraf)
 ├── db/
-│   ├── database.js          # Подключение и DB-утилиты
+│   ├── database.js          # Пул подключений и DB-утилиты
 │   ├── schema.js            # DDL и миграции
-│   └── players.js           # DB-слой игроков
+│   ├── players.js           # DB-слой игроков
+│   └── pvp.js               # PvP: доступ к данным + боевые формулы
 ├── routes/
-│   ├── api.js               # Общие API-роуты
-│   ├── leaderboard.js       # Рейтинги
+│   ├── admin.js             # Админ-эндпоинты
+│   ├── api.js               # Общие API-роуты (рейтинг, достижения)
 │   └── game/                # Игровые namespace-роуты
-├── services/
-│   └── playerService.js     # Бизнес-логика игрока
+│       ├── bosses.js        # Боссы и рейды
+│       ├── clans.js         # Кланы
+│       ├── items.js         # Предметы и магазин
+│       ├── minigames.js     # Колесо удачи
+│       ├── player.js        # Профиль, рефералы, энергия
+│       ├── pvp.js           # PvP-бои
+│       ├── status.js        # Статус игрока
+│       └── world.js         # Локации и поиск лута
 ├── utils/
-│   ├── serverApi.js         # Серверные утилиты и auth
+│   ├── config.js            # Конфигурация окружения
+│   ├── game-helpers.js      # Нормализация состояния + достижения
 │   ├── gameConstants.js     # Игровые формулы
-│   └── playerState.js       # Нормализация состояния игрока
+│   ├── realtime.js          # WebSocket realtime-уведомления
+│   ├── scheduler.js         # Фоновые задачи
+│   └── serverApi.js         # Серверные утилиты, auth, метрики
 └── public/
     ├── index.html           # Главная страница Mini App
+    ├── manifest.json        # PWA-манифест
+    ├── sw.js                # Service Worker
     ├── styles.css           # Стили
-    ├── game-core.js         # Ядро клиента, state, экраны
-    ├── game-systems.js      # Игровые сценарии и механики
-    ├── game-ui.js           # DOM-binding и обработчики
-    ├── game-api.js          # Клиентские API-обёртки
-    └── прочие UI/эффект-модули
+    └── game.js              # Весь клиентский код игры
 ```
 
 ## Функции игры
@@ -123,10 +130,23 @@ GET  /api/game/clans/clan
 POST /api/game/clans/clan/create
 POST /api/game/clans/clan/join
 
-POST /api/game/energy/buy-energy
-GET  /api/game/market/listings-v2
+POST /api/game/pvp/attack
+POST /api/game/pvp/attack-hit
+GET  /api/game/pvp/stats
+
+GET  /api/game/wheel
+POST /api/game/wheel/spin
+
+GET  /api/game/items/shop
+POST /api/game/items/buy
 POST /api/game/purchase
 POST /api/verify-telegram
+```
+
+## Тесты
+
+```bash
+npm test
 ```
 
 ## Лицензия

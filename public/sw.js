@@ -1,5 +1,5 @@
 // Last Hearth - Service Worker
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `last-hearth-cache-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',

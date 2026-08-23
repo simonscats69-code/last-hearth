@@ -7,15 +7,15 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
-const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
+const { queryOne, queryAll, transaction: tx } = require('../../db/database');
+const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { normalizeInventory, createInventoryItem, normalizeRadiation, normalizeInfections } = require('../../utils/game-helpers');
 
 /**
  * Получить список предметов в магазине
- * GET /items
+ * GET /items/shop (основной), GET /items (обратная совместимость)
  */
-router.get('/', async (req, res) => {
+router.get(['/shop', '/items'], async (req, res) => {
     try {
         const items = await queryAll(`
             SELECT id, name, description, type, category, rarity, 
@@ -39,9 +39,9 @@ router.get('/', async (req, res) => {
 
 /**
  * Получить инвентарь игрока
- * GET /inventory (алиас)
+ * GET /api/game/inventory (через алиас /inventory), GET /inventory (обратная совместимость)
  */
-router.get('/inventory', async (req, res) => {
+router.get(['/', '/inventory'], async (req, res) => {
     try {
         const playerId = req.player.id;
 
@@ -154,7 +154,7 @@ router.post('/buy', async (req, res) => {
 /**
  * POST /items/use — использовать/экипировать предмет
  */
-router.post('/use', async (req, res) => {
+router.post(['/use', '/use-item'], async (req, res) => {
     try {
         const playerId = req.player.id;
         const itemIndex = Number(req.body?.item_index);
@@ -225,11 +225,18 @@ router.post('/use', async (req, res) => {
             }
 
             if (stats.infection_cure) {
+                // infections — JSONB-массив объектов {type, level, expires_at};
+                // снижаем уровень каждой инфекции, полностью вылеченные удаляем
                 const cureAmount = Number(stats.infection_cure);
-                const curInf = playerInfections.reduce((sum, inf) => sum + (inf.level || 0), 0);
-                const newInf = Math.max(0, curInf - cureAmount);
+                const remaining = [];
+                for (const inf of playerInfections) {
+                    const newLevel = Math.max(0, Number(inf?.level || 0) - cureAmount);
+                    if (newLevel > 0) {
+                        remaining.push({ ...inf, level: newLevel });
+                    }
+                }
                 updates.push(`infections = $${params.length + 1}`);
-                params.push(newInf);
+                params.push(JSON.stringify(remaining));
             }
 
             if (updates.length > 0) {
