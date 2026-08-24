@@ -32,10 +32,14 @@ async function setupWebhook(app) {
     // Удаляем webhook и используем polling
     try {
         await bot.telegram.deleteWebhook();
-        bot.launch();
+        // launch() возвращает промис: без .catch() ошибка авторизации/сети
+        // превращалась в unhandledRejection и могла ронять процесс
+        Promise.resolve(bot.launch()).catch((launchError) => {
+            logger.error('Бот остановлен с ошибкой (polling):', launchError.message);
+        });
         logger.info('Бот запущен в режиме polling');
     } catch (error) {
-        logger.error('Ошибка запуска бота:', error);
+        logger.error('Ошибка запуска бота:', error.message);
     }
 
     // Команда /start - начало игры

@@ -361,52 +361,77 @@ function shutdown(signal) {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-async function startServer() {
-    try {
-        setLogger(logger);
-        
-        try {
-            await initDatabase();
-            logger.info('База данных инициализирована');
-        } catch (dbError) {
-            logger.error('Ошибка инициализации БД, продолжаем без БД:', dbError.message);
-        }
-        
-        try {
-            await initAchievementsTable();
-            logger.info('Таблица достижений инициализирована');
-        } catch (achError) {
-            // Сбой инициализации достижений не должен мешать старту HTTP-сервера:
-            // иначе процесс не поднимается и прокси отдаёт 404 на весь сайт.
-            logger.error('Ошибка инициализации таблицы достижений (продолжаем):', achError.message);
-        }
-        
-        await setupWebhook(app);
-        logger.info('Webhook настроен');
-        
-        startScheduler();
-        logger.info('Планировщик задач запущен');
-        
-        server = app.listen(PORT, '0.0.0.0', () => {
-            logger.info(`Сервер запущен на порту ${PORT}`);
-            initWebSocket(server);
-        }).on('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
-                logger.warn(`Порт ${PORT} уже используется, пробуем порт ${PORT + 1}`);
-                server = app.listen(PORT + 1, '0.0.0.0', () => {
-                    logger.info(`Сервер запущен на порту ${PORT + 1}`);
-                    initWebSocket(server);
-                }).on('error', (fallbackErr) => {
-                    logger.error({ type: 'server_fallback_error', message: fallbackErr.message });
-                    process.exit(1);
-                });
-            } else {
-                logger.error({ type: 'server_error', message: err.message });
+function startHttpServer(port) {
+    return new Promise((resolve, reject) => {
+        const srv = app.listen(port, '0.0.0.0', () => {
+            logger.info(`Сервер запущен на порту ${port}`);
+            try {
+                initWebSocket(srv);
+            } catch (wsError) {
+                logger.error('Ошибка инициализации WebSocket:', wsError.message);
             }
+            resolve(srv);
         });
+        srv.on('error', reject);
+    });
+}
+
+async function startServer() {
+    setLogger(logger);
+
+    // HTTP-сервер стартует ПЕРВЫМ. За reverse-прокси Bothost приложение
+    // обязано слушать порт как можно раньше: пока порт не открыт,
+    // прокси отвечает "404 page not found" на все запросы.
+    // БД/бот/планировщик инициализируются в фоне и не могут заблокировать listen.
+    try {
+        server = await startHttpServer(PORT);
     } catch (err) {
-        logger.error({ type: 'startup_error', message: err.message, stack: err.stack });
+        if (err.code === 'EADDRINUSE') {
+            // Нельзя молча переезжать на PORT+1 за прокси:
+            // прокси продолжит слать трафик на исходный порт -> вечный 404.
+            logger.error({
+                type: 'port_in_use',
+                message: `Порт ${PORT} занят другим процессом. Завершаемся — платформа перезапустит контейнер.`
+            });
+        } else {
+            logger.error({ type: 'server_error', message: err.message });
+        }
         process.exit(1);
+        return;
+    }
+
+    try {
+        await initDatabase();
+        logger.info('База данных инициализирована');
+    } catch (dbError) {
+        logger.error('Ошибка инициализации БД, продолжаем без БД:', dbError.message);
+    }
+
+    try {
+        await initAchievementsTable();
+        logger.info('Таблица достижений инициализирована');
+    } catch (achError) {
+        logger.error('Ошибка инициализации таблицы достижений (продолжаем):', achError.message);
+    }
+
+    // setupWebhook ждёт ответа api.telegram.org без таймаута.
+    // Зависший запрос здесь раньше блокировал app.listen -> 404 на весь сайт.
+    // Ограничиваем ожидание 20 секундами: сбой бота не влияет на работу сайта.
+    await Promise.race([
+        setupWebhook(app).then(
+            () => logger.info('Webhook настроен'),
+            (botError) => logger.error('Ошибка настройки бота (сервер работает):', botError.message)
+        ),
+        new Promise((resolve) => setTimeout(() => {
+            logger.warn('Настройка бота превысила 20 секунд — пропускаем');
+            resolve();
+        }, 20000))
+    ]);
+
+    try {
+        startScheduler();
+    } catch (schedError) {
+        logger.error('Ошибка запуска планировщика:', schedError.message);
     }
 }
 
