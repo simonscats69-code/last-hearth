@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "node -e \"console.log('No build step required')\"",
-    "start": "cross-env NODE_ENV=production node index.js",
+    "start": "node index.js",
     "dev": "node --watch index.js",
     "test": "jest",
     "migrate": "node db/database.js",
@@ -30,7 +30,6 @@
   },
   "devDependencies": {
     "babel-jest": "^29.7.0",
-    "cross-env": "^7.0.3",
     "eslint": "^8.57.0",
     "jest": "^29.7.0"
   }
