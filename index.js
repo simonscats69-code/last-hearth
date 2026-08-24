@@ -291,8 +291,14 @@ app.get('/metrics', telegramAuthMiddleware, (req, res) => {
     res.json(metrics);
 });
 
-// 404 обработчик
+// 404: для браузерных переходов по сайту отдаём index.html (SPA-fallback),
+// чтобы ни один путь не мог вернуть 404 при загрузке игры.
+// Для API и прочего — JSON 404.
 app.use((req, res) => {
+    const accept = req.headers.accept || '';
+    if (req.method === 'GET' && !req.path.startsWith('/api') && accept.includes('text/html')) {
+        return res.sendFile(path.join(__dirname, 'public/index.html'));
+    }
     res.status(404).json({ error: 'Not found' });
 });
 
