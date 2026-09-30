@@ -1,72 +1,43 @@
-// Last Hearth - Service Worker
-const CACHE_VERSION = 'v4';
-const CACHE_NAME = `last-hearth-cache-${CACHE_VERSION}`;
-const STATIC_ASSETS = [
-    '/',
-    '/index.html',
-    '/styles.css',
-    '/game.js',
-    '/sw.js',
-    '/manifest.json',
-    '/icon-192.png',
-    '/icon-512.png',
-    '/favicon.ico'
-];
+// Last Hearth — Service Worker (самоуничтожающийся)
+//
+// ВАЖНО: предыдущие версии SW кэшировали index.html и game.js по стратегии
+// cache-first, из-за чего клиенты могли бесконечно видеть устаревшую версию
+// игры после деплоя (и не получали новые фиксы). Браузеры с уже установленным
+// старым SW получат этот файл как обновление: он удалит все кэши, снимет
+// регистрацию и перезагрузит открытые страницы — после чего игра всегда
+// загружается напрямую из сети.
+//
+// Новые клиенты SW не регистрируют (регистрация убрана из index.html).
+// НЕ УДАЛЯТЬ этот файл: если /sw.js начнёт отдавать 404, проверка обновления
+// у старых клиентов провалится и они застрянут на старом кэше навсегда.
 
-// Установка - кэшируем статику
-self.addEventListener('install', (event) => {
+self.addEventListener('install', () => {
+    // Активируемся немедленно, не дожидаясь закрытия вкладок
     self.skipWaiting();
-    event.waitUntil(
-        caches.open(CACHE_NAME).then((cache) => {
-            return cache.addAll(STATIC_ASSETS);
-        })
-    );
 });
 
-// Активация - удаляем старые кэши
 self.addEventListener('activate', (event) => {
-    self.clients.claim();
     event.waitUntil(
-        caches.keys().then((cacheNames) => {
-            return Promise.all(
-                cacheNames
-                    .filter((name) => name !== CACHE_NAME)
-                    .map((name) => caches.delete(name))
-            );
-        })
-    );
-});
+        (async () => {
+            // 1. Кэши больше не нужны — данные всегда свежие из сети
+            const keys = await caches.keys();
+            await Promise.all(keys.map((key) => caches.delete(key)));
 
-// Стратегия: cache-first для статики, network-only для API
-self.addEventListener('fetch', (event) => {
-    const { request } = event;
-    const url = new URL(request.url);
+            // 2. Снимаем себя с регистрации
+            await self.registration.unregister();
 
-    // API запросы - только сеть
-    if (url.pathname.startsWith('/api/')) {
-        event.respondWith(fetch(request).catch(() => {
-            return new Response(JSON.stringify({ error: 'Нет соединения', offline: true }), {
-                status: 503,
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }));
-        return;
-    }
-
-    // Статические файлы - cache-first
-    event.respondWith(
-        caches.match(request).then((cached) => {
-            const fetchPromise = fetch(request).then((response) => {
-                if (response && response.ok) {
-                    const responseClone = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => {
-                        cache.put(request, responseClone);
-                    });
+            // 3. Перезагружаем контролируемые страницы, чтобы они получили
+            //    новую версию index.html/game.js напрямую с сервера
+            const clients = await self.clients.matchAll({ type: 'window' });
+            for (const client of clients) {
+                try {
+                    await client.navigate(client.url);
+                } catch (e) {
+                    // navigate недоступен для части клиентов — не критично
                 }
-                return response;
-            }).catch(() => cached);
-
-            return cached || fetchPromise;
-        })
+            }
+        })()
     );
 });
+
+// Никаких fetch-перехватов: все запросы идут напрямую в сеть.
