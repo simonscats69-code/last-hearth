@@ -6,8 +6,9 @@
  * runMigrations включает RLS) список "RLS-off tables" должен стать пустым.
  */
 require('dotenv').config();
-const { Pool } = require('pg');
-const p = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 6000 });
+// Конфиг берём из приложения (db/database.js): учитывает sslmode/SSL так же,
+// как сервер, — проверяем ровно то подключение, что и в бою.
+const { pool: p, describeError } = require('../db/database');
 
 (async () => {
     try {
@@ -34,7 +35,7 @@ const p = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeo
         const who = await p.query(`SELECT current_user, session_user`);
         console.log('connected as:', who.rows[0].current_user, '/', who.rows[0].session_user);
     } catch (e) {
-        console.log('DB ERR:', e.code || '', e.message);
+        console.log('DB ERR:', describeError(e));
     } finally {
         await p.end();
     }

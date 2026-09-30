@@ -15,6 +15,23 @@ function setLogger(log) {
 }
 
 /**
+ * pg >= 8.16 (pg-connection-string): sslmode из строки подключения ПЕРЕОПРЕДЕЛЯЕТ
+ * ssl из конфига (Object.assign в pg/lib/connection-parameters.js), причём
+ * require/verify-ca трактуются как verify-full — строгая проверка сертификата.
+ * Сертификат Supabase (пулер) её не проходит: SELF_SIGNED_CERT_IN_CHAIN.
+ * Поэтому sslmode вырезаем из строки, а SSL настраиваем сами:
+ * disable -> без TLS, любой другой sslmode -> TLS с rejectUnauthorized:false.
+ */
+function splitSslmode(rawUrl) {
+    const match = rawUrl.match(/[?&]sslmode=([^&]*)/);
+    if (!match) return { url: rawUrl, sslmode: null };
+    const url = rawUrl
+        .replace(/([?&])sslmode=[^&]*&?/g, '$1')
+        .replace(/[?&]$/, '');
+    return { url, sslmode: decodeURIComponent(match[1]) };
+}
+
+/**
  * Конфигурация подключения.
  * Приоритет: DATABASE_URL, иначе DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD,
  * иначе стандартный fallback pg (localhost:5432) — в контейнере это почти
@@ -28,12 +45,16 @@ function buildPoolConfig() {
     };
 
     if (process.env.DATABASE_URL) {
-        const sslRequired = process.env.DATABASE_URL.includes('sslmode=require') ||
-            process.env.DB_SSL === 'true';
+        const { url, sslmode } = splitSslmode(process.env.DATABASE_URL);
+        // sslmode=disable -> без TLS; иначе TLS без строгой проверки цепочки
+        // (сертификат Supabase её не проходит, см. комментарий splitSslmode)
+        const sslEnabled = sslmode
+            ? sslmode !== 'disable'
+            : process.env.DB_SSL === 'true';
         return {
             ...base,
-            connectionString: process.env.DATABASE_URL,
-            ssl: sslRequired ? { rejectUnauthorized: false } : false
+            connectionString: url,
+            ssl: sslEnabled ? { rejectUnauthorized: false } : false
         };
     }
 
