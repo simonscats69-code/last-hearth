@@ -1015,6 +1015,34 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
         )
     `);
     await query(`DELETE FROM achievements WHERE category = 'craft'`);
+
+    // Supabase Advisor: включение Row Level Security на всех таблицах public.
+    // - Приложение подключается ролью postgres (владелец таблиц): RLS владельцу
+    //   не применяется без FORCE, поэтому доступ приложения не меняется.
+    // - Закрывается анонимный доступ к данным через PostgREST (anon/authenticated)
+    //   без явных политик: RLS без политик -> ни одной строки для не-владельцев.
+    // - Идемпотентно: включаем только там, где RLS ещё выключен (rowsecurity = false).
+    // - Ошибка на одной таблице (нет прав владельца) не прерывает миграцию.
+    await query(`
+        DO $$
+        DECLARE tbl record;
+        BEGIN
+            FOR tbl IN
+                SELECT c.relname
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public'
+                  AND c.relkind IN ('r', 'p')
+                  AND NOT c.relrowsecurity
+            LOOP
+                BEGIN
+                    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tbl.relname);
+                EXCEPTION WHEN OTHERS THEN
+                    RAISE NOTICE 'RLS: не удалось включить на % (%): пропуск', tbl.relname, SQLERRM;
+                END;
+            END LOOP;
+        END $$;
+    `);
 }
 
 /**
