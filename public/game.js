@@ -10,15 +10,27 @@
  * @returns {string|null}
  */
 function getTelegramId() {
-    // Проверяем существование Telegram WebApp
-    if (!window.Telegram?.WebApp) {
-        return localStorage.getItem('telegram_id') || '123456789'; // Fallback для разработки
+    const tg = window.Telegram?.WebApp;
+
+    // Основной источник: SDK Telegram
+    if (tg) {
+        const id = tg.initDataUnsafe?.user?.id;
+        // Используем != null для проверки на null/undefined (включая 0)
+        if (id != null) return String(id);
     }
 
-    const tg = window.Telegram.WebApp;
-    const id = tg.initDataUnsafe?.user?.id;
-    // Используем != null для проверки на null/undefined (включая 0)
-    return id != null ? String(id) : (localStorage.getItem('telegram_id') || '123456789'); // Fallback для разработки
+    // SDK недоступен — пробуем подписанные данные из fragment прямой ссылки
+    const initData = getInitDataFromHash();
+    if (initData) {
+        try {
+            const user = JSON.parse(new URLSearchParams(initData).get('user') || '{}');
+            if (user?.id != null) return String(user.id);
+        } catch (e) {
+            // повреждённый fragment — падаем в fallback ниже
+        }
+    }
+
+    return localStorage.getItem('telegram_id') || '123456789'; // Fallback для разработки
 }
 
 
@@ -377,22 +389,62 @@ function createLoadingTimeout(showLoading) {
 }
 
 /**
+ * Извлечь initData из fragment прямой ссылки Mini App (#tgWebAppData=...).
+ * Нужен, когда SDK Telegram (window.Telegram) недоступен: например, страница
+ * открыта по прямой ссылке и telegram-web-app.js не загрузился (сеть/блокировка).
+ * Формат совпадает с логикой официального SDK: значение параметра закодировано
+ * целиком и раскодируется один раз.
+ * @returns {string|null}
+ */
+function getInitDataFromHash() {
+    if (typeof location === 'undefined' || !location.hash) return null;
+
+    const raw = location.hash.replace(/^#/, '');
+    const marker = 'tgWebAppData=';
+    const start = raw.indexOf(marker);
+    if (start === -1) return null;
+
+    let value = raw.slice(start + marker.length);
+    // Отрезаем следующие параметры fragment (tgWebAppVersion, tgWebAppThemeParams, ...)
+    const cut = value.search(/&tgWebApp[A-Za-z]+=/);
+    if (cut !== -1) value = value.slice(0, cut);
+    if (!value) return null;
+
+    let decoded = value;
+    // Целиком закодированное значение не содержит сырого '&hash=' — раскодируем
+    if (!value.includes('&hash=')) {
+        try {
+            decoded = decodeURIComponent(value);
+        } catch (e) {
+            decoded = value; // не удалось раскодировать — используем как есть
+        }
+    }
+
+    // Признак подписанных данных — наличие hash
+    return decoded.includes('hash=') ? decoded : null;
+}
+
+/**
  * Получить initData для авторизации
  * ВАЖНО: Никогда не использовать localStorage - initData имеет срок жизни (auth_date)
  * и становится invalid через некоторое время
  * @returns {string|null}
  */
 function getInitData() {
-    // Всегда используем только initData от Telegram WebApp
-    const initData = window.Telegram?.WebApp?.initData || null;
+    // 1. Основной источник: SDK Telegram (инжектится клиентом или telegram-web-app.js)
+    const fromTelegram = window.Telegram?.WebApp?.initData || null;
+    if (fromTelegram) return fromTelegram;
 
-    if (!initData) {
-        console.warn('[getInitData] Telegram WebApp initData отсутствует, используем заглушку для разработки');
-        // Возвращаем dummy initData для локальной разработки
-        return 'user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=1234567890&hash=dummy';
+    // 2. Фоллбэк: fragment прямой ссылки (если SDK не загрузился)
+    const fromHash = getInitDataFromHash();
+    if (fromHash) {
+        console.log('[getInitData] initData взят из fragment ссылки');
+        return fromHash;
     }
 
-    return initData;
+    console.warn('[getInitData] Telegram WebApp initData отсутствует, используем заглушку для разработки');
+    // Возвращаем dummy initData для локальной разработки
+    return 'user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=1234567890&hash=dummy';
 }
 
 /**
@@ -1663,15 +1715,20 @@ async function waitForTelegramWebApp(maxWait = 5000) {
     const startTime = Date.now();
     
     return new Promise((resolve) => {
+        // Данные доступны либо из SDK Telegram, либо из fragment прямой ссылки
+        const isReady = () => Boolean(
+            window.Telegram?.WebApp?.initDataUnsafe?.user || getInitDataFromHash()
+        );
+
         // Если уже загружен - сразу разрешаем
-        if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
+        if (isReady()) {
             resolve();
             return;
         }
 
         // Функция проверки
         const check = () => {
-            if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
+            if (isReady()) {
                 resolve();
                 return;
             }

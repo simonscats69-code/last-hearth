@@ -73,6 +73,12 @@ WS_TOKEN_SECRET=your_random_hex_secret
   (см. `public/index.html`), поэтому даже открытие по ссылке с fragment
   `#tgWebAppData=...` авторизуется штатно. Fragment живёт ограниченное время
   (окно проверки задаётся `MAX_INIT_DATA_AGE_SECONDS`, по умолчанию 48 ч).
+- Клиент берёт initData в таком порядке: SDK Telegram → fragment ссылки
+  (`getInitDataFromHash()` в `game.js`) → dev-заглушка `hash=dummy`.
+  Поэтому игра работает даже если `telegram.org` недоступен.
+- После деплоя `index.html` отдаётся с `Cache-Control: no-store`, но старые
+  версии могли закэшироваться на 1 час — если видите старый код в консоли,
+  подождите/перезапустите приложение.
 - 403 `telegram_id не соответствует подписанным данным` — клиент передал чужой
   id (например, старую запись в localStorage). Перезапустите Mini App.
 

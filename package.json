@@ -8,6 +8,7 @@
     "start": "node index.js",
     "dev": "node --watch index.js",
     "test": "jest",
+    "test:hash": "node scripts/test_hash_parse.js",
     "migrate": "node db/database.js",
     "prod": "node db/database.js && node index.js",
     "lint": "eslint .",
