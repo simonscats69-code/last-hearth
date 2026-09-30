@@ -73,7 +73,7 @@ const crypto = require('crypto');
 const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/game-helpers');
 const { initWebSocket, getMetrics, stopHeartbeat } = require('./utils/realtime');
-const { initDatabase, query, closePool, setLogger } = require('./db/database');
+const { initDatabase, query, closePool, setLogger, describeError } = require('./db/database');
 const { setupWebhook, bot } = require('./webhook');
 const gameRouter = require('./routes/game');
 const apiRouter = require('./routes/api');
@@ -406,33 +406,49 @@ async function startServer() {
         return;
     }
 
-    try {
-        await initDatabase();
-        logger.info('База данных инициализирована');
-    } catch (dbError) {
-        logger.error('Ошибка инициализации БД, продолжаем без БД:', dbError.message);
+    // БД может быть временно недоступна при старте (DNS, сеть, холодный
+    // старт Supabase) — повторяем подключение, прежде чем работать без БД.
+    const DB_INIT_ATTEMPTS = 3;
+    const DB_INIT_RETRY_DELAY_MS = 5000;
+    for (let attempt = 1; attempt <= DB_INIT_ATTEMPTS; attempt++) {
+        try {
+            await initDatabase();
+            logger.info('База данных инициализирована');
+            break;
+        } catch (dbError) {
+            logger.error(`Ошибка инициализации БД (попытка ${attempt}/${DB_INIT_ATTEMPTS}), продолжаем без БД: ${describeError(dbError)}`);
+            if (attempt < DB_INIT_ATTEMPTS) {
+                await new Promise(resolve => setTimeout(resolve, DB_INIT_RETRY_DELAY_MS));
+            }
+        }
     }
 
     try {
         await initAchievementsTable();
         logger.info('Таблица достижений инициализирована');
     } catch (achError) {
-        logger.error('Ошибка инициализации таблицы достижений (продолжаем):', achError.message);
+        logger.error(`Ошибка инициализации таблицы достижений (продолжаем): ${describeError(achError)}`);
     }
 
     // setupWebhook ждёт ответа api.telegram.org без таймаута.
     // Зависший запрос здесь раньше блокировал app.listen -> 404 на весь сайт.
     // Ограничиваем ожидание 20 секундами: сбой бота не влияет на работу сайта.
+    // Таймер обязательно очищаем иначе, даже при мгновенной настройке бота,
+    // через 20 секунд печатался ложный warn «превысила 20 секунд».
+    let botTimeout;
     await Promise.race([
         setupWebhook(app).then(
             () => logger.info('Webhook настроен'),
-            (botError) => logger.error('Ошибка настройки бота (сервер работает):', botError.message)
+            (botError) => logger.error('Ошибка настройки бота (сервер работает): ' + describeError(botError))
         ),
-        new Promise((resolve) => setTimeout(() => {
-            logger.warn('Настройка бота превысила 20 секунд — пропускаем');
-            resolve();
-        }, 20000))
+        new Promise((resolve) => {
+            botTimeout = setTimeout(() => {
+                logger.warn('Настройка бота превысила 20 секунд — пропускаем');
+                resolve();
+            }, 20000);
+        })
     ]);
+    clearTimeout(botTimeout);
 
     try {
         startScheduler();

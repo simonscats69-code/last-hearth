@@ -8,21 +8,25 @@
 
 ```
 # Подключение к БД (любой формат)
-DATABASE_URL=postgresql://postgres:Leonardo43552635@db.eddqhtpbpqzdixejmked.supabase.co:5432/postgres
+DATABASE_URL=postgresql://postgres:[PASSWORD]@db.eddqhtpbpqzdixejmked.supabase.co:5432/postgres?sslmode=require
 
-# Или отдельно:
+# Или отдельно (теперь тоже поддерживается кодом):
 DB_HOST=db.eddqhtpbpqzdixejmked.supabase.co
 DB_PORT=5432
 DB_NAME=postgres
 DB_USER=postgres
-DB_PASSWORD=Leonardo43552635
+DB_PASSWORD=[PASSWORD]
 
-# Telegram
-TELEGRAM_BOT_TOKEN=8298468022:AAEcwAfgPt3vOMeHyqlOKKmmVEsbG2zjXkc
+# ВАЖНО: переменная называется именно TG_BOT_TOKEN (не TELEGRAM_BOT_TOKEN)
+TG_BOT_TOKEN=your_bot_token_from_botfather
 MINI_APP_URL=https://твой-домен.bothost.ru
 WEBHOOK_URL=https://твой-домен.bothost.ru/webhook
 SECRET_KEY=любой-секретный-ключ
 ```
+
+Если ни `DATABASE_URL`, ни `DB_HOST` не заданы, pg подключается к
+`localhost:5432` — в контейнере это всегда `ECONNREFUSED`. В логах старт
+печатает строку `Подключение к БД: <host>:<port>/<db>` — проверьте её в первую очередь.
 
 ## 3. Запуск
 - Node.js версия: 18+

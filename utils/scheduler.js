@@ -9,7 +9,7 @@
  * - Batch-обработка для больших объёмов
  */
 
-const { query, transaction: tx } = require('../db/database');
+const { query, transaction: tx, describeError } = require('../db/database');
 const { logger } = require('./serverApi');
 const { checkAchievements } = require('./game-helpers');
 
@@ -84,7 +84,7 @@ async function regenerateEnergy() {
             });
         }
     } catch (err) {
-        logger.error({ type: 'energy_regen_error', message: err.message });
+        logger.error({ type: 'energy_regen_error', message: describeError(err) });
     } finally {
         isRunning.energy = false;
         
@@ -140,7 +140,7 @@ async function checkDailyActivity() {
         
         logger.info({ type: 'daily_activity', duration_ms: duration });
     } catch (err) {
-        logger.error({ type: 'daily_activity_error', message: err.message });
+        logger.error({ type: 'daily_activity_error', message: describeError(err) });
     } finally {
         isRunning.dailyActivity = false;
         
@@ -200,7 +200,7 @@ async function cleanupOldLogs() {
         
         logger.info({ type: 'cleanup', duration_ms: duration });
     } catch (err) {
-        logger.error({ type: 'cleanup_error', message: err.message });
+        logger.error({ type: 'cleanup_error', message: describeError(err) });
     } finally {
         isRunning.cleanup = false;
         
@@ -227,8 +227,8 @@ async function processPlayerAchievements(player) {
         await checkAchievements(player.id);
         return { success: true, playerId: player.id };
     } catch (err) {
-        logger.error({ type: 'achievement_error', playerId: player.id, message: err.message });
-        return { success: false, playerId: player.id, error: err.message };
+        logger.error({ type: 'achievement_error', playerId: player.id, message: describeError(err) });
+        return { success: false, playerId: player.id, error: describeError(err) };
     }
 }
 
@@ -306,7 +306,7 @@ async function checkAllAchievements() {
             duration_ms: duration
         });
     } catch (err) {
-        logger.error({ type: 'achievements_check_error', message: err.message });
+        logger.error({ type: 'achievements_check_error', message: describeError(err) });
     } finally {
         isRunning.achievements = false;
         
@@ -364,7 +364,7 @@ async function cleanupExpiredDebuffs() {
             duration_ms: duration
         });
     } catch (err) {
-        logger.error({ type: 'debuffs_cleanup_error', message: err.message });
+        logger.error({ type: 'debuffs_cleanup_error', message: describeError(err) });
         debuffRetryCount++;
         
         const delay = Math.min(
@@ -475,6 +475,8 @@ async function cleanupExpiredRaids() {
         });
         
         return;
+    } catch (err) {
+        logger.error({ type: 'raids_cleanup_error', message: describeError(err) });
     } finally {
         isRunning.raids = false;
         
@@ -522,7 +524,7 @@ async function resetDailyTasks() {
         
         logger.info({ type: 'daily_tasks_reset', duration_ms: duration });
     } catch (err) {
-        logger.error({ type: 'daily_tasks_reset_error', message: err.message });
+        logger.error({ type: 'daily_tasks_reset_error', message: describeError(err) });
     } finally {
         isRunning.dailyTasks = false;
         

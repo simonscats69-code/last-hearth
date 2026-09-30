@@ -35,11 +35,11 @@ async function setupWebhook(app) {
         // launch() возвращает промис: без .catch() ошибка авторизации/сети
         // превращалась в unhandledRejection и могла ронять процесс
         Promise.resolve(bot.launch()).catch((launchError) => {
-            logger.error('Бот остановлен с ошибкой (polling):', launchError.message);
+            logger.error('Бот остановлен с ошибкой (polling): ' + (launchError?.message || String(launchError)));
         });
         logger.info('Бот запущен в режиме polling');
     } catch (error) {
-        logger.error('Ошибка запуска бота:', error.message);
+        logger.error('Ошибка запуска бота: ' + (error?.message || String(error)));
     }
 
     // Команда /start - начало игры

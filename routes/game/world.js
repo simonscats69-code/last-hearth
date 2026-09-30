@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query, queryAll } = require('../../db/database');
+const { pool, query, queryAll, describeError } = require('../../db/database');
 const {
     DEBUFF_CONFIG,
     calculateDropChance,
@@ -21,6 +21,12 @@ const { DebuffAPI } = require('./debuffs');
 const lootPoolCache = {};
 let lootCacheReady = false;
 
+// Модуль загружается ДО initDatabase(), поэтому первая сборка кэша может
+// упасть (БД ещё не подключена). Повторяем с растущей задержкой, иначе
+// пул лута остаётся пустым на весь цикл работы сервера.
+const LOOT_CACHE_MAX_ATTEMPTS = 10;
+let lootCacheAttempts = 0;
+
 async function buildLootCache() {
     try {
         const rows = await queryAll(`SELECT id, rarity, type FROM items WHERE type != 'key'`);
@@ -30,9 +36,20 @@ async function buildLootCache() {
             lootPoolCache[key].push(r.id);
         }
         lootCacheReady = true;
+        lootCacheAttempts = 0;
         logger.info('[world] loot pool cache built', { size: rows.length });
     } catch (err) {
-        logger.error('[world] loot cache build failed', { error: err.message });
+        lootCacheAttempts++;
+        logger.error('[world] loot cache build failed', {
+            attempt: lootCacheAttempts,
+            error: describeError(err)
+        });
+        if (lootCacheAttempts < LOOT_CACHE_MAX_ATTEMPTS) {
+            const delay = Math.min(5000 * Math.pow(2, lootCacheAttempts - 1), 60000);
+            setTimeout(buildLootCache, delay);
+        } else {
+            logger.error('[world] loot cache: превышено число попыток, кэш лута пуст');
+        }
     }
 }
 
