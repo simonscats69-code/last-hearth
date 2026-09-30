@@ -65,6 +65,7 @@ process.on('unhandledRejection', (reason) => {
 
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const compression = require('compression');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -138,6 +139,23 @@ app.use((req, res, next) => {
     res.locals.nonce = crypto.randomBytes(16).toString('hex');
     next();
 });
+
+// Отдача index.html с подстановкой {{nonce}} (шаблон кэшируем в памяти)
+const indexHtmlPath = path.join(__dirname, 'public', 'index.html');
+let indexHtmlTemplate = null;
+function sendIndexHtml(res) {
+    try {
+        if (indexHtmlTemplate === null) {
+            indexHtmlTemplate = fs.readFileSync(indexHtmlPath, 'utf8');
+        }
+        res.set('Content-Type', 'text/html; charset=utf-8');
+        res.set('Cache-Control', 'no-cache');
+        res.send(indexHtmlTemplate.replace(/\{\{nonce\}\}/g, res.locals.nonce || ''));
+    } catch (e) {
+        logger.error('[index] Не удалось отдать index.html:', e.message);
+        res.status(500).send('Ошибка загрузки приложения. Обновите страницу.');
+    }
+}
 
 // Таймаут для всех запросов - защита от зависаний
 app.use((req, res, next) => {
@@ -248,17 +266,16 @@ app.use('/api/leaderboard', (req, res, next) => {
 });
 app.use('/api', apiRouter);
 
-// Статика
+// Главная страница: index.html через шаблон (подстановка nonce для CSP)
+app.get(['/', '/index.html'], (req, res) => sendIndexHtml(res));
+
+// Статика (index: false — index.html отдаёт только sendIndexHtml)
 app.use(express.static(path.join(__dirname, 'public'), {
+    index: false,
     maxAge: '1h',
     etag: true,
     cacheControl: true
 }));
-
-// Главная страница
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public/index.html'));
-});
 
 // Health checks
 app.get('/health', healthLimiter, (req, res) => {
@@ -297,7 +314,7 @@ app.get('/metrics', telegramAuthMiddleware, (req, res) => {
 app.use((req, res) => {
     const accept = req.headers.accept || '';
     if (req.method === 'GET' && !req.path.startsWith('/api') && accept.includes('text/html')) {
-        return res.sendFile(path.join(__dirname, 'public/index.html'));
+        return sendIndexHtml(res);
     }
     res.status(404).json({ error: 'Not found' });
 });

@@ -61,3 +61,27 @@ WS_TOKEN_SECRET=your_random_hex_secret
 /package.json   - зависимости
 .env            - переменные окружения (не грузить на git!)
 ```
+
+## 6. Частые проблемы
+
+### 401 «Неверная подпись Telegram»
+- Игра открывается ТОЛЬКО внутри Telegram: /start у бота → кнопка «🎮 Играть».
+  Если открыть прямой URL в обычном браузере, SDK Telegram отсутствует, клиент
+  отправляет тестовую заглушку initData (`hash=dummy`) — сервер её отклоняет
+  (в логах Bothost: `telegram_hash_mismatch`). Это защита, а не поломка.
+- Приложение само подключает `https://telegram.org/js/telegram-web-app.js`
+  (см. `public/index.html`), поэтому даже открытие по ссылке с fragment
+  `#tgWebAppData=...` авторизуется штатно. Fragment живёт ограниченное время
+  (окно проверки задаётся `MAX_INIT_DATA_AGE_SECONDS`, по умолчанию 48 ч).
+- 403 `telegram_id не соответствует подписанным данным` — клиент передал чужой
+  id (например, старую запись в localStorage). Перезапустите Mini App.
+
+### CSP-ошибки в консоли (inline script blocked)
+- `index.html` отдаётся через шаблон с подстановкой `{{nonce}}` (функция
+  `sendIndexHtml` в `index.js`). Новые inline-скрипты обязаны иметь атрибут
+  `nonce="{{nonce}}"`, иначе helmet их заблокирует.
+
+### Service worker
+- Регистрация SW убрана из `index.html`: cache-first стратегия отдавала
+  устаревший `game.js` после обновлений. Файл `public/sw.js` оставлен, но
+  не подключается.
