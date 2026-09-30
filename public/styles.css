@@ -459,6 +459,13 @@ html, body {
     flex-direction: column;
 }
 
+/* Основной контейнер игры: в index.html скрыт до окончания инициализации,
+   показывается из initGame() (game.js). Высота нужна, чтобы .screen
+   со своей height:100% и overflow-y:auto корректно скроллились. */
+#game-content {
+    height: 100%;
+}
+
 /* Экраны */
 .screen {
     display: none;

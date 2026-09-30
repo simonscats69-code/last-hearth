@@ -896,7 +896,7 @@ const Templates = {
         const itemActionId = item.index ?? item.id;
         return `
             <div class="item-card rarity-${item.rarity || 'common'}" 
-                 data-id="${item.id}" onclick="useItem(${itemActionId})">
+                 data-id="${item.id}" data-use-item="${itemActionId}">
                 <span class="item-icon">${item.icon || '📦'}</span>
                 <span class="item-name">${escapeHtml(item.name)}</span>
                 ${item.count ? `<span class="item-count">x${item.count}</span>` : ''}
@@ -918,7 +918,7 @@ const Templates = {
                     <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
                 </div>
                 <div class="boss-hp-text">${boss.current_hp}/${boss.max_hp} HP</div>
-                <button class="btn attack-btn" onclick="attackBoss()">Атаковать</button>
+                <button class="btn attack-btn" data-attack-boss>Атаковать</button>
             </div>
         `;
     },
@@ -943,7 +943,7 @@ const Templates = {
         const itemActionId = item.index ?? item.id;
         return `
             <div class="inventory-slot rarity-${item.rarity || 'common'}" 
-                 onclick="useItem(${itemActionId})" data-id="${item.id}">
+                 data-use-item="${itemActionId}" data-id="${item.id}">
                 <span class="item-icon">${item.icon || '📦'}</span>
                 ${item.count > 1 ? `<span class="item-count">${item.count}</span>` : ''}
             </div>
@@ -1161,15 +1161,26 @@ async function confirmAction(message, price = 0, threshold = 5000) {
 // SERVICE WORKER
 // ============================================================================
 
-// Регистрация Service Worker
+// Регистрация Service Worker намеренно отключена.
+// Файл /sw.js на сервере — самоуничтожающийся: при активации он снимает свою
+// регистрацию и перезагружает все открытые страницы. Если игра при каждой
+// загрузке снова вызывает register(), получается бесконечный цикл
+// "загрузка -> активация SW -> перезагрузка" и игрок видит вечный лоадер.
+// Поэтому здесь только тихо снимаем возможные старые регистрации и чистим
+// их кэши — без регистрации и без перезагрузки страницы.
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js')
-            .then((registration) => {
-                console.debug('[SW] Service Worker зарегистрирован');
+        navigator.serviceWorker.getRegistrations()
+            .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+            .then(() => (typeof caches !== 'undefined' ? caches.keys() : []))
+            .then((cacheNames) => Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName))))
+            .then(() => {
+                if (navigator.serviceWorker.controller) {
+                    console.debug('[SW] Легаси-регистрации Service Worker сняты, кэши очищены');
+                }
             })
             .catch((error) => {
-                console.warn('[SW] Ошибка регистрации Service Worker:', error.message);
+                console.debug('[SW] Очистка Service Worker пропущена:', error && error.message);
             });
     });
 }
@@ -1747,9 +1758,48 @@ async function waitForTelegramWebApp(maxWait = 5000) {
 }
 
 /**
+ * Показать ошибку инициализации вместо экрана загрузки.
+ * Кнопка перезапуска навешивается через addEventListener, а не inline onclick:
+ * inline-обработчики блокируются строгим CSP (script-src с nonce).
+ * @param {string} icon - эмодзи для сообщения
+ * @param {string} title - заголовок ошибки
+ * @param {string} text - текст ошибки
+ */
+function renderInitError(icon, title, text) {
+    const loadingScreen = document.getElementById('loading-screen');
+    if (!loadingScreen) return;
+
+    loadingScreen.style.display = 'flex';
+    loadingScreen.innerHTML = `
+        <div class="loader">
+            <div class="loader-icon">${icon}</div>
+            <h1>${title}</h1>
+            <p>${text}</p>
+            <button class="btn" id="init-error-restart-btn" type="button">🔄 Перезапустить</button>
+        </div>
+    `;
+
+    const restartBtn = document.getElementById('init-error-restart-btn');
+    if (restartBtn) {
+        restartBtn.addEventListener('click', () => location.reload());
+    }
+}
+
+/**
  * Инициализация игры
  */
 async function initGame() {
+    // Страховка от «вечной загрузки»: если инициализация не завершилась за
+    // 30 секунд (зависший запрос, сбой SDK и т.п.), показываем пользователю
+    // причину и кнопку перезапуска вместо бесконечного лоадера.
+    const initWatchdog = setTimeout(() => {
+        if (gameState.player) return; // игра уже запущена
+        const loadingScreen = document.getElementById('loading-screen');
+        if (!loadingScreen || loadingScreen.style.display === 'none') return;
+        console.error('[initGame] Watchdog: инициализация не завершилась за 30 секунд');
+        renderInitError('⏳', 'Загрузка затянулась', 'Сервер долго не отвечает. Проверь интернет и попробуй ещё раз.');
+    }, 30000);
+
     try {
         // Ждём пока загрузится Telegram WebApp
         await waitForTelegramWebApp();
@@ -1762,7 +1812,7 @@ async function initGame() {
         
         const telegramId = getTelegramId();
         if (!telegramId) {
-            showModal('Ошибка', 'Не удалось определить пользователя Telegram. Откройте игру через бота @LastHearthBot');
+            renderInitError('😿', 'Ошибка', 'Не удалось определить пользователя Telegram. Откройте игру через бота @LastHearthBot');
             return;
         }
 
@@ -1773,7 +1823,7 @@ async function initGame() {
             // Пробуем получить из localStorage
             const storedInitData = localStorage.getItem('init_data');
             if (!storedInitData) {
-                showModal('Ошибка авторизации', 'Откройте игру через бота @LastHearthBot');
+                renderInitError('😿', 'Ошибка авторизации', 'Откройте игру через бота @LastHearthBot');
                 return;
             }
         }
@@ -1804,28 +1854,22 @@ async function initGame() {
         // Проверяем, успешно ли загрузился профиль
         if (!gameState.player) {
             console.error('[initGame] Профиль не загружен, прерываем инициализацию');
-            const loadingScreen = document.getElementById('loading-screen');
-            if (loadingScreen) {
-                loadingScreen.innerHTML = `
-                    <div class="loader">
-                        <div class="loader-icon">😿</div>
-                        <h1>Ошибка загрузки</h1>
-                        <p>Не удалось загрузить профиль. Попробуй перезапустить игру.</p>
-                        <button class="btn" onclick="location.reload()">🔄 Перезапустить</button>
-                    </div>
-                `;
-            }
+            renderInitError('😿', 'Ошибка загрузки', 'Не удалось загрузить профиль. Попробуй перезапустить игру.');
             return;
+        }
+
+        // Показываем основной контейнер: в index.html он скрыт (display: none),
+        // чтобы до окончания инициализации игрок не видел полупустой интерфейс
+        const gameContent = document.getElementById('game-content');
+        if (gameContent) {
+            gameContent.style.display = 'block';
         }
 
         // Показываем главный экран только после успешной загрузки профиля
         showScreen('main');
 
         // Скрываем экран загрузки
-        const loadingScreen = document.getElementById('loading-screen');
-        if (loadingScreen) {
-            loadingScreen.classList.remove('active');
-        }
+        hideLoadingScreen();
 
         // Запускаем обновление энергии
         safeSetInterval(updateEnergyDisplay, 60000); // Каждую минуту
@@ -1835,8 +1879,7 @@ async function initGame() {
 
     } catch (error) {
         console.error('Init error:', error);
-        const loadingScreen = document.getElementById('loading-screen');
-        
+
         // Проверяем тип ошибки для более понятного сообщения
         let errorMessage = 'Напиши /start боту';
         if (error.message && error.message.includes('401')) {
@@ -1846,16 +1889,10 @@ async function initGame() {
         } else if (error.message && (error.message.includes('network') || error.message.includes('fetch'))) {
             errorMessage = 'Нет соединения. Проверь интернет';
         }
-        
-        if (loadingScreen) {
-            loadingScreen.innerHTML = `
-                <div class="loader">
-                    <div class="loader-icon">😿</div>
-                    <h1>Ошибка</h1>
-                    <p>${errorMessage}</p>
-                </div>
-            `;
-        }
+
+        renderInitError('😿', 'Ошибка', errorMessage);
+    } finally {
+        clearTimeout(initWatchdog);
     }
 }
 
@@ -4561,8 +4598,8 @@ function renderRaids(raids) {
                     <div class="raid-participants">Участников: ${raid.participants_count || 0}</div>
                     <div class="raid-timer">Осталось: ${timeRemaining}</div>
                     ${isParticipating ? 
-                        `<button class="btn-attack" onclick="attackRaid(${raid.id})">Атаковать</button>` :
-                        `<button class="btn-join" onclick="joinRaid(${raid.id})">Присоединиться</button>`
+                        `<button class="btn-attack" data-raid-attack="${raid.id}">Атаковать</button>` :
+                        `<button class="btn-join" data-raid-join="${raid.id}">Присоединиться</button>`
                     }
                 </div>
             </div>
@@ -4811,13 +4848,13 @@ function renderAchievementsCategories(categories) {
     };
     
     let html = `<button class="achievement-category-btn ${!currentAchievementCategory ? 'active' : ''}" 
-        onclick="filterAchievements(null)">Все</button>`;
+        data-achievement-filter="">Все</button>`;
     
     for (const [key, cat] of Object.entries(categories)) {
         html += `
             <button class="achievement-category-btn ${currentAchievementCategory === key ? 'active' : ''}" 
-                onclick="filterAchievements('${key}')">
-                ${categoryNames[key] || key} (${cat.completed}/${cat.total})
+                data-achievement-filter="${escapeHtml(key)}">
+                ${categoryNames[key] || escapeHtml(key)} (${cat.completed}/${cat.total})
             </button>
         `;
     }
@@ -4890,7 +4927,7 @@ function renderAchievementsList(achievements) {
                     ` : ''}
                 </div>
                 ${ach.completed && !ach.reward_claimed ? `
-                    <button class="claim-btn" onclick="claimAchievement(${ach.id})">Получить</button>
+                    <button class="claim-btn" data-claim-achievement="${ach.id}">Получить</button>
                 ` : ''}
                 ${ach.reward_claimed ? `
                     <div class="claimed-badge">✓ Получено</div>
@@ -5638,6 +5675,59 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Запускаем игру (DOMContentLoaded уже произошёл, вызываем напрямую)
     startGame();
+});
+
+// ============================================================================
+// ДЕЛЕГИРОВАНИЕ КЛИКОВ ДЛЯ ДИНАМИЧЕСКИХ КНОПОК
+// ============================================================================
+
+// Inline-обработчики onclick блокируются строгим CSP (для script-src-attr
+// nonce не действует), поэтому кнопки, создаваемые шаблонами (рейды,
+// достижения, магазин, карточки предметов/боссов), помечаются data-атрибутами,
+// а клики обрабатываются одним общим делегированным обработчиком на document.
+document.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+
+    const raidAttackBtn = target.closest('[data-raid-attack]');
+    if (raidAttackBtn) {
+        attackRaid(Number(raidAttackBtn.dataset.raidAttack));
+        return;
+    }
+
+    const raidJoinBtn = target.closest('[data-raid-join]');
+    if (raidJoinBtn) {
+        joinRaid(Number(raidJoinBtn.dataset.raidJoin));
+        return;
+    }
+
+    const claimBtn = target.closest('[data-claim-achievement]');
+    if (claimBtn) {
+        claimAchievement(Number(claimBtn.dataset.claimAchievement));
+        return;
+    }
+
+    const achievementFilterBtn = target.closest('[data-achievement-filter]');
+    if (achievementFilterBtn) {
+        filterAchievements(achievementFilterBtn.dataset.achievementFilter || null);
+        return;
+    }
+
+    const buyBtn = target.closest('[data-buy-coin-item]');
+    if (buyBtn) {
+        buyCoinItem(Number(buyBtn.dataset.buyCoinItem));
+        return;
+    }
+
+    const useItemEl = target.closest('[data-use-item]');
+    if (useItemEl) {
+        useItem(Number(useItemEl.dataset.useItem));
+        return;
+    }
+
+    if (target.closest('[data-attack-boss]')) {
+        attackBoss();
+    }
 });
 
 // ============================================================================
@@ -6774,7 +6864,7 @@ function renderCoinShop() {
                 </div>
                 <div class="shop-item-buy">
                     <div class="shop-item-price">💰 ${formatNumber(item.price || 0)}</div>
-                    <button class="buy-btn" onclick="buyCoinItem(${safeItemId})">Купить</button>
+                    <button class="buy-btn" data-buy-coin-item="${safeItemId}">Купить</button>
                 </div>
             </div>
         `;
