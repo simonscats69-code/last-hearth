@@ -154,25 +154,26 @@ function formatTime(seconds) {
  * @param {number|string} itemId - ID предмета
  * @returns {string}
  */
+/**
+ * Категория предмета для фильтров инвентаря.
+ *
+ * Раньше здесь была жёсткая привязка к диапазонам ID (1-5 еда, 6-10 медицина,
+ * 11-16 оружие...). Это ловушка: при добавлении предмета с id=30 он молча
+ * попадал в 'unknown' и исчезал из инвентаря. Сервер от такого подхода
+ * давно отказался (getInventoryItemCategory в utils/game-helpers.js) —
+ * здесь должна быть ровно та же логика: читаем поле, а не угадываем по id.
+ * @param {number|string} itemId - id предмета (не используется, оставлен
+ *   для совместимости с window.getItemCategory)
+ * @returns {string} категория в нижнем регистре
+ */
 function getItemCategory(itemId) {
-    const id = parseInt(itemId);
-    
-    if (isNaN(id)) return 'unknown';
-    
-    // Еда
-    if (id >= 1 && id <= 5) return 'food';
-    // Медикаменты
-    if (id >= 6 && id <= 10) return 'medicine';
-    // Оружие
-    if (id >= 11 && id <= 16) return 'weapon';
-    // Броня
-    if (id >= 17 && id <= 20) return 'armor';
-    // Ресурсы
-    if (id >= 21 && id <= 28) return 'resource';
-    // Ключи
-    if (id === 29) return 'key';
-    
-    return 'unknown';
+    // Категория всегда приходит с сервера (items.category, а createInventoryItem
+    // дополнительно подставляет type). Если её нет — честно отдаём misc,
+    // а не выдумываем по диапазону id.
+    if (itemId && typeof itemId === 'object') {
+        return String(itemId.category || itemId.type || 'misc').toLowerCase();
+    }
+    return 'misc';
 }
 
 /**
@@ -238,7 +239,7 @@ function getPlayerEmoji(level) {
 
 // Делаем функции глобальными для обратной совместимости
 window.getTelegramId = getTelegramId;
-// getInitData moved to game-api.js
+// getInitData иниализируется вместе с Telegram WebApp (см. initGame)
 window.isColorDark = isColorDark;
 window.hapticImpact = hapticImpact;
 window.hapticNotification = hapticNotification;
@@ -3405,7 +3406,9 @@ function renderInventoryWithFilters(items) {
     
     if (typeof currentInventoryFilter !== 'undefined' && currentInventoryFilter !== 'all') {
         filteredItems = filteredItems.filter((item) => {
-            const category = String(item.category || item.type || getItemCategory(item.id)).toLowerCase();
+            // Передаём весь предмет: категория берётся из поля, а не угадывается
+            // по диапазону id (см. getItemCategory).
+            const category = getItemCategory(item);
             return category === currentInventoryFilter;
         });
     }
@@ -6042,15 +6045,9 @@ function generateScreens() {
         `;
     }
 
-    // Шаблон экрана для основных разделов
-    function fullScreen(id, title) {
-        return `
-            <div class="screen" id="${id}-screen">
-                <div class="screen-content" id="${id}-content"></div>
-            </div>
-        `;
-    }
-
+    // Шаблон экрана для основных разделов.
+    // Раньше здесь был ещё шаблон fullScreen(id, title), но ни один экран
+    // его не использовал — все пишутся литералом в screensHtml ниже.
     const screensHtml = `
         <!-- Главный экран -->
         <div class="screen active" id="main-screen">

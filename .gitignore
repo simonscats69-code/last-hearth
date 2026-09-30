@@ -6,3 +6,12 @@ dist/
 build/
 .DS_Store
 Thumbs.db
+
+# Локальные worktree агента (.kilo) — 50 МБ и 3500+ файлов.
+# Без этой строки `git add -A` затягивает их в репозиторий.
+.kilo/
+
+# Служебные отчёты аудита
+dupe.txt
+dupe-report.txt
+*.local.json
