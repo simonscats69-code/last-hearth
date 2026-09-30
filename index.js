@@ -149,7 +149,9 @@ function sendIndexHtml(res) {
             indexHtmlTemplate = fs.readFileSync(indexHtmlPath, 'utf8');
         }
         res.set('Content-Type', 'text/html; charset=utf-8');
-        res.set('Cache-Control', 'no-cache');
+        // no-store: nonce одноразовый, страницу нельзя брать из кэша/по 304 (иначе
+        // в DOM останется старый nonce, а CSP придёт с новым — скрипты заблокируются)
+        res.set('Cache-Control', 'no-store');
         res.send(indexHtmlTemplate.replace(/\{\{nonce\}\}/g, res.locals.nonce || ''));
     } catch (e) {
         logger.error('[index] Не удалось отдать index.html:', e.message);
