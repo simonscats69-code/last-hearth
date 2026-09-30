@@ -9,7 +9,14 @@ const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, transaction: tx } = require('../../db/database');
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
-const { normalizeInventory, createInventoryItem, normalizeRadiation, normalizeInfections } = require('../../utils/game-helpers');
+const { normalizeInventory, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory } = require('../../utils/game-helpers');
+
+/**
+ * Лимит слотов инвентаря. Должен совпадать с MAX_INVENTORY_SLOTS
+ * в routes/game/world.js (там та же проверка при добыче) и с
+ * INVENTORY_MAX_SLOTS в public/game.js.
+ */
+const MAX_INVENTORY_SLOTS = 100;
 
 /**
  * Получить список предметов в магазине
@@ -57,9 +64,26 @@ router.get(['/', '/inventory'], async (req, res) => {
         const inventory = normalizeInventory(player.inventory);
         const equipment = safeJsonParse(player.equipment, {});
 
+        // Цены продажи считаем по таблице items, а не берём из JSON инвентаря.
+        // Одним запросом на все id, чтобы не делать N+1.
+        const ids = [...new Set(inventory.map(i => i.id).filter(id => id != null))];
+        const catalog = new Map();
+        if (ids.length > 0) {
+            const rows = await queryAll(
+                'SELECT id, type, rarity, price FROM items WHERE id = ANY($1::int[])',
+                [ids]
+            );
+            for (const row of rows) catalog.set(row.id, row);
+        }
+
+        const items = inventory.map(item => ({
+            ...item,
+            sell_price: calculateSellPrice(catalog.get(item.id) || null, item)
+        }));
+
         res.json({
             success: true,
-            inventory,
+            inventory: items,
             equipment
         });
     } catch (error) {
@@ -114,8 +138,19 @@ router.post('/buy', async (req, res) => {
             }
 
             const inventory = normalizeInventory(player.inventory);
+
             const newItem = createInventoryItem(shopItem, { quantity });
-            inventory.push(newItem);
+            const addedAsNewSlots = addItemToInventory(inventory, newItem, shopItem);
+
+            // Лимит слотов. Проверяем ПОСЛЕ стакования: если предмет влез
+            // в существующий стек, новый слот не создаётся и лимит не трогаем.
+            if (addedAsNewSlots > 0 && inventory.length > MAX_INVENTORY_SLOTS) {
+                throw {
+                    message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов).`,
+                    code: 'INVENTORY_FULL',
+                    statusCode: 400
+                };
+            }
 
             await client.query(
                 'UPDATE players SET coins = coins - $1, inventory = $2 WHERE id = $3',
@@ -229,8 +264,17 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 const cureAmount = Number(stats.radiation_cure);
                 const curRad = playerRadiation.level;
                 const newRad = Math.max(0, curRad - cureAmount);
-                updates.push(`radiation = $${params.length + 1}`);
-                params.push(newRad);
+                // radiation — JSONB-колонка ({ level, expires_at, applied_at }).
+                // Раньше сюда писалось голое число → Postgres отвечал
+                // "column radiation is of type jsonb but expression is of type
+                // integer" и любое использование антирада падало с 500.
+                const radPayload = JSON.stringify({
+                    level: newRad,
+                    expires_at: newRad > 0 ? playerRadiation.expires_at : null,
+                    applied_at: newRad > 0 ? playerRadiation.applied_at : null
+                });
+                updates.push(`radiation = $${params.length + 1}::jsonb`);
+                params.push(radPayload);
             }
 
             if (stats.infection_cure) {
@@ -249,18 +293,34 @@ router.post(['/use', '/use-item'], async (req, res) => {
             }
 
             if (updates.length > 0) {
-                inventory.splice(itemIndex, 1);
+                // Расходник может лежать стопкой (quantity > 1). Раньше здесь стоял
+                // inventory.splice(itemIndex, 1) — эффект применялся один раз,
+                // а удалялся ВЕСЬ стек: купил 10 яблок, использовал одно — потерял 9.
+                const currentQty = Number(item.quantity || 1);
+                const remainingQty = currentQty - 1;
+
+                if (remainingQty > 0) {
+                    inventory[itemIndex] = { ...item, quantity: remainingQty };
+                } else {
+                    inventory.splice(itemIndex, 1);
+                }
+
                 await client.query(
                     `UPDATE players SET ${updates.join(', ')}, inventory = $${params.length + 1} WHERE id = $1`,
                     [...params, JSON.stringify(inventory)]
                 );
-            } else {
-                return { success: false, message: 'Этот предмет нельзя использовать' };
+
+                await logPlayerAction(playerId, 'item_use', { item_id: item.id, item_name: item.name }, client);
+
+                return {
+                    success: true,
+                    message: 'Предмет использован',
+                    item: { id: item.id, name: item.name },
+                    quantity_left: remainingQty
+                };
             }
 
-            await logPlayerAction(playerId, 'item_use', { item_id: item.id, item_name: item.name }, client);
-
-            return { success: true, message: 'Предмет использован', item: { id: item.id, name: item.name } };
+            return { success: false, message: 'Этот предмет нельзя использовать' };
         });
 
         res.json(result);
@@ -269,6 +329,106 @@ router.post(['/use', '/use-item'], async (req, res) => {
             return res.status(error.statusCode).json({ success: false, error: error.message, code: error.code });
         }
         handleError(res, error, 'item_use');
+    }
+});
+
+/**
+ * POST /items/sell — продать предмет за монеты
+ *
+ * Закрывает петлю экономики: раньше предметы можно было только тратить,
+ * а при заполнении 100 слотов игра предлагала «продать лишнее» —
+ * функции продажи не существовало.
+ */
+router.post('/sell', async (req, res) => {
+    try {
+        const playerId = req.player.id;
+        const itemIndex = Number(req.body?.item_index);
+
+        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Укажите корректный индекс предмета',
+                code: 'INVALID_INDEX'
+            });
+        }
+
+        const result = await tx(async (client) => {
+            const playerResult = await client.query(
+                'SELECT inventory, coins FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+
+            if (!playerResult.rows[0]) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
+
+            const inventory = normalizeInventory(playerResult.rows[0].inventory);
+
+            if (itemIndex >= inventory.length) {
+                throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+            }
+
+            const item = inventory[itemIndex];
+
+            // Цену берём из таблицы items, а не из JSON инвентаря —
+            // иначе цену можно было бы подделать на клиенте.
+            const dbItemResult = await client.query(
+                'SELECT id, name, type, rarity, price, stackable FROM items WHERE id = $1',
+                [item.id]
+            );
+            const dbItem = dbItemResult.rows[0] || null;
+
+            const unitPrice = calculateSellPrice(dbItem, item);
+            if (unitPrice <= 0) {
+                throw {
+                    message: 'Этот предмет нельзя продать',
+                    code: 'ITEM_NOT_SELLABLE',
+                    statusCode: 400
+                };
+            }
+
+            // За одну операцию продаём весь стек — это осознанно:
+            // слот занимает место, а монеты компактнее.
+            const soldQuantity = Math.max(1, Number(item.quantity || 1));
+            const earned = unitPrice * soldQuantity;
+
+            inventory.splice(itemIndex, 1);
+
+            const newCoins = Number(playerResult.rows[0].coins || 0) + earned;
+
+            await client.query(
+                'UPDATE players SET coins = $1, inventory = $2 WHERE id = $3',
+                [newCoins, JSON.stringify(inventory), playerId]
+            );
+
+            await logPlayerAction(playerId, 'item_sell', {
+                item_id: item.id,
+                item_name: item.name,
+                quantity: soldQuantity,
+                price_earned: earned
+            }, client);
+
+            return {
+                success: true,
+                message: `Продано: ${item.name} ×${soldQuantity}`,
+                item: { id: item.id, name: item.name, icon: item.icon || '📦', rarity: item.rarity },
+                quantity_sold: soldQuantity,
+                unit_price: unitPrice,
+                coins_earned: earned,
+                coins_total: newCoins
+            };
+        });
+
+        res.json(result);
+    } catch (error) {
+        if (['ITEM_NOT_IN_INVENTORY', 'PLAYER_NOT_FOUND', 'ITEM_NOT_SELLABLE'].includes(error.code)) {
+            return res.status(error.statusCode || 400).json({
+                success: false,
+                error: error.message,
+                code: error.code
+            });
+        }
+        handleError(res, error, 'item_sell');
     }
 });
 

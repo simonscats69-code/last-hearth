@@ -14,7 +14,7 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, normalizeEquipment } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, normalizeEquipment, addItemToInventory } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
 
 // Кэш пула предметов по rarity:type для быстрого случайного выбора (P2-9)
@@ -433,19 +433,24 @@ router.post('/search', async (req, res) => {
                     await client.query('ROLLBACK');
                     return res.json({
                         success: false,
-                        error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Продайте лишнее.`,
+                        // Раньше здесь было «Продайте лишнее», но функции продажи
+                        // в игре нет — игрока уводили в несуществующее действие.
+                        error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
                         code: 'INVENTORY_FULL'
                     });
                 }
 
                 const newItem = buildInventoryItem(foundItem, itemRarity);
-                
-                inventory.push(newItem);
+
+                // Стакование: однотипные предметы складываются в один слот.
+                // Раньше каждый дроп занимал отдельный слот, поэтому 100 слотов
+                // забивались быстрее, чем игрок успевал их разбирать.
+                addItemToInventory(inventory, newItem, foundItem);
                 itemsCollected += 1;
 
                 // Бафф x2 к добыче дублирует обычный предмет, но не ключ.
                 if (activeBuffs.loot_x2 && newItem.type !== 'key') {
-                    inventory.push({ ...newItem });
+                    addItemToInventory(inventory, { ...newItem }, foundItem);
                     itemsCollected += 1;
                 }
 

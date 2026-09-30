@@ -455,24 +455,28 @@ function getInitData() {
  * @returns {Promise<Object>} ответ сервера
  */
 async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
-    const normalizedEndpoint = endpoint.startsWith('/api') 
-        ? endpoint.replace(/^\/api/, '') || '/' 
+    const normalizedEndpoint = endpoint.startsWith('/api')
+        ? endpoint.replace(/^\/api/, '') || '/'
         : endpoint;
-    
-    const queryString = Object.keys(params).length > 0 
-        ? '?' + new URLSearchParams(params).toString() 
+
+    // silent — не показывать toast при ошибке (для ожидаемых состояний,
+    // например «игрок не в клане»). Вытаскиваем из options, чтобы не утекло в fetch.
+    const { silent = false, ...fetchOptions } = options;
+
+    const queryString = Object.keys(params).length > 0
+        ? '?' + new URLSearchParams(params).toString()
         : '';
     const url = `${API_BASE}${normalizedEndpoint.startsWith('/') ? '' : '/'}${normalizedEndpoint}${queryString}`;
-    
+
     // Получаем initData для авторизации
     const initData = getInitData();
-    
+
     const config = {
         headers: {
             'Content-Type': 'application/json',
             'x-init-data': initData || ''  // Используем x-init-data для безопасной авторизации
         },
-        ...options
+        ...fetchOptions
     };
 
     if (config.body && typeof config.body === 'object') {
@@ -484,11 +488,11 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         let loadingTimeout = null;
 
         try {
-            loadingTimeout = createLoadingTimeout(options.showLoading);
-            
+            loadingTimeout = createLoadingTimeout(fetchOptions.showLoading);
+
             const controller = new AbortController();
             timeoutId = setTimeout(() => controller.abort(), 8000);
-            
+
             const response = await fetch(url, { ...config, signal: controller.signal });
             clearTimeout(timeoutId);
             timeoutId = null;
@@ -498,11 +502,12 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             const data = contentType.includes('application/json')
                 ? await response.json()
                 : null;
-            
+
             if (!response.ok) {
                 const serverMessage = data?.error || data?.message || `HTTP error! status: ${response.status}`;
                 const httpError = new Error(serverMessage);
                 httpError.status = response.status;
+                httpError.code = data?.code || null;
                 httpError.response = data;
                 throw httpError;
             }
@@ -510,23 +515,23 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             if (!data) {
                 return { success: true };
             }
-            
+
             if (data.error === true) {
                 console.error('API Error:', data.message);
                 throw new Error(data.message || 'Unknown error');
             }
-            
+
             return data;
         } catch (error) {
             const isLastAttempt = attempt === retries;
-            
+
             // Всегда очищаем таймауты при ошибке
             if (timeoutId) {
                 clearTimeout(timeoutId);
                 timeoutId = null;
             }
             if (loadingTimeout) clearTimeout(loadingTimeout);
-            
+
             if (error.name === 'AbortError') {
                 if (isLastAttempt) {
                     showNotification('Сервер не отвечает. Попробуй позже.', 'error');
@@ -535,9 +540,22 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 await delay(attempt);
                 continue;
             }
-            
+
+            // 4xx — детерминированная ошибка клиента: повтор ничего не изменит.
+            // Раньше здесь уходили 3 одинаковых запроса (например, 400 «не в клане»).
+            // Исключения: 408 (таймаут запроса) и 429 (лимит) — их есть смысл повторить.
+            const status = Number(error.status || 0);
+            if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
+                if (!silent) {
+                    console.warn(`[apiRequest] ${status} ${normalizedEndpoint}: ${error.message}`);
+                }
+                throw error;
+            }
+
             if (isLastAttempt) {
-                console.error('API Request failed:', error);
+                if (!silent) {
+                    console.error('API Request failed:', error);
+                }
                 // Проверяем код ошибки для более понятного сообщения
                 if (error.message.includes('401') || error.message.includes('Unauthorized')) {
                     showNotification('Ошибка авторизации. Обновите игру через Telegram.', 'error');
@@ -545,13 +563,13 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                     showNotification('Сервер перегружен. Попробуй через несколько минут.', 'error');
                 } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
                     showNotification('Пропал интернет. Проверь соединение.', 'error');
-                } else {
+                } else if (!silent) {
                     const message = error.message || 'Неизвестная ошибка';
                     showNotification('Ошибка: ' + message, 'error');
                 }
                 throw error;
             }
-            
+
             await delay(attempt);
         }
     }
@@ -705,6 +723,21 @@ const CONSTANTS = {
         uncommon: 2,
         common: 1
     }
+};
+
+/**
+ * Лимит слотов инвентаря. Должен совпадать с MAX_INVENTORY_SLOTS
+ * в routes/game/world.js — там сервер отклоняет добычу при переполнении.
+ */
+const INVENTORY_MAX_SLOTS = 100;
+
+/** Подписи редкости для интерфейса (в CSS цвета заданы переменными --rarity-*) */
+const RARITY_LABELS = {
+    common: 'Обычное',
+    uncommon: 'Необычное',
+    rare: 'Редкое',
+    epic: 'Эпическое',
+    legendary: 'Легендарное'
 };
 
 // ============================================================================
@@ -1919,6 +1952,23 @@ async function initGame() {
 }
 
 /**
+ * Единая точка записи инвентаря в gameState.
+ *
+ * Сервер не возвращает индексы, а они нужны для use-item (item_index).
+ * Раньше индексы проставлял только loadInventory(), а loadProfile() писал
+ * «сырые» предметы без index. Так как useItem() вызывает и то, и другое,
+ * после первого использования предмета состояние оставалось без индексов,
+ * и ЛЮБОЙ следующий клик по инвентару уходил с item_index=NaN → 400.
+ * @param {Array} rawItems - предметы из API
+ * @returns {Array} предметы с проставленным index
+ */
+function setInventoryState(rawItems) {
+    const list = Array.isArray(rawItems) ? rawItems : [];
+    gameState.inventory = list.map((item, index) => ({ ...item, index }));
+    return gameState.inventory;
+}
+
+/**
  * Загрузка профиля игрока
  * API возвращает { success, data: { player, achievements, progress, inventory, equipment, active_buffs } }
  */
@@ -1968,7 +2018,7 @@ async function loadProfile() {
 
     // Экипировка, баффы и инвентарь из ответа
     playerData.equipment = payload.equipment || {};
-    gameState.inventory = Array.isArray(payload.inventory) ? payload.inventory : [];
+    setInventoryState(payload.inventory);
     gameState.buffs = payload.active_buffs || {};
     playerData.buffs = gameState.buffs;
 
@@ -3102,15 +3152,22 @@ async function useItem(itemId, options = {}) {
         const payload = result?.data || result;
         
         if (result.success) {
-            showModal('✅ Успех', payload.message || result.message || 'Действие выполнено');
-            
+            // Для экипировки модалка на каждый клик раздражала —
+            // ограничиваемся всплывающим уведомлением.
+            const message = payload.message || result.message || 'Действие выполнено';
+            if (options.equip) {
+                showNotification(`✅ ${message}`, 'success');
+            } else {
+                showModal('✅ Успех', message);
+            }
+
             // Сбрасываем кэш рендеринга, т.к. инвентарь изменился
             RenderCache.clear();
-            
+
             // Обновляем инвентарь и профиль
             await loadInventory();
             await loadProfile();
-            
+
             playSound('use');
         } else {
             showModal('⚠️ Внимание', result.error || result.message || 'Не удалось выполнить действие');
@@ -3134,24 +3191,127 @@ async function loadInventory() {
     try {
         const response = await apiRequest('/api/game/inventory');
         const data = response.data || response;
-        const rawItems = Array.isArray(data.inventory) ? data.inventory : [];
 
-        // Сервер не возвращает индексы — добавляем их для item_index в API
-        const inventoryItems = rawItems.map((item, index) => ({ ...item, index }));
+        // Индексы проставляет setInventoryState — тот же путь, что и в loadProfile,
+        // иначе состояния расходятся и клики по инвентарю ломаются.
+        const inventoryItems = setInventoryState(data.inventory);
 
-        gameState.inventory = inventoryItems;
-        
         // Обновляем статистику
         const invCoins = document.getElementById('inv-coins');
         const invStars = document.getElementById('inv-stars');
         if (invCoins) invCoins.textContent = gameState.player?.coins || 0;
         if (invStars) invStars.textContent = gameState.player?.stars || 0;
-        
-        // Применяем фильтр и сортировку
+
+        renderEquipment(data.equipment);
+        renderInventoryCapacity();
         renderInventoryWithFilters(inventoryItems);
-        
+
     } catch (error) {
         console.error('Inventory error:', error);
+        showNotification('Не удалось загрузить инвентарь', 'error');
+    }
+}
+
+/**
+ * Панель снаряжения.
+ *
+ * Экипировка влияла на урон и защиту, но нигде не отображалась — игрок
+ * надевал предмет и не получал никакой обратной связи. Слоты повторяют
+ * VALID_SLOTS из normalizeEquipment() (utils/game-helpers.js).
+ * @param {object} equipment - объект { slot: item }
+ */
+function renderEquipment(equipment) {
+    const root = document.getElementById('inventory-equipment');
+    if (!root) return;
+
+    const eq = (equipment && typeof equipment === 'object') ? equipment : {};
+    const slots = [
+        ['weapon', '⚔️ Оружие'],
+        ['armor', '🛡️ Броня'],
+        ['helmet', '🪖 Шлем'],
+        ['body', '🧥 Костюм'],
+        ['head', '🎽 Голова'],
+        ['hands', '🧤 Руки'],
+        ['legs', '👖 Ноги'],
+        ['boots', '🥾 Обувь'],
+        ['accessory', '💍 Аксессуар']
+    ];
+
+    root.innerHTML = `
+        <h4 class="inv-equipment-title">Снаряжение</h4>
+        <div class="inv-equipment-grid">
+            ${slots.map(([slot, label]) => {
+                const item = eq[slot];
+                if (!item) {
+                    return `<div class="equip-slot is-empty">
+                        <span class="equip-slot-label">${label}</span>
+                        <span class="equip-slot-empty">пусто</span>
+                    </div>`;
+                }
+                return `<div class="equip-slot rarity-${item.rarity || 'common'}">
+                    <span class="equip-slot-icon">${item.icon || '📦'}</span>
+                    <span class="equip-slot-info">
+                        <span class="equip-slot-name">${escapeHtml(item.name || label)}</span>
+                        <span class="equip-slot-label">${escapeHtml(RARITY_LABELS[item.rarity] || '')}</span>
+                    </span>
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+}
+
+/**
+ * Индикатор вместимости инвентаря.
+ * Лимит берём из ответа сервера, а при его отсутствии — из локальной константы,
+ * синхронизированной с MAX_INVENTORY_SLOTS в routes/game/world.js.
+ */
+function renderInventoryCapacity() {
+    const el = document.getElementById('inventory-capacity');
+    if (!el) return;
+
+    const used = Array.isArray(gameState.inventory) ? gameState.inventory.length : 0;
+    const max = INVENTORY_MAX_SLOTS;
+    const percent = Math.min(100, Math.round((used / max) * 100));
+
+    el.textContent = `${used} / ${max}`;
+    el.dataset.level = used >= max ? 'full' : used >= max * 0.8 ? 'warn' : 'ok';
+    el.style.width = `${percent}%`;
+}
+
+/**
+ * Продать предмет за монеты.
+ * Закрывает петлю экономики: добыча → использование → продажа.
+ * @param {number|string} itemIndex - индекс слота в инвентаре
+ */
+async function sellItem(itemIndex) {
+    if (!lockAction('sellItem')) return;
+
+    try {
+        const result = await apiRequest('/api/game/inventory/sell', {
+            method: 'POST',
+            body: { item_index: parseInt(itemIndex, 10) }
+        });
+
+        if (result?.success) {
+            const earned = Number(result.coins_earned || 0);
+            showNotification(`💰 ${result.message || 'Продано'} · +${earned} 🪙`, 'success');
+            playSound('coin');
+            RenderCache.clear();
+            await loadInventory();
+            await loadProfile();
+        } else {
+            showNotification(result?.error || 'Не удалось продать предмет', 'error');
+        }
+    } catch (error) {
+        console.error('Sell item error:', error);
+        showNotification(error?.message || 'Не удалось продать предмет', 'error');
+
+        // Индекс мог протухнуть (инвентарь изменился) — перерисуем список.
+        if (error?.code === 'ITEM_NOT_IN_INVENTORY' || error?.status === 400) {
+            await loadInventory();
+        }
+    } finally {
+        unlockAction('sellItem');
     }
 }
 
@@ -3162,22 +3322,71 @@ function renderInventory(items) {
     const grid = document.getElementById('inventory-grid');
     if (!grid) return;
     grid.innerHTML = '';
-    
+
     const normalizedItems = Array.isArray(items) ? items : [];
+
+    if (normalizedItems.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-message';
+        empty.textContent = Array.isArray(gameState.inventory) && gameState.inventory.length > 0
+            ? 'Нет предметов в этой категории'
+            : 'Инвентарь пуст. Найди что-нибудь поиском или купи в магазине.';
+        grid.appendChild(empty);
+        return;
+    }
 
     for (const item of normalizedItems) {
         const slot = document.createElement('div');
         slot.className = `inventory-slot item-rarity rarity-${item.rarity || 'common'}`;
+
         const isEquippable = isEquippableInventoryItem(item);
-        const amount = item.quantity || item.count || 1;
+        const amount = Number(item.quantity || item.count || 1);
+        const name = item.name || 'Предмет';
+        const rarityLabel = RARITY_LABELS[item.rarity] || item.rarity || '';
+        const sellPrice = Number(item.sell_price || 0);
+        const isSellMode = currentInventoryMode === 'sell';
+        const canSell = sellPrice > 0;
+
+        slot.classList.toggle('is-sell-mode', isSellMode);
+        slot.classList.toggle('is-unsellable', isSellMode && !canSell);
+
+        slot.dataset.index = item.index;
         slot.innerHTML = `
             <span class="item-icon">${item.icon || '📦'}</span>
-            <span class="item-count">${amount}</span>
+            <span class="item-name">${escapeHtml(name)}</span>
+            ${amount > 1 ? `<span class="item-count">${amount}</span>` : ''}
+            ${isSellMode
+                ? `<span class="item-sell-price">${canSell ? `💰 ${sellPrice * amount}` : 'нельзя'}</span>`
+                : `<span class="item-rarity-label">${escapeHtml(rarityLabel)}</span>`}
         `;
-        
-        // Обработчик клика: расходник используем, экипировку надеваем
-        slot.addEventListener('click', () => useItem(item.index, { equip: isEquippable }));
-        
+        slot.setAttribute('role', 'button');
+        slot.setAttribute('tabindex', '0');
+        slot.setAttribute('aria-label', isSellMode
+            ? `${name}. Продать за ${sellPrice * amount} монет`
+            : `${name}. ${rarityLabel}. ${isEquippable ? 'Нажмите чтобы надеть' : 'Нажмите чтобы использовать'}`);
+
+        // Клик: в режиме продажи — продажа, иначе использование/экипировка.
+        // Отдельный переключатель вместо long-press: long-press ненадёжен
+        // в Telegram WebView и не discoverable.
+        const activate = () => {
+            if (currentInventoryMode === 'sell') {
+                if (!canSell) {
+                    showNotification('Этот предмет нельзя продать', 'warning');
+                    return;
+                }
+                sellItem(item.index);
+                return;
+            }
+            useItem(item.index, { equip: isEquippable });
+        };
+        slot.addEventListener('click', activate);
+        slot.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                activate();
+            }
+        });
+
         grid.appendChild(slot);
     }
 }
@@ -3891,31 +4100,40 @@ let clanState = {
 };
 
 /**
- * Загрузка информации о клане
+ * Загрузка информации о клане.
+ *
+ * Отсутствие клана — это НЕ ошибка, а обычное состояние игрока, поэтому
+ * запрос идёт с silent: true (без красного тоста и без записи в консоль).
+ * Раньше здесь был красный тост «Ошибка: Вы не состоите в клане» и три
+ * одинаковых запроса подряд (apiRequest ретраил 400 дважды).
  */
 async function loadClan() {
     try {
-        const data = await apiRequest('/api/game/clans/clan');
-        
+        const data = await apiRequest('/api/game/clans/clan', { silent: true });
+
         if (data?.success && data?.data?.in_clan) {
             clanState.clan = data.data.clan;
             renderClanScreen(data.data);
         } else {
-            // Игрок не в клане - показываем экран создания/вступления
+            clanState.clan = null;
             renderNoClanScreen();
         }
     } catch (error) {
-        console.error('Clan load error:', error);
-        
-        // Обрабатываем ошибку 400 (игрок не в клане)
-        // Сервер возвращает: { success: false, error: 'Вы не состоите в клане', code: 'NOT_IN_CLAN' }
-        if (error.status === 400 || error.message?.includes('NOT_IN_CLAN')) {
+        // 400 NOT_IN_CLAN — ожидаемое состояние, не показываем ошибку игроку
+        const isNotInClan = error.status === 400
+            || error.code === 'NOT_IN_CLAN'
+            || /не состоите в клане/i.test(error.message || '');
+
+        if (isNotInClan) {
+            clanState.clan = null;
             renderNoClanScreen();
             return;
         }
-        
-        // При других ошибках показываем экран без клана
-        renderNoClanScreen();
+
+        // Настоящая ошибка (сеть, 5xx) — сообщаем и не рисуем «экран создания
+        // клана», чтобы игрок не решил, что потерял клан.
+        console.error('Clan load error:', error);
+        showNotification('Не удалось загрузить клан. Попробуй позже.', 'error');
     }
 }
 
@@ -4802,34 +5020,49 @@ window.healInfections = healInfections;
 // Глобальные переменные для фильтрации и сортировки инвентаря
 let currentInventoryFilter = 'all';
 let currentInventorySort = 'id';
-let inventoryControlsInitialized = false;
+
+/** Режим клика по предмету: 'use' (использовать/надеть) или 'sell' (продать) */
+let currentInventoryMode = 'use';
 
 /**
  * Инициализация обработчиков кнопок фильтрации и сортировки
  */
 function initInventoryControls() {
-    if (inventoryControlsInitialized) return;
-    inventoryControlsInitialized = true;
-
-    // Кнопки фильтров
-    const filterBtns = document.querySelectorAll('.filter-btn');
-    filterBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            filterBtns.forEach(b => b.classList.remove('active'));
+    // Раньше стоял флаг inventoryControlsInitialized, который запрещал
+    // повторную привязку. Но generateScreens() пересоздаёт DOM-элементы —
+    // обработчики на старых кнопках исчезали, а флаг не давал навесить новые,
+    // и фильтры/сортировка просто переставали работать.
+    // Привязываемся к конкретным элементам через data-bound (bindClickOnce).
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        bindClickOnce(btn, `inv-filter-${btn.dataset.filter || 'x'}`, () => {
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            currentInventoryFilter = btn.dataset.filter;
+            currentInventoryFilter = btn.dataset.filter || 'all';
             renderInventoryWithFilters(gameState.inventory);
         });
     });
-    
+
     // Выбор сортировки
     const sortSelect = document.getElementById('sort-select');
     if (sortSelect) {
-        sortSelect.addEventListener('change', () => {
-            currentInventorySort = sortSelect.value;
+        if (sortSelect.value !== currentInventorySort) {
+            sortSelect.value = currentInventorySort;
+        }
+        bindClickOnce(sortSelect, 'inv-sort', () => {
+            currentInventorySort = sortSelect.value || 'id';
             renderInventoryWithFilters(gameState.inventory);
         });
     }
+
+    // Переключатель «использовать / продать»
+    document.querySelectorAll('.inv-mode-btn').forEach(btn => {
+        bindClickOnce(btn, `inv-mode-${btn.dataset.invMode || 'use'}`, () => {
+            currentInventoryMode = btn.dataset.invMode === 'sell' ? 'sell' : 'use';
+            document.querySelectorAll('.inv-mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderInventoryWithFilters(gameState.inventory);
+        });
+    });
 }
 
 // ============================================================================
@@ -5659,9 +5892,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Навешиваем обработчики на свежесозданные DOM-элементы
         initEventHandlers();
         
-        // Инициализируем фильтры инвентаря
+        // Инициализируем фильтры инвентаря.
+        // Раньше здесь стоял setTimeout(..., 200) — гонка с рендером экрана.
+        // bindClickOnce идемпотентен, поэтому достаточно вызвать сразу.
         if (typeof initInventoryControls === 'function') {
-            setTimeout(initInventoryControls, 200);
+            initInventoryControls();
         }
         
         initGame();
@@ -6017,14 +6252,36 @@ function generateScreens() {
                 </div>
             </div>
             <div class="screen-content">
-                <div class="inv-filters" id="inventory-filters">
-                    <button class="filter-btn active" data-filter="all">Все</button>
-                    <button class="filter-btn" data-filter="weapon">⚔️</button>
-                    <button class="filter-btn" data-filter="food">🍞</button>
-                    <button class="filter-btn" data-filter="medicine">💊</button>
-                    <button class="filter-btn" data-filter="armor">🛡️</button>
-                    <button class="filter-btn" data-filter="resource">📦</button>
+                <div class="inv-toolbar">
+                    <div class="inv-filters" id="inventory-filters">
+                        <button class="filter-btn active" data-filter="all">Все</button>
+                        <button class="filter-btn" data-filter="weapon">⚔️</button>
+                        <button class="filter-btn" data-filter="food">🍞</button>
+                        <button class="filter-btn" data-filter="medicine">💊</button>
+                        <button class="filter-btn" data-filter="armor">🛡️</button>
+                        <button class="filter-btn" data-filter="resource">📦</button>
+                    </div>
+                    <div class="inv-toolbar-row">
+                        <label class="inv-capacity">
+                            <span class="inv-capacity-label">Слоты</span>
+                            <span class="inv-capacity-track"><span class="inv-capacity-fill" id="inventory-capacity" data-level="ok">0 / 100</span></span>
+                        </label>
+                        <label class="inv-sort">
+                            <span class="inv-sort-label">Сортировка</span>
+                            <select id="sort-select">
+                                <option value="id">По ID</option>
+                                <option value="rarity">По редкости</option>
+                                <option value="name">По названию</option>
+                                <option value="count">По количеству</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="inv-mode" role="group" aria-label="Действие с предметом">
+                        <button class="inv-mode-btn active" data-inv-mode="use">Использовать</button>
+                        <button class="inv-mode-btn" data-inv-mode="sell">Продать</button>
+                    </div>
                 </div>
+                <div class="inv-equipment" id="inventory-equipment"></div>
                 <div class="inventory-grid" id="inventory-grid"></div>
             </div>
         </div>
@@ -7700,6 +7957,10 @@ function playSound(type) {
             break;
         case 'use':
             navigator.vibrate(30);
+            break;
+        case 'coin':
+            // короткий двойной импульс — «монеты»
+            navigator.vibrate([25, 40, 25]);
             break;
         case 'modal':
             navigator.vibrate(20);

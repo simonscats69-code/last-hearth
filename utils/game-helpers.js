@@ -138,6 +138,114 @@ function normalizePlayerBuffs(value) {
 }
 
 /**
+ * Предметы, которые нельзя продать.
+ * Ключи боссов — валюта прогрессии: их нельзя обратить в монеты,
+ * иначе можно было бы бесконечно фармить монеты, покупая ключи по кругу.
+ */
+const NON_SELLABLE_TYPES = new Set(['key']);
+
+/** Доля от цены в магазине, которую игрок получает при продаже */
+const SELL_RATE = 0.35;
+
+/** Минимальная цена продажи по редкости (для добычи, у price = 0) */
+const SELL_FLOOR_BY_RARITY = {
+    common: 3,
+    uncommon: 8,
+    rare: 20,
+    epic: 45,
+    legendary: 100
+};
+
+/**
+ * Посчитать цену продажи одного предмета.
+ * Цена берётся из таблицы items по id (не из JSON инвентаря), поэтому
+ * подделать стоимость на клиенте невозможно.
+ * @param {object|null} dbItem - строка из таблицы items
+ * @param {object} inventoryItem - предмет из инвентаря
+ * @returns {number} цена за одну штуку
+ */
+function calculateSellPrice(dbItem, inventoryItem) {
+    if (!dbItem) return 0;
+    if (NON_SELLABLE_TYPES.has(String(dbItem.type || inventoryItem?.type || ''))) return 0;
+
+    const shopPrice = Number(dbItem.price || 0);
+    if (shopPrice > 0) {
+        return Math.max(1, Math.floor(shopPrice * SELL_RATE));
+    }
+
+    const rarity = String(dbItem.rarity || inventoryItem?.rarity || 'common');
+    return SELL_FLOOR_BY_RARITY[rarity] || SELL_FLOOR_BY_RARITY.common;
+}
+
+/**
+ * Добавить предмет в инвентарь с учётом стакования.
+ *
+ * Без этого покупка 10 яблок создавала 10 слотов (и упиралась в
+ * лимит в 100), хотя в таблице items есть stackable/max_stack.
+ * Стакуются только предметы с одинаковыми id, rarity и нулевым
+ * upgrade_level — чтобы не смешивать апгрейженные экземпляры.
+ * @param {Array} inventory - текущий инвентарь (мутируется)
+ * @param {object} newItem - новый предмет из createInventoryItem()
+ * @param {object|null} dbItem - строка из таблицы items (для stackable/max_stack)
+ * @returns {number} сколько предметов реально добавлено новыми слотами
+ */
+/**
+ * Типы предметов, которые нельзя складывать в стек.
+ * Проверяются вместе со слотом: колонка items.slot nullable,
+ * и у части оружия она пустая — без проверки типа два одинаковых
+ * меча слились бы в один слот.
+ */
+const EQUIPMENT_TYPES = new Set([
+    'weapon', 'armor', 'helmet', 'body', 'head',
+    'hands', 'legs', 'boots', 'accessory', 'equipment'
+]);
+
+function addItemToInventory(inventory, newItem, dbItem) {
+    if (!Array.isArray(inventory) || !newItem) return 0;
+
+    const type = String(newItem.type || dbItem?.type || '').toLowerCase();
+    const category = String(newItem.category || dbItem?.category || type).toLowerCase();
+    // Снаряжение (у него есть slot) и ключи НИКОГДА не стакаются:
+    // два меча в одном слоте — это поломанный предмет, а не стопка.
+    const isEquipment = Boolean(newItem.slot || dbItem?.slot)
+        || EQUIPMENT_TYPES.has(type)
+        || EQUIPMENT_TYPES.has(category);
+    const stackable = dbItem ? dbItem.stackable !== false : true;
+
+    const maxStack = Math.max(1, Number(dbItem?.max_stack || 99));
+    const quantity = Math.max(1, Number(newItem.quantity || 1));
+
+    let remaining = quantity;
+
+    if (stackable && !isEquipment && type !== 'key' && !newItem.upgrade_level) {
+        for (let i = 0; i < inventory.length && remaining > 0; i++) {
+            const existing = inventory[i];
+            if (!existing || existing.id !== newItem.id) continue;
+            if (existing.rarity !== newItem.rarity) continue;
+            if (Number(existing.upgrade_level || 0) !== 0) continue;
+
+            const currentQty = Math.max(0, Number(existing.quantity || 1));
+            if (currentQty >= maxStack) continue;
+
+            const toAdd = Math.min(maxStack - currentQty, remaining);
+            inventory[i] = { ...existing, quantity: currentQty + toAdd };
+            remaining -= toAdd;
+        }
+    }
+
+    // Что не влезло в стеки — отдельным слотом.
+    // Раньше здесь был безусловный push(newItem) с ПОЛНЫМ quantity:
+    // при max_stack=5 и добавлении 4 в стек из 4 получалось 5 + 4 = 9,
+    // а не 5 + 3 — лишние предметы «терялись» в арифметике.
+    if (remaining > 0) {
+        inventory.push({ ...newItem, quantity: remaining });
+        return 1; // создан новый слот
+    }
+
+    return 0; // всё ушло в существующие стеки
+}
+
+/**
  * Получить только активные баффы игрока
  */
 function getActiveBuffs(value, now = Date.now()) {
@@ -215,8 +323,22 @@ async function recalcEnergy(client, player) {
     const regen = Math.floor(elapsedSec / 60); // 1 энергия в минуту
     if (regen <= 0) return player;
 
-    const newEnergy = Math.min(Number(player.max_energy || 50), Number(player.energy || 0) + regen);
-    if (newEnergy === Number(player.energy || 0)) return player;
+    const currentEnergy = Number(player.energy || 0);
+    const maxEnergy = Number(player.max_energy || 50);
+    const newEnergy = Math.min(maxEnergy, currentEnergy + regen);
+
+    if (newEnergy === currentEnergy) {
+        // Игрок уже на максимуме: регенировать нечего, но ОБЯЗАНЫ двигать
+        // last_energy_update. Иначе метка «застывает» на момент заполнения,
+        // а потом любой расход (поиск/атака) мгновенно возвращается на клиенте:
+        // getEffectivePlayerStatus() дочитывает реген с прошедшего времени.
+        await client.query(
+            'UPDATE players SET last_energy_update = $1 WHERE id = $2',
+            [new Date(now).toISOString(), player.id]
+        );
+        player.last_energy_update = new Date(now).toISOString();
+        return player;
+    }
 
     // Сдвигаем метку на фактически восстановленное время
     const newLast = new Date(last + regen * 60000).toISOString();
@@ -596,6 +718,10 @@ module.exports = {
     buildPlayerStatus,
     recalcEnergy,
     normalizeEquipment,
+calculateSellPrice,
+addItemToInventory,
+SELL_RATE,
+SELL_FLOOR_BY_RARITY,
     
     // Функции достижений (achievements.js)
     getAchievementCurrentValue,

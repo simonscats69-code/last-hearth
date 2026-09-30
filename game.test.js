@@ -10,7 +10,7 @@ const ACHIEVEMENTS = null;
 const { calculateLocationRiskProfile } = require('./utils/gameConstants');
 const { calculateCoinsToSteal, calculatePVPRewardExperience, calculatePVPDamage, getRandomItemsToSteal } = require('./db/pvp');
 const { calculateDropChance, calculateDebuffModifiers, getDebuffTier, calculateRadiationDefense } = require('./utils/gameConstants');
-const { normalizeInventory, createInventoryItem, getInventoryItemCategory, getActiveBuffs, isBuffActive, normalizeEquipment } = require('./utils/game-helpers');
+const { normalizeInventory, createInventoryItem, getInventoryItemCategory, getActiveBuffs, isBuffActive, normalizeEquipment, calculateSellPrice, addItemToInventory, recalcEnergy } = require('./utils/game-helpers');
 const { getExpForLevel, getTotalExpForLevel } = require('./utils/gameConstants');
 
 // =============================================================================
@@ -538,6 +538,161 @@ describe('Регрессия: мир и PvP', () => {
             expect(getRandomItemsToSteal([], 3)).toEqual([]);
             expect(getRandomItemsToSteal(null, 3)).toEqual([]);
         });
+    });
+});
+
+// =============================================================================
+// Экономика инвентаря: продажа предметов и стакование
+// =============================================================================
+
+describe('Экономика инвентаря', () => {
+    const dbFood = { id: 1, type: 'food', category: 'food', stackable: true, max_stack: 99 };
+    const makeFood = (quantity = 1) => ({
+        id: 1, name: 'Яблоко', type: 'food', category: 'food',
+        rarity: 'common', quantity, upgrade_level: 0
+    });
+
+    describe('calculateSellPrice', () => {
+        test('считает долю от цены магазина', () => {
+            expect(calculateSellPrice({ id: 1, type: 'food', rarity: 'common', price: 100 }, {})).toBe(35);
+        });
+
+        test('даёт минимум 1 монету за дешёвый предмет', () => {
+            expect(calculateSellPrice({ id: 1, type: 'food', rarity: 'common', price: 2 }, {})).toBe(1);
+        });
+
+        test('ключи боссов продавать нельзя', () => {
+            // Иначе монеты фармились бы по кругу: купил ключ -> продал.
+            expect(calculateSellPrice({ id: 9, type: 'key', rarity: 'epic', price: 500 }, {})).toBe(0);
+        });
+
+        test('для добычи без price берётся минимум по редкости', () => {
+            expect(calculateSellPrice({ id: 5, type: 'medicine', rarity: 'common', price: 0 }, {})).toBe(3);
+            expect(calculateSellPrice({ id: 6, type: 'medicine', rarity: 'rare', price: 0 }, {})).toBe(20);
+            expect(calculateSellPrice({ id: 7, type: 'medicine', rarity: 'legendary', price: 0 }, {})).toBe(100);
+        });
+
+        test('неизвестный предмет не продаётся', () => {
+            expect(calculateSellPrice(null, { id: 999, type: 'food' })).toBe(0);
+        });
+    });
+
+    describe('addItemToInventory', () => {
+        test('расходники складываются в один слот', () => {
+            const inv = [];
+            addItemToInventory(inv, makeFood(1), dbFood);
+            addItemToInventory(inv, makeFood(4), dbFood);
+
+            expect(inv).toHaveLength(1);
+            expect(inv[0].quantity).toBe(5);
+        });
+
+        test('учитывает max_stack и создаёт новый слот при переполнении', () => {
+            const inv = [];
+            const db = { ...dbFood, max_stack: 5 };
+            addItemToInventory(inv, makeFood(4), db);
+            addItemToInventory(inv, makeFood(4), db);
+
+            expect(inv).toHaveLength(2);
+            expect(inv[0].quantity).toBe(5);
+            expect(inv[1].quantity).toBe(3);
+        });
+
+        test('оружие НИКОГДА не стакается', () => {
+            // Два одинаковых меча в одном слоте — поломанный предмет.
+            const inv = [];
+            const db = { id: 2, type: 'weapon', category: 'weapon', stackable: true, max_stack: 99 };
+            const sword = { id: 2, name: 'Меч', type: 'weapon', category: 'weapon', rarity: 'rare', quantity: 1 };
+
+            addItemToInventory(inv, { ...sword }, db);
+            addItemToInventory(inv, { ...sword }, db);
+
+            expect(inv).toHaveLength(2);
+        });
+
+        test('броня не стакается даже с пустым slot в БД', () => {
+            // items.slot nullable — часть брони идёт без слота.
+            const inv = [];
+            const db = { id: 3, type: 'armor', category: 'armor', stackable: true, slot: null };
+            const armor = { id: 3, name: 'Куртка', type: 'armor', category: 'armor', rarity: 'common', quantity: 1 };
+
+            addItemToInventory(inv, { ...armor }, db);
+            addItemToInventory(inv, { ...armor }, db);
+
+            expect(inv).toHaveLength(2);
+        });
+
+        test('ключи не стакаются', () => {
+            const inv = [];
+            const db = { id: 4, type: 'key', rarity: 'epic', stackable: true, max_stack: 99 };
+            const key = { id: 4, name: 'Ключ', type: 'key', rarity: 'epic', quantity: 1 };
+
+            addItemToInventory(inv, { ...key }, db);
+            addItemToInventory(inv, { ...key }, db);
+
+            expect(inv).toHaveLength(2);
+        });
+
+        test('апгрейженные предметы не смешиваются с обычными', () => {
+            const inv = [];
+            addItemToInventory(inv, makeFood(1), dbFood);
+            addItemToInventory(inv, { ...makeFood(1), upgrade_level: 2 }, dbFood);
+
+            expect(inv).toHaveLength(2);
+        });
+
+        test('возвращает 1 при создании нового слота, 0 при стаке', () => {
+            const inv = [];
+            expect(addItemToInventory(inv, makeFood(1), dbFood)).toBe(1);
+            expect(addItemToInventory(inv, makeFood(1), dbFood)).toBe(0);
+        });
+    });
+});
+
+// =============================================================================
+// Регрессия: «поиск не тратит энергию» — реген при полном баре
+// =============================================================================
+
+describe('Регрессия: энергия не возвращается сама', () => {
+    const makeClient = () => {
+        const queries = [];
+        return {
+            queries,
+            client: {
+                query: async (sql, params) => {
+                    queries.push({ sql, params });
+                    return { rows: [] };
+                }
+            }
+        };
+    };
+
+    test('при полной энергии last_energy_update всё равно двигается', async () => {
+        // Корневая причина бага: baseline застывал на момент заполнения,
+        // и клиент возвращал только что потраченную энергию.
+        const { queries, client } = makeClient();
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const player = { id: 7, energy: 100, max_energy: 100, last_energy_update: twoHoursAgo };
+
+        await recalcEnergy(client, player);
+
+        expect(queries.length).toBe(1);
+        expect(queries[0].sql).toContain('last_energy_update');
+        const newStamp = new Date(player.last_energy_update).getTime();
+        expect(Date.now() - newStamp).toBeLessThan(2000);
+    });
+
+    test('частичный реген двигает метку ровно на восстановленное время', async () => {
+        // Иначе игрок терял бы дробный прогресс регена при каждом действии.
+        const { client } = makeClient();
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const player = { id: 8, energy: 50, max_energy: 100, last_energy_update: fiveMinutesAgo };
+
+        await recalcEnergy(client, player);
+
+        expect(player.energy).toBe(55);
+        const expected = new Date(fiveMinutesAgo).getTime() + 5 * 60000;
+        expect(Math.abs(new Date(player.last_energy_update).getTime() - expected)).toBeLessThan(2000);
     });
 });
 
