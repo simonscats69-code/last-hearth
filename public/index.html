@@ -51,7 +51,7 @@
     </style>
     <link rel="icon" type="image/png" href="/icon-192.png">
     <link rel="apple-touch-icon" href="/icon-192.png">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v={{assetVersion}}">
     <link rel="manifest" href="/manifest.json">
     <!-- Официальный SDK Telegram Mini Apps: window.Telegram.WebApp и initData.
          Подключаем сами: если страницу открыть по ссылке с fragment
@@ -78,6 +78,6 @@
         </nav>
     </div>
 
-    <script src="game.js" nonce="{{nonce}}"></script>
+    <script src="game.js?v={{assetVersion}}" nonce="{{nonce}}"></script>
 </body>
 </html>

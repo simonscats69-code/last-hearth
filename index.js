@@ -143,6 +143,22 @@ app.use((req, res, next) => {
 // Отдача index.html с подстановкой {{nonce}} (шаблон кэшируем в памяти)
 const indexHtmlPath = path.join(__dirname, 'public', 'index.html');
 let indexHtmlTemplate = null;
+
+// Версия статики для кэш-бастинга (?v=...): считается по содержимому game.js и
+// styles.css. После деплоя ссылки в index.html меняются, поэтому клиент получает
+// свежие файлы даже если браузер закэшировал старые (Cache-Control статики — 1 час).
+let assetVersion = 'dev';
+try {
+    const hash = crypto.createHash('sha1');
+    for (const file of ['game.js', 'styles.css']) {
+        hash.update(fs.readFileSync(path.join(__dirname, 'public', file)));
+    }
+    assetVersion = hash.digest('hex').slice(0, 10);
+} catch (e) {
+    assetVersion = Date.now().toString(36);
+    logger.warn('[index] Не удалось вычислить версию статики, использую timestamp:', e.message);
+}
+
 function sendIndexHtml(res) {
     try {
         if (indexHtmlTemplate === null) {
@@ -152,7 +168,9 @@ function sendIndexHtml(res) {
         // no-store: nonce одноразовый, страницу нельзя брать из кэша/по 304 (иначе
         // в DOM останется старый nonce, а CSP придёт с новым — скрипты заблокируются)
         res.set('Cache-Control', 'no-store');
-        res.send(indexHtmlTemplate.replace(/\{\{nonce\}\}/g, res.locals.nonce || ''));
+        res.send(indexHtmlTemplate
+            .replace(/\{\{nonce\}\}/g, res.locals.nonce || '')
+            .replace(/\{\{assetVersion\}\}/g, assetVersion));
     } catch (e) {
         logger.error('[index] Не удалось отдать index.html:', e.message);
         res.status(500).send('Ошибка загрузки приложения. Обновите страницу.');
