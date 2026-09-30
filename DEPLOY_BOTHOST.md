@@ -7,26 +7,42 @@
 В панели Bothost нужно настроить:
 
 ```
-# Подключение к БД (любой формат)
-DATABASE_URL=postgresql://postgres:[PASSWORD]@db.eddqhtpbpqzdixejmked.supabase.co:5432/postgres?sslmode=require
+# Подключение к БД через пулер Supabase (Supavisor).
+# ВАЖНО: прямой хост db.<ref>.supabase.co — только IPv6, из контейнера Bothost
+# недостижим (ENETUNREACH). Точную строку берите в Dashboard -> Connect -> Session pooler.
+# У ЭТОГО проекта пул aws-1-eu-west-1 (на aws-0-eu-west-1 тот же URI даёт
+# "XX000 tenant/user postgres.<ref> not found" — проверено экспериментально).
+DATABASE_URL=postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-1-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require
 
-# Или отдельно (теперь тоже поддерживается кодом):
-DB_HOST=db.eddqhtpbpqzdixejmked.supabase.co
+# Альтернативный формат (не нужно задавать вместе с DATABASE_URL — он имеет приоритет):
+DB_HOST=aws-1-eu-west-1.pooler.supabase.com
 DB_PORT=5432
 DB_NAME=postgres
-DB_USER=postgres
+DB_USER=postgres.[PROJECT-REF]
 DB_PASSWORD=[PASSWORD]
 
+# Обязательные переменные бота:
 # ВАЖНО: переменная называется именно TG_BOT_TOKEN (не TELEGRAM_BOT_TOKEN)
 TG_BOT_TOKEN=your_bot_token_from_botfather
-MINI_APP_URL=https://твой-домен.bothost.ru
-WEBHOOK_URL=https://твой-домен.bothost.ru/webhook
-SECRET_KEY=любой-секретный-ключ
+MINI_APP_URL=https://твой-домен.bothost.tech
+FRONTEND_URL=https://твой-домен.bothost.tech
+# Числовые Telegram ID админов через запятую (доступ к /metrics и админ-роутам)
+ADMIN_IDS=123456789
+# Случайная hex-строка; без неё в проде WebSocket-подключения отклоняются
+WS_TOKEN_SECRET=your_random_hex_secret
 ```
 
-Если ни `DATABASE_URL`, ни `DB_HOST` не заданы, pg подключается к
-`localhost:5432` — в контейнере это всегда `ECONNREFUSED`. В логах старт
-печатает строку `Подключение к БД: <host>:<port>/<db>` — проверьте её в первую очередь.
+Примечания:
+- `?sslmode=require` в `DATABASE_URL` оставлять можно: код (`db/database.js`)
+  сам вырезает `sslmode` из строки и включает TLS без строгой проверки цепочки
+  (иначе pg 8.20 падает с `SELF_SIGNED_CERT_IN_CHAIN` на сертификате Supabase).
+- `SECRET_KEY`, `ADSGRAM_APP_ID`, `NODE_ENV`, `PORT`, `DOMAIN` задавать не нужно —
+  бот работает в режиме polling, а порт/домен выдаёт платформа.
+- Если ни `DATABASE_URL`, ни `DB_HOST` не заданы, pg подключается к
+  `localhost:5432` — в контейнере это всегда `ECONNREFUSED`. В логах старт
+  печатает строку `Подключение к БД: <host>:<port>/<db>` — проверьте её в первую очередь.
+- Успешный старт с БД: в логе `Подключение к БД: aws-1-eu-west-1.pooler.supabase.com:5432/postgres`
+  и следом `База данных инициализирована` (без ошибок `tenant/user ... not found`).
 
 ## 3. Запуск
 - Node.js версия: 18+

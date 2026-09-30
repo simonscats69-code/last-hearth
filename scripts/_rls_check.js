@@ -30,7 +30,8 @@ const { pool: p, describeError } = require('../db/database');
             ORDER BY tablename
         `);
         console.log('Existing policies:', pol.rowCount);
-        pol.rows.forEach(x => console.log(' *', x.tablename, '->', x.policyname, 'roles:', x.roles.join(','), 'cmd:', x.cmd));
+        pol.rows.forEach(x => console.log(' *', x.tablename, '->', x.policyname,
+            'roles:', Array.isArray(x.roles) ? x.roles.join(',') : String(x.roles), 'cmd:', x.cmd));
 
         const who = await p.query(`SELECT current_user, session_user`);
         console.log('connected as:', who.rows[0].current_user, '/', who.rows[0].session_user);
