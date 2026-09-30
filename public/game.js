@@ -923,9 +923,12 @@ const Templates = {
         `;
     },
     
-    // Кнопка
-    button(text, onClick, type = 'primary', extra = '') {
-        return `<button class="btn btn-${type}" onclick="${escapeHtml(onClick)}" ${extra}>${escapeHtml(text)}</button>`;
+    // Кнопка.
+    // ВНИМАНИЕ: inline onclick заблокирован CSP (script-src-attr без nonce),
+    // поэтому обработчик передаётся через data-* и вызывается делегированным
+    // слушателем из document (см. блок «ДЕЛЕГИРОВАНИЕ КЛИКОВ»).
+    button(text, action, type = 'primary', extra = '') {
+        return `<button class="btn btn-${type}" data-action="${escapeHtml(action || '')}" ${extra}>${escapeHtml(text)}</button>`;
     },
     
     // Уведомление
@@ -1469,6 +1472,11 @@ function showScreen(screenName) {
         targetScreen.classList.add('active');
         gameState.currentScreen = screenName;
 
+        // Подсветка активной кнопки нижней навигации
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.screen === screenName);
+        });
+
         // Выполняем специфичные действия при открытии
         onScreenOpen(screenName);
     }
@@ -1553,6 +1561,20 @@ function onScreenOpen(screenName) {
         case 'pvp-stats':
             // Загружаем статистику PvP
             loadPVPStats();
+            break;
+
+        case 'wheel':
+            // Колесо удачи
+            loadWheelInfo();
+            break;
+
+        case 'referral':
+            // Реферальная программа
+            loadReferralScreen();
+            break;
+
+        case 'clan-chat':
+            loadClanChat();
             break;
     }
 }
@@ -4197,10 +4219,10 @@ function showClanMembersModal(members) {
     
     members.forEach(m => {
         html += '<div class="member-row">' +
-            '<span class="member-role">' + roleEmoji[m.clan_role] + '</span>' +
+            '<span class="member-role">' + (roleEmoji[m.clan_role] || roleEmoji.member) + '</span>' +
             '<div class="member-info">' +
-                '<div class="member-name">' + m.first_name + '</div>' +
-                '<div class="member-level">Уровень ' + m.level + '</div>' +
+                '<div class="member-name">' + escapeHtml(m.first_name || 'Выживший') + '</div>' +
+                '<div class="member-level">Уровень ' + escapeHtml(String(m.level ?? 1)) + '</div>' +
             '</div>' +
             '<div class="member-status ' + (m.is_online ? 'online' : 'offline') + '">' +
                 (m.is_online ? '🟢 Онлайн' : '⚪ Офлайн') +
@@ -4212,10 +4234,31 @@ function showClanMembersModal(members) {
     const modalTitle = document.getElementById('modal-title');
     const modalMessage = document.getElementById('modal-message');
     const modal = document.getElementById('modal');
-    
+
     if (modalTitle) modalTitle.textContent = 'Участники клана';
     if (modalMessage) modalMessage.innerHTML = html;
-    if (modal) modal.classList.add('active');
+    openModalElement(modal);
+}
+
+/**
+ * Показать существующее окно #modal.
+ * В разметке у #modal стоит inline style="display:none", поэтому одного
+ * класса .active недостаточно — раньше из-за этого окна участников и настроек
+ * клана «не открывались». display задаём явно здесь.
+ * @param {HTMLElement|null} modal - элемент #modal
+ */
+function openModalElement(modal) {
+    if (!modal) return;
+    modal.classList.add('active');
+    modal.style.display = 'flex';
+    modal.style.animation = 'fadeIn 0.3s ease-out';
+
+    // Закрытие по клику вне окна и по крестику
+    const modalClose = document.getElementById('modal-close');
+    if (modalClose) modalClose.onclick = () => hideModal();
+    modal.onclick = (e) => {
+        if (e.target === modal) hideModal();
+    };
 }
 
 /**
@@ -4275,7 +4318,7 @@ function showClanSettings() {
     if (!clan) return;
     
     let html = '<div class="clan-settings">';
-    html += '<p>Код приглашения: <strong>' + clan.invite_code + '</strong></p>';
+    html += '<p>Код приглашения: <strong>' + escapeHtml(clan.invite_code || '—') + '</strong></p>';
     html += '<p>Поделитесь кодом с друзьями!</p>';
     html += '</div>';
     
@@ -4285,7 +4328,7 @@ function showClanSettings() {
     
     if (modalTitle) modalTitle.textContent = 'Настройки клана';
     if (modalMessage) modalMessage.innerHTML = html;
-    if (modal) modal.classList.add('active');
+    openModalElement(modal);
 }
 
 /**
@@ -4891,7 +4934,7 @@ function renderAchievementsList(achievements) {
     if (!container) return;
     
     if (!achievements || achievements.length === 0) {
-        container.innerHTML = '<div class="empty">Нет достижений</div>';
+        container.innerHTML = '<div class="empty-message">Нет достижений</div>';
         return;
     }
     
@@ -5542,7 +5585,7 @@ function setElementText(id, value) {
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Нижняя навигация
+    // Нижняя навигация (кнопки есть уже в index.html)
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const screen = btn.dataset.screen;
@@ -5552,56 +5595,23 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Основные кнопки
-    document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
-    document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
-    document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
-    document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => openWeaponSelect());
-    document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
-    document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
-    document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
-    document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
-    
-    // Лечение инфекций
-    document.getElementById('heal-infections-btn')?.addEventListener('click', healInfections);
-    
-    
-    // PvP
-    document.getElementById('pvp-refresh-btn')?.addEventListener('click', loadPVPGamePlayers);
-    document.getElementById('pvp-stats-btn')?.addEventListener('click', () => showScreen('pvp-stats'));
-    document.getElementById('pvp-attack-btn')?.addEventListener('click', attackPVPTarget);
-    document.getElementById('pvp-claim-rewards-btn')?.addEventListener('click', claimPVPRewards);
-    
-    // Боссы
-    document.getElementById('attack-boss-btn')?.addEventListener('click', attackBoss);
-    
-    // Кланы
-    document.getElementById('create-clan-btn')?.addEventListener('click', createClan);
-    document.getElementById('clans-search-btn')?.addEventListener('click', () => {
-        const search = document.getElementById('clans-search-input')?.value;
-        loadClansList(search);
-    });
-    document.getElementById('clans-search-input')?.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            loadClansList(e.target.value);
-        }
-    });
-    document.getElementById('clan-send-btn')?.addEventListener('click', sendClanMessage);
-    document.getElementById('clan-message-input')?.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendClanMessage();
-    });
-    
+    // Остальные обработчики навешиваются в initEventHandlers() — после того,
+    // как generateScreens() создаст экраны. Раньше эти элементы не существуют,
+    // поэтому повторная регистрация здесь была бы и бессмысленной, и лишней.
+
     // Функция для повторной инициализации обработчиков после generateScreens
     function initEventHandlers() {
         // Основные кнопки
         document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
         document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
-        document.getElementById('inventory-btn')?.addEventListener('click', () => showScreen('inventory'));
         document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => openWeaponSelect());
-        document.getElementById('bosses-btn')?.addEventListener('click', () => showScreen('bosses'));
         document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
+        document.getElementById('market-btn')?.addEventListener('click', () => showScreen('market'));
+        document.getElementById('wheel-btn')?.addEventListener('click', openWheel);
         document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
         document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
+        document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
+        document.getElementById('referral-btn')?.addEventListener('click', () => showScreen('referral'));
         
         // Лечение инфекций
         document.getElementById('heal-infections-btn')?.addEventListener('click', healInfections);
@@ -5727,6 +5737,16 @@ document.addEventListener('click', (event) => {
 
     if (target.closest('[data-attack-boss]')) {
         attackBoss();
+        return;
+    }
+
+    // Кнопки из Templates.button(): действие приходит строкой в data-action
+    const actionBtn = target.closest('[data-action]');
+    if (actionBtn) {
+        const action = actionBtn.dataset.action;
+        if (action && typeof window[action] === 'function') {
+            window[action]();
+        }
     }
 });
 
@@ -5801,161 +5821,170 @@ function generateScreens() {
         <div class="screen active" id="main-screen">
             <div id="main-content">
                 <!-- Хедер -->
-                <div class="game-header" id="game-header">
-                    <div class="header-top">
+                <div class="game-header main-hero-header" id="game-header">
+                    <div class="player-info-row">
                         <div class="player-info">
-                            <span class="player-avatar" id="player-avatar">👤</span>
-                            <div class="player-details">
-                                <span class="player-name" id="player-name">Загрузка...</span>
-                                <span class="player-level" id="player-level">1</span>
-                            </div>
+                            <span class="player-name" id="player-name">Загрузка...</span>
+                            <span class="player-level" id="player-level">1</span>
                         </div>
-                        <div class="header-balance">
-                            <span class="balance-stars" id="main-stars-value">0</span>
-                            <span class="balance-coins" id="main-coins-value">0</span>
+                        <div class="main-currency-badges">
+                            <span class="currency-badge coins">🪙 <span id="main-coins-value">0</span></span>
+                            <span class="currency-badge stars">⭐ <span id="main-stars-value">0</span></span>
                         </div>
                     </div>
 
                     <!-- Полоски здоровья, энергии, опыта -->
                     <div class="player-stats">
-                        <div class="stat-bar health-bar-container">
-                            <span class="stat-label">❤️</span>
-                            <div class="bar-track">
-                                <div class="bar-fill health-fill" id="health-bar" style="width:100%"></div>
-                            </div>
-                            <span class="stat-text" id="health-text">0/0</span>
+                        <div class="stat-bar">
+                            <div class="bar health-bar" id="health-bar" style="width:100%"></div>
+                            <span class="bar-text" id="health-text">❤️ 100/100</span>
                         </div>
-                        <div class="stat-bar energy-bar-container">
-                            <span class="stat-label">⚡</span>
-                            <div class="bar-track">
-                                <div class="bar-fill energy-fill" id="energy-bar" style="width:100%"></div>
-                            </div>
-                            <span class="stat-text" id="energy-text">0/0</span>
+                        <div class="stat-bar">
+                            <div class="bar energy-bar" id="energy-bar" style="width:100%"></div>
+                            <span class="bar-text" id="energy-text">⚡ 100/100</span>
                         </div>
-                        <div class="stat-bar exp-bar-container">
-                            <span class="stat-label">⬆️</span>
-                            <div class="bar-track">
-                                <div class="bar-fill exp-fill" id="exp-bar" style="width:0%"></div>
-                            </div>
-                            <span class="stat-text" id="exp-text">0/0</span>
+                        <div class="stat-bar">
+                            <div class="bar exp-bar" id="exp-bar" style="width:0%"></div>
+                            <span class="bar-text" id="exp-text">XP 0/500</span>
                         </div>
                     </div>
 
-                    <!-- Статусы (радиация, инфекция) -->
-                    <div class="status-grid" id="conditions-grid" style="display:none">
-                        <div class="status-item" id="radiation-display">
-                            <span>☢️</span>
-                            <span id="radiation-value">0</span>
-                        </div>
-                        <div class="status-item" id="infections-display" style="display:none">
-                            <span>🤒</span>
-                            <span id="infection-value">0</span>
-                        </div>
-                    </div>
+                    <div class="energy-timer inline" id="energy-timer" style="display:none">⌛ Энергия полная</div>
 
-                    <!-- Статус монет -->
-                    <div class="coins-display" id="coins-value">0</div>
-
-                    <!-- Локация -->
-                    <div class="location-badge">
-                        <span id="location-icon">🏠</span>
-                        <span id="location-name">Спальный район</span>
-                        <span id="location-desc" style="display:none"></span>
-                        <span id="location-infection" style="display:none"></span>
+                    <!-- Состояния: радиация и инфекции -->
+                    <div class="conditions-grid" id="conditions-grid" style="display:none">
+                        <div class="condition-item">
+                            <span class="condition-icon">☢️</span>
+                            <span class="condition-text">Радиация</span>
+                            <span class="condition-effect" id="radiation-value">0</span>
+                        </div>
+                        <div class="condition-item infections" id="infections-display" style="display:none">
+                            <span class="condition-icon">🤒</span>
+                            <span class="condition-text" id="infections-text">Инфекции: 0</span>
+                            <span class="condition-effect" id="infection-effect"></span>
+                            <span id="infection-value" hidden>0</span>
+                        </div>
                     </div>
                 </div>
+
+                <!-- Кнопки лечения -->
+                <div class="heal-actions" id="heal-actions" style="display:none">
+                    <button class="heal-btn" id="heal-infections-btn" style="display:none">💊 Лечить инфекции</button>
+                </div>
+
+                <!-- Текущая локация -->
+                <section class="location-section">
+                    <div class="location-card">
+                        <div class="location-icon" id="location-icon">🏠</div>
+                        <div class="location-info">
+                            <h3 id="location-name">Спальный район</h3>
+                            <p id="location-desc">Тихий жилой комплекс</p>
+                            <div class="location-stats">
+                                <span class="radiation">☢️ <span id="location-radiation">0</span></span>
+                                <span class="infection">🦠 <span id="location-infection">0</span></span>
+                                <span class="danger">⚠️ ур. <span id="location-danger">1</span></span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
 
                 <!-- Карточка рекомендаций -->
-                <div class="guidance-card" id="main-guidance-card" data-tone="ready">
-                    <div class="guidance-header">
-                        <span class="guidance-state" id="guidance-state">Фарм</span>
+                <section class="main-guidance-section">
+                    <div class="main-guidance-card" id="main-guidance-card" data-tone="ready">
+                        <div class="guidance-topline">
+                            <span class="guidance-kicker">Что делать сейчас</span>
+                            <span class="guidance-state" id="guidance-state">Фарм</span>
+                        </div>
+                        <div class="guidance-title" id="guidance-title">Лучший ход — искать припасы</div>
+                        <div class="guidance-text" id="guidance-text">...</div>
+                        <div class="guidance-meta">
+                            <span class="meta-pill" id="guidance-meta-primary"></span>
+                            <span class="meta-pill" id="guidance-meta-secondary"></span>
+                        </div>
+                        <button class="action-btn guidance-action-btn" id="guidance-action-btn">Действие</button>
                     </div>
-                    <div class="guidance-title" id="guidance-title">Лучший ход — искать припасы</div>
-                    <div class="guidance-text" id="guidance-text">...</div>
-                    <div class="guidance-meta">
-                        <span id="guidance-meta-primary"></span>
-                        <span id="guidance-meta-secondary"></span>
-                    </div>
-                    <button class="guidance-action-btn" id="guidance-action-btn">Действие</button>
-                </div>
+                </section>
 
                 <!-- Быстрые действия -->
-                <div class="quick-actions">
-                    <button class="action-btn" id="search-btn">🔍 Искать</button>
-                    <button class="action-btn" id="map-btn">🗺️ Карта</button>
-                    <button class="action-btn" id="inventory-btn">🎒 Инвентарь</button>
-                    <button class="action-btn" id="bosses-btn">👹 Боссы</button>
-                    <button class="action-btn" id="shop-btn">🏪 Магазин</button>
-                    <button class="action-btn" id="rating-btn">🏆 Рейтинг</button>
-                    <button class="action-btn" id="pvp-btn">⚔️ PvP</button>
-                </div>
+                <section class="actions-section">
+                    <button class="action-btn search-btn" id="search-btn">
+                        <span class="btn-icon">🔍</span>
+                        <span class="btn-text">Искать</span>
+                        <span class="btn-cost">-1 ⚡</span>
+                    </button>
+                    <button class="action-btn" id="map-btn">
+                        <span class="btn-icon">🗺️</span>
+                        <span class="btn-text">Карта</span>
+                    </button>
+                </section>
+                <section class="extra-actions">
+                    <button class="extra-btn" id="shop-btn">🏪 Магазин ⭐</button>
+                    <button class="extra-btn" id="market-btn">💰 Рынок</button>
+                    <button class="extra-btn" id="wheel-btn">🎡 Колесо</button>
+                    <button class="extra-btn" id="rating-btn">🏆 Рейтинг</button>
+                    <button class="extra-btn" id="pvp-btn">⚔️ PvP</button>
+                    <button class="extra-btn" id="achievements-btn">🎖️ Достижения</button>
+                    <button class="extra-btn" id="referral-btn">📨 Рефералы</button>
+                </section>
 
                 <!-- Прогресс-карточки -->
-                <div class="progress-cards" id="main-progress-cards">
-                    <div class="progress-card">
-                        <span class="progress-card-icon">⬆️</span>
-                        <span class="progress-card-value" id="next-level-value">0 XP</span>
-                        <span class="progress-card-label" id="next-level-desc">До уровня 2</span>
+                <section class="quick-progress-section">
+                    <div class="quick-progress-grid" id="main-progress-cards">
+                        <div class="progress-card">
+                            <span class="progress-card-label">Опыт</span>
+                            <span class="progress-card-value" id="next-level-value">0 XP</span>
+                            <span class="progress-card-desc" id="next-level-desc">До уровня 2</span>
+                        </div>
+                        <div class="progress-card">
+                            <span class="progress-card-label">Боссы</span>
+                            <span class="progress-card-value" id="next-boss-value">Все открыты</span>
+                            <span class="progress-card-desc" id="next-boss-desc">Боссы</span>
+                        </div>
+                        <div class="progress-card">
+                            <span class="progress-card-label">Достижения</span>
+                            <span class="progress-card-value" id="next-reward-value">Нет задач</span>
+                            <span class="progress-card-desc" id="next-reward-desc">Достижения</span>
+                        </div>
                     </div>
-                    <div class="progress-card">
-                        <span class="progress-card-icon">👹</span>
-                        <span class="progress-card-value" id="next-boss-value">Все открыты</span>
-                        <span class="progress-card-label" id="next-boss-desc">Боссы</span>
-                    </div>
-                    <div class="progress-card">
-                        <span class="progress-card-icon">🏆</span>
-                        <span class="progress-card-value" id="next-reward-value">Нет задач</span>
-                        <span class="progress-card-label" id="next-reward-desc">Достижения</span>
-                    </div>
-                </div>
+                </section>
 
                 <!-- Бонусы -->
-                <div class="bonuses-section" id="main-bonuses">
-                    <div class="bonus-item">
-                        <span>⚔️ Урон:</span>
-                        <span id="player-damage-preview">+1</span>
-                    </div>
-                    <div class="bonus-item">
-                        <span>📦 Шанс дропа:</span>
-                        <span id="player-drop-chance">10%</span>
-                    </div>
-                    <div class="bonus-item">
-                        <span>🛡️ Выживаемость:</span>
-                        <span id="player-survival-preview">Стабильно</span>
-                    </div>
-                </div>
+                <section class="player-bonuses">
+                    <div class="bonus-pill">⚔️ Урон: <span id="player-damage-preview">+1</span></div>
+                    <div class="bonus-pill">📦 Шанс дропа: <span id="player-drop-chance">10%</span></div>
+                    <div class="bonus-pill">🛡️ Выживаемость: <span id="player-survival-preview">Стабильно</span></div>
+                </section>
 
                 <!-- Активные баффы -->
-                <div class="active-buffs-section" id="active-buffs-section" style="display:none">
-                    <span class="section-title">Активные баффы</span>
+                <div class="active-buffs-section" id="active-buffs-section" style="display:none;margin:0 16px 16px">
+                    <div class="active-buffs-header">Активные баффы</div>
                     <div class="active-buffs-list" id="active-buffs-list"></div>
                 </div>
 
                 <!-- Journey Progress -->
-                <div class="journey-section" id="journey-section">
-                    <div class="journey-grid">
-                        <div class="journey-item">
-                            <span class="journey-icon">👹</span>
-                            <span class="journey-value" id="journey-bosses-killed">0</span>
+                <section class="journey-progress-section">
+                    <div class="journey-progress-grid">
+                        <div class="journey-card">
                             <span class="journey-label">Боссов убито</span>
+                            <span class="journey-value" id="journey-bosses-killed">0</span>
                         </div>
-                        <div class="journey-item">
-                            <span class="journey-icon">🎯</span>
+                        <div class="journey-card">
+                            <span class="journey-label">Главный босс</span>
                             <span class="journey-value" id="journey-main-boss">Нет цели</span>
-                            <span class="journey-label" id="journey-main-boss-desc">Главный босс</span>
+                            <span class="journey-desc" id="journey-main-boss-desc"></span>
                         </div>
-                        <div class="journey-item">
-                            <span class="journey-icon">🗺️</span>
+                        <div class="journey-card">
+                            <span class="journey-label">Следующая зона</span>
                             <span class="journey-value" id="journey-next-zone">Все открыты</span>
-                            <span class="journey-label" id="journey-next-zone-desc">Следующая зона</span>
+                            <span class="journey-desc" id="journey-next-zone-desc"></span>
                         </div>
-                        <div class="journey-item">
-                            <span class="journey-icon">⚠️</span>
+                        <div class="journey-card">
+                            <span class="journey-label">Освоенный риск</span>
                             <span class="journey-value" id="journey-risk-label">Стабильно</span>
-                            <span class="journey-label" id="journey-risk-desc">Освоенный риск</span>
+                            <span class="journey-desc" id="journey-risk-desc"></span>
                         </div>
                     </div>
-                </div>
+                </section>
             </div>
         </div>
 
@@ -5964,17 +5993,17 @@ function generateScreens() {
             <div class="screen-header">
                 <h2>🗺️ Карта города</h2>
             </div>
-            <div class="map-content">
+            <div class="map-container">
                 <div class="map-info">
                     <span class="map-location-name">Выберите локацию</span>
                 </div>
                 <canvas id="city-map" width="350" height="400"></canvas>
-                <div class="location-preparation-panel" id="location-preparation-panel">
-                    <span class="risk-label" id="location-risk-label">—</span>
-                    <span>☢️ Защита: <span id="location-rad-defense">0</span></span>
-                    <span>🦠 Защита: <span id="location-inf-defense">0</span></span>
-                    <span class="risk-hint" id="location-risk-hint">Выберите локацию для просмотра рисков</span>
+                <div class="location-preparation" id="location-preparation-panel">
+                    <span class="prep-pill risk">⚠️ <span id="location-risk-label">—</span></span>
+                    <span class="prep-pill rad-def">🛡☢ <span id="location-rad-defense">0</span></span>
+                    <span class="prep-pill inf-def">🛡🦠 <span id="location-inf-defense">0</span></span>
                 </div>
+                <div class="location-risk-hint" id="location-risk-hint">Выберите локацию для просмотра рисков</div>
             </div>
         </div>
 
@@ -5983,12 +6012,12 @@ function generateScreens() {
             <div class="screen-header">
                 <h2>🎒 Инвентарь</h2>
                 <div class="inventory-balance">
-                    <span>⭐ <span id="inv-stars">0</span></span>
-                    <span>💰 <span id="inv-coins">0</span></span>
+                    <span class="currency-badge stars">⭐ <span id="inv-stars">0</span></span>
+                    <span class="currency-badge coins">🪙 <span id="inv-coins">0</span></span>
                 </div>
             </div>
             <div class="screen-content">
-                <div class="inventory-filters" id="inventory-filters">
+                <div class="inv-filters" id="inventory-filters">
                     <button class="filter-btn active" data-filter="all">Все</button>
                     <button class="filter-btn" data-filter="weapon">⚔️</button>
                     <button class="filter-btn" data-filter="food">🍞</button>
@@ -6044,7 +6073,7 @@ function generateScreens() {
                 <div class="fight-log" id="fight-log"></div>
                 <div class="boss-actions">
                     <button class="btn attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать</button>
-                    <div class="attack-progress" id="attack-progress-container" style="display:none"></div>
+                    <div class="attack-progress-container" id="attack-progress-container" style="display:none"></div>
                     <button class="btn weapon-btn" id="boss-fight-inventory-btn">🔧 Выбрать оружие</button>
                 </div>
             </div>
@@ -6068,7 +6097,7 @@ function generateScreens() {
                 <h2>🏰 Список кланов</h2>
             </div>
             <div class="screen-content">
-                <div class="clans-search">
+                <div class="clans-list-search">
                     <input type="text" id="clans-search-input" placeholder="Поиск клана...">
                     <button class="btn" id="clans-search-btn">🔍</button>
                 </div>
@@ -6145,7 +6174,7 @@ function generateScreens() {
                     <button class="shop-category-btn" data-category="medicine">💊 Медицина</button>
                     <button class="shop-category-btn" data-category="food">🍞 Еда</button>
                 </div>
-                <div class="shop-items-list" id="shop-items-list"></div>
+                <div class="shop-items shop-items-list" id="shop-items-list"></div>
             </div>
         </div>
 
@@ -6300,7 +6329,7 @@ function generateScreens() {
             </div>
             <div class="screen-content">
                 <div class="achievements-stats" id="achievements-stats"></div>
-                <div class="achievement-categories" id="achievement-categories"></div>
+                <div class="achievements-categories" id="achievement-categories"></div>
                 <div class="achievements-list" id="achievements-list"></div>
             </div>
         </div>
@@ -6617,11 +6646,11 @@ const WHEEL_PRIZES = [
 ];
 
 /**
- * Открытие колеса удачи
+ * Открытие колеса удачи.
+ * Данные подгружает onScreenOpen('wheel') — здесь только переход.
  */
 function openWheel() {
     showScreen('wheel');
-    loadWheelInfo();
 }
 
 async function loadWheelInfo() {
@@ -6825,7 +6854,7 @@ async function loadCoinShop() {
         console.error('Ошибка загрузки магазина:', error);
         const container = document.getElementById('shop-items-list');
         if (container) {
-            container.innerHTML = '<div class="error">Ошибка загрузки товаров</div>';
+            container.innerHTML = '<div class="empty-message">Ошибка загрузки товаров</div>';
         }
     }
 }
@@ -7544,31 +7573,19 @@ function showModal(title, message, type = 'info') {
     const modalTitle = document.getElementById('modal-title');
     const modalMessage = document.getElementById('modal-message');
     const modalClose = document.getElementById('modal-close');
-    
+
     if (!modal || !modalTitle || !modalMessage || !modalClose) return;
-    
+
     modalTitle.textContent = title;
     modalMessage.textContent = message;
-    
-    // Устанавливаем класс типа
+
+    // Сбрасываем класс типа (openModalElement добавит .active)
     modal.className = 'modal';
     if (type === 'success') modal.classList.add('modal-success');
     else if (type === 'error') modal.classList.add('modal-error');
     else modal.classList.add('modal-info');
-    
-    // Показываем модальное окно с анимацией
-    modal.style.display = 'flex';
-    modal.style.animation = 'fadeIn 0.3s ease-out';
-    
-    // Обработчик закрытия (сначала удаляем старый)
-    modalClose.onclick = null;
-    modalClose.onclick = () => hideModal();
-    
-    // Закрытие по клику вне окна (сначала удаляем старый)
-    modal.onclick = null;
-    modal.onclick = (e) => {
-        if (e.target === modal) hideModal();
-    };
+
+    openModalElement(modal);
 }
 
 /**
@@ -7585,6 +7602,8 @@ function hideModal() {
         modal.style.animation = 'fadeOut 0.2s ease-out';
         setTimeout(() => {
             modal.style.display = 'none';
+            modal.classList.remove('active');
+            modal.style.animation = '';
         }, 200);
     }
 }

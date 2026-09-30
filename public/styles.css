@@ -398,6 +398,23 @@ input:checked + .slider:before {
     --accent-blue: #4a6b8a;        /* Сталь */
     --accent-radiation: #39ff14;   /* Неон радиация */
     
+    /* Состояния карточек (в т.ч. для .item-card, .boss-card, .shop-item-card) */
+    --card-bg: #2f2921;          /* Альтернативный фон карточек */
+    --bg-secondary: #241f19;     /* Второй фон: табы, поля ввода */
+    --bg-hover: #38312a;         /* Наведение на кнопки/строки */
+    --border-color: #4a4235;     /* Базовая рамка карточек и полей */
+
+    /* Дополнительные акценты (Кланы / PvP / Достижения / легендарки) */
+    --accent-purple: #7a5aa6;    /* Эпический фиолетовый */
+    --accent-gold: #c9a227;      /* Золото: легендарное, достижения */
+
+    /* Редкость предметов (совпадает с getRarityColor в game.js) */
+    --rarity-common: #8a8070;
+    --rarity-uncommon: #4caf50;
+    --rarity-rare: #2196f3;
+    --rarity-epic: #9c27b0;
+    --rarity-legendary: #ff9800;
+
     /* Цвета состояний */
     --health-color: #cc3333;       /* Красный */
     --energy-color: #ffcc00;       /* Жёлтый */
@@ -1187,28 +1204,37 @@ html, body {
 
 /* Дополнительные кнопки */
 .extra-actions {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
     gap: 8px;
 }
 
 .extra-btn {
-    flex: 1;
-    padding: 12px 8px;
-    border: 1px solid #444;
+    padding: 12px 6px;
+    border: 1px solid var(--border-color);
     border-radius: 12px;
     background: var(--bg-card);
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 11px;
+    line-height: 1.25;
+    text-align: center;
     cursor: pointer;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 4px;
     position: relative;
+    transition: background 0.2s, border-color 0.2s, transform 0.1s;
+}
+
+.extra-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-rust);
 }
 
 .extra-btn:active {
-    background: #333;
+    transform: scale(0.96);
 }
 
 .extra-badge {
@@ -1232,8 +1258,10 @@ html, body {
     background: var(--bg-header);
     display: flex;
     justify-content: space-around;
-    padding: 8px 0;
-    border-top: 1px solid #333;
+    align-items: stretch;
+    padding: 4px 0;
+    border-top: 1px solid var(--border-color);
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.45);
     z-index: 100;
 }
 
@@ -1244,14 +1272,55 @@ html, body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    padding: 8px 16px;
+    justify-content: center;
+    gap: 2px;
+    flex: 1;
+    min-height: 52px;
+    padding: 4px 2px;
     cursor: pointer;
-    font-size: 12px;
+    position: relative;
+    transition: color 0.2s;
+}
+
+.nav-btn .nav-icon {
+    font-size: 20px;
+    line-height: 1;
+    filter: grayscale(0.6);
+    opacity: 0.75;
+    transition: filter 0.2s, opacity 0.2s, transform 0.2s;
+}
+
+.nav-btn .nav-label {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
 }
 
 .nav-btn.active {
     color: var(--accent-green);
+}
+
+/* Индикатор активной вкладки */
+.nav-btn.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 28px;
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+    background: var(--accent-green);
+}
+
+.nav-btn.active .nav-icon {
+    filter: none;
+    opacity: 1;
+    transform: translateY(-1px);
+}
+
+.nav-btn:active {
+    background: var(--bg-hover);
 }
 
 /* Выпадающее меню "Ещё" */
@@ -2367,7 +2436,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transform: rotate(calc(var(--i) * 60deg));
+    transform: rotate(calc(var(--i, 0) * 60deg));
 }
 
 .wheel-segment span {
@@ -2466,7 +2535,7 @@ html, body {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0,0,0,0.8);
+    background: rgba(0, 0, 0, 0.8);
     justify-content: center;
     align-items: center;
     z-index: 1000;
@@ -2478,23 +2547,32 @@ html, body {
 }
 
 .modal-content {
+    position: relative;
     background: var(--bg-card);
     border-radius: 16px;
-    padding: 24px;
-    max-width: 320px;
+    padding: 24px 20px 20px;
+    /* 320px не хватало под списки (участники клана, настройки) */
+    max-width: 420px;
     width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     text-align: center;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
 }
 
 .modal-content h3 {
-    font-size: 20px;
+    font-size: 18px;
     margin-bottom: 12px;
+    color: var(--text-primary);
+    padding-right: 24px;
 }
 
 .modal-content p {
     color: var(--text-secondary);
     margin-bottom: 20px;
+    /* сюда же кладут HTML (showClanMembersModal) — выравниваем по левому краю */
+    text-align: left;
 }
 
 .modal-content button {
@@ -2593,9 +2671,10 @@ html, body {
 
 /* Улучшенная мобильная адаптивность */
 @media (max-width: 400px) {
-    /* Уменьшаем отступы */
+    /* Отступы оставляем на ответственности секций (.screen-content / redesign-секции),
+       иначе content залезает под fixed-навигацию, а двойной padding ломает сетку */
     .screen {
-        padding: 12px;
+        padding-bottom: 90px;
     }
     
     /* Кнопки удобнее для тапа */
@@ -2631,9 +2710,11 @@ html, body {
     .bottom-nav {
         padding-bottom: env(safe-area-inset-bottom);
     }
-    
+
+    /* Высота навигации выросла (иконка + подпись, min-height 52px),
+       поэтому 60px уже не хватало — контент уходил под неё. */
     .screen {
-        padding-bottom: calc(60px + env(safe-area-inset-bottom));
+        padding-bottom: calc(80px + env(safe-area-inset-bottom));
     }
 }
 
@@ -3613,6 +3694,483 @@ html, body {
 .pvp-attack-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+
+/* ============================================================================
+   ФРОНТЕНД-АУДИТ 2026-09: стили для классов, которые генерирует game.js,
+   но которых в этом файле раньше не было (экран генерируется из JS).
+   ========================================================================== */
+
+/* Контент под-экранов: боковые отступы (у .screen их нет) */
+.screen-content {
+    padding: 0 16px;
+}
+
+/* Ряд «Искать / Карта» на главном экране тоже получает отступы секций */
+.actions-section {
+    padding: 0 16px;
+    margin-bottom: 8px;
+}
+
+/* ---------- Модальное окно (showModal) ---------- */
+.modal-close {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    font-size: 24px;
+    line-height: 1;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.modal-close:active { color: var(--text-primary); }
+.modal-content {
+    position: relative;
+    border-top: 3px solid var(--accent-green);
+}
+.modal-error .modal-content { border-top-color: #e74c3c; }
+.modal-info .modal-content { border-top-color: #3498db; }
+.modal-success .modal-content { border-top-color: #4caf50; }
+#modal-message {
+    white-space: pre-line;
+    word-break: break-word;
+}
+
+/* ---------- Глобальный лоадер (Loader.show/hide) ---------- */
+#global-loader {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 11000;
+}
+#global-loader.active { display: block; }
+.loader-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(15, 15, 35, 0.75);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+}
+.loader-spinner {
+    width: 44px;
+    height: 44px;
+    border: 3px solid #2a2a4a;
+    border-top-color: var(--accent-green, #4a7c3f);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+.loader-text {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+/* ---------- Toast-уведомления (Templates.notification) ---------- */
+.notification {
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    background: #4a90a4;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.notification-success { background: #2e7d32; }
+.notification-error { background: #b3402e; }
+.notification-warning { background: #b3762e; }
+.notification-info { background: #2e5a8f; }
+
+/* ---------- Общие карточки статистики (PvP-статы и др.) ---------- */
+.stat-card {
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    text-align: center;
+}
+.stat-card .stat-value {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+.stat-card .stat-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.section-title {
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    margin: 12px 0 8px;
+}
+
+/* ---------- Предпросмотр урона (выбор оружия) ---------- */
+.damage-preview-line {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 3px 0;
+}
+.damage-preview-total {
+    display: flex;
+    justify-content: space-between;
+    font-size: 15px;
+    font-weight: bold;
+    color: var(--text-primary);
+    padding-top: 6px;
+    margin-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.damage-preview-loading {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 8px 0;
+}
+.damage-base, .damage-level, .damage-mastery { color: var(--text-secondary); }
+.damage-total { color: var(--accent-green, #6abf59); }
+
+/* ---------- Достижения: контейнер категорий и legacy ---------- */
+.progress-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+.bosses-info {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.bosses-info-card {
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* ---------- Колесо удачи: подписи секторов ---------- */
+.wheel-prizes {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+}
+.wheel-prizes .prize {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 11px;
+    font-weight: bold;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+.wheel-prizes .prize:nth-child(1) { transform: translate(-50%, -130%); }
+.wheel-prizes .prize:nth-child(2) { transform: translate(20%, -90%); }
+.wheel-prizes .prize:nth-child(3) { transform: translate(20%, -10%); }
+.wheel-prizes .prize:nth-child(4) { transform: translate(-50%, 30%); }
+.wheel-prizes .prize:nth-child(5) { transform: translate(-120%, -10%); }
+.wheel-prizes .prize:nth-child(6) { transform: translate(-120%, -90%); }
+.star { font-size: 14px; }
+
+/* ---------- Экран боя с боссом (markup: boss-fight-container) ---------- */
+.boss-fight-container {
+    padding: 0 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.boss-fight-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0 0;
+}
+.boss-icon-large {
+    font-size: 72px;
+    line-height: 1;
+    animation: boss-pulse 2.4s ease-in-out infinite;
+}
+.boss-name-large {
+    font-size: 22px;
+    font-weight: bold;
+    text-align: center;
+}
+.boss-hp-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.boss-hp-bar {
+    height: 18px;
+    background: #2b2b3f;
+    border-radius: 9px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.boss-hp-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #b3402e, #e74c3c);
+    transition: width 0.3s ease;
+    border-radius: 9px;
+}
+.boss-hp-text {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.boss-timer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    font-size: 14px;
+}
+.boss-damage { color: #ff8a80; font-weight: bold; }
+.attack-btn {
+    width: 100%;
+    padding: 16px;
+    border: none;
+    border-radius: 14px;
+    background: linear-gradient(135deg, var(--accent-green, #4a7c3f), #2e7d32);
+    color: #fff;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.attack-btn:active { transform: scale(0.98); }
+.attack-btn:disabled, .attack-btn.disabled { opacity: 0.5; pointer-events: none; }
+.attack-btn.multiple,
+.mass-btn {
+    background: linear-gradient(135deg, #b3762e, #8d5a1e);
+}
+.start-solo-btn {
+    background: linear-gradient(135deg, #3e6b8f, #2a4a66);
+}
+.fight-start {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* ---------- Рейды (вкладка «Массовый» на экране боссов) ---------- */
+#raids-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.raid-item {
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.raid-boss-icon { font-size: 32px; }
+.raid-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.raid-boss-name {
+    font-size: 16px;
+    font-weight: bold;
+}
+.raid-hp-bar {
+    height: 12px;
+    background: #2b2b3f;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.raid-hp-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #b3402e, #e74c3c);
+    transition: width 0.3s ease;
+}
+.raid-hp-text { font-size: 12px; color: var(--text-secondary); }
+.raid-leader, .raid-participants { font-size: 13px; color: var(--text-secondary); }
+.raid-timer { font-size: 12px; color: #ffd166; }
+.btn-join,
+.btn-attack {
+    border: none;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-weight: bold;
+    color: #fff;
+    cursor: pointer;
+}
+.btn-join { background: linear-gradient(135deg, #3e6b8f, #2a4a66); }
+.btn-attack { background: linear-gradient(135deg, var(--accent-green, #4a7c3f), #2e7d32); }
+.btn-join:active, .btn-attack:active { transform: scale(0.98); }
+
+/* ---------- PvP: бой и статистика ---------- */
+.pvp-battle-arena {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.pvp-combatant {
+    flex: 1;
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+}
+.pvp-combatant.attacker { border-color: rgba(74, 124, 63, 0.5); }
+.pvp-combatant.defender { border-color: rgba(179, 64, 46, 0.5); }
+.pvp-combatant-name { font-size: 15px; font-weight: bold; }
+.pvp-combatant-level { font-size: 12px; color: var(--text-secondary); }
+.pvp-health-bar {
+    height: 10px;
+    background: #2b2b3f;
+    border-radius: 5px;
+    overflow: hidden;
+}
+.pvp-health-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--health-color, #b3402e), #ff6b6b);
+    transition: width 0.3s ease;
+}
+.pvp-health-text { font-size: 12px; color: var(--text-secondary); }
+.pvp-info {
+    padding: 8px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.pvp-stats-content { padding-top: 4px; }
+.pvp-recent-matches-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.pvp-vs { align-self: center; font-size: 22px; }
+
+/* ---------- Разное: недостающие контейнеры и алиасы ---------- */
+.inventory-balance {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+.energy-timer { display: none; }
+.coins-display { display: none; } /* баланс показывается в currency-badge */
+.journey-section { margin-top: 4px; }
+.journey-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+.journey-item {
+    display: grid;
+    gap: 4px;
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 12px;
+    text-align: center;
+    align-content: center;
+}
+.journey-icon { font-size: 22px; }
+.referral-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+.bonuses-section {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 16px;
+    margin-bottom: 16px;
+}
+.bonus-item {
+    display: inline-flex;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 12px;
+}
+.guidance-card { /* legacy-алиас */
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 16px;
+    margin: 0 16px 16px;
+}
+.guidance-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.quick-actions {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 0 16px;
+    margin-bottom: 16px;
+}
+.clans-search {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.shop-items-list { margin-top: 12px; }
+.header-top,
+.header-balance {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.location-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    margin: 8px 16px 16px;
+}
+.location-preparation-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+.risk-label { color: #ffd166; font-weight: bold; }
+.risk-hint {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 6px;
+}
+
 }
 
 /* Награды PvP */
@@ -4230,5 +4788,193 @@ html, body {
 
 .referral-bonuses {
     font-size: 20px;
+}
+
+
+/* ============================================================================
+   АУДИТ 2026-09 (продолжение): классы, которые рендерит game.js,
+   но для которых не было ни одного правила. Без них элементы выглядят
+   как «голый» текст без рамок — из-за этого UI казался сломанным.
+   ========================================================================== */
+
+/* ---------- Модификаторы .action-btn (экраны клана) ---------- */
+.action-btn.secondary {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+}
+.action-btn.secondary:active {
+    background: var(--bg-hover);
+}
+
+.action-btn.primary {
+    background: linear-gradient(135deg, var(--accent-green), #2E7D32);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #fff;
+}
+.action-btn.primary .btn-text,
+.action-btn.primary .btn-cost {
+    color: #fff;
+}
+
+.action-btn.danger {
+    background: rgba(139, 0, 0, 0.35);
+    border: 1px solid var(--accent-red);
+    color: #ff8a8a;
+}
+.action-btn.danger:active {
+    background: rgba(139, 0, 0, 0.55);
+}
+
+/* Кнопки внутри .action-btn по умолчанию имеют flex:1 — в вертикальных
+   секциях (clan-admin / clan-actions) это растягивает их на всю строку,
+   поэтому оставляем им обычную ширину. */
+.clan-admin .action-btn,
+.clan-actions .action-btn {
+    flex: none;
+    width: 100%;
+}
+
+/* ---------- Компактная кнопка .btn.small (PvP-статы, рефералы) ---------- */
+.btn.small {
+    padding: 6px 12px;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    min-height: 0;
+    border-radius: 3px;
+}
+.btn.small:active {
+    transform: scale(0.97);
+}
+
+/* ---------- Иконка и подпись активного баффа ---------- */
+.active-buff-pill .buff-icon {
+    font-size: 14px;
+    line-height: 1;
+}
+.active-buff-pill .buff-label {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* ---------- Ключи боссов (.keys-owned / .keys-needed) ---------- */
+.boss-item .boss-keys {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+.boss-item .keys-owned {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-color);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.boss-item .keys-needed {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* ---------- Экран рефералов: секции и сетка статистики ---------- */
+.referral-code-section {
+    margin-bottom: 16px;
+}
+.referral-code-section h3 {
+    font-size: 14px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
+}
+.referral-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin: 12px 0 16px;
+}
+@media (max-width: 400px) {
+    .referral-stats {
+        grid-template-columns: 1fr;
+    }
+}
+.referral-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* ---------- Карточки из Templates (используются в модальных окнах) ---------- */
+.item-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--rarity-common);
+    border-radius: 10px;
+    margin-bottom: 8px;
+}
+.item-card .item-icon { font-size: 20px; }
+.item-card .item-name {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+.item-card .item-count {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.item-card.rarity-uncommon { border-left-color: var(--rarity-uncommon); }
+.item-card.rarity-rare     { border-left-color: var(--rarity-rare); }
+.item-card.rarity-epic     { border-left-color: var(--rarity-epic); }
+.item-card.rarity-legendary{ border-left-color: var(--rarity-legendary); }
+
+.boss-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+.boss-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.boss-header .boss-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* ---------- Модальное окно: затемнение и тело (Templates.modal) ---------- */
+.modal-overlay {
+    position: absolute;
+    inset: 0;
+}
+.modal-body {
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.5;
+    text-align: left;
+    white-space: pre-line;
+    word-break: break-word;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* ---------- Загрузочный текст на экране старта (index.html) ---------- */
+.loading-text {
+    margin-top: 15px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
