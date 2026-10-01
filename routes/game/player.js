@@ -6,7 +6,6 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
-const { getExpForLevel } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress } = require('../../utils/game-helpers');
 

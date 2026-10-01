@@ -46,7 +46,12 @@ function stripTemplates(src) {
  * @returns {{classes: Map<string,{count:number,example:string}>, ids: Map<string,number>}}
  */
 function collectMarkup(js, html) {
-    const markup = stripTemplates(js) + '\n' + stripTemplates(html);
+    // Комментарии не рендерятся — считать из них id/class нельзя:
+    // раньше `<div id="main-screen">` в JSDoc давал ложный «дубль ID».
+    const jsCode = js
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    const markup = stripTemplates(jsCode) + '\n' + stripTemplates(html);
     const classes = new Map();
     const ids = new Map();
 

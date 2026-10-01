@@ -40,7 +40,7 @@ function masked(url) {
     } catch (e) {
         console.error('FAIL:', describeError(e));
     } finally {
-        try { await pool.end(); } catch {}
+        try { await pool.end(); } catch { /* ignore */ }
     }
     process.exit(code);
 })();

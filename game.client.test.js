@@ -381,6 +381,24 @@ describe('регрессии из ревью', () => {
         expect(vm.runInContext('INVENTORY_MAX_SLOTS', sandbox)).toBe(100);
     });
 
+    test('getCurrentZoneRiskProfile не падает с ReferenceError: shared', () => {
+        // Регрессия: в функции использовался голый `shared.` без объявления,
+        // из-за чего initGame прерывался на loadProfile.
+        const sharedEquipment = require('./public/shared/equipment.js');
+        const { getCurrentZoneRiskProfile } = loadFunctions(
+            ['getCurrentZoneRiskProfile', 'calculatePlayerPreparation'],
+            { window: { EquipmentShared: sharedEquipment } }
+        );
+
+        const profile = getCurrentZoneRiskProfile({
+            location: { radiation: 30, infection: 11 }
+        });
+
+        // 30/10 -> 3 очка угрозы, 11/10 -> 2; защиты без экипировки нет
+        expect(profile.score).toBe(5);
+        expect(profile.tier).toBe('warning');
+    });
+
     test('API.endpoints строится из общего словаря endpoints (нет дубля списка)', () => {
         const apiObject = src().slice(src().indexOf('const API = {'));
         expect(apiObject.slice(0, 1200)).toContain('Object.fromEntries');
@@ -461,6 +479,66 @@ describe('регрессии из ревью', () => {
 
     test('loadProfile сбрасывает кэш gameApi, иначе вернёт устаревшие данные', () => {
         expect(extractFunction(src(), 'loadProfile')).toContain("invalidateCache('profile')");
+    });
+});
+
+// =============================================================================
+// Регрессия: id, который ищет JS, должен существовать в разметке
+// =============================================================================
+
+describe('id в разметке', () => {
+    const src = () => readGameSource();
+
+    // Собираем id, объявленные в разметке (game.js генерирует экраны сам).
+    // Комментарии вырезаем: примеры в JSDoc не являются разметкой.
+    const collectIds = () => {
+        const fs = require('fs');
+        const path = require('path');
+        const html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+        const code = src()
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+        const ids = new Set();
+
+        for (const m of (code + '\n' + html).matchAll(/\sid="([\w-]+)"/g)) ids.add(m[1]);
+        // id, которые элементы получают в рантайме: el.id = 'x'
+        for (const m of code.matchAll(/\.id\s*=\s*['"]([\w-]+)['"]/g)) ids.add(m[1]);
+
+        return ids;
+    };
+
+    test('каждый getElementById/getEl/setElementText находит элемент в разметке', () => {
+        const defined = collectIds();
+        // #app в разметке нет намеренно: на него есть fallback `|| document.body`
+        const allowMissing = new Set(['app']);
+        const missing = [];
+
+        src().split(/\r?\n/).forEach((line, i) => {
+            for (const m of line.matchAll(
+                /(?:getElementById|getEl|setElementText)\(\s*'([\w-]+)'/g
+            )) {
+                if (!defined.has(m[1]) && !allowMissing.has(m[1])) {
+                    missing.push(`#${m[1]} (game.js:${i + 1})`);
+                }
+            }
+        });
+
+        // Регрессия: pvp-zone-indicator отсутствовал, и loadPVPGamePlayers()
+        // выходила по `if (!indicator || !list) return` — список PvP не рендерился.
+        // weapon-list отсутствовал — экран выбора оружия был пустым.
+        expect(missing).toEqual([]);
+    });
+
+    test('экран выбора оружия содержит контейнер списка и предпросмотра урона', () => {
+        const s = src();
+        expect(s).toContain('class="weapon-list" id="weapon-list"');
+        expect(s).toContain('id="damage-preview"');
+        // Старый subScreen не позволял задать внутренние блоки экрана
+        expect(s).not.toContain('function subScreen(');
+    });
+
+    test('индикатор зоны PvP присутствует — иначе список игроков не рисуется', () => {
+        expect(src()).toContain('id="pvp-zone-indicator"');
     });
 });
 

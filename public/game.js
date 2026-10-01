@@ -1035,24 +1035,15 @@ const Loader = {
         }
         this._element.querySelector('.loader-text').textContent = message;
         this._element.classList.add('active');
-        if (typeof AppState !== 'undefined') {
-            AppState.ui.loading = true;
-        }
     },
     
     hide() {
         if (this._element) {
             this._element.classList.remove('active');
         }
-        if (typeof AppState !== 'undefined') {
-            AppState.ui.loading = false;
-        }
     },
     
     async wrap(fn, message = 'Загрузка...') {
-        if (typeof AppState !== 'undefined' && AppState.ui.loading) {
-            return;
-        }
         this.show(message);
         try {
             return await fn();
@@ -2759,6 +2750,10 @@ function calculatePlayerPreparation(player) {
 function getCurrentZoneRiskProfile(player) {
     const location = player?.location || player?.current_location || {};
     const preparation = calculatePlayerPreparation(player || {});
+    // Общие правила живут в shared/equipment.js -> window.EquipmentShared.
+    // Раньше здесь стоял голый `shared.` без объявления — браузер падал с
+    // ReferenceError: shared is not defined, и весь initGame прерывался.
+    const shared = window.EquipmentShared;
     const radiationThreat = shared.normalizeThreatLevelToPoints(location.radiation);
     const infectionThreat = shared.normalizeThreatLevelToPoints(location.infection);
     const radiationPressure = Math.max(0, radiationThreat - preparation.radiationDefense);
@@ -2999,10 +2994,7 @@ function updateProfileUI(player) {
     if (radiationValue) radiationValue.textContent = status.radiation || 0;
     if (infectionValue) infectionValue.textContent = status.infections || 0;
     
-    const coinsValue = document.getElementById('coins-value');
-    if (coinsValue) coinsValue.textContent = player.coins || 0;
-    
-    // Локация
+    // Локацию
     if (player.location) {
         const locationIcon = document.getElementById('location-icon');
         const locationName = document.getElementById('location-name');
@@ -3675,11 +3667,12 @@ function renderInventoryWithFilters(items) {
         switch (sortKey) {
             case 'name':
                 return (a.name || '').localeCompare(b.name || '');
-            case 'rarity':
+            case 'rarity': {
                 const rarityOrder = { legendary: 5, epic: 4, rare: 3, uncommon: 2, common: 1 };
                 const rA = rarityOrder[a.rarity] || 0;
                 const rB = rarityOrder[b.rarity] || 0;
                 return rB - rA;
+            }
             case 'count':
                 return (b.quantity || b.count || 1) - (a.quantity || a.count || 1);
             case 'id':
@@ -3973,8 +3966,6 @@ function startBossFight(boss, timeRemainingMs = null) {
     
     // Скрываем прогресс
     if (progressContainer) progressContainer.style.display = 'none';
-    const attackMultiBtn = document.getElementById('attack-boss-multiple-btn');
-    if (attackMultiBtn) attackMultiBtn.style.display = 'none';
     
     // Удаляем старый обработчик и атрибут data-handler перед добавлением нового
     if (attackSingleBtn) {
@@ -4152,7 +4143,7 @@ async function attackWithWeapon(itemIndex) {
 
             const attackBtn = document.getElementById('attack-boss-btn');
             if (attackBtn) {
-                attackBtn.textContent = Boolean(gameState.buffs?.free_energy)
+                attackBtn.textContent = gameState.buffs?.free_energy
                     ? '⚔️ Атаковать (бесплатно)'
                     : '⚔️ Атаковать (1 ⚡)';
             }
@@ -4342,7 +4333,7 @@ async function attackBoss() {
     } finally {
         if (btn) {
             btn.disabled = false;
-            btn.textContent = Boolean(gameState.buffs?.free_energy)
+            btn.textContent = gameState.buffs?.free_energy
                 ? '⚔️ Атаковать (бесплатно)'
                 : '⚔️ Атаковать (1 ⚡)';
         }
@@ -6462,22 +6453,11 @@ function generateScreens() {
     // Удаляем старые screen'ы, если есть (кроме навигации)
     gameContent.querySelectorAll('.screen').forEach(el => el.remove());
 
-    // Шаблон экрана с кнопкой "назад" для под-экранов
-    function subScreen(id, title) {
-        return `
-            <div class="screen" id="${id}-screen">
-                <div class="screen-header">
-                    <button class="back-btn" data-screen="main">← Назад</button>
-                    <h2>${title}</h2>
-                </div>
-                <div class="screen-content" id="${id}-content"></div>
-            </div>
-        `;
-    }
-
     // Шаблон экрана для основных разделов.
-    // Раньше здесь был ещё шаблон fullScreen(id, title), но ни один экран
-    // его не использовал — все пишутся литералом в screensHtml ниже.
+    // Раньше здесь были шаблоны fullScreen(id, title) и subScreen(id, title),
+    // но их использовала лишь вёрстка экрана выбора оружия. Она описана
+    // литералом выше: subScreen не давал указать внутренние блоки
+    // (weapon-list, damage-preview), из-за чего экран оставался пустым.
     const screensHtml = `
         <!-- Главный экран -->
         <div class="screen active" id="main-screen">
@@ -6615,6 +6595,20 @@ function generateScreens() {
                     <div class="bonus-pill">⚔️ Урон: <span id="player-damage-preview">+1</span></div>
                     <div class="bonus-pill">📦 Шанс дропа: <span id="player-drop-chance">10%</span></div>
                     <div class="bonus-pill">🛡️ Выживаемость: <span id="player-survival-preview">Стабильно</span></div>
+                </section>
+
+                <!-- Сводка состояния: риск и рекомендация (updateRiskSummary) -->
+                <section class="status-section">
+                    <div class="risk-summary-card" id="risk-summary-card" data-risk="safe">
+                        <div class="risk-summary-main">
+                            <span class="risk-summary-label">Состояние</span>
+                            <strong id="risk-summary-level">Стабильно</strong>
+                            <p id="risk-summary-text">Пока всё под контролем — можно безопасно продолжать вылазку.</p>
+                        </div>
+                        <div class="risk-summary-side">
+                            <span class="risk-summary-action" id="risk-summary-action">Ищи лут</span>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- Активные баффы -->
@@ -6755,6 +6749,11 @@ function generateScreens() {
                     <span id="boss-timer-text">00:00:00</span>
                 </div>
                 <div class="fight-log" id="fight-log"></div>
+                <div class="fight-energy-display">
+                    <span class="energy-label">⚡ Энергия:</span>
+                    <span id="boss-energy-text">0/100</span>
+                    <span class="energy-used" id="boss-energy-used"></span>
+                </div>
                 <div class="boss-actions">
                     <button class="btn attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать</button>
                     <div class="attack-progress-container" id="attack-progress-container" style="display:none"></div>
@@ -6764,7 +6763,17 @@ function generateScreens() {
         </div>
 
         <!-- Выбор оружия -->
-        ${subScreen('weapon-select', 'Выбор оружия')}
+        <div class="screen" id="weapon-select-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="boss-fight">← Назад</button>
+                <h2>🔪 Выбор оружия</h2>
+            </div>
+            <div class="weapon-select-content">
+                <p class="weapon-info">Выберите оружие для атаки. Оружие будет использовано и исчезнет из инвентаря!</p>
+                <div id="damage-preview"></div>
+                <div class="weapon-list" id="weapon-list"></div>
+            </div>
+        </div>
 
         <!-- Клан -->
         <div class="screen" id="clan-screen">
@@ -6906,7 +6915,7 @@ function generateScreens() {
                 <button class="btn small" id="pvp-stats-btn">📊 Статистика</button>
             </div>
             <div class="screen-content">
-                <div class="pvp-info"></div>
+                <div class="pvp-zone-indicator" id="pvp-zone-indicator"></div>
                 <div class="pvp-players-list" id="pvp-players-list"></div>
                 <button class="btn" id="pvp-refresh-btn">🔄 Обновить</button>
             </div>
@@ -7013,7 +7022,7 @@ function generateScreens() {
             </div>
             <div class="screen-content">
                 <div class="achievements-stats" id="achievements-stats"></div>
-                <div class="achievements-categories" id="achievement-categories"></div>
+                <div class="achievements-categories" id="achievements-categories"></div>
                 <div class="achievements-list" id="achievements-list"></div>
             </div>
         </div>
@@ -8502,7 +8511,9 @@ function showLootAnimation(item) {
  * Визуальный эффект при получении урона
  */
 function showDamageEffect() {
-    const app = document.getElementById('app');
+    // #app в разметке нет (корневой контейнер — #game-content),
+    // поэтому падаем на body, как и showLootAnimation.
+    const app = document.getElementById('app') || document.body;
     if (!app) return;
 
     app.style.animation = 'damageFlash 0.3s';

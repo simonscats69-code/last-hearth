@@ -54,8 +54,9 @@ try {
     }
 
     // Заголовок формируется в audit.js как «<title> (<число>)», поэтому число
-// берём отсюда, а не ищем по старой формулировке.
-const count = Number((out.match(/не применяются \((\d+)\)/) || [, '0'])[1]);
+    // берём отсюда, а не ищем по старой формулировке.
+    const countMatch = out.match(/не применяются \((\d+)\)/);
+    const count = Number(countMatch ? countMatch[1] : '0');
 const nestingReported = /вложено в/.test(out);
 
     console.log('Структурных ошибок в отчёте: ' + count);

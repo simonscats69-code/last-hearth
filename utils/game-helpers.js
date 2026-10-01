@@ -38,11 +38,20 @@ function normalizeInventory(value) {
 }
 
 /**
+ * Общая нормализация: любой JSON в чистый объект (не массив, не null).
+ * Раньше эта же строка была продублирована в normalizeItemStats и
+ * normalizePlayerBuffs — аудит находил «точный дубль».
+ */
+function normalizePlainObject(value) {
+    const parsed = safeParseJson(value, {});
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+/**
  * Нормализация stats предмета
  */
 function normalizeItemStats(value) {
-    const parsed = safeParseJson(value, {});
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return normalizePlainObject(value);
 }
 
 /**
@@ -133,8 +142,7 @@ function normalizeInfections(value) {
  * Нормализация активных баффов игрока
  */
 function normalizePlayerBuffs(value) {
-    const parsed = safeParseJson(value, {});
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return normalizePlainObject(value);
 }
 
 /**

@@ -6,7 +6,6 @@ const { validateTelegramInitData, isAdmin } = require('./utils/serverApi');
 const { getMetrics, resetMetrics } = require('./utils/realtime');
 // ACHIEVEMENTS was removed — achievements are now stored in DB with schema seed
 // Tests for static achievements have been migrated to schema tests
-const ACHIEVEMENTS = null;
 const { calculateLocationRiskProfile } = require('./utils/gameConstants');
 const { calculateCoinsToSteal, calculatePVPRewardExperience, calculatePVPDamage, getRandomItemsToSteal } = require('./db/pvp');
 const { calculateDropChance, calculateDebuffModifiers, getDebuffTier, calculateRadiationDefense } = require('./utils/gameConstants');

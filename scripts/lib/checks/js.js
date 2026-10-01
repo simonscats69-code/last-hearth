@@ -4,9 +4,6 @@
  * Дубль ищем по телу функции без комментариев и лишних пробелов — так
  * ловятся копии, отличающиеся только именем переменной.
  */
-const fs = require('fs');
-const path = require('path');
-
 const TARGETS = [
     'public/game.js', 'public/shared/equipment.js', 'index.js', 'webhook.js',
     'utils/serverApi.js', 'utils/game-helpers.js', 'utils/gameConstants.js',

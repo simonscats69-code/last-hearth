@@ -543,8 +543,8 @@ router.post('/verify-telegram', async (req, res) => {
         );
 
         if (!player) {
-            // Создаём нового игрока
-            const newPlayer = await queryOne(`
+            // Создаём нового игрока (результат не нужен — дальше возвращаем флаг)
+            await queryOne(`
                 INSERT INTO players (telegram_id)
                 VALUES ($1)
                 RETURNING id

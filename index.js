@@ -17,7 +17,9 @@ try {
 // ADMIN_IDS парсится один раз при старте
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
 const DEV_MODE = process.env.DEV_MODE === 'true';
-const MAX_INIT_DATA_AGE_SECONDS = parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '172800', 10); // 48 часов по умолчанию
+// Окно валидации initData (MAX_INIT_DATA_AGE_SECONDS, по умолчанию 48 ч)
+// читается напрямую в utils/serverApi.js (validateTelegramInitData) —
+// дубль константы здесь был мёртвым кодом и удалён.
 
 const { logger, requestMiddleware, telegramAuthMiddleware, getTelegramIdFromHeaders } = require('./utils/serverApi');
 

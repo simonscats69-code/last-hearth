@@ -509,6 +509,7 @@ html, body {
 .quick-progress-section,
 .location-section,
 .player-bonuses,
+.status-section,
 .extra-actions,
 .heal-actions{
     padding-left: 16px;
@@ -519,6 +520,7 @@ html, body {
 .quick-progress-section,
 .location-section,
 .player-bonuses,
+.status-section,
 .extra-actions{
     margin-bottom: 16px;
 }
@@ -940,6 +942,35 @@ html, body {
 .risk-summary-card[data-risk="danger"] {
     background: rgba(139, 0, 0, 0.18);
     border-color: rgba(255, 89, 94, 0.45);
+}
+
+.risk-summary-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.risk-summary-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+}
+
+.risk-summary-main strong {
+    font-size: 18px;
+}
+
+.risk-summary-main p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin: 0;
+}
+
+.risk-summary-side {
+    display: flex;
+    align-items: center;
 }
 
 .risk-summary-action {
@@ -1674,6 +1705,10 @@ html, body {
 .weapon-btn .btn-cost {
     font-size: 11px;
     opacity: 0.8;
+}
+
+.weapon-select-content {
+    padding: 16px;
 }
 
 .weapon-info {
@@ -3268,6 +3303,32 @@ html, body {
     font-size: 13px;
 }
 
+/* Индикатор энергии в бою: подпись, счётчик и вспышка списания */
+.fight-energy-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    padding: 8px 16px;
+    background: var(--bg-card);
+    border-radius: 8px;
+}
+
+.energy-label {
+    color: var(--text-secondary);
+}
+
+.energy-used {
+    color: var(--accent-red);
+    font-weight: bold;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.energy-used.show {
+    opacity: 1;
+}
+
 /* ---------- Рейды (вкладка «Массовый» на экране боссов) ---------- */
 #raids-list {
     display: flex;
@@ -3356,11 +3417,6 @@ html, body {
     transition: width 0.3s ease;
 }
 .pvp-health-text { font-size: 12px; color: var(--text-secondary); }
-.pvp-info {
-    padding: 8px 0;
-    font-size: 13px;
-    color: var(--text-secondary);
-}
 .pvp-stats-content { padding-top: 4px; }
 .pvp-recent-matches-list {
     display: flex;

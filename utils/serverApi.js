@@ -3,21 +3,12 @@
  * Объединяет: валидацию, ответы API, транзакции, логирование, обработку ошибок, Telegram авторизацию
  */
 
-const { query, queryOne, transaction: tx, pool } = require('../db/database');
+const { query, queryOne, transaction: tx } = require('../db/database');
 const winston = require('winston');
 const crypto = require('crypto');
 const { randomUUID } = require('crypto');
 const path = require('path');
 const fs = require('fs');
-
-class AppError extends Error {
-    constructor(message, code, statusCode) {
-        super(message);
-        this.name = 'AppError';
-        this.code = code;
-        this.statusCode = statusCode;
-    }
-}
 
 const ERROR_CODES = {
     BAD_REQUEST: { status: 400, message: 'Некорректный запрос' },
@@ -78,28 +69,6 @@ const jsonFormat = winston.format.combine(
     winston.format.json()
 );
 
-// Консольный формат для разработки
-const consoleFormat = winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.errors({ stack: true }),
-    winston.format.printf(({ level, message, timestamp, stack, ...meta }) => {
-        let msg = message;
-        if (typeof message === 'object' && message !== null) {
-            msg = JSON.stringify(message, null, 2);
-        }
-        const cleanMeta = { ...meta };
-        delete cleanMeta.level;
-        delete cleanMeta.message;
-        delete cleanMeta.timestamp;
-        delete cleanMeta.stack;
-        const metaStr = Object.keys(cleanMeta).length > 0 ? ' ' + JSON.stringify(cleanMeta) : '';
-        if (stack) {
-            return `${timestamp} [${level.toUpperCase()}]: ${msg}${metaStr}\n${stack}`;
-        }
-        return `${timestamp} [${level.toUpperCase()}]: ${msg}${metaStr}`;
-    })
-);
-
 // Транспорты
 const transports = [
     new winston.transports.File({
@@ -115,7 +84,10 @@ const transports = [
     })
 ];
 
-if (process.env.NODE_ENV !== 'production') {
+// NODE_ENV=test (так задаёт jest) — консоль не нужна: негативные тесты
+// валидации намеренно зовут validateTelegramInitData с пустыми параметрами,
+// и их warn-сообщения засоряют вывод тестов вместо отчёта jest.
+if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
     transports.push(
         new winston.transports.Console({
             format: winston.format.combine(
@@ -213,7 +185,7 @@ function requestMiddleware(req, res, next) {
                 // метрики не должны ломать обработку запроса
             }
 
-            logger.info({
+            const entry = {
                 type: 'http_request',
                 requestId: req.requestId,
                 method: req.method,
@@ -226,7 +198,22 @@ function requestMiddleware(req, res, next) {
                     ip: req.ip,
                     userAgent: req.headers?.['user-agent']
                 })
-            });
+            };
+
+            // Статика (css/js/картинки) и успешные GET-запросы — рутинный шум:
+            // в combined.log их сотни в минуту и они топят настоящие события.
+            // Понижаем до debug (видно при LOG_LEVEL=debug), ошибки и мутации
+            // остаются на info/error.
+            const path = req.originalUrl || req.url || '';
+            const isStatic = /\.(css|js|mjs|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|otf|mp[34])($|\?)/i.test(path);
+            const isQuiet = isStatic || (req.method === 'GET' && res.statusCode < 400);
+
+            if (!isQuiet) {
+                logger.info(entry);
+            } else {
+                // winston сам отфильтрует по LOG_LEVEL (по умолчанию info)
+                logger.debug(entry);
+            }
         } catch (e) {
             logger.error('Logging failed', { error: e.message });
         }

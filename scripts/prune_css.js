@@ -16,7 +16,6 @@ const path = require('path');
 const FILE = path.join(__dirname, '..', 'public', 'styles.css');
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
-const dry = args.includes('--dry') || !apply;
 const dead = args.filter(a => a.startsWith('.')).map(a => a.slice(1));
 
 if (!dead.length) {
@@ -57,11 +56,6 @@ function analyzeSelector(selector) {
         live.push(g);
     }
     return { dead: live.length === 0, live };
-}
-
-/** Совместимость со старым вызовом: правило целиком мёртвое? */
-function selectorIsDead(selector) {
-    return analyzeSelector(selector).dead;
 }
 
 /** Рекурсивно обрабатывает блок @media/@supports, возвращает новый текст */

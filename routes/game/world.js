@@ -14,7 +14,7 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, normalizeEquipment, addItemToInventory } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, addItemToInventory } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
 
 // Кэш пула предметов по rarity:type для быстрого случайного выбора (P2-9)

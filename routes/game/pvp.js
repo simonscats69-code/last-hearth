@@ -15,7 +15,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
-const { logger, logPlayerError, safeParse, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
+const { logger, logPlayerError, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment } = require('../../utils/game-helpers');
 const realtime = require('../../utils/realtime');
 
@@ -460,8 +460,8 @@ router.post('/attack-hit', async (req, res) => {
                     [battle_id]
                 );
 
-                // P2-14: уведомляем противника
-                try { realtime.notifyPlayer?.(defenderId, 'pvp_dodge', { battleId: battle_id }); } catch {}
+                // P2-14: уведомляем противника (best-effort: сбой WS не должен ломать бой)
+                try { realtime.notifyPlayer?.(defenderId, 'pvp_dodge', { battleId: battle_id }); } catch { /* ignore */ }
 
                 return {
                     dodged: true,
@@ -634,6 +634,7 @@ await client.query(`
                 );
 
                 // P2-14: уведомляем противника о поражении/завершении
+                // (best-effort: сбой WS не должен ломать бой)
                 try {
                     realtime.notifyPlayer?.(defenderId, 'pvp_defeat', {
                         battleId: battle_id,
@@ -641,7 +642,7 @@ await client.query(`
                         damage,
                         coinsLost: coinsReward
                     });
-                } catch {}
+                } catch { /* ignore */ }
 
                 // Логируем завершение боя
                 await logPlayerAction(playerId, 'pvp_battle_win', {

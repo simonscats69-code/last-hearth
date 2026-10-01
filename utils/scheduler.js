@@ -9,7 +9,7 @@
  * - Batch-обработка для больших объёмов
  */
 
-const { query, transaction: tx, describeError } = require('../db/database');
+const { query, describeError } = require('../db/database');
 const { logger } = require('./serverApi');
 const { checkAchievements } = require('./game-helpers');
 
@@ -27,9 +27,10 @@ let isRunning = {
 // Флаг для graceful shutdown
 let schedulerEnabled = true;
 
-// Счётчик повторных ошибок для debuffs cleanup
+// Счётчик повторных ошибок для debuffs cleanup.
+// Лимит не применяется: задержка и так зажата Math.min до 30 минут,
+// поэтому константа MAX_DEBUFF_RETRIES была мёртвым кодом и удалена.
 let debuffRetryCount = 0;
-const MAX_DEBUFF_RETRIES = 5;
 
 // Метрики выполнения
 const metrics = {
@@ -262,7 +263,7 @@ async function checkAllAchievements() {
     let totalErrors = 0;
     
     try {
-        while (true) {
+        for (;;) {
             // Batch-выборка игроков
             const players = await query(`
                 SELECT id, level, bosses_killed, pvp_wins, items_collected,

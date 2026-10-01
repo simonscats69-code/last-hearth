@@ -367,7 +367,10 @@ async function getPlayersByClan(clanId, limit = 50, offset = 0) {
             'SELECT * FROM players WHERE clan_id = $1 ORDER BY clan_donated DESC LIMIT $2 OFFSET $3',
             [clanId, limit, offset]
         ),
-        queryOne('SELECT COUNT(*) as total FROM players WHERE clan_id = $1', [clanId])
+        // Импорт из database называется defaultQueryOne — голый queryOne
+        // падал с ReferenceError при открытии списка клана (тот же баг,
+        // что и «shared is not defined» в game.js).
+        defaultQueryOne('SELECT COUNT(*) as total FROM players WHERE clan_id = $1', [clanId])
     ]);
     const total = parseInt(countResult?.total || 0, 10);
     return { success: true, players, total };
