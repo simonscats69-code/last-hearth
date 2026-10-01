@@ -789,9 +789,10 @@ router.post('/attack-boss', async (req, res) => {
 
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1)
+                 SET energy = GREATEST(0, energy - $1),
+                     last_energy_update = NOW()
                  WHERE id = $2
-                 RETURNING energy`,
+                 RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, playerId]
             );
 
@@ -822,6 +823,10 @@ router.post('/attack-boss', async (req, res) => {
                 damage_dealt: damage,
                 boss_defeated: killed,
                 player_energy: energyResult.rows[0].energy,
+                player_max_energy: energyResult.rows[0].max_energy,
+                // Клиент строит регенерацию энергии от этой метки. Без неё
+                // он продолжит считать от устаревшей метки и покажет лишнюю.
+                last_energy_update: energyResult.rows[0].last_energy_update,
                 mastery,
                 rewards,
                 data: {
@@ -834,7 +839,8 @@ router.post('/attack-boss', async (req, res) => {
                     killed,
                     rewards,
                     mastery,
-                    energy_left: energyResult.rows[0].energy
+                    energy_left: energyResult.rows[0].energy,
+                    last_energy_update: energyResult.rows[0].last_energy_update
                 }
             });
         } catch (error) {
@@ -917,9 +923,10 @@ router.post('/attack-with-weapon', async (req, res) => {
             const energyResult = await client.query(`
                 UPDATE players
                 SET energy = GREATEST(0, energy - $1),
+                    last_energy_update = NOW(),
                     inventory = $2
                 WHERE id = $3
-                RETURNING energy
+                RETURNING energy, max_energy, last_energy_update
             `, [energyCost, JSON.stringify(newInventory), playerId]);
 
             await client.query(`
@@ -960,6 +967,7 @@ router.post('/attack-with-weapon', async (req, res) => {
                     weapon_used: weaponName,
                     weapon_damage: weaponDamage,
                     energy: energyResult.rows[0]?.energy || 0,
+                    last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                     killed,
                     rewards,
                     mastery
@@ -1334,9 +1342,10 @@ router.post('/raid/:id/attack', async (req, res) => {
 
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1)
+                 SET energy = GREATEST(0, energy - $1),
+                     last_energy_update = NOW()
                  WHERE id = $2
-                 RETURNING energy`,
+                 RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, playerId]
             );
 
@@ -1428,6 +1437,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                     },
                     damage,
                     player_energy: energyResult.rows[0]?.energy ?? player.energy,
+                    last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                     your_total_damage: newTotalDamage,
                     killed,
                     rewards

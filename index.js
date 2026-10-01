@@ -144,13 +144,14 @@ app.use((req, res, next) => {
 const indexHtmlPath = path.join(__dirname, 'public', 'index.html');
 let indexHtmlTemplate = null;
 
-// Версия статики для кэш-бастинга (?v=...): считается по содержимому game.js и
-// styles.css. После деплоя ссылки в index.html меняются, поэтому клиент получает
-// свежие файлы даже если браузер закэшировал старые (Cache-Control статики — 1 час).
+// Версия статики для кэш-бастинга (?v=...): считается по содержимому game.js,
+// styles.css и shared/equipment.js. shared/equipment.js обязателен в списке —
+// иначе правка общих правил экипировки не сбросит кэш у клиента, и браузер
+// достанет старую копию (у статики Cache-Control 1 час).
 let assetVersion = 'dev';
 try {
     const hash = crypto.createHash('sha1');
-    for (const file of ['game.js', 'styles.css']) {
+    for (const file of ['game.js', 'styles.css', 'shared/equipment.js']) {
         hash.update(fs.readFileSync(path.join(__dirname, 'public', file)));
     }
     assetVersion = hash.digest('hex').slice(0, 10);
@@ -170,7 +171,12 @@ function sendIndexHtml(res) {
         res.set('Cache-Control', 'no-store');
         res.send(indexHtmlTemplate
             .replace(/\{\{nonce\}\}/g, res.locals.nonce || '')
-            .replace(/\{\{assetVersion\}\}/g, assetVersion));
+            .replace(/\{\{assetVersion\}\}/g, assetVersion)
+            // DEV-флаг авторизации для клиента. Клиент по нему решает,
+            // допустим ли фиктивный telegram_id/initData. Флаг ставится
+            // ТОЛЬКО по явному DEV_MODE=true — в production (где NODE_ENV
+            // часто не задан, напр. на BotHost) подстановка всё равно 'false'.
+            .replace(/\{\{devMode\}\}/g, DEV_MODE ? 'true' : 'false'));
     } catch (e) {
         logger.error('[index] Не удалось отдать index.html:', e.message);
         res.status(500).send('Ошибка загрузки приложения. Обновите страницу.');

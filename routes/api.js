@@ -497,11 +497,10 @@ router.options('/verify-telegram', (req, res) => {
 
 router.post('/verify-telegram', async (req, res) => {
     try {
-        const { telegram_id } = req.body;
-
-        if (!telegram_id) {
-            return res.status(400).json({ error: 'Отсутствует telegram_id' });
-        }
+        // БЕЗОПАСНОСТЬ: telegram_id НЕ берётся из тела запроса как есть.
+        // Тело рассматривается как «просьба проверить», а источник истины —
+        // user.id из криптографически проверенных initData.
+        const requestedTelegramId = req.body.telegram_id;
 
         // БЕЗОПАСНОСТЬ: при наличии bot token подпись initData ОБЯЗАТЕЛЬНА,
         // а telegram_id должен совпадать с подписанным пользователем.
@@ -509,28 +508,38 @@ router.post('/verify-telegram', async (req, res) => {
         const isDevelopment = process.env.NODE_ENV !== 'production';
         const initDataStr = req.body.initData || req.body.init_data || req.headers['x-init-data'] || '';
 
+        let telegramId = requestedTelegramId;
+
         if (botToken) {
             if (!initDataStr) {
                 return res.status(401).json({ error: 'Требуется initData' });
             }
             const validated = validateTelegramInitData(initDataStr, botToken);
             if (!validated) {
-                logger.warn({ type: 'telegram_hash_mismatch', telegram_id });
+                logger.warn({ type: 'telegram_hash_mismatch', telegram_id: requestedTelegramId });
                 return res.status(401).json({ error: 'Неверная подпись Telegram' });
             }
-            if (Number(validated.user.id) !== Number(telegram_id)) {
-                logger.warn({ type: 'telegram_id_mismatch', telegram_id, signedId: validated.user.id });
+
+            // Канонический ID — из подписи. Тело запроса только сверяется с ним.
+            const signedId = Number(validated.user.id);
+            if (requestedTelegramId !== undefined && Number(requestedTelegramId) !== signedId) {
+                logger.warn({ type: 'telegram_id_mismatch', telegram_id: requestedTelegramId, signedId });
                 return res.status(403).json({ error: 'telegram_id не соответствует подписанным данным' });
             }
+            telegramId = signedId;
         } else if (!isDevelopment) {
             logger.error('TG_BOT_TOKEN не настроен в production!');
             return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
         }
 
+        if (!telegramId) {
+            return res.status(400).json({ error: 'Отсутствует telegram_id' });
+        }
+
         // Проверяем, существует ли игрок
         const player = await queryOne(
             'SELECT id, telegram_id FROM players WHERE telegram_id = $1',
-            [telegram_id]
+            [telegramId]
         );
 
         if (!player) {
@@ -539,21 +548,21 @@ router.post('/verify-telegram', async (req, res) => {
                 INSERT INTO players (telegram_id)
                 VALUES ($1)
                 RETURNING id
-            `, [telegram_id]);
+            `, [telegramId]);
 
-            logger.info('[verify-telegram] Создан новый игрок', { telegram_id });
+            logger.info('[verify-telegram] Создан новый игрок', { telegram_id: telegramId });
             return res.json({
                 valid: true,
                 new_player: true,
-                telegram_id: telegram_id
+                telegram_id: telegramId
             });
         }
 
-        logger.info('[verify-telegram] Найден существующий игрок', { telegram_id });
+        logger.info('[verify-telegram] Найден существующий игрок', { telegram_id: telegramId });
         res.json({
             valid: true,
             new_player: false,
-            telegram_id: telegram_id
+            telegram_id: telegramId
         });
     } catch (error) {
         logger.error({ type: 'verify_telegram_error', message: error.message, stack: error.stack });

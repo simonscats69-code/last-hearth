@@ -58,7 +58,7 @@
          #tgWebAppData=..., SDK прочитает данные из URL и авторизация сработает. -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
-<body>
+<body data-dev-mode="{{devMode}}">
     <!-- Экран загрузки -->
     <div id="loading-screen">
         <h1>LAST HEARTH</h1>
@@ -78,6 +78,20 @@
         </nav>
     </div>
 
+    <!-- DEV-флаг авторизации. ОБЯЗАТЕЛЬНО до game.js: тот читает его на
+         этапе загрузки (const DEV_FALLBACK_ENABLED = window.__DEV_MODE__ === true).
+         Значение подставляет сервер (DEV_MODE из .env). В production там
+         всегда 'false', поэтому фиктивные telegram_id/initData недоступны
+         и игра без Telegram просто не стартует. Инлайн-скрипт разрешён
+         строгим CSP, потому что несёт nonce. -->
+    <script nonce="{{nonce}}">
+        window.__DEV_MODE__ = document.body.dataset.devMode === 'true';
+    </script>
+
+    <!-- Общие правила экипировки: читает и сервер (require), и эта страница.
+         Обязательно ДО game.js — тот обращается к window.EquipmentShared
+         на этапе загрузки (лимит слотов инвентаря). -->
+    <script src="shared/equipment.js?v={{assetVersion}}" nonce="{{nonce}}"></script>
     <script src="game.js?v={{assetVersion}}" nonce="{{nonce}}"></script>
 </body>
 </html>

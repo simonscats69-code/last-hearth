@@ -132,12 +132,14 @@ router.post('/clan/create', wrap(async (req, res) => {
     
     const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
-            throw new Error('Игрок не найден');
+            // statusCode обязателен: без него handleError отдаёт 500
+            // и игрок видит «Внутренняя ошибка» вместо понятного текста
+            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
         }
 
         // Проверяем монеты еще раз внутри транзакции
         if (lockedPlayer.coins < 1000) {
-            throw new Error(ERROR_MESSAGES.INSUFFICIENT_COINS);
+            throw { message: ERROR_MESSAGES.INSUFFICIENT_COINS, code: 'INSUFFICIENT_COINS', statusCode: 400 };
         }
 
         // Проверяем уникальность имени клана
@@ -147,7 +149,8 @@ router.post('/clan/create', wrap(async (req, res) => {
         );
         const existingClan = existingClanResult.rows[0];
         if (existingClan) {
-            throw new Error('Клан с таким именем уже существует');
+            // 409 Conflict: имя занято, это ожидаемое состояние, а не сбой
+            throw { message: 'Клан с таким именем уже существует', code: 'CLAN_NAME_TAKEN', statusCode: 409 };
         }
 
         const insertResult = await client.query(
@@ -215,12 +218,12 @@ router.post('/clan/join', wrap(async (req, res) => {
     
     const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
-            throw new Error('Игрок не найден');
+            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
         }
 
         // Проверяем, что игрок не состоит в клане
         if (lockedPlayer.clan_id) {
-            throw new Error('Вы уже состоите в клане');
+            throw { message: 'Вы уже состоите в клане', code: 'ALREADY_IN_CLAN', statusCode: 400 };
         }
 
         // Проверяем количество участников
@@ -231,7 +234,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         const memberCount = memberCountResult.rows[0];
 
         if (Number(memberCount.count) >= 30) {
-            throw new Error('Клан полный');
+            throw { message: 'Клан полный', code: 'CLAN_FULL', statusCode: 400 };
         }
 
         const updateResult = await client.query(`
@@ -243,7 +246,8 @@ router.post('/clan/join', wrap(async (req, res) => {
         `, [clan_id, playerId]);
         
         if (!updateResult.rows.length) {
-            throw new Error('Не удалось вступить (клан полный)');
+            // Гонка: игрок успел вступить в другой клан между проверкой и UPDATE
+            throw { message: 'Не удалось вступить (клан полный)', code: 'CLAN_JOIN_FAILED', statusCode: 409 };
         }
 
         // Логируем вступление
@@ -276,7 +280,7 @@ router.post('/clan/leave', wrap(async (req, res) => {
     
     await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
-            throw new Error('Игрок не найден');
+            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
         }
 
         await client.query(
@@ -510,11 +514,11 @@ router.post('/clan/donate', wrap(async (req, res) => {
     
     const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
-            throw new Error('Игрок не найден');
+            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
         }
 
         if (lockedPlayer.coins < donation) {
-            throw new Error(ERROR_MESSAGES.INSUFFICIENT_COINS);
+            throw { message: ERROR_MESSAGES.INSUFFICIENT_COINS, code: 'INSUFFICIENT_COINS', statusCode: 400 };
         }
 
         // Списание с игрока и добавление в казну клана

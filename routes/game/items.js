@@ -326,7 +326,14 @@ router.post(['/use', '/use-item'], async (req, res) => {
         res.json(result);
     } catch (error) {
         if (error.code === 'ITEM_NOT_IN_INVENTORY' || error.code === 'PLAYER_NOT_FOUND') {
-            return res.status(error.statusCode).json({ success: false, error: error.message, code: error.code });
+            // statusCode может отсутствовать — res.status(undefined) дал бы
+            // невалидный HTTP-код. Фоллбэк 404 соответствует смыслу ошибки.
+            const status = Number(error.statusCode) || 404;
+            return res.status(status).json({
+                success: false,
+                error: error.message,
+                code: error.code
+            });
         }
         handleError(res, error, 'item_use');
     }

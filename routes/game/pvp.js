@@ -425,15 +425,20 @@ router.post('/attack-hit', async (req, res) => {
 
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
-            // P0-1: списываем энергию БЕЗ сброса last_energy_update
+            // Энергия: метку last_energy_update двигаем ВМЕСТЕ со списанием.
+            // Раньше она оставалась старой, и клиент (getEffectivePlayerStatus)
+            // дочитывал регенерацию от устаревшей метки — показывал энергию,
+            // которой на сервере уже нет.
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1)
+                 SET energy = GREATEST(0, energy - $1),
+                     last_energy_update = NOW()
                  WHERE id = $2
-                 RETURNING energy`,
+                 RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, attackerId]
             );
             const energyLeft = Number(energyResult.rows[0]?.energy || 0);
+            const energyLastUpdate = energyResult.rows[0]?.last_energy_update || null;
 
             // P1-6: формулы с насыщением (soft caps) — вынесены в db/pvp.js
             const attackerEq = normalizeEquipment(attacker.equipment);
@@ -468,7 +473,8 @@ router.post('/attack-hit', async (req, res) => {
                         targetHealth: defender.health,
                         maxHealth: defender.max_health
                     },
-                    energy_left: energyLeft
+                    energy_left: energyLeft,
+                    last_energy_update: energyLastUpdate
                 };
             }
 
@@ -667,6 +673,7 @@ await client.query(`
                     maxHealth: defender.max_health
                 },
                 energy_left: energyLeft,
+                last_energy_update: energyLastUpdate,
                 message: battleEnded ? 'Победа!' : 'Удар нанесён'
             };
         });

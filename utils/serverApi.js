@@ -775,12 +775,28 @@ function handleDbError(err, context = 'DB_OPERATION') {
 
 /**
  * Универсальный обработчик ошибок для роутов
+ *
+ * Клиенту отдаём текст ТОЛЬКО для клиентских ошибок (4xx). Для 500
+ * наружу уходит обобщённый текст: иначе игрок видел бы внутренние
+ * сообщения (например, текст ошибки PostgreSQL с именами таблиц и
+ * колонок). Полные детали остаются в логах.
  */
 function handleError(res, error, action = 'unknown') {
-    const code = error.code || 'UNKNOWN_ERROR';
-    const message = error.message || 'Внутренняя ошибка сервера';
     const statusCode = error.statusCode || 500;
-    logger.error(`[${action}] Ошибка: ${message}`, { code, stack: error.stack });
+    const code = error.code || 'UNKNOWN_ERROR';
+    const internalMessage = error.message || 'Внутренняя ошибка сервера';
+    const isClientError = statusCode >= 400 && statusCode < 500;
+
+    logger.error(`[${action}] Ошибка: ${internalMessage}`, {
+        code,
+        statusCode,
+        stack: error.stack
+    });
+
+    const message = isClientError
+        ? internalMessage
+        : 'Внутренняя ошибка сервера. Попробуй позже.';
+
     return res.status(statusCode).json({ success: false, error: message, code });
 }
 
@@ -956,6 +972,10 @@ module.exports = {
     ok,
     fail,
     error,
+    // Универсальный обработчик ошибок для роутов. Экспортируется, чтобы
+    // его поведение (сокрытие внутренних сообщений при 5xx) можно было
+    // проверить тестами без поднятия HTTP-сервера
+    handleError,
     notFound,
     unauthorized,
     forbidden,

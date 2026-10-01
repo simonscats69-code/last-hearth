@@ -551,10 +551,19 @@ router.post('/cure', async (req, res) => {
             message: `Использован ${result.itemUsed}!`
         });
     } catch (error) {
-        logger.error('[debuffs] Ошибка лечения', { error: error.message, code: error.code });
+        logger.error('[debuffs] Ошибка лечения', { error: error.message, code: error.code, stack: error.stack });
         // Различаем типы ошибок: валидация - 400, внутренние - 500
-        const statusCode = error.statusCode || ((error.code && ['INVALID_TYPE', 'MISSING_ITEM_ID', 'ITEM_NOT_FOUND'].includes(error.code)) ? 400 : 500);
-        res.status(statusCode).json({ success: false, error: error.message });
+        const isValidationError = error.code
+            && ['INVALID_TYPE', 'MISSING_ITEM_ID', 'ITEM_NOT_FOUND'].includes(error.code);
+        const statusCode = error.statusCode || (isValidationError ? 400 : 500);
+
+        // Для 500 наружу отдаём обобщённый текст: внутреннее сообщение
+        // (например, от PostgreSQL) игроку знать не нужно
+        const message = statusCode < 500
+            ? error.message
+            : 'Внутренняя ошибка сервера. Попробуй позже.';
+
+        res.status(statusCode).json({ success: false, error: message });
     }
 });
 

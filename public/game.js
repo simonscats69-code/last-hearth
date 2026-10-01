@@ -6,8 +6,30 @@
 
 
 /**
+ * Разрешён ли dev-фоллбэк авторизации.
+ *
+ * ВАЖНО: значение приходит с сервера (index.html, инлайн-скрипт с nonce).
+ * В production там всегда `false`, поэтому поддельные telegram_id/initData
+ * физически недоступны: без настоящего Telegram.WebApp.initData игра не
+ * стартует, а не продолжает работать от имени фиктивного игрока 123456789.
+ */
+const DEV_FALLBACK_ENABLED = window.__DEV_MODE__ === true;
+
+/**
+ * Состояние анимации закрытия модального окна.
+ *
+ * Объявлено здесь, а не рядом с hideModal(): файл выполняется сверху вниз,
+ * а startGame() (и, значит, openModalElement) вызывается раньше конца файла —
+ * при объявлении ниже была бы обращение к переменной в TDZ.
+ */
+const modalState = {
+    openGeneration: 0,
+    closeTimer: null
+};
+
+/**
  * Получить ID текущего пользователя Telegram
- * @returns {string|null}
+ * @returns {string|null} null, если подтвердить пользователя не удалось
  */
 function getTelegramId() {
     const tg = window.Telegram?.WebApp;
@@ -30,7 +52,15 @@ function getTelegramId() {
         }
     }
 
-    return localStorage.getItem('telegram_id') || '123456789'; // Fallback для разработки
+    // Production: подтвердить пользователя не удалось — возвращаем null.
+    // Раньше здесь был жёсткий '123456789': приложение продолжало работать
+    // без валидного initData, то есть фактически без авторизации.
+    if (DEV_FALLBACK_ENABLED) {
+        // Fallback для разработки — только при явном DEV-флаге с сервера
+        return localStorage.getItem('telegram_id') || '123456789';
+    }
+
+    return null;
 }
 
 
@@ -98,6 +128,27 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/**
+ * Экранирование значения для подстановки внутрь HTML-атрибута.
+ *
+ * escapeHtml() экранирует только текстовый узел: кавычки в нём остаются
+ * как есть. В атрибуте вида data-x="${value}" значение `x" onmouseover=...`
+ * сломало бы разметку и выполнило произвольный код, поэтому для атрибутов
+ * нужен отдельный, более строгий вариант.
+ *
+ * @param {*} value - значение атрибута
+ * @returns {string}
+ */
+function escapeAttribute(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -245,6 +296,7 @@ window.hapticImpact = hapticImpact;
 window.hapticNotification = hapticNotification;
 window.hapticSelection = hapticSelection;
 window.escapeHtml = escapeHtml;
+window.escapeAttribute = escapeAttribute;
 window.formatNumber = formatNumber;
 window.formatPercent = formatPercent;
 // showModal/hideModal - в game-animations.js
@@ -372,6 +424,22 @@ function invalidateCache(key) {
     relatedKeys.forEach(relatedKey => apiCache.delete(relatedKey));
 }
 
+/**
+ * Полный сброс API-кэша после любой успешной мутации.
+ *
+ * Зачем: cacheInvalidationMap срабатывает только для вызовов вида
+ * gameApi.post('purchase'), а почти все изменяющие запросы в игре уходят
+ * напрямую через apiRequest('/api/game/...') и его мимо. Профиль,
+ * инвентарь, достижения и боссы оставались в кэше на 30 секунд, и
+ * интерфейс показывал состояние до последнего действия.
+ *
+ * Сброс консервативный (все ключи): цена — один лишний GET, зато
+ * «устаревший профиль после покупки/атаки» исключён полностью.
+ */
+function invalidateAllCaches() {
+    apiCache.clear();
+}
+
 // ============================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================
@@ -429,7 +497,7 @@ function getInitDataFromHash() {
  * Получить initData для авторизации
  * ВАЖНО: Никогда не использовать localStorage - initData имеет срок жизни (auth_date)
  * и становится invalid через некоторое время
- * @returns {string|null}
+ * @returns {string|null} null, если подписанных данных нет
  */
 function getInitData() {
     // 1. Основной источник: SDK Telegram (инжектится клиентом или telegram-web-app.js)
@@ -443,16 +511,31 @@ function getInitData() {
         return fromHash;
     }
 
-    console.warn('[getInitData] Telegram WebApp initData отсутствует, используем заглушку для разработки');
-    // Возвращаем dummy initData для локальной разработки
-    return 'user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=1234567890&hash=dummy';
+    // 3. Заглушка для разработки — только при явном DEV-флаге с сервера.
+    // В production её нет: поддельный initData с hash=dummy раньше позволял
+    // пройти инициализацию без Telegram вообще.
+    if (DEV_FALLBACK_ENABLED) {
+        console.warn('[getInitData] initData отсутствует, используется DEV-заглушка');
+        return 'user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=1234567890&hash=dummy';
+    }
+
+    console.warn('[getInitData] Telegram WebApp initData отсутствует');
+    return null;
 }
 
 /**
  * Выполнение запроса к API с таймаутом и повторами
+ *
+ * БЕЗОПАСНОСТЬ МУТАЦИЙ: POST/PUT/PATCH/DELETE НЕ повторяются автоматически.
+ * Сервер мог выполнить действие (списать валюту, нанести урон, выдать награду),
+ * а ответ не дошёл из-за таймаута — повтор списал бы дважды. Повтор разрешён
+ * только для идемпотентных GET, либо когда вызывающая сторона явно подтверждает
+ * идемпотентность через options.idempotent (или headers['Idempotency-Key']).
+ *
  * @param {string} endpoint - endpoint API
- * @param {Object} options - дополнительные опции
- * @param {number} retries - количество повторов после первой попытки (по умолчанию 2)
+ * @param {Object} options - дополнительные опции (signal, silent, idempotent, showLoading)
+ * @param {number} retries - количество повторов после первой попытки (только для идемпотентных)
+ * @param {Object} params - query-параметры (для GET)
  * @returns {Promise<Object>} ответ сервера
  */
 async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
@@ -462,7 +545,16 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
 
     // silent — не показывать toast при ошибке (для ожидаемых состояний,
     // например «игрок не в клане»). Вытаскиваем из options, чтобы не утекло в fetch.
-    const { silent = false, ...fetchOptions } = options;
+    // signal — внешний AbortController (API.cancelRequest), чтобы отмена
+    // действительно разрывала fetch, а не жила в отдельном Map.
+    const { silent = false, signal: externalSignal, idempotent = false, ...fetchOptions } = options;
+
+    const method = String(fetchOptions.method || 'GET').toUpperCase();
+    const hasIdempotencyKey = Boolean(fetchOptions.headers?.['Idempotency-Key']);
+    const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+    // Повторять мутацию можно только если сервер гарантирует идемпотентность
+    const canRetry = !isMutation || idempotent || hasIdempotencyKey;
+    const maxAttempts = canRetry ? retries : 0;
 
     const queryString = Object.keys(params).length > 0
         ? '?' + new URLSearchParams(params).toString()
@@ -471,6 +563,14 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
 
     // Получаем initData для авторизации
     const initData = getInitData();
+
+    if (!initData && !DEV_FALLBACK_ENABLED) {
+        // Без подписанных initData сервер всё равно отдаст 401. Лучше fail-fast:
+        // не тратим 8 секунд таймаута и не показываем «Сервер не отвечает».
+        const authError = new Error('Нет данных авторизации Telegram');
+        authError.code = 'NO_INIT_DATA';
+        throw authError;
+    }
 
     const config = {
         headers: {
@@ -484,7 +584,7 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         config.body = JSON.stringify(config.body);
     }
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
+    for (let attempt = 0; attempt <= maxAttempts; attempt++) {
         let timeoutId = null;
         let loadingTimeout = null;
 
@@ -494,9 +594,28 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             const controller = new AbortController();
             timeoutId = setTimeout(() => controller.abort(), 8000);
 
-            const response = await fetch(url, { ...config, signal: controller.signal });
-            clearTimeout(timeoutId);
-            timeoutId = null;
+            // Внешняя отмена (API.cancelRequest) тоже должна разрывать fetch.
+            // Раньше контроллер создавался здесь и никогда не доходил до
+            // настоящего запроса, поэтому cancelRequest() ни на что не влиял.
+            let removeExternalAbort = null;
+            if (externalSignal) {
+                if (externalSignal.aborted) {
+                    clearTimeout(timeoutId);
+                    throw new DOMException('Запрос отменён', 'AbortError');
+                }
+                const onExternalAbort = () => controller.abort();
+                externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+                removeExternalAbort = () => externalSignal.removeEventListener('abort', onExternalAbort);
+            }
+
+            let response;
+            try {
+                response = await fetch(url, { ...config, signal: controller.signal });
+            } finally {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+                if (removeExternalAbort) removeExternalAbort();
+            }
             if (loadingTimeout) clearTimeout(loadingTimeout);
 
             const contentType = response.headers.get('content-type') || '';
@@ -522,9 +641,17 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 throw new Error(data.message || 'Unknown error');
             }
 
+            // Успешная мутация изменила состояние на сервере — сбрасываем
+            // кэш, иначе следующий gameApi.profile()/bosses() отдаст
+            // данные, актуальные до этого действия
+            if (isMutation) {
+                invalidateAllCaches();
+            }
+
             return data;
         } catch (error) {
-            const isLastAttempt = attempt === retries;
+            const isLastAttempt = attempt === maxAttempts;
+            const isExternalAbort = Boolean(externalSignal?.aborted);
 
             // Всегда очищаем таймауты при ошибке
             if (timeoutId) {
@@ -534,9 +661,24 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             if (loadingTimeout) clearTimeout(loadingTimeout);
 
             if (error.name === 'AbortError') {
+                // Отмена по инициативе вызывающей стороны — не ошибка и не повод
+                // показывать тост: это штатное поведение API.cancelRequest.
+                // Оборачиваем в обычный Error с явными флагами: полагаться на
+                // присвоение свойств DOMException нельзя.
+                if (isExternalAbort) {
+                    const cancelError = new Error('Запрос отменён');
+                    cancelError.name = 'AbortError';
+                    cancelError.isManualAbort = true;
+                    cancelError.isTimeoutAbort = false;
+                    throw cancelError;
+                }
                 if (isLastAttempt) {
+                    const timeoutError = new Error('Таймаут запроса');
+                    timeoutError.name = 'AbortError';
+                    timeoutError.isManualAbort = false;
+                    timeoutError.isTimeoutAbort = true;
                     showNotification('Сервер не отвечает. Попробуй позже.', 'error');
-                    throw error;
+                    throw timeoutError;
                 }
                 await delay(attempt);
                 continue;
@@ -727,10 +869,17 @@ const CONSTANTS = {
 };
 
 /**
- * Лимит слотов инвентаря. Должен совпадать с MAX_INVENTORY_SLOTS
- * в routes/game/world.js — там сервер отклоняет добычу при переполнении.
+ * Лимит слотов инвентаря. Берётся из public/shared/equipment.js — того же
+ * файла, что использует routes/game/world.js. Раньше значение 100 было
+ * продублировано в двух местах, и правка одного ломала второе.
+ *
+ * Optional chaining + значение по умолчанию: раньше здесь стояло
+ * window.EquipmentShared.MAX_INVENTORY_SLOTS, и если shared/equipment.js
+ * не успел загрузиться (или отдался 404), выполнение файла падало с
+ * TypeError на этой строке — то есть НЕ выполнялся весь последующий код.
+ * Значение 100 совпадает с константой в shared/equipment.js и routes/game/items.js.
  */
-const INVENTORY_MAX_SLOTS = 100;
+const INVENTORY_MAX_SLOTS = window.EquipmentShared?.MAX_INVENTORY_SLOTS ?? 100;
 
 /** Подписи редкости для интерфейса (в CSS цвета заданы переменными --rarity-*) */
 const RARITY_LABELS = {
@@ -793,9 +942,16 @@ const actionLocks = {
     clanJoin: false,
     clanLeave: false,
     clanDonate: false,
+    raidJoin: false,
+    claimAchievement: false,
     pvpAttack: false,
+    pvpStart: false,
     useItem: false,
     purchase: false,
+    buyCoinItem: false,
+    buyEnergy: false,
+    wheelSpin: false,
+    sellItem: false,
     referral: false,
     searchLoot: false,
     attackBoss: false,
@@ -928,12 +1084,13 @@ const Templates = {
     // Карточка предмета
     itemCard(item, actions = '') {
         const itemActionId = item.index ?? item.id;
+        const rarityClass = escapeAttribute(item.rarity || 'common');
         return `
-            <div class="item-card rarity-${item.rarity || 'common'}" 
-                 data-id="${item.id}" data-use-item="${itemActionId}">
-                <span class="item-icon">${item.icon || '📦'}</span>
+            <div class="item-card rarity-${rarityClass}" 
+                 data-id="${escapeAttribute(item.id)}" data-use-item="${escapeAttribute(itemActionId)}">
+                <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
                 <span class="item-name">${escapeHtml(item.name)}</span>
-                ${item.count ? `<span class="item-count">x${item.count}</span>` : ''}
+                ${item.count ? `<span class="item-count">x${Number(item.count)}</span>` : ''}
                 ${actions}
             </div>
         `;
@@ -943,15 +1100,15 @@ const Templates = {
     bossCard(boss) {
         const hpPercent = boss.current_hp / boss.max_hp * 100;
         return `
-            <div class="boss-card" data-id="${boss.id}">
+            <div class="boss-card" data-id="${escapeAttribute(boss.id)}">
                 <div class="boss-header">
-                    <span class="boss-icon">${boss.icon || '👹'}</span>
+                    <span class="boss-icon">${escapeHtml(boss.icon || '👹')}</span>
                     <span class="boss-name">${escapeHtml(boss.name)}</span>
                 </div>
                 <div class="boss-hp-bar">
                     <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
                 </div>
-                <div class="boss-hp-text">${boss.current_hp}/${boss.max_hp} HP</div>
+                <div class="boss-hp-text">${Number(boss.current_hp)}/${Number(boss.max_hp)} HP</div>
                 <button class="btn attack-btn" data-attack-boss>Атаковать</button>
             </div>
         `;
@@ -961,8 +1118,10 @@ const Templates = {
     // ВНИМАНИЕ: inline onclick заблокирован CSP (script-src-attr без nonce),
     // поэтому обработчик передаётся через data-* и вызывается делегированным
     // слушателем из document (см. блок «ДЕЛЕГИРОВАНИЕ КЛИКОВ»).
+    // action попадает в значение атрибута — экранируем escapeAttribute(),
+    // иначе кавычка в action разорвёт разметку.
     button(text, action, type = 'primary', extra = '') {
-        return `<button class="btn btn-${type}" data-action="${escapeHtml(action || '')}" ${extra}>${escapeHtml(text)}</button>`;
+        return `<button class="btn btn-${escapeAttribute(type)}" data-action="${escapeAttribute(action || '')}" ${extra}>${escapeHtml(text)}</button>`;
     },
     
     // Уведомление
@@ -978,11 +1137,12 @@ const Templates = {
     // Слот инвентаря
     inventorySlot(item) {
         const itemActionId = item.index ?? item.id;
+        const rarityClass = escapeAttribute(item.rarity || 'common');
         return `
-            <div class="inventory-slot rarity-${item.rarity || 'common'}" 
-                 data-use-item="${itemActionId}" data-id="${item.id}">
-                <span class="item-icon">${item.icon || '📦'}</span>
-                ${item.count > 1 ? `<span class="item-count">${item.count}</span>` : ''}
+            <div class="inventory-slot rarity-${rarityClass}" 
+                 data-use-item="${escapeAttribute(itemActionId)}" data-id="${escapeAttribute(item.id)}">
+                <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
+                ${item.count > 1 ? `<span class="item-count">${Number(item.count)}</span>` : ''}
             </div>
         `;
     }
@@ -993,16 +1153,25 @@ const Templates = {
 // ============================================================================
 
 const API = {
-    // Маппинг типов на эндпоинты
+    /**
+     * Маппинг типов на эндпоинты.
+     *
+     * Строится из общего словаря `endpoints` (он же источник для gameApi) —
+     * раньше здесь был второй независимый список, и правка эндпоинта в
+     * одном месте оставляла другой устаревшим.
+     *
+     * Обратная совместимость: дополнительно сохраняем ключи, которых нет
+     * в `endpoints` (market, pvp, status, energy). Иначе внешний код с
+     * API.load('market') получил бы «Неизвестный тип» — это регрессия
+     * публичного API. Правки в этих адресах нужно дублировать в endpoints.
+     */
     endpoints: {
-        profile: '/api/game/profile',
-        inventory: '/api/game/inventory',
-        locations: '/api/game/locations',
-        bosses: '/api/game/bosses',
-        clan: '/api/game/clans/clan',
+        ...Object.fromEntries(
+            Object.entries(endpoints).map(([name, config]) => [name, `/api${config.endpoint}`])
+        ),
+        // Ключи из прежнего API.endpoints, отсутствующие в общем словаре
         market: '/api/game/market/listings',
         pvp: '/api/game/pvp/players',
-        achievements: '/api/achievements/progress',
         status: '/api/game/status',
         energy: '/api/game/energy'
     },
@@ -1019,24 +1188,32 @@ const API = {
         }
     },
     
+    // Отмена всех активных запросов
+    cancelAllRequests() {
+        for (const controller of this._activeControllers.values()) {
+            controller.abort();
+        }
+        this._activeControllers.clear();
+    },
+    
     // GET запрос
-    async get(endpoint) {
-        return apiRequest(endpoint);
+    async get(endpoint, options = {}) {
+        return apiRequest(endpoint, { method: 'GET', ...options });
     },
     
     // POST запрос
-    async post(endpoint, data) {
-        return apiRequest(endpoint, { method: 'POST', body: data });
+    async post(endpoint, data, options = {}) {
+        return apiRequest(endpoint, { method: 'POST', body: data, ...options });
     },
     
     // PUT запрос
-    async put(endpoint, data) {
-        return apiRequest(endpoint, { method: 'PUT', body: data });
+    async put(endpoint, data, options = {}) {
+        return apiRequest(endpoint, { method: 'PUT', body: data, ...options });
     },
     
     // DELETE запрос
-    async delete(endpoint) {
-        return apiRequest(endpoint, { method: 'DELETE' });
+    async delete(endpoint, options = {}) {
+        return apiRequest(endpoint, { method: 'DELETE', ...options });
     },
     
     // Универсальная загрузка с поддержкой отмены
@@ -1057,7 +1234,9 @@ const API = {
         if (id) url += `/${id}`;
         
         try {
-            const response = await this.get(url);
+            // signal обязателен: без него controller жил бы только в Map
+            // и отмена запроса ни на что бы не влияла.
+            const response = await this.get(url, { signal: controller.signal });
             const data = response?.data || response;
             
             // Автоматическое обновление gameState
@@ -1075,8 +1254,19 @@ const API = {
             }
             
             return data;
+        } catch (error) {
+            // Отменённый пользователем запрос — не ошибка, глотаем,
+            // чтобы не сыпались необработанные rejection'ы
+            if (error?.name === 'AbortError' && error?.isManualAbort) {
+                return null;
+            }
+            throw error;
         } finally {
-            this._activeControllers.delete(type);
+            // Снимаем только если контроллер всё ещё наш: за время запроса
+            // мог появиться новый запрос того же типа
+            if (this._activeControllers.get(type) === controller) {
+                this._activeControllers.delete(type);
+            }
         }
     }
 };
@@ -1531,11 +1721,22 @@ function onScreenOpen(screenName) {
             break;
 
         case 'map':
-            // Загружаем локации для карты
+            // Загружаем локации для карты.
+            // .catch обязателен: без него сетевая ошибка даёт unhandled
+            // promise rejection и молча не рисует карту
             loadLocations().then(() => {
                 // Рисуем карту после загрузки данных
                 if (typeof renderLocations === 'function') {
                     setTimeout(renderLocations, 100);
+                }
+            }).catch((mapError) => {
+                console.error('Не удалось загрузить локации для карты:', mapError);
+                const mapEl = document.getElementById('city-map');
+                if (mapEl) {
+                    const fallback = document.createElement('div');
+                    fallback.className = 'empty-message';
+                    fallback.textContent = 'Не удалось загрузить карту';
+                    mapEl.parentNode?.replaceChild(fallback, mapEl);
                 }
             });
             break;
@@ -1776,18 +1977,26 @@ window.hideLoadingScreen = hideLoadingScreen;
 
 /**
  * Ожидание загрузки Telegram WebApp
+ *
+ * ВАЖНО: промис теперь ОТКЛОНЯЕТСЯ по таймауту, а не резолвится.
+ * Раньше resolve() на 5-й секунде позволял продолжить инициализацию без
+ * Telegram, а дальше срабатывал фиктивный ID/initData — приложение
+ * работало без авторизации.
+ *
+ * @param {number} maxWait - сколько ждать, мс
  * @returns {Promise<void>}
+ * @throws {Error} если данные Telegram так и не появились
  */
 async function waitForTelegramWebApp(maxWait = 5000) {
     const startTime = Date.now();
     
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         // Данные доступны либо из SDK Telegram, либо из fragment прямой ссылки
         const isReady = () => Boolean(
             window.Telegram?.WebApp?.initDataUnsafe?.user || getInitDataFromHash()
         );
-
-        // Если уже загружен - сразу разрешаем
+        
+        // Если уже загружен - сразу успех
         if (isReady()) {
             resolve();
             return;
@@ -1801,8 +2010,7 @@ async function waitForTelegramWebApp(maxWait = 5000) {
             }
             
             if (Date.now() - startTime > maxWait) {
-                console.warn('[waitForTelegramWebApp] Таймаут ожидания Telegram WebApp');
-                resolve(); // Всё равно продолжаем - может работать через localStorage
+                reject(new Error('Telegram WebApp не загрузился'));
                 return;
             }
             
@@ -1857,8 +2065,23 @@ async function initGame() {
     }, 30000);
 
     try {
-        // Ждём пока загрузится Telegram WebApp
-        await waitForTelegramWebApp();
+        // Ждём пока загрузится Telegram WebApp.
+        // В production отсутствие Telegram — фатально: продолжать нельзя,
+        // иначе запросы уйдут без валидного initData.
+        try {
+            await waitForTelegramWebApp();
+        } catch (waitError) {
+            if (!DEV_FALLBACK_ENABLED) {
+                console.error('[initGame] Telegram WebApp не загрузился:', waitError);
+                renderInitError(
+                    '😿',
+                    'Ошибка авторизации',
+                    'Не удалось получить данные Telegram. Откройте игру через бота @LastHearthBot'
+                );
+                return;
+            }
+            console.warn('[initGame] Telegram WebApp не загрузился, продолжаем в DEV-режиме');
+        }
         
         // Инициализируем Telegram WebApp
         if (window.Telegram?.WebApp) {
@@ -1872,23 +2095,21 @@ async function initGame() {
             return;
         }
 
-        // Проверяем доступность initData
+        // Подписанные initData обязательны (в production — всегда).
+        // localStorage НЕ используется: initData имеет auth_date и протухает,
+        // поэтому сохранённая копия — это не валидный вход.
         const initData = getInitData();
         if (!initData) {
-            console.warn('[initGame] initData не доступен, пробуем из localStorage');
-            // Пробуем получить из localStorage
-            const storedInitData = localStorage.getItem('init_data');
-            if (!storedInitData) {
-                renderInitError('😿', 'Ошибка авторизации', 'Откройте игру через бота @LastHearthBot');
-                return;
-            }
+            renderInitError('😿', 'Ошибка авторизации', 'Откройте игру через бота @LastHearthBot');
+            return;
         }
 
         // Проверяем/создаём игрока.
-        // Сервер требует подписанный initData при наличии TG_BOT_TOKEN.
+        // Сервер берёт user.id ИЗ ПОДПИСАННЫХ initData и сверяет его с
+        // переданным telegram_id — подделать чужой ID невозможно.
         await apiRequest('/verify-telegram', {
             method: 'POST',
-            body: { telegram_id: telegramId, initData: getInitData() }
+            body: { telegram_id: telegramId, initData }
         });
         
         // Загружаем профиль с обработкой ошибок
@@ -1974,6 +2195,11 @@ function setInventoryState(rawItems) {
  * API возвращает { success, data: { player, achievements, progress, inventory, equipment, active_buffs } }
  */
 async function loadProfile() {
+    // Сбрасываем кэш ДО запроса: gameApi кэширует GET на 30 секунд, и после
+    // мутаций (атака, покупка, колесо) закэшированный профиль отдавал бы
+    // устаревшие монеты/XP/инвентарь даже при явном loadProfile()
+    invalidateCache('profile');
+
     const response = await apiRequest('/api/game/profile');
 
     if (!response?.success) {
@@ -2080,6 +2306,19 @@ function getEffectivePlayerStatus() {
     return status;
 }
 
+/**
+ * Синхронизация энергии с ответом сервера.
+ *
+ * ВАЖНО про last_energy_update: регенерация на клиенте считается ОТ этой
+ * метки. Если сервер вернул новую энергию, но не вернул метку (либо вернул
+ * старую), getEffectivePlayerStatus() тут же дочислит реген от устаревшего
+ * времени — и кнопка атаки станет активной при энергии, которой на сервере
+ * уже нет. Поэтому метку нужно обновлять всегда, когда пришла новая энергия.
+ *
+ * @param {number|null} energy - энергия с сервера
+ * @param {number|null} maxEnergy - максимум энергии с сервера
+ * @param {string|null} lastEnergyUpdate - метка последнего начисления с сервера
+ */
 function syncPlayerEnergyState(energy, maxEnergy, lastEnergyUpdate = null) {
     const status = ensurePlayerStatus();
 
@@ -2095,6 +2334,10 @@ function syncPlayerEnergyState(energy, maxEnergy, lastEnergyUpdate = null) {
 
     if (lastEnergyUpdate) {
         status.last_energy_update = lastEnergyUpdate;
+    } else if (energy !== undefined && energy !== null) {
+        // Метки нет, но энергия изменилась — считаем, что сервер только что
+        // её списал. Иначе клиент «нарисует» себе энергию из старой метки.
+        status.last_energy_update = new Date().toISOString();
     }
 
     return status;
@@ -2497,53 +2740,27 @@ function updateMainBonuses(player) {
     }
 }
 
-function getEquipmentStatValue(item, keys) {
-    if (!item || typeof item !== 'object') return 0;
-
-    for (const key of keys) {
-        const directValue = Number(item[key]);
-        if (Number.isFinite(directValue) && directValue > 0) {
-            return directValue;
-        }
-    }
-
-    const stats = item.stats && typeof item.stats === 'object' ? item.stats : null;
-    if (!stats) return 0;
-
-    for (const key of keys) {
-        const statValue = Number(stats[key]);
-        if (Number.isFinite(statValue) && statValue > 0) {
-            return statValue;
-        }
-    }
-
-    return 0;
-}
-
+/**
+ * Правила экипировки и расчёт защиты — в public/shared/equipment.js,
+ * том же файле, что читает сервер. Копия в браузере разъезжалась с
+ * серверной: клиент показывал игроку одну защиту, а сервер начислял другую.
+ * Слоты, синонимы полей и формула /10 берутся оттуда же.
+ */
 function calculatePlayerPreparation(player) {
     const equipment = player?.equipment || {};
-    const slots = ['armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
-
-    let radiationResistance = 0;
-    let infectionResistance = 0;
-
-    for (const slot of slots) {
-        const equippedItem = equipment[slot];
-        radiationResistance += getEquipmentStatValue(equippedItem, ['radiation_resist', 'radiation_resistance', 'radiationDefense']);
-        infectionResistance += getEquipmentStatValue(equippedItem, ['infection_resist', 'infection_resistance', 'infectionDefense']);
-    }
+    const shared = window.EquipmentShared;
 
     return {
-        radiationDefense: Math.max(0, Math.round(radiationResistance / 10)),
-        infectionDefense: Math.max(0, Math.round(infectionResistance / 10))
+        radiationDefense: shared.calculateRadiationDefense(equipment),
+        infectionDefense: shared.calculateInfectionDefense(equipment)
     };
 }
 
 function getCurrentZoneRiskProfile(player) {
     const location = player?.location || player?.current_location || {};
     const preparation = calculatePlayerPreparation(player || {});
-    const radiationThreat = Math.max(0, Math.ceil(Number(location.radiation || 0) / 10));
-    const infectionThreat = Math.max(0, Math.ceil(Number(location.infection || 0) / 10));
+    const radiationThreat = shared.normalizeThreatLevelToPoints(location.radiation);
+    const infectionThreat = shared.normalizeThreatLevelToPoints(location.infection);
     const radiationPressure = Math.max(0, radiationThreat - preparation.radiationDefense);
     const infectionPressure = Math.max(0, infectionThreat - preparation.infectionDefense);
     const score = radiationPressure + infectionPressure;
@@ -2747,8 +2964,11 @@ function handleMainGuidanceAction(action) {
 
 /**
  * Обновление UI профиля
+ *
+ * Синхронная функция: async больше не нужен (внутри нет await), а промис
+ * без причины усложнял чтение и вызовы вида `updateProfileUI(x).catch(...)`.
  */
-async function updateProfileUI(player) {
+function updateProfileUI(player) {
     // Защитная проверка
     if (!player) return;
     
@@ -3084,6 +3304,31 @@ async function moveToLocation(locationId) {
  */
 function updateEnergyDisplay() {
     refreshPlayerEnergyUI();
+
+    // Баффы тоже живут на таймере: раньше истёкший бафф оставался на экране
+    // до следующего loadProfile()/перерендера. Пересчитываем раз в минуту
+    // (точность до минуты для UI более чем достаточна) и чистим истёкшие.
+    pruneExpiredBuffs();
+    renderActiveBuffs(gameState.buffs || {});
+}
+
+/**
+ * Удаляет из gameState.buffs все баффы с истёкшим сроком.
+ * Единственный источник истины — сервер; здесь только чистим локальный кэш.
+ */
+function pruneExpiredBuffs() {
+    const buffs = gameState.buffs;
+    if (!buffs || typeof buffs !== 'object') return;
+
+    const now = Date.now();
+    for (const [effect, buff] of Object.entries(buffs)) {
+        const expiresAt = new Date(
+            buff?.expires_at || buff?.expires || 0
+        ).getTime();
+        if (Number.isFinite(expiresAt) && expiresAt <= now) {
+            delete buffs[effect];
+        }
+    }
 }
 
 /**
@@ -3115,8 +3360,16 @@ async function checkPlayerStatus() {
         
         // Перезагружаем профиль
         await loadProfile();
-        
+
     } catch (error) {
+        // Раньше здесь был пустой catch {}: фоновая проверка статуса
+        // (раз в 10 минут) молча падала, и игрок не узнавал, что переломы,
+        // инфекции и смерть обновляются только при смене экрана.
+        // Тихим делаем только отмену запроса — она штатная.
+        const isManualAbort = error?.isManualAbort || error?.name === 'AbortError';
+        if (!isManualAbort) {
+            console.warn('[checkPlayerStatus] Не удалось проверить статус:', error);
+        }
     }
 }
 
@@ -3271,7 +3524,10 @@ function renderInventoryCapacity() {
     if (!el) return;
 
     const used = Array.isArray(gameState.inventory) ? gameState.inventory.length : 0;
-    const max = INVENTORY_MAX_SLOTS;
+    // max > 0 гарантирует: INVENTORY_MAX_SLOTS приходит из общего модуля,
+    // но при его отсутствии используется запасное 100. Явная проверка
+    // защищает от деления на ноль, если значение вдруг окажется 0.
+    const max = Math.max(1, Number(INVENTORY_MAX_SLOTS) || 100);
     const percent = Math.min(100, Math.round((used / max) * 100));
 
     el.textContent = `${used} / ${max}`;
@@ -3511,11 +3767,12 @@ function renderBossesInfo(info) {
         return;
     }
 
+    // info.* приходит с сервера — экранируем, иначе это XSS-вектор
     container.innerHTML = `
         <div class="bosses-info-card">
-            <div><strong>Соло:</strong> ${info.solo || ''}</div>
-            <div><strong>Прокачка:</strong> ${info.mastery || ''}</div>
-            <div><strong>Массовый бой:</strong> ${info.raids || ''}</div>
+            <div><strong>Соло:</strong> ${escapeHtml(info.solo || '')}</div>
+            <div><strong>Прокачка:</strong> ${escapeHtml(info.mastery || '')}</div>
+            <div><strong>Массовый бой:</strong> ${escapeHtml(info.raids || '')}</div>
         </div>
     `;
 }
@@ -3745,7 +4002,14 @@ function startBossFight(boss, timeRemainingMs = null) {
 function updateBossFightTimer() {
     const timerText = document.getElementById('boss-timer-text');
     if (!timerText || !gameState.bossFightEndTime) return;
-    
+
+    const stopTimer = () => {
+        if (window.bossFightTimerId) {
+            safeClearInterval(window.bossFightTimerId);
+            window.bossFightTimerId = null;
+        }
+    };
+
     const updateTimer = () => {
         const now = Date.now();
         const remaining = gameState.bossFightEndTime - now;
@@ -3753,6 +4017,9 @@ function updateBossFightTimer() {
         if (remaining <= 0) {
             timerText.textContent = 'Время вышло!';
             timerText.style.color = 'var(--accent-red)';
+            // Снимаем интервал: раньше он продолжал крутиться раз в секунду
+            // до конца страницы, хотя бой давно закончился.
+            stopTimer();
             return;
         }
         
@@ -3763,8 +4030,12 @@ function updateBossFightTimer() {
         timerText.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     };
     
+    stopTimer();
     updateTimer();
-    if (window.bossFightTimerId) safeClearInterval(window.bossFightTimerId);
+
+    // Если время уже истекло до запуска таймера — интервал не нужен вовсе
+    if (gameState.bossFightEndTime <= Date.now()) return;
+
     window.bossFightTimerId = safeSetInterval(updateTimer, 1000);
 }
 
@@ -3804,16 +4075,18 @@ function renderWeapons(weapons) {
         const item = document.createElement('div');
         item.className = 'weapon-item';
         item.dataset.index = weapon.index;
-        
+
+        // Название/иконка приходят из инвентаря игрока (серверные данные) —
+        // без экранирования это XSS-вектор.
         item.innerHTML = `
-            <span class="weapon-icon">${weapon.icon}</span>
+            <span class="weapon-icon">${escapeHtml(weapon.icon)}</span>
             <div class="weapon-info">
-                <div class="weapon-name">${weapon.name}</div>
-                <div class="weapon-damage">Урон: +${weapon.damage}</div>
+                <div class="weapon-name">${escapeHtml(weapon.name)}</div>
+                <div class="weapon-damage">Урон: +${Number(weapon.damage) || 0}</div>
             </div>
-            <span class="weapon-rarity ${weapon.rarity}">${weapon.rarity}</span>
+            <span class="weapon-rarity ${escapeAttribute(weapon.rarity)}">${escapeHtml(weapon.rarity)}</span>
         `;
-        
+
         item.addEventListener('click', () => attackWithWeapon(weapon.index));
         list.appendChild(item);
     }
@@ -3853,7 +4126,8 @@ async function attackWithWeapon(itemIndex) {
             if (log) {
                 const damageText = document.createElement('p');
                 damageText.className = 'damage';
-                damageText.innerHTML = `<span class="hit">⚔️</span> Использовал <strong>${result.data.weapon_used}</strong>! Нанёс <strong>${result.data.damage}</strong> урона!`;
+                // weapon_used приходит с сервера — экранируем
+                damageText.innerHTML = `<span class="hit">⚔️</span> Использовал <strong>${escapeHtml(result.data.weapon_used)}</strong>! Нанёс <strong>${Number(result.data.damage) || 0}</strong> урона!`;
                 log.appendChild(damageText);
                 log.scrollTop = log.scrollHeight;
             }
@@ -3869,7 +4143,11 @@ async function attackWithWeapon(itemIndex) {
             gameState.currentBoss.health = result.data.boss_hp;
             gameState.currentBoss.max_health = result.data.boss_max_hp;
              
-            syncPlayerEnergyState(result.data.energy, gameState.player?.status?.max_energy);
+            syncPlayerEnergyState(
+                result.data.energy,
+                gameState.player?.status?.max_energy,
+                result.data.last_energy_update || null
+            );
             refreshPlayerEnergyUI();
 
             const attackBtn = document.getElementById('attack-boss-btn');
@@ -3897,6 +4175,17 @@ async function attackWithWeapon(itemIndex) {
                         actionLocks.loadBosses = false;
                     });
                 }, 2200);
+
+                // После убийства изменились монеты/XP/ключи/инвентарь/мастерство —
+                // подтягиваем профиль, иначе UI покажет устаревшие значения.
+                loadProfile().catch((profileError) => {
+                    console.error('Не удалось обновить профиль после победы оружием:', profileError);
+                });
+            } else {
+                // Оружие израсходовано — инвентарь на сервере уже изменился
+                loadInventory().catch((invError) => {
+                    console.error('Не удалось обновить инвентарь после атаки оружием:', invError);
+                });
             }
         } else {
             showNotification(result.error || 'Ошибка атаки', 'error');
@@ -3960,7 +4249,9 @@ async function attackBoss() {
             if (log) {
                 const damageText = document.createElement('p');
                 damageText.className = 'damage';
-                damageText.innerHTML = `<span class="hit">⚔️</span> Нанёс <strong>${result.damage_dealt}</strong> урона!`;
+                // Числа с сервера приводим явно: без Number() строка ответа попала бы
+                // в innerHTML как есть (потенциальный XSS при подмене ответа)
+                damageText.innerHTML = `<span class="hit">⚔️</span> Нанёс <strong>${Number(result.damage_dealt) || 0}</strong> урона!`;
                 log.appendChild(damageText);
                 log.scrollTop = log.scrollHeight;
             }
@@ -3972,10 +4263,16 @@ async function attackBoss() {
             if (bossHealthBar) bossHealthBar.style.width = `${hpPercent}%`;
             if (bossHealthText) bossHealthText.textContent = `${result.boss_hp}/${result.boss_max_hp}`;
             
-            // Обновляем энергию игрока
+            // Обновляем энергию игрока.
+            // last_energy_update обязателен: без него клиент посчитает реген
+            // от устаревшей метки и покажет энергию, которой на сервере нет.
             const energyUsed = document.getElementById('boss-energy-used');
 
-            syncPlayerEnergyState(result.player_energy, gameState.player?.status?.max_energy);
+            syncPlayerEnergyState(
+                result.player_energy,
+                result.player_max_energy ?? gameState.player?.status?.max_energy,
+                result.last_energy_update ?? result.data?.last_energy_update ?? null
+            );
             refreshPlayerEnergyUI();
 
             if (energyUsed) {
@@ -4010,7 +4307,9 @@ async function attackBoss() {
                 if (result.mastery !== undefined) {
                     const masteryText = document.createElement('p');
                     masteryText.className = 'mastery-gain';
-                    masteryText.innerHTML = `<span class="star">⭐</span> Мастерство: ${result.mastery}`;
+                    // masteryText.innerHTML с Number(): значение приходит с сервера,
+                    // и без приведения строка ушла бы в innerHTML как HTML
+                    masteryText.innerHTML = `<span class="star">⭐</span> Мастерство: ${Number(result.mastery) || 0}`;
                     if (log) log.appendChild(masteryText);
                 }
                 
@@ -4023,11 +4322,14 @@ async function attackBoss() {
                         actionLocks.loadBosses = false;
                     });
                 }, 2200);
-            }
-            
-            // Обновляем энергию локально (уже обновлена выше из result.player_energy)
-            if (gameState.player?.status) {
-                gameState.player.status.energy = result.player_energy;
+
+                // ПЕРЕЗАГРУЖАЕМ ПРОФИЛЬ: после убийства на сервере изменились
+                // монеты, XP, ключи, инвентарь и мастерство. RenderCache.clear()
+                // чистит только UI-кэш и эти данные НЕ обновляет, поэтому
+                // интерфейс показывал бы устаревшие значения.
+                loadProfile().catch((profileError) => {
+                    console.error('Не удалось обновить профиль после победы:', profileError);
+                });
             }
             
             playSound('attack');
@@ -4303,6 +4605,13 @@ async function createClan() {
         return;
     }
     
+    // Блокировка от двойного клика: без неё два быстрых тапа создавали
+    // два запроса, и игрок мог получить два клана или ошибку от сервера.
+    if (!lockAction('clanCreate')) return;
+
+    const createBtn = document.getElementById('create-clan-btn');
+    if (createBtn) createBtn.disabled = true;
+    
     try {
         const result = await apiRequest('/api/game/clans/clan/create', {
             method: 'POST',
@@ -4321,6 +4630,10 @@ async function createClan() {
         }
     } catch (error) {
         console.error('Create clan error:', error);
+        showModal('⚠️ Ошибка', 'Не удалось создать клан');
+    } finally {
+        unlockAction('clanCreate');
+        if (createBtn) createBtn.disabled = false;
     }
 }
 
@@ -4370,6 +4683,10 @@ function renderClansList(clans) {
  * Вступление в клан
  */
 async function joinClan(clanId) {
+    // Блокировка от двойного клика: вступление меняет членство,
+    // два быстрых тапа отправляли бы два POST /clans/clan/join
+    if (!lockAction('clanJoin')) return;
+
     try {
         const result = await apiRequest('/api/game/clans/clan/join', {
             method: 'POST',
@@ -4388,6 +4705,9 @@ async function joinClan(clanId) {
         }
     } catch (error) {
         console.error('Join clan error:', error);
+        showModal('⚠️ Ошибка', 'Не удалось вступить в клан');
+    } finally {
+        unlockAction('clanJoin');
     }
 }
 
@@ -4396,6 +4716,9 @@ async function joinClan(clanId) {
  */
 async function leaveClan() {
     if (!confirm('Ты уверен, что хочешь покинуть клан?')) return;
+    
+    // Блокировка от двойного клика: повторный запрос вышел бы уже не из клана
+    if (!lockAction('clanLeave')) return;
     
     try {
         const result = await apiRequest('/api/game/clans/clan/leave', {
@@ -4413,6 +4736,9 @@ async function leaveClan() {
         }
     } catch (error) {
         console.error('Leave clan error:', error);
+        showModal('⚠️ Ошибка', 'Не удалось покинуть клан');
+    } finally {
+        unlockAction('clanLeave');
     }
 }
 
@@ -4470,6 +4796,15 @@ function showClanMembersModal(members) {
  */
 function openModalElement(modal) {
     if (!modal) return;
+
+    // Новое открытие «отменяет» отложенное закрытие и увеличивает поколение:
+    // таймер из hideModal() увидит несовпадение и не закроет это окно
+    if (modalState.closeTimer) {
+        clearTimeout(modalState.closeTimer);
+        modalState.closeTimer = null;
+    }
+    modalState.openGeneration++;
+
     modal.classList.add('active');
     modal.style.display = 'flex';
     modal.style.animation = 'fadeIn 0.3s ease-out';
@@ -4512,6 +4847,10 @@ async function donateToClan(amount) {
         return;
     }
     
+    // Блокировка от двойного клика: пожертвование тратит монеты, и два
+    // быстрых вызова отправляли бы две суммы подряд
+    if (!lockAction('clanDonate')) return;
+    
     try {
         const result = await apiRequest('/api/game/clans/clan/donate', {
             method: 'POST',
@@ -4520,14 +4859,17 @@ async function donateToClan(amount) {
         const payload = result?.data || result;
         
         if (result.success) {
-            showModal('✅ Успех', `Пожертвование принято! Вы пожертвовали ${amount} монет. Казна: ${payload.clan_total || 0}`);
-            gameState.player.coins = Number(payload.new_balance ?? (gameState.player.coins - amount));
+            showModal('✅ Успех', `Пожертвование принято! Вы пожертвовали ${amount} монет. Казна: ${Number(payload.clan_total) || 0}`);
+            gameState.player.coins = Number(payload.new_balance ?? ((gameState.player.coins || 0) - amount));
             loadClan();
         } else {
             showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось отправить пожертвование');
         }
     } catch (error) {
         console.error('Donate error:', error);
+        showModal('⚠️ Ошибка', 'Не удалось отправить пожертвование');
+    } finally {
+        unlockAction('clanDonate');
     }
 }
 
@@ -4577,11 +4919,16 @@ function renderClanChat(messages) {
         messages,
         (msg) => {
             const time = new Date(msg.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-            const playerName = msg.first_name || msg.username || 'Игрок';
+            // Имя и уровень приходят из профиля игрока в Telegram, который он
+            // контролирует сам, и пишутся в БД без очистки. Без escapeHtml
+            // имя вида <img src=x onerror=...> выполнялся бы у всех, кто откроет
+            // чат. Текст сообщения ниже экранируется — имя тоже обязано.
+            const playerName = escapeHtml(msg.first_name || msg.username || 'Игрок');
+            const playerLevel = escapeHtml(msg.level);
             return '<div class="chat-message">' +
                 '<div class="chat-header">' +
                     '<span class="chat-author">' + playerName + '</span>' +
-                    '<span class="chat-level">[' + msg.level + ']</span>' +
+                    '<span class="chat-level">[' + playerLevel + ']</span>' +
                     '<span class="chat-time">' + time + '</span>' +
                 '</div>' +
                 '<div class="chat-text">' + escapeHtml(msg.message) + '</div>' +
@@ -4639,6 +4986,10 @@ async function restoreEnergy() {
         return;
     }
 
+    // Блокировка от двойного клика: покупка энергии списывает Stars, и два
+    // быстрых тапа отправляли бы два POST и списывали 10 звёзд вместо 5
+    if (!lockAction('buyEnergy')) return;
+
     try {
         const result = await apiRequest('/api/game/player/buy-energy', {
             method: 'POST',
@@ -4647,16 +4998,25 @@ async function restoreEnergy() {
 
         if (result.success) {
             const payload = result?.data || result;
-            syncPlayerEnergyState(payload.energy, gameState.player?.status?.max_energy);
+            syncPlayerEnergyState(
+                payload.energy,
+                payload.max_energy ?? gameState.player?.status?.max_energy,
+                payload.last_energy_update || null
+            );
             if (payload.stars !== undefined) {
-                gameState.player.stars = payload.stars;
+                gameState.player.stars = Number(payload.stars);
             }
             refreshPlayerEnergyUI();
             await loadProfile();
             showModal('✅ Успех', `Энергия восстановлена! (-${STARS_COST} ⭐)`);
+        } else {
+            showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось купить энергию');
         }
     } catch (error) {
         console.error('Restore energy error:', error);
+        showModal('⚠️ Ошибка', 'Не удалось купить энергию');
+    } finally {
+        unlockAction('buyEnergy');
     }
 }
 
@@ -4850,20 +5210,20 @@ function renderRaids(raids) {
         const isParticipating = gameState.raidsParticipating?.includes(raid.id);
         
         return `
-            <div class="raid-item" data-raid-id="${raid.id}" data-boss-id="${raid.boss.id}">
-                <div class="raid-boss-icon">${raid.boss.icon || '👾'}</div>
+            <div class="raid-item" data-raid-id="${escapeAttribute(raid.id)}" data-boss-id="${escapeAttribute(raid.boss?.id)}">
+                <div class="raid-boss-icon">${escapeHtml(raid.boss?.icon || '👾')}</div>
                 <div class="raid-info">
-                    <div class="raid-boss-name">${raid.boss.name}</div>
+                    <div class="raid-boss-name">${escapeHtml(raid.boss?.name || 'Босс')}</div>
                     <div class="raid-hp-bar">
                         <div class="raid-hp-fill" style="width: ${hpPercent}%"></div>
                     </div>
                     <div class="raid-hp-text">${formatNumber(raid.hp)} / ${formatNumber(raid.max_hp)} (${hpPercent}%)</div>
                     <div class="raid-leader">Лидер: ${escapeHtml(raid.leader?.name || 'Неизвестно')}</div>
-                    <div class="raid-participants">Участников: ${raid.participants_count || 0}</div>
-                    <div class="raid-timer">Осталось: ${timeRemaining}</div>
+                    <div class="raid-participants">Участников: ${Number(raid.participants_count) || 0}</div>
+                    <div class="raid-timer">Осталось: ${escapeHtml(timeRemaining)}</div>
                     ${isParticipating ? 
-                        `<button class="btn-attack" data-raid-attack="${raid.id}">Атаковать</button>` :
-                        `<button class="btn-join" data-raid-join="${raid.id}">Присоединиться</button>`
+                        `<button class="btn-attack" data-raid-attack="${escapeAttribute(raid.id)}">Атаковать</button>` :
+                        `<button class="btn-join" data-raid-join="${escapeAttribute(raid.id)}">Присоединиться</button>`
                     }
                 </div>
             </div>
@@ -4889,6 +5249,10 @@ async function startRaid(bossId, isRaid = true) {
  * @param {number} raidId - ID рейда
  */
 async function joinRaid(raidId) {
+    // Блокировка от двойного клика: присоединение к рейду пишет на сервере,
+    // повторный запрос мог бы задвоить участие
+    if (!lockAction('raidJoin')) return;
+
     try {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/join`, {
             method: 'POST'
@@ -4909,6 +5273,8 @@ async function joinRaid(raidId) {
     } catch (error) {
         console.error('Ошибка присоединения к рейду:', error);
         showNotification('Ошибка при присоединении', 'error');
+    } finally {
+        unlockAction('raidJoin');
     }
 }
 
@@ -4930,14 +5296,27 @@ async function attackRaid(raidId) {
             // Показываем урон
             showDamageAnimation(data.damage);
 
+            // Метка времени обязательна — иначе клиент досчитает регенерацию
+            // от устаревшей метки и покажет лишнюю энергию
             if (typeof data.player_energy === 'number') {
-                syncPlayerEnergyState(data.player_energy, gameState.player?.status?.max_energy);
+                syncPlayerEnergyState(
+                    data.player_energy,
+                    gameState.player?.status?.max_energy,
+                    data.last_energy_update || null
+                );
                 refreshPlayerEnergyUI();
             }
             
             // Обновляем UI рейда
             await loadRaids();
             renderRaids(gameState.raids);
+            
+            // После удара в рейде на сервере изменились энергия/урон, а после
+            // убийства — монеты/XP/ключи. Профиль нужно перечитать, иначе
+            // награды появятся в интерфейсе позже, чем реально начислены.
+            loadProfile().catch((profileError) => {
+                console.error('Не удалось обновить профиль после атаки в рейде:', profileError);
+            });
             
             // Если босс убит
             if (data.killed) {
@@ -5222,6 +5601,10 @@ function renderAchievementsList(achievements) {
  * Получение награды за достижение
  */
 async function claimAchievement(achievementId) {
+    // Блокировка от двойного клика: выдача награды тратит ресурсы игрока,
+    // два быстрых тапа отправляли бы два POST /achievements/claim
+    if (!lockAction('claimAchievement')) return;
+
     try {
         const data = await apiRequest('/api/achievements/claim', {
             method: 'POST',
@@ -5238,6 +5621,8 @@ async function claimAchievement(achievementId) {
     } catch (error) {
         console.error('Ошибка получения награды:', error);
         showModal('❌ Ошибка', 'Ошибка получения награды');
+    } finally {
+        unlockAction('claimAchievement');
     }
 }
 
@@ -5258,7 +5643,8 @@ async function loadPVPGamePlayers() {
         if (!indicator || !list) return;
         
         if (payload.available === false) {
-            indicator.innerHTML = `<div class="pvp-zone-safe">🛡️ ${payload.message || 'PvP недоступно'}</div>`;
+            // message приходит с сервера — экранируем, иначе это XSS-вектор
+            indicator.innerHTML = `<div class="pvp-zone-safe">🛡️ ${escapeHtml(payload.message || 'PvP недоступно')}</div>`;
             list.innerHTML = '<div class="empty-message">Перейдите в локацию с опасностью 6+ для PvP</div>';
             return;
         }
@@ -5270,31 +5656,38 @@ async function loadPVPGamePlayers() {
             return;
         }
         
-        list.innerHTML = payload.players.map(player => `
+        list.innerHTML = payload.players.map(player => {
+            // Имя соперника — это данные, которые игрок контролирует сам
+            // (Telegram username/first_name). В атрибуте data-target-name
+            // нужен escapeAttribute: escapeHtml не экранирует кавычки,
+            // и значение вида x" onclick="... разорвало бы разметку.
+            const safeName = escapeHtml(player.username || 'Игрок');
+            return `
             <div class="pvp-player-item">
                 <div class="pvp-player-info">
-                    <div class="pvp-player-name">${escapeHtml(player.username) || 'Игрок'}</div>
+                    <div class="pvp-player-name">${safeName}</div>
                     <div class="pvp-player-stats">
-                        <span>Уровень: ${player.level}</span>
-                        <span>HP: ${player.health}/${player.max_health}</span>
+                        <span>Уровень: ${Number(player.level) || 1}</span>
+                        <span>HP: ${Number(player.health) || 0}/${Number(player.max_health) || 100}</span>
                     </div>
                     <div class="pvp-player-pvp">
-                        <span>Побед: ${player.pvp_wins || 0}</span>
-                        <span>Рейтинг: ${player.pvp_rating || 1000}</span>
-                        <span>Серия: ${player.pvp_streak || 0}</span>
+                        <span>Побед: ${Number(player.pvp_wins) || 0}</span>
+                        <span>Рейтинг: ${Number(player.pvp_rating) || 1000}</span>
+                        <span>Серия: ${Number(player.pvp_streak) || 0}</span>
                     </div>
                 </div>
                 <button
                     class="pvp-attack-player-btn"
-                    data-target-id="${player.id}"
-                    data-target-name="${escapeHtml(player.username) || 'Игрок'}"
-                    data-target-level="${player.level}"
-                    data-target-health="${player.health}"
-                    data-target-max-health="${player.max_health}">
+                    data-target-id="${escapeAttribute(player.id)}"
+                    data-target-name="${escapeAttribute(player.username || 'Игрок')}"
+                    data-target-level="${Number(player.level) || 1}"
+                    data-target-health="${Number(player.health) || 0}"
+                    data-target-max-health="${Number(player.max_health) || 100}">
                     ⚔️ Атаковать
                 </button>
             </div>
-        `).join('');
+        `;
+        }).join('');
 
         list.querySelectorAll('.pvp-attack-player-btn').forEach((button) => {
             button.addEventListener('click', () => {
@@ -5317,6 +5710,14 @@ async function loadPVPGamePlayers() {
  * Начало PvP боя
  */
 async function startPVPFight(targetId, targetName, targetLevel, targetHealth, targetMaxHealth) {
+    // Блокировка от двойного клика: без неё два быстрых тапа по «Атаковать»
+    // отправляли два POST /pvp/attack и создавали два боя.
+    if (!lockAction('pvpStart')) return;
+
+    // Кнопку блокируем сразу, до отправки запроса
+    const listButtons = document.querySelectorAll('.pvp-attack-player-btn');
+    listButtons.forEach((button) => { button.disabled = true; });
+
     try {
         const result = await apiRequest('/api/game/pvp/attack', {
             method: 'POST',
@@ -5372,6 +5773,12 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
     } catch (error) {
         console.error('Ошибка начала PvP:', error);
         showModal('❌ Ошибка', 'Не удалось начать бой');
+    } finally {
+        unlockAction('pvpStart');
+        // Разблокируем кнопки списка — боя уже нет, можно выбрать другую цель
+        document.querySelectorAll('.pvp-attack-player-btn').forEach((button) => {
+            button.disabled = false;
+        });
     }
 }
 
@@ -5400,9 +5807,15 @@ async function attackPVPTarget() {
         if (result.success) {
             playSound('attack');
 
-            if (payload.energy_left !== undefined && gameState.player?.status) {
-                gameState.player.status.energy = payload.energy_left;
-                gameState.player.energy = payload.energy_left;
+            // Энергию синхронизируем через syncPlayerEnergyState — он двигает
+            // и last_energy_update, иначе клиент досчитает лишнюю регенерацию
+            // от старой метки (кнопка атаки станет активна при 0 энергии).
+            if (payload.energy_left !== undefined) {
+                syncPlayerEnergyState(
+                    payload.energy_left,
+                    gameState.player?.status?.max_energy,
+                    payload.last_energy_update || null
+                );
                 refreshPlayerEnergyUI?.();
             }
             
@@ -5419,13 +5832,16 @@ async function attackPVPTarget() {
                     
                     const log = document.getElementById('pvp-battle-log');
                     if (log) {
-                        log.innerHTML += `<p>${payload.message || 'Удар нанесён'}</p>`;
+                        // message приходит с сервера — экранируем обязательно
+                        log.innerHTML += `<p>${escapeHtml(payload.message || 'Удар нанесён')}</p>`;
                         log.scrollTop = log.scrollHeight;
                     }
                 }
             }
             
-            loadProfile();
+            loadProfile().catch((profileError) => {
+                console.error('Не удалось обновить профиль после удара PvP:', profileError);
+            });
             
         } else {
             showModal('❌ Ошибка', result.error || result.message || 'Не удалось выполнить атаку');
@@ -5445,12 +5861,15 @@ async function attackPVPTarget() {
  * Обновление здоровья в PvP
  */
 function updatePVPHealth(target, current, max) {
-    const percent = Math.max(0, (current / max) * 100);
+    // Ограничиваем процент: max может прийти 0 или меньше текущего HP,
+    // и без клампа полоса здоровья растягивалась бы за контейнер.
+    const safeMax = Number(max) > 0 ? Number(max) : 1;
+    const percent = Math.max(0, Math.min(100, (Number(current) / safeMax) * 100));
     const healthBar = document.getElementById(`pvp-${target}-health`);
     const healthText = document.getElementById(`pvp-${target}-health-text`);
     
     if (healthBar) healthBar.style.width = `${percent}%`;
-    if (healthText) healthText.textContent = `${Math.max(0, current)}/${max}`;
+    if (healthText) healthText.textContent = `${Math.max(0, Number(current) || 0)}/${safeMax}`;
 }
 
 /**
@@ -5459,7 +5878,8 @@ function updatePVPHealth(target, current, max) {
 function handlePVPBattleEnd(result) {
     const log = document.getElementById('pvp-battle-log');
     if (log) {
-        log.innerHTML += `<p class="battle-result">${result.message}</p>`;
+        // message может содержать имя соперника (пользовательские данные)
+        log.innerHTML += `<p class="battle-result">${escapeHtml(result.message || '')}</p>`;
         log.scrollTop = log.scrollHeight;
     }
     
@@ -5472,9 +5892,9 @@ function handlePVPBattleEnd(result) {
     if (result.winner && result.winner.id === gameState.player?.id) {
         if (rewardsContent) {
             rewardsContent.innerHTML = `
-                <div class="reward-item">💰 +${result.rewards?.coins || 0} монет</div>
+                <div class="reward-item">💰 +${Number(result.rewards?.coins) || 0} монет</div>
                 <div class="reward-item">📦 ${result.rewards?.item ? 'Получен предмет' : 'Без предмета'}</div>
-                <div class="reward-item">⭐ +${result.rewards?.experience || 0} опыта</div>
+                <div class="reward-item">⭐ +${Number(result.rewards?.experience) || 0} опыта</div>
             `;
         }
         playSound('loot');
@@ -5491,11 +5911,19 @@ function handlePVPBattleEnd(result) {
     
     gameState.pvpMatch = null;
     
-    loadProfile();
+    loadProfile().catch((profileError) => {
+        console.error('Не удалось обновить профиль после PvP-боя:', profileError);
+    });
 }
 
 /**
- * Забрать награды PvP
+ * Завершение экрана PvP-боя
+ *
+ * ВНИМАНИЕ: награда начисляется СЕРВЕРом внутри POST /pvp/attack-hit
+ * (в транзакции боя), отдельного эндпоинта «забрать награды» в API нет.
+ * Поэтому здесь только закрывается окно результатов — отправлять запрос
+ * не нужно. Имя функции оставлено прежним ради совместимости с
+ * делегированными вызовами, но поведение — чисто навигационное.
  */
 async function claimPVPRewards() {
     const rewardsDiv = document.getElementById('pvp-rewards');
@@ -5578,12 +6006,12 @@ async function loadPVPStats() {
                             <div class="pvp-match-item ${resultClass}">
                                 <div class="match-result">${resultIcon}</div>
                                 <div class="match-info">
-                                    <div class="match-opponent">vs ${m.opponentName || 'Игрок'}</div>
-                                    <div class="match-date">${date}</div>
+                                    <div class="match-opponent">vs ${escapeHtml(m.opponentName || 'Игрок')}</div>
+                                    <div class="match-date">${escapeHtml(date)}</div>
                                 </div>
                                 <div class="match-damage">
-                                    <span>⬆️ ${m.damageDealt || 0}</span>
-                                    <span>⬇️ ${m.damageTaken || 0}</span>
+                                    <span>⬆️ ${Number(m.damageDealt) || 0}</span>
+                                    <span>⬇️ ${Number(m.damageTaken) || 0}</span>
                                 </div>
                             </div>
                         `;
@@ -5963,7 +6391,9 @@ document.addEventListener('click', (event) => {
 
     const buyBtn = target.closest('[data-buy-coin-item]');
     if (buyBtn) {
-        buyCoinItem(Number(buyBtn.dataset.buyCoinItem));
+        // Передаём саму кнопку: buyCoinItem блокирует и восстанавливает
+        // именно её, а не все кнопки списка
+        buyCoinItem(Number(buyBtn.dataset.buyCoinItem), buyBtn);
         return;
     }
 
@@ -6298,7 +6728,7 @@ function generateScreens() {
                     </label>
                     <span class="toggle-label">Массовый</span>
                 </div>
-                <div id="bosses-list"></div>
+                <div class="bosses-list" id="bosses-list"></div>
                 <div id="raids-list" style="display:none"></div>
             </div>
         </div>
@@ -6355,7 +6785,7 @@ function generateScreens() {
                     <input type="text" id="clans-search-input" placeholder="Поиск клана...">
                     <button class="btn" id="clans-search-btn">🔍</button>
                 </div>
-                <div id="clans-list"></div>
+                <div class="clans-list" id="clans-list"></div>
             </div>
         </div>
 
@@ -6418,7 +6848,7 @@ function generateScreens() {
         <div class="screen" id="market-screen">
             <div class="screen-header">
                 <h2>💰 Магазин</h2>
-                <span>💰 <span id="shop-coins-balance">0</span></span>
+                <span class="shop-coins-balance">💰 <strong id="shop-coins-balance">0</strong></span>
             </div>
             <div class="screen-content">
                 <div class="shop-categories">
@@ -6744,13 +7174,13 @@ function renderShopCategory(category) {
                     : 'Купить';
         
         return `
-            <div class="shop-item" data-item-id="${item.id}">
-                <div class="shop-item-icon">${item.icon}</div>
+            <div class="shop-item" data-item-id="${escapeAttribute(item.id)}" data-category="${escapeAttribute(category)}">
+                <div class="shop-item-icon">${escapeHtml(item.icon)}</div>
                 <div class="shop-item-info">
-                    <div class="shop-item-name">${item.name}</div>
-                    <div class="shop-item-desc">${item.desc}</div>
+                    <div class="shop-item-name">${escapeHtml(item.name)}</div>
+                    <div class="shop-item-desc">${escapeHtml(item.desc)}</div>
                 </div>
-                <div class="shop-item-price">${priceText}</div>
+                <div class="shop-item-price">${escapeHtml(priceText)}</div>
                 <button class="shop-buy-btn" ${(item.price === 0 && item.currency !== 'free') || isUnavailable ? 'disabled' : ''}>
                     ${buttonLabel}
                 </button>
@@ -6800,6 +7230,13 @@ async function buyShopItem(itemId, category) {
         }
     }
     
+    // Блокировка от двойного клика: покупка за Stars/монеты тратит валюту.
+    // Без неё два быстрых тапа списывали валюту дважды (или покупали два баффа)
+    if (!lockAction('purchase')) return;
+
+    const buyButtons = document.querySelectorAll('.shop-buy-btn:not([disabled])');
+    buyButtons.forEach((button) => { button.disabled = true; });
+
     // Покупка
     try {
         const result = await apiRequest('/api/game/purchase', {
@@ -6814,35 +7251,47 @@ async function buyShopItem(itemId, category) {
             // Сбрасываем кэш, т.к. инвентарь изменился
             RenderCache.clear();
             
-            // Применяем эффект баффа
-            if (category === 'buffs') {
-                applyBuff(item);
-            }
-            
             // Обновляем валюту из правильных полей ответа
-            if (result.balance !== undefined) {
-                player.balance = result.balance;
-            }
-            if (result.coins !== undefined) {
-                player.coins = result.coins;
-            }
-            // Для совместимости со старым API
             if (result.new_stars !== undefined) {
-                player.stars = result.new_stars;
+                player.stars = Number(result.new_stars);
             }
             if (result.new_coins !== undefined) {
-                player.coins = result.new_coins;
+                player.coins = Number(result.new_coins);
             }
-            
+            if (result.balance !== undefined) {
+                player.balance = Number(result.balance);
+            }
+
+            // showModal() выводит message через textContent, поэтому экранировать
+            // здесь НЕЛЬЗЯ: игрок увидел бы буквальные «&amp;» вместо символа.
             showModal('✅ Успешно!', `Куплено: ${item.name}`);
             showConfetti();
 
-            if (typeof loadProfile === 'function') {
-                loadProfile().catch(error => console.error('Не удалось обновить профиль после покупки:', error));
+            // Бафф применяем ТОЛЬКО из ответа сервера (reward.effect +
+            // reward.expires_at приходят из minigames.js). Раньше здесь был
+            // applyBuff(item) по локальным данным SHOP_ITEMS — интерфейс мог
+            // показать бафф, которого на сервере фактически нет.
+            const reward = result.purchased_item?.reward;
+            if (reward?.type === 'buff' && reward.effect) {
+                applyBuff({ effect: reward.effect, expires_at: reward.expires_at });
+                showNotification('⚡ Бафф активирован!', 'success');
             }
+
+            loadProfile().catch(error => console.error('Не удалось обновить профиль после покупки:', error));
+        } else {
+            showModal('❌ Ошибка', result.error || result.message || 'Не удалось совершить покупку');
         }
     } catch (error) {
         showModal('❌ Ошибка', 'Не удалось совершить покупку');
+    } finally {
+        unlockAction('purchase');
+        document.querySelectorAll('.shop-buy-btn').forEach((button) => {
+            if (button.dataset.permanentlyDisabled !== 'true') button.disabled = false;
+        });
+        // Перерисовываем список — кнопки получат корректные disabled-состояния
+        if (typeof renderShopCategory === 'function' && category) {
+            renderShopCategory(category);
+        }
     }
 }
 
@@ -6851,20 +7300,33 @@ async function buyShopItem(itemId, category) {
  * @param {Object} buff - данные баффа
  */
 function applyBuff(buff) {
+    // ВАЖНО: источник истины — сервер. Здесь принимаются ТОЛЬКО данные,
+    // пришедшие с сервера (effect + expires_at). Раньше длительность бралась
+    // из локального SHOP_ITEMS, и интерфейс мог показать бафф, которого
+    // на сервере фактически нет (или с другой длительностью).
     gameState.buffs = gameState.buffs || {};
-    const expiresAt = Date.now() + (buff.duration * 1000);
-    gameState.buffs[buff.effect] = {
+
+    const effect = buff?.effect;
+    if (!effect) {
+        console.warn('[applyBuff] Ответ сервера не содержит effect — бафф не применён');
+        return;
+    }
+
+    const expiresAt = buff.expires_at
+        ? new Date(buff.expires_at).getTime()
+        : Date.now() + (Number(buff.duration) || 0) * 1000;
+
+    if (!Number.isFinite(expiresAt)) {
+        console.warn('[applyBuff] Некорректный expires_at — бафф не применён');
+        return;
+    }
+
+    gameState.buffs[effect] = {
         expires: expiresAt,
         expires_at: new Date(expiresAt).toISOString()
     };
-    
-    showNotification(`⚡ ${buff.name} активирован!`, 'success');
-    
-    // Запускаем таймер окончания
-    setTimeout(() => {
-        delete gameState.buffs[buff.effect];
-        showNotification(`⏰ ${buff.name} закончился`, 'info');
-    }, buff.duration * 1000);
+
+    renderActiveBuffs?.(gameState.buffs);
 }
 
 
@@ -6890,6 +7352,14 @@ function hasBuff(effect) {
 // КОЛЕСО УДАЧИ
 // ============================================
 
+/**
+ * Призы колеса по умолчанию — только для первого рендера и оффлайн-фоллбэка.
+ *
+ * Источник истины — сервер: GET /game/wheel возвращает поле `prizes`,
+ * и loadWheelInfo() перезаписывает эту переменную. Раньше клиент держал
+ * свою копию списка, и если сервер менял набор призов, анимация
+ * подсвечивала не тот сектор.
+ */
 const WHEEL_PRIZES = [
     { type: 'coins', value: 10, text: '10 монет' },
     { type: 'coins', value: 25, text: '25 монет' },
@@ -6898,6 +7368,9 @@ const WHEEL_PRIZES = [
     { type: 'multiplier', value: 2, text: 'x2 к монетам' },
     { type: 'energy', value: 20, text: '20 энергии' },
 ];
+
+/** Актуальный список призов: перезаписывается ответом сервера. */
+let wheelPrizes = WHEEL_PRIZES;
 
 /**
  * Открытие колеса удачи.
@@ -6921,6 +7394,17 @@ async function loadWheelInfo() {
         const payload = response?.data || response;
         const canSpinFree = Boolean(payload.can_spin_free);
         const nextFreeSpin = Number(payload.next_free_spin || 0);
+
+        // Призы берём с сервера: он уже отдаёт их в GET /wheel.
+        // Так сектор анимации всегда совпадает с реально выпавшим призом,
+        // даже если набор призов изменится на сервере.
+        if (Array.isArray(payload.prizes) && payload.prizes.length > 0) {
+            wheelPrizes = payload.prizes.map((p) => ({
+                type: p.type,
+                value: p.value,
+                text: p.text
+            }));
+        }
 
         if (freeBtn) {
             freeBtn.disabled = !canSpinFree;
@@ -6956,6 +7440,16 @@ async function loadWheelInfo() {
  * Бесплатное вращение колеса
  */
 async function spinWheelFree() {
+    // Блокировка ДО отправки запроса: раньше кнопка блокировалась только
+    // внутри spinWheelAnimation (после ответа), поэтому несколько быстрых
+    // тапов успевали отправить несколько POST /wheel/spin.
+    if (!lockAction('wheelSpin')) return;
+
+    const freeBtn = document.getElementById('wheel-free-btn');
+    const paidBtn = document.getElementById('wheel-paid-btn');
+    if (freeBtn) freeBtn.disabled = true;
+    if (paidBtn) paidBtn.disabled = true;
+
     try {
         const response = await gameApi.post('/game/wheel/spin', { is_paid: false });
         
@@ -6966,15 +7460,20 @@ async function spinWheelFree() {
             } else {
                 showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
             }
+            // Анимации не будет — снимаем блокировку сразу
+            unlockAction('wheelSpin');
+            loadWheelInfo().catch(() => {});
             return;
         }
         
-        // Анимация с призом от сервера
+        // Успех: блокировку снимает spinWheelAnimation после конца анимации
         spinWheelAnimation(response.data.prize, false);
         
     } catch (error) {
         console.error('Ошибка вращения колеса:', error);
         showModal('❌ Ошибка', 'Не удалось связаться с сервером', 'error');
+        unlockAction('wheelSpin');
+        loadWheelInfo().catch(() => {});
     }
 }
 
@@ -6988,25 +7487,44 @@ async function spinWheelPaid() {
         return;
     }
     
+    // Критично для платного вращения: каждый клик списывает звезду,
+    // поэтому запрос обязан уйти ровно один раз
+    if (!lockAction('wheelSpin')) return;
+
+    const freeBtn = document.getElementById('wheel-free-btn');
+    const paidBtn = document.getElementById('wheel-paid-btn');
+    if (freeBtn) freeBtn.disabled = true;
+    if (paidBtn) paidBtn.disabled = true;
+    
     try {
         const response = await gameApi.post('/game/wheel/spin', { is_paid: true });
         
         if (!response.success) {
             showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
+            unlockAction('wheelSpin');
+            loadWheelInfo().catch(() => {});
             return;
         }
         
-        // Анимация с призом от сервера
+        // Успех: блокировку снимает spinWheelAnimation после конца анимации
         spinWheelAnimation(response.data.prize, true);
         
     } catch (error) {
         console.error('Ошибка вращения колеса:', error);
         showModal('❌ Ошибка', 'Не удалось связаться с сервером', 'error');
+        unlockAction('wheelSpin');
+        loadWheelInfo().catch(() => {});
     }
 }
 
 /**
  * Анимация колеса
+ *
+ * Снимает блокировку wheelSpin в конце: пока идёт анимация (3 с) и
+ * обновление состояния, повторное вращение невозможно — раньше блокировка
+ * снималась сразу по ответу сервера, и игрок мог запустить второе вращение
+ * ещё до конца анимации первого.
+ *
  * @param {object} prize - приз от сервера
  * @param {boolean} isPaid - платное вращение
  */
@@ -7014,42 +7532,59 @@ function spinWheelAnimation(prize, isPaid) {
     const wheel = document.getElementById('wheel');
     const freeBtn = document.getElementById('wheel-free-btn');
     const paidBtn = document.getElementById('wheel-paid-btn');
-    if (!wheel) return;
+    if (!wheel) {
+        unlockAction('wheelSpin');
+        return;
+    }
 
     if (freeBtn) freeBtn.disabled = true;
     if (paidBtn) paidBtn.disabled = true;
     
-    // Анимация
+    // Анимация.
+    // Сектор ищем в актуальном списке призов (обновляется ответом сервера),
+    // поэтому подсветка совпадает с реально выпавшим призом.
+    // Если приз всё же не найден, показываем первый сектор и предупреждаем
+    // в консоль — награда всё равно выдана по серверному ответу.
+    const prizes = Array.isArray(wheelPrizes) && wheelPrizes.length ? wheelPrizes : WHEEL_PRIZES;
     const rotations = 5 + Math.random() * 5;
-    const prizeIndex = WHEEL_PRIZES.findIndex(p => p.type === prize.type && p.value === prize.value);
-    const finalAngle = rotations * 360 + (360 / WHEEL_PRIZES.length) * (prizeIndex >= 0 ? prizeIndex : 0);
+    const prizeIndex = prizes.findIndex(p => p.type === prize?.type && p.value === prize?.value);
+    if (prizeIndex < 0) {
+        console.warn('[spinWheelAnimation] Приз с сервера не найден в списке призов:', prize);
+    }
+    const finalAngle = rotations * 360 + (360 / prizes.length) * (prizeIndex >= 0 ? prizeIndex : 0);
     
     wheel.style.transition = 'transform 3s ease-out';
     wheel.style.transform = `rotate(${finalAngle}deg)`;
     
     setTimeout(() => {
         // Выдача приза
-        if (prize.type === 'coins') {
+        if (prize?.type === 'coins') {
+            // prize.text идёт в showModal, который выводит его через textContent,
+            // поэтому escapeHtml здесь показал бы буквальные «&amp;»
             showModal('🎉 Выигрыш!', `Выпало: ${prize.text}`, 'success');
-        } else if (prize.type === 'multiplier') {
-            showModal('🎉 Удвоение!', `Множитель x${prize.value}!`, 'success');
-        } else if (prize.type === 'energy') {
-            showModal('⚡ Энергия!', `+${prize.value} энергии!`, 'success');
+        } else if (prize?.type === 'multiplier') {
+            showModal('🎉 Удвоение!', `Множитель x${Number(prize.value) || 0}!`, 'success');
+        } else if (prize?.type === 'energy') {
+            showModal('⚡ Энергия!', `+${Number(prize.value) || 0} энергии!`, 'success');
         }
         
         showConfetti(80);
         
-        // Обновляем данные игрока после вращения
-        if (typeof loadProfile === 'function') {
-            loadProfile().catch(e => console.error('Failed to update player:', e));
-        }
-        loadWheelInfo().catch(e => console.error('Не удалось обновить состояние колеса:', e));
+        // Обновляем данные игрока после вращения.
+        // Энергия/монеты/звёзды изменились на сервере — профиль перечитываем.
+        loadProfile().catch(e => console.error('Failed to update player:', e));
         
         // Сброс колеса
         setTimeout(() => {
             wheel.style.transition = 'none';
             wheel.style.transform = 'rotate(0deg)';
         }, 2000);
+        
+        // Блокировку снимаем в самом конце цикла: loadWheelInfo() сам
+        // пересчитает доступность кнопок (кулдаун, звезды)
+        loadWheelInfo()
+            .catch(e => console.error('Не удалось обновить состояние колеса:', e))
+            .finally(() => unlockAction('wheelSpin'));
         
     }, 3000);
 }
@@ -7153,9 +7688,12 @@ function renderCoinShop() {
         `;
     }).join('');
     
-    // Обработчики категорий
+    // Обработчики категорий.
+    // bindClickOnce идемпотентен: раньше здесь каждый вызов renderCoinShop()
+    // добавлял новый addEventListener на те же кнопки, и после нескольких
+    // открытий магазина один клик вызывал renderCoinShop() десятки раз.
     document.querySelectorAll('.shop-category-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        bindClickOnce(btn, `shopCategory_${btn.dataset.category || 'unknown'}`, () => {
             document.querySelectorAll('.shop-category-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             currentCoinShopCategory = btn.dataset.category;
@@ -7178,7 +7716,7 @@ function renderItemStats(stats) {
     return statLines.join('<br>');
 }
 
-async function buyCoinItem(itemId) {
+async function buyCoinItem(itemId, triggerButton = null) {
     const item = coinShopItems.find(i => i.id === itemId);
     if (!item) return;
     
@@ -7194,6 +7732,19 @@ async function buyCoinItem(itemId) {
         return;
     }
     
+    // Блокировка от двойного клика: покупка тратит монеты, и два быстрых
+    // тапа отправляли бы два POST /items/buy (клиентская проверка баланса
+    // успевала пройти оба раза до ответа сервера).
+    if (!lockAction('buyCoinItem')) return;
+
+    // Блокируем ТОЛЬКО нажатую кнопку. Раньше отключались все кнопки
+    // покупки, и если список перерисовывался, восстановление зависело от
+    // того, какие элементы ещё остались в DOM.
+    const button = triggerButton instanceof Element
+        ? triggerButton
+        : document.querySelector(`[data-buy-coin-item="${itemId}"]`);
+    if (button) button.disabled = true;
+    
     try {
         const response = await gameApi.post('/game/items/buy', { 
             item_id: itemId,
@@ -7201,6 +7752,8 @@ async function buyCoinItem(itemId) {
         });
         
         if (response.success) {
+            // textContent не интерпретирует HTML, поэтому escapeHtml здесь дал бы
+            // игроку буквальные сущности вида &amp; вместо символа
             showModal('✅ Успешно', `Вы купили ${item.name}!`);
             
             // Сбрасываем кэш, т.к. инвентарь изменился
@@ -7215,19 +7768,24 @@ async function buyCoinItem(itemId) {
                 }
             }
             
-            // Перезагружаем инвентарь
-            if (typeof loadInventory === 'function') {
-                loadInventory();
-            }
-            if (typeof loadProfile === 'function') {
-                loadProfile().catch(error => console.error('Не удалось обновить профиль после покупки за монеты:', error));
-            }
+            // Перезагружаем инвентарь и профиль: предмет уже в инвентаре,
+            // а монеты на сервере изменились
+            loadInventory().catch(error => 
+                console.error('Не удалось обновить инвентарь после покупки за монеты:', error));
+            loadProfile().catch(error => 
+                console.error('Не удалось обновить профиль после покупки за монеты:', error));
         } else {
             showModal('❌ Ошибка', response.error || 'Не удалось купить предмет');
         }
     } catch (error) {
         console.error('Ошибка покупки:', error);
         showModal('❌ Ошибка', 'Не удалось купить предмет');
+    } finally {
+        unlockAction('buyCoinItem');
+        // Восстанавливаем ТОЛЬКО свою кнопку. Если её уже заменили
+        // (перерисовка списка), трогать нечего — renderCoinShop()
+        // создаст новые кнопки в корректном состоянии.
+        if (button?.isConnected) button.disabled = false;
     }
 }
 
@@ -7844,22 +8402,36 @@ function showModal(title, message, type = 'info') {
 
 /**
  * Скрыть модальное окно
+ *
+ * Анимация закрытия идёт 200 мс, и раньше отложенный колбэк безусловно
+ * делал display='none'. Если за эти 200 мс открывали НОВОЕ окно (частый
+ * случай: showModal сразу после hideModal), старое закрывало новое.
+ * Поэтому каждое открытие увеличивает счётчик modalState.openGeneration,
+ * и таймер закрытия работает только если счётчик не изменился.
  */
 function hideModal() {
     const modal = document.getElementById('modal');
     const modalClose = document.getElementById('modal-close');
     
+    if (!modal) return;
+    
+    // Запоминаем поколение на момент закрытия
+    const generation = modalState.openGeneration;
+    
     // Очищаем обработчики при закрытии
     if (modalClose) modalClose.onclick = null;
-    if (modal) {
-        modal.onclick = null;
-        modal.style.animation = 'fadeOut 0.2s ease-out';
-        setTimeout(() => {
-            modal.style.display = 'none';
-            modal.classList.remove('active');
-            modal.style.animation = '';
-        }, 200);
-    }
+    modal.onclick = null;
+    modal.style.animation = 'fadeOut 0.2s ease-out';
+    
+    if (modalState.closeTimer) clearTimeout(modalState.closeTimer);
+    modalState.closeTimer = setTimeout(() => {
+        modalState.closeTimer = null;
+        // Пока открывали другое окно — не трогаем текущее
+        if (generation !== modalState.openGeneration) return;
+        modal.style.display = 'none';
+        modal.classList.remove('active');
+        modal.style.animation = '';
+    }, 200);
 }
 
 /**
