@@ -56,7 +56,10 @@ async function buildLootCache() {
 // Строим кэш при загрузке модуля
 buildLootCache();
 
-const MAX_INVENTORY_SLOTS = 100;
+// Лимит слотов инвентаря — из public/shared/equipment.js, того же файла,
+// который читает браузер. Раньше 100 было продублировано здесь и в
+// public/game.js, и правка одного места ломала второе.
+const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
 
 // =============================================================================
 // УТИЛИТЫ

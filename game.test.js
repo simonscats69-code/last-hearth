@@ -13,6 +13,11 @@ const { calculateDropChance, calculateDebuffModifiers, getDebuffTier, calculateR
 const { normalizeInventory, createInventoryItem, getInventoryItemCategory, getActiveBuffs, isBuffActive, normalizeEquipment, calculateSellPrice, addItemToInventory, recalcEnergy } = require('./utils/game-helpers');
 const { getExpForLevel, getTotalExpForLevel } = require('./utils/gameConstants');
 
+// Общие правила экипировки: сервер и браузер читают один и тот же файл
+// (public/shared/equipment.js). Если эти тесты падают — значит клиент и
+// сервер считают защиту по-разному и игрок увидит одно, а получит другое.
+const sharedEquipment = require('./public/shared/equipment.js');
+
 // =============================================================================
 // Тесты telegramAuth
 // =============================================================================
@@ -693,6 +698,129 @@ describe('Регрессия: энергия не возвращается са�
         expect(player.energy).toBe(55);
         const expected = new Date(fiveMinutesAgo).getTime() + 5 * 60000;
         expect(Math.abs(new Date(player.last_energy_update).getTime() - expected)).toBeLessThan(2000);
+    });
+});
+// =============================================================================
+// Общие правила экипировки (public/shared/equipment.js)
+// =============================================================================
+
+describe('shared equipment rules', () => {
+
+    describe('getEquipmentStatValue', () => {
+        test('берёт стат из объекта stats', () => {
+            expect(sharedEquipment.getEquipmentStatValue(
+                { stats: { radiation_resist: 25 } },
+                sharedEquipment.RADIATION_KEYS
+            )).toBe(25);
+        });
+
+        test('берёт стат с верхнего уровня (синоним поля)', () => {
+            expect(sharedEquipment.getEquipmentStatValue(
+                { radiationDefense: 40 },
+                sharedEquipment.RADIATION_KEYS
+            )).toBe(40);
+        });
+
+        test('приоритет: верхний уровень раньше вложенного stats', () => {
+            expect(sharedEquipment.getEquipmentStatValue(
+                { radiationDefense: 10, stats: { radiation_resist: 99 } },
+                sharedEquipment.RADIATION_KEYS
+            )).toBe(10);
+        });
+
+        test('возвращает 0 для пустого и невалидного предмета', () => {
+            expect(sharedEquipment.getEquipmentStatValue(null, sharedEquipment.RADIATION_KEYS)).toBe(0);
+            expect(sharedEquipment.getEquipmentStatValue({}, sharedEquipment.RADIATION_KEYS)).toBe(0);
+            expect(sharedEquipment.getEquipmentStatValue('строка', sharedEquipment.RADIATION_KEYS)).toBe(0);
+        });
+
+        test('игнорирует нули, отрицательные и мусорные значения', () => {
+            expect(sharedEquipment.getEquipmentStatValue(
+                { radiation_resist: 0, radiation_resistance: -5, radiationDefense: 'abc' },
+                sharedEquipment.RADIATION_KEYS
+            )).toBe(0);
+        });
+    });
+
+    describe('normalizeResistanceToThreatPoints', () => {
+        test('делит на 10 и округляет', () => {
+            expect(sharedEquipment.normalizeResistanceToThreatPoints(50)).toBe(5);
+            expect(sharedEquipment.normalizeResistanceToThreatPoints(54)).toBe(5);
+            expect(sharedEquipment.normalizeResistanceToThreatPoints(55)).toBe(6);
+        });
+
+        test('не даёт отрицательных значений', () => {
+            expect(sharedEquipment.normalizeResistanceToThreatPoints(-100)).toBe(0);
+            expect(sharedEquipment.normalizeResistanceToThreatPoints(null)).toBe(0);
+        });
+    });
+
+    describe('normalizeThreatLevelToPoints', () => {
+        test('округляет вверх — игрок видит худший случай', () => {
+            expect(sharedEquipment.normalizeThreatLevelToPoints(1)).toBe(1);
+            expect(sharedEquipment.normalizeThreatLevelToPoints(11)).toBe(2);
+            expect(sharedEquipment.normalizeThreatLevelToPoints(30)).toBe(3);
+        });
+
+        test('не даёт отрицательных значений', () => {
+            expect(sharedEquipment.normalizeThreatLevelToPoints(-5)).toBe(0);
+            expect(sharedEquipment.normalizeThreatLevelToPoints(undefined)).toBe(0);
+        });
+    });
+
+    describe('calculateRadiationDefense / calculateInfectionDefense', () => {
+        test('суммирует по всем слотам и делит на 10', () => {
+            const equipment = {
+                armor: { stats: { radiation_resist: 30 } },
+                helmet: { stats: { radiation_resist: 20 } }
+            };
+            expect(sharedEquipment.calculateRadiationDefense(equipment)).toBe(5);
+            expect(sharedEquipment.calculateInfectionDefense(equipment)).toBe(0);
+        });
+
+        test('учитывает все слоты, а не только существующие', () => {
+            const equipment = {
+                armor: { stats: { radiation_resist: 10 } },
+                boots: { stats: { radiation_resist: 10 } },
+                accessory: { radiationDefense: 10 }
+            };
+            expect(sharedEquipment.calculateRadiationDefense(equipment)).toBe(3);
+        });
+
+        test('без экипировки — 0', () => {
+            expect(sharedEquipment.calculateRadiationDefense(null)).toBe(0);
+            expect(sharedEquipment.calculateInfectionDefense(undefined)).toBe(0);
+            expect(sharedEquipment.calculateRadiationDefense({})).toBe(0);
+        });
+    });
+
+    // Ключевой тест: клиент (game.js) и сервер (gameConstants.js) обязаны
+    // давать одинаковый результат. При рассинхроне игрок увидит в интерфейсе
+    // одну защиту, а сервер начислит другую.
+    describe('клиент и сервер считают одинаково', () => {
+        test('gameConstants переиспользует общие правила, а не свои копии', () => {
+            const cases = [
+                null,
+                {},
+                { armor: { stats: { radiation_resist: 30 } } },
+                {
+                    armor: { stats: { radiation_resist: 30, infection_resist: 15 } },
+                    helmet: { radiationDefense: 12, infectionDefense: 7 },
+                    boots: { stats: { radiation_resistance: 3 } }
+                }
+            ];
+
+            for (const equipment of cases) {
+                expect(calculateRadiationDefense(equipment))
+                    .toBe(sharedEquipment.calculateRadiationDefense(equipment));
+                expect(sharedEquipment.calculateInfectionDefense(equipment))
+                    .toBe(require('./utils/gameConstants').calculateInfectionDefense(equipment));
+            }
+        });
+
+        test('лимит слотов инвентаря один на клиент и сервер', () => {
+            expect(sharedEquipment.MAX_INVENTORY_SLOTS).toBe(100);
+        });
     });
 });
 

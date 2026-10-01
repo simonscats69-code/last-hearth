@@ -12,6 +12,14 @@
     "migrate": "node db/database.js",
     "prod": "node db/database.js && node index.js",
     "lint": "eslint .",
+    "audit": "node scripts/audit.js",
+    "audit:css": "node scripts/audit.js css",
+    "audit:dead": "node scripts/audit.js dead",
+    "audit:xss": "node scripts/audit.js xss",
+    "audit:js": "node scripts/audit.js js",
+    "test:audit": "node scripts/test_audit_nesting.js",
+    "css:prune": "node scripts/prune_css.js",
+    "css:fix-braces": "node scripts/fix_css_braces.js",
     "postinstall": "node -e \"console.log('Installation complete')\""
   },
   "dependencies": {

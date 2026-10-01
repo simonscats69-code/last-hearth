@@ -15,3 +15,9 @@ Thumbs.db
 dupe.txt
 dupe-report.txt
 *.local.json
+
+# Промежуточные отчёты скриптов анализа (find_dead_css / verify_dead_css)
+.dead-candidates.txt
+.dead-confirmed.txt
+.dead-suspect.txt
+.unsure-classes.txt

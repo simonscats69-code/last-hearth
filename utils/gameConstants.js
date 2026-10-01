@@ -3,6 +3,13 @@
  * Централизованное хранилище игровой логики
  */
 
+// Правила экипировки живут в public/shared/equipment.js — этот файл читают
+// и сервер, и браузер, поэтому там не может быть require(). Здесь только
+// реэкспорт, чтобы существующий код и тесты продолжали работать.
+// Имя НЕ equipment: в calculateLocationRiskProfile() есть параметр с таким
+// именем и он перекрывает модуль — обращение equipment.normalize... падало бы.
+const sharedEquipment = require('../public/shared/equipment.js');
+
 // Формулы опыта — не используются, фактический расчёт в getExpForLevel()
 // Устаревшие константы удалены для чистоты кода.
 /**
@@ -380,64 +387,17 @@ function getDebuffTier(level) {
     return 'safe';
 }
 
-function getEquipmentResistanceValue(item, keys) {
-    if (!item || typeof item !== 'object') return 0;
-
-    for (const key of keys) {
-        const directValue = Number(item[key]);
-        if (Number.isFinite(directValue) && directValue > 0) {
-            return directValue;
-        }
-    }
-
-    const stats = item.stats && typeof item.stats === 'object' ? item.stats : null;
-    if (!stats) return 0;
-
-    for (const key of keys) {
-        const statValue = Number(stats[key]);
-        if (Number.isFinite(statValue) && statValue > 0) {
-            return statValue;
-        }
-    }
-
-    return 0;
-}
-
-function normalizeResistanceToThreatPoints(totalResistance) {
-    return Math.max(0, Math.round(Number(totalResistance || 0) / 10));
-}
-
 /**
  * Рассчитать защиту от радиации из экипировки
- * @param {object} equipment - экипировка игрока
+ * @param {object} equipmentMap - экипировка игрока
  * @returns {number} защита от радиации
  */
-function calculateRadiationDefense(equipment) {
-    if (!equipment) return 0;
-
-    let defense = 0;
-    const slots = ['armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
-    const keys = ['radiation_resist', 'radiation_resistance', 'radiationDefense'];
-
-    for (const slot of slots) {
-        defense += getEquipmentResistanceValue(equipment[slot], keys);
-    }
-
-    return normalizeResistanceToThreatPoints(defense);
+function calculateRadiationDefense(equipmentMap) {
+    return sharedEquipment.calculateRadiationDefense(equipmentMap);
 }
 
-function calculateInfectionDefense(equipment) {
-    if (!equipment) return 0;
-
-    let defense = 0;
-    const slots = ['armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
-    const keys = ['infection_resist', 'infection_resistance', 'infectionDefense'];
-
-    for (const slot of slots) {
-        defense += getEquipmentResistanceValue(equipment[slot], keys);
-    }
-
-    return normalizeResistanceToThreatPoints(defense);
+function calculateInfectionDefense(equipmentMap) {
+    return sharedEquipment.calculateInfectionDefense(equipmentMap);
 }
 
 function getRiskTierByScore(score) {
@@ -445,8 +405,8 @@ function getRiskTierByScore(score) {
 }
 
 function calculateLocationRiskProfile(location = {}, equipment = {}) {
-    const radiationThreat = Math.max(0, Math.ceil(Number(location.radiation || 0) / 10));
-    const infectionThreat = Math.max(0, Math.ceil(Number(location.infection || 0) / 10));
+    const radiationThreat = sharedEquipment.normalizeThreatLevelToPoints(location.radiation);
+    const infectionThreat = sharedEquipment.normalizeThreatLevelToPoints(location.infection);
     const radiationDefense = calculateRadiationDefense(equipment);
     const infectionDefense = calculateInfectionDefense(equipment);
 

@@ -26,22 +26,47 @@ if (!dead.length) {
 
 const deadSet = new Set(dead);
 const src = fs.readFileSync(FILE, 'utf8');
-let out = '';
-let pos = 0;
 let removedRules = 0;
-let removedLines = 0;
+let slimmedRules = 0;
+const removedSelectors = [];
+const slimmedSelectors = [];
 
 const CLASS_RE = /\.(-?[_a-zA-Z][\w-]*)/g;
 
+/**
+ * Разбирает список селекторов правила на группы (через запятую) и
+ * определяет, какие группы принципиально не могут совпасть с DOM.
+ *
+ * Группа недостижима, если в любом её составном селекторе (`.a.b`,
+ * `.parent .child`) есть мёртвый класс: элемент никогда не получит
+ * этот класс, поэтому совпадения не будет. Именно так выглядит
+ * остаток старой вёрстки: `.card.danger` и `.boss-fight-timer .timer-label`
+ * существуют, но срабатывают ноль раз.
+ *
+ * @returns {{dead: boolean, live: string[]}} мёртва ли группа и какие
+ *          селекторы выживают.
+ */
+function analyzeSelector(selector) {
+    const live = [];
+    for (const group of selector.split(',')) {
+        const g = group.trim();
+        if (!g) continue;
+        const classes = [...g.matchAll(CLASS_RE)].map(m => m[1]);
+        if (!classes.length) { live.push(g); continue; }   // body, html, a — не трогаем
+        if (classes.some(c => deadSet.has(c))) continue;    // есть мёртвый класс — недостижима
+        live.push(g);
+    }
+    return { dead: live.length === 0, live };
+}
+
+/** Совместимость со старым вызовом: правило целиком мёртвое? */
 function selectorIsDead(selector) {
-    const classes = [...selector.matchAll(CLASS_RE)].map(m => m[1]);
-    if (!classes.length) return false;              // body/html/a — не трогаем
-    return classes.every(c => deadSet.has(c));
+    return analyzeSelector(selector).dead;
 }
 
 /** Рекурсивно обрабатывает блок @media/@supports, возвращает новый текст */
 function processAtBlock(text, blockStart, blockEnd) {
-    return { text: processRange(text, blockStart + 1, blockEnd - 1), start: blockStart, end: blockEnd };
+    return processRange(text, blockStart + 1, blockEnd - 1);
 }
 
 /** Обрабатывает диапазон [from, to), предполагая сбалансированные скобки */
@@ -50,6 +75,16 @@ function processRange(text, from, to) {
     let i = from;
     while (i < to) {
         const ch = text[i];
+
+        // Пропускаем пробельные символы ВНАЧРИ цикла. Без этого пробел между
+        // правилами считался бы началом селектора, text.indexOf('{') находил бы
+        // скобку следующего @media, и весь блок проглатывался целиком —
+        // вместе с правилами внутри, которые нужно было почистить.
+        if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+            result += ch;
+            i++;
+            continue;
+        }
 
         // Пропускаем комментарии
         if (ch === '/' && text[i + 1] === '*') {
@@ -69,13 +104,19 @@ function processRange(text, from, to) {
                 i++;
                 continue;
             }
-            const inner = processRange(text, braceStart + 1, blockEnd - 1);
-            result += header + '{' + inner + '}';
+            const inner = processAtBlock(text, braceStart, blockEnd);
+            // Сохраняем перевод строки перед закрывающей скобкой блока.
+            // Без этого «...; }» + «}» склеивается в «...; }}» и файл
+            // теряет по строке на каждый @keyframes/@media.
+            const origInner = text.slice(braceStart + 1, blockEnd);
+            const tailMatch = origInner.match(/\n([ \t]*)$/);
+            const tail = tailMatch ? '\n' + tailMatch[1] : '';
+            result += header + '{' + inner + tail + '}';
             i = blockEnd + 1;
             continue;
         }
 
-        // Обычное правило: собираем селектор до '{'
+        // Закрывающая скобка: обычное правило или конец @media
         if (ch === '}') {
             result += ch;
             i++;
@@ -94,20 +135,33 @@ function processRange(text, from, to) {
             break;
         }
 
-        if (selectorIsDead(selector)) {
+        const info = analyzeSelector(selector);
+        if (process.env.TRACE_VISIT) {
+            console.log('  вижу @' + i + ' селектор: ' + selector.trim().replace(/\s+/g, ' ').slice(0, 60));
+        }
+        if (info.dead) {
             removedRules++;
-            removedLines += (blockEnd + 1 - i + 1); // примерно, с новой строки
-            // заодно срезаем ведущий перевод строки, чтобы не оставлять пустот
-            let cut = i;
-            if (out.endsWith('\n')) {
-                out = out.slice(0, -1);
-                cut--;
-            }
+            removedSelectors.push(selector.trim().replace(/\s+/g, ' '));
+            // Срезаем пустую строку, остающуюся между соседними правилами.
+            // Именно пустую (две подряд \n): если срезать любой \n, закрывающая
+            // скобка блока склеивается — «...}» + «}» превращается в «...}}».
+            if (result.endsWith('\n\n')) result = result.slice(0, -1);
             i = blockEnd + 1;
             continue;
         }
 
-        result += text.slice(i, blockEnd + 1);
+        const originalGroups = selector.split(',').map(g => g.trim()).filter(Boolean);
+        if (info.live.length < originalGroups.length) {
+            // Часть групп выбрасываем: правило «.btn, .card {}» -> «.btn {}».
+            // Правка списка селекторов, тело блока не трогаем.
+            const indent = (text.slice(i, i + 8).match(/^[ \t]*/) || [''])[0];
+            result += indent + info.live.join(',\n' + indent) + text.slice(braceStart, blockEnd + 1);
+            slimmedRules++;
+            slimmedSelectors.push(selector.trim().replace(/\s+/g, ' ') +
+                '  ->  ' + info.live.join(', '));
+        } else {
+            result += text.slice(i, blockEnd + 1);
+        }
         i = blockEnd + 1;
     }
     return result;
@@ -125,13 +179,57 @@ function findBlockEnd(text, braceStart) {
     return -1;
 }
 
-out = processRange(src, 0, src.length);
+const out = processRange(src, 0, src.length);
 
 const before = src.split(/\r?\n/).length;
 const after = out.split(/\r?\n/).length;
 console.log('Классов в списке: ' + dead.length);
-console.log('Удалено правил: ' + removedRules);
+console.log('Удалено правил целиком: ' + removedRules);
+console.log('Прорежено правил (убраны мёртвые селекторы из списка): ' + slimmedRules);
 console.log('Строк: ' + before + ' -> ' + after + ' (минус ' + (before - after) + ')');
+if (process.env.LIST) {
+    console.log('--- УДАЛЕНЫ ЦЕЛИКОМ:');
+    for (const s of removedSelectors) console.log('    ' + s);
+    console.log('--- ПРОРЕЖЕНЫ:');
+    for (const s of slimmedSelectors) console.log('    ' + s);
+}
+if (process.env.DUMP) {
+    // Диагностика: какие селекторы инструмент вообще видит и как их оценивает.
+    const seen = [...src.matchAll(/([^{}]+)\{/g)];
+    console.log('--- СЕЛЕКТОРЫ (' + seen.length + '), содержащие ' + [...deadSet].join(', '));
+    for (const m of seen) {
+        const sel = m[1].trim();
+        if (![...deadSet].some(d => sel.includes('.' + d))) continue;
+        const info = analyzeSelector(sel);
+        console.log('    ' + (info.dead ? 'МЁРТВЫЙ  ' : 'живой    ') + ' | ' + sel.replace(/\s+/g, ' ').slice(0, 80));
+    }
+}
+if (process.env.TRACE) {
+    // Показываем, какие селекторы реально посещает рекурсивный обход.
+    const visited = [];
+    for (const s of removedSelectors) visited.push('УДАЛЁН ' + s);
+    for (const s of slimmedSelectors) visited.push('ПРОРЕЖАН ' + s);
+    console.log('--- ПОСЕЩЕНО ПРАВИЛ С МЁРТВЫМИ КЛАССАМИ: ' + visited.length);
+    for (const v of visited) console.log('    ' + v);
+    // Ищем в raw-тексте случаи, где мёртвый класс стоит в селекторе, который
+    // обход пропустил (значит, он съел блок целиком).
+    const missing = [];
+    for (const d of deadSet) {
+        const re = new RegExp('(^|[,{}])\\s*\\.' + d.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '(?![\\w-])', 'gm');
+        let mm;
+        while ((mm = re.exec(src)) !== null) {
+            const line = src.slice(0, mm.index).split('\n').length;
+            if (!removedSelectors.some(r => r.includes('.' + d))) {
+                missing.push('.' + d + ' (строка ' + line + ')');
+            }
+            break;
+        }
+    }
+    if (missing.length) {
+        console.log('--- ПРОПУЩЕНЫ ОБХОДОМ (требуют разбора):');
+        for (const m of missing) console.log('    ' + m);
+    }
+}
 
 if (apply) {
     fs.writeFileSync(FILE, out, 'utf8');
