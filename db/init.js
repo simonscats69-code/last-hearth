@@ -45,12 +45,21 @@ async function initDatabase() {
         await pool.query('SELECT 1');
         logger.info('Подключение к БД установлено');
 
-        const { createTables, runMigrations, seedDatabase, seedAchievements } = getSchema();
+        const {
+            createTables,
+            runMigrations,
+            seedDatabase,
+            seedAchievements,
+            mergeDuplicateInventoryStacks
+        } = getSchema();
 
         await createTables();
         await runMigrations();
         await seedDatabase();
         await seedAchievements();
+        // После сидов: нужны метаданные items (stackable/max_stack/slot),
+        // чтобы свести старые дубли предметов к правилам стакования.
+        await mergeDuplicateInventoryStacks();
 
         return true;
     } catch (error) {

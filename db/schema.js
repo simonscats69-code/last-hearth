@@ -651,6 +651,72 @@ async function runMigrations() {
     // Удаляем временную функцию
     await query(`DROP FUNCTION IF EXISTS convert_player_id_to_bigint(TEXT)`);
 
+    // Миграция: FK player_boss_progress.player_id должен ссылаться на players(id),
+    // а НЕ на players(telegram_id).
+    // На проде (Supabase) ограничение оказалось создано вручную со ссылкой на
+    // telegram_id, тогда как приложение везде передаёт req.player.id === players.id
+    // (см. buildRequestPlayer в routes/game/index.js). Из-за этого INSERT ... ON CONFLICT
+    // падал с ошибкой 23503 (FK violation) -> 500 на POST /api/game/bosses/start.
+    // Приводим и ограничение, и данные к схеме CREATE TABLE (REFERENCES players(id)).
+    await query(`
+        DO $do$
+        DECLARE r record;
+        BEGIN
+            -- 1. Убираем FK на players, ссылающийся на любую колонку кроме id.
+            FOR r IN
+                SELECT con.conname
+                FROM pg_constraint con
+                JOIN pg_class rel ON rel.oid = con.conrelid
+                JOIN pg_class frel ON frel.oid = con.confrelid
+                JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = con.confkey[1]
+                JOIN pg_namespace n ON n.oid = rel.relnamespace
+                WHERE n.nspname = current_schema()
+                  AND rel.relname = 'player_boss_progress'
+                  AND con.contype = 'f'
+                  AND frel.relname = 'players'
+                  AND fa.attname <> 'id'
+            LOOP
+                EXECUTE format('ALTER TABLE player_boss_progress DROP CONSTRAINT %I', r.conname);
+            END LOOP;
+
+            -- 2. Строки, где player_id хранит telegram_id, переводим в players.id.
+            --    Если по тому же боссу уже есть запись с правильным id — лишнюю убираем,
+            --    иначе нарушится UNIQUE (player_id, boss_id).
+            DELETE FROM player_boss_progress pbp
+            USING players p
+            WHERE pbp.player_id = p.telegram_id
+              AND pbp.player_id IS DISTINCT FROM p.id
+              AND EXISTS (
+                  SELECT 1 FROM player_boss_progress x
+                  WHERE x.player_id = p.id AND x.boss_id = pbp.boss_id
+              );
+
+            UPDATE player_boss_progress pbp
+            SET player_id = p.id
+            FROM players p
+            WHERE pbp.player_id = p.telegram_id
+              AND pbp.player_id IS DISTINCT FROM p.id
+              AND NOT EXISTS (SELECT 1 FROM players p2 WHERE p2.id = pbp.player_id);
+
+            -- 3. Корректный FK (добавляем только если его ещё нет).
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint con
+                JOIN pg_class rel ON rel.oid = con.conrelid
+                JOIN pg_class frel ON frel.oid = con.confrelid
+                JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = con.confkey[1]
+                WHERE rel.relname = 'player_boss_progress'
+                  AND con.contype = 'f'
+                  AND frel.relname = 'players'
+                  AND fa.attname = 'id'
+            ) THEN
+                ALTER TABLE player_boss_progress
+                    ADD CONSTRAINT player_boss_progress_player_id_fkey
+                    FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
+            END IF;
+        END $do$
+    `);
+
     // Миграция: добавить active_boss_id после создания таблицы bosses
     await query(`
         DO $do$
@@ -1058,6 +1124,25 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
     `);
     await query(`DELETE FROM achievements WHERE category = 'craft'`);
 
+    // Миграция: актуальный баланс оружия ближнего боя.
+    // Сид использует ON CONFLICT (name, type) DO NOTHING, поэтому уже
+    // существующие строки он не обновляет — правим их явно, иначе на
+    // работающем проде остались бы старые значения (Бита дешевле Ножа).
+    const meleeBalance = [
+        { name: 'Нож', price: 20, durability: 50, max_durability: 50, damage: 5 },
+        { name: 'Бита', price: 40, durability: 30, max_durability: 30, damage: 8 }
+    ];
+    for (const weapon of meleeBalance) {
+        await query(`
+            UPDATE items
+               SET price = $1,
+                   durability = $2,
+                   max_durability = $3,
+                   stats = jsonb_set(COALESCE(stats, '{}'::jsonb), '{damage}', to_jsonb($4::integer))
+             WHERE name = $5 AND type = 'weapon'
+        `, [weapon.price, weapon.durability, weapon.max_durability, weapon.damage, weapon.name]);
+    }
+
     // Supabase Advisor: включение Row Level Security на всех таблицах public.
     // - Приложение подключается ролью postgres (владелец таблиц): RLS владельцу
     //   не применяется без FORCE, поэтому доступ приложения не меняется.
@@ -1085,6 +1170,71 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
             END LOOP;
         END $$;
     `);
+}
+
+/**
+ * Миграция данных: сворачиваем старые дубли предметов в инвентарях игроков.
+ *
+ * До появления стакования (utils/game-helpers.js → addItemToInventory) каждый
+ * дроп и каждая покупка создавали отдельный слот, поэтому в players.inventory
+ * накопились дубли (например, 4 слота «Древесины» по 1 шт. вместо стека).
+ * Рантайм теперь стакает новые предметы, но старые записи остаются разбитыми —
+ * эта миграция приводит их к текущим правилам.
+ *
+ * Правила берём из того же addItemToInventory, чтобы миграция не разошлась с
+ * игрой. Идемпотентно: если сворачивать нечего, запись не трогается.
+ *
+ * ВАЖНО: вызывается ПОСЛЕ seedDatabase() — нужны метаданные items
+ * (stackable/max_stack/slot), чтобы уважать настройки предметов.
+ *
+ * @returns {Promise<number>} сколько инвентарей реально изменилось
+ */
+async function mergeDuplicateInventoryStacks() {
+    // Ленивый require: game-helpers тянет db/database, который к этому моменту
+    // уже загружен, поэтому цикла зависимостей не возникает.
+    const { addItemToInventory } = require('../utils/game-helpers');
+
+    const metaResult = await query(
+        'SELECT id, name, type, category, slot, stackable, max_stack FROM items');
+    const meta = new Map(metaResult.rows.map((row) => [String(row.id), row]));
+    if (meta.size === 0) return 0;
+
+    const players = await query(`
+        SELECT id, inventory FROM players
+        WHERE jsonb_typeof(inventory) = 'array'
+          AND jsonb_array_length(inventory) > 1
+    `);
+
+    let updated = 0;
+    for (const playerRow of players.rows) {
+        let inventory = playerRow.inventory;
+        if (typeof inventory === 'string') {
+            try {
+                inventory = JSON.parse(inventory);
+            } catch {
+                continue;
+            }
+        }
+        if (!Array.isArray(inventory)) continue;
+
+        const merged = [];
+        for (const entry of inventory) {
+            if (!entry || typeof entry !== 'object') continue;
+            addItemToInventory(merged, entry, meta.get(String(entry.id)) || null);
+        }
+
+        if (merged.length < inventory.length) {
+            await query('UPDATE players SET inventory = $1::jsonb WHERE id = $2',
+                [JSON.stringify(merged), playerRow.id]);
+            updated += 1;
+        }
+    }
+
+    if (updated > 0) {
+        console.warn(`[migrate] Свернули дубли предметов в инвентарях: инвентарей изменено — ${updated}`);
+    }
+
+    return updated;
 }
 
 /**
@@ -1145,8 +1295,12 @@ async function seedDatabase() {
         { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 2 } },
         { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 3 } },
         { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 15 } },
-        { name: 'Нож', description: 'Простой нож выживания', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 5 }, durability: 50, max_durability: 50, price: 30, icon: '🔪' },
-        { name: 'Бита', description: 'Бейсбольная бита', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 8 }, durability: 30, max_durability: 30, price: 25, icon: '🏏' },
+        // Баланс ближнего боя: цена растёт вместе с уроном.
+        // Раньше Бита (урон 8) стоила 25 — дешевле Ножа (урон 5, цена 30),
+        // то есть строго доминировала над ним. Теперь Нож — дешёвый старт,
+        // Бита — дороже и сильнее (но менее прочная: 30 против 50).
+        { name: 'Нож', description: 'Простой нож выживания', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 5 }, durability: 50, max_durability: 50, price: 20, icon: '🔪' },
+        { name: 'Бита', description: 'Бейсбольная бита', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 8 }, durability: 30, max_durability: 30, price: 40, icon: '🏏' },
         { name: 'Пистолет', description: 'Травматический пистолет', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', stats: { damage: 20, ammo: 8 }, durability: 100, max_durability: 100, price: 200, icon: '🔫' },
         { name: 'Автомат', description: 'Автоматическое оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 40, ammo: 30 }, durability: 200, max_durability: 200, price: 500, icon: '⚔️' },
         { name: 'Дробовик', description: 'Охотничий дробовик', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 60, ammo: 5 }, durability: 150, max_durability: 150, price: 750, icon: '🔫' },
@@ -1246,5 +1400,6 @@ module.exports = {
     createTables,
     runMigrations,
     seedDatabase,
-    seedAchievements
+    seedAchievements,
+    mergeDuplicateInventoryStacks
 };
