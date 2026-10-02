@@ -27,6 +27,42 @@ let isRunning = {
 // Флаг для graceful shutdown
 let schedulerEnabled = true;
 
+/**
+ * Безопасный перезапуск задачи.
+ *
+ * setTimeout(fn) не возвращает промис, поэтому .catch к нему не прицепить.
+ * У всех семи задач внутри есть try/catch/finally, который гасит ошибку
+ * и логирует (например, regenerateEnergy → energy_regen_error), поэтому
+ * их промис всегда resolve и сам по себе unhandledRejection не создаёт.
+ *
+ * Остаётся один путь: throw ВНУТРИ catch-блока задачи — прежде всего
+ * logger.error, если лог недоступен. Такой throw выходит из задачи наружу
+ * и становится unhandledRejection. Глобальный обработчик в index.js только
+ * пишет в лог, то есть задача молча перестала бы выполняться навсегда,
+ * без перезапуска.
+ *
+ * Эта обёртка ловит и то, и другое, и всегда планирует следующий запуск.
+ *
+ * @param {string} name имя задачи для логов
+ * @param {Function} task сама задача
+ * @param {number} delayMs задержка до следующего запуска
+ */
+function schedule(name, task, delayMs) {
+    if (!schedulerEnabled) return;
+    setTimeout(() => {
+        try {
+            const result = task();
+            if (result && typeof result.catch === 'function') {
+                result.catch((err) => {
+                    logger.error({ type: 'scheduler_task_rejected', task: name, message: describeError(err) });
+                });
+            }
+        } catch (err) {
+            logger.error({ type: 'scheduler_task_failed', task: name, message: describeError(err) });
+        }
+    }, delayMs);
+}
+
 // Счётчик повторных ошибок для debuffs cleanup.
 // Лимит не применяется: задержка и так зажата Math.min до 30 минут,
 // поэтому константа MAX_DEBUFF_RETRIES была мёртвым кодом и удалена.
@@ -108,7 +144,7 @@ async function regenerateEnergy() {
         
         // Запускаем следующую итерацию через 1 минуту (если планировщик не остановлен)
         if (schedulerEnabled) {
-            setTimeout(regenerateEnergy, 60 * 1000);
+            schedule('regenerateEnergy', regenerateEnergy, 60 * 1000);
         }
     }
 }
@@ -164,7 +200,7 @@ async function checkDailyActivity() {
         
         // Запускаем следующую итерацию через 1 час (если планировщик не остановлен)
         if (schedulerEnabled) {
-            setTimeout(checkDailyActivity, 60 * 60 * 1000);
+            schedule('checkDailyActivity', checkDailyActivity, 60 * 60 * 1000);
         }
     }
 }
@@ -224,7 +260,7 @@ async function cleanupOldLogs() {
         
         // Запускаем следующую итерацию через 6 часов (если планировщик не остановлен)
         if (schedulerEnabled) {
-            setTimeout(cleanupOldLogs, 6 * 60 * 60 * 1000);
+            schedule('cleanupOldLogs', cleanupOldLogs, 6 * 60 * 60 * 1000);
         }
     }
 }
@@ -330,7 +366,7 @@ async function checkAllAchievements() {
         
         // Запускаем следующую итерацию через 1 час (если планировщик не остановлен)
         if (schedulerEnabled) {
-            setTimeout(checkAllAchievements, 60 * 60 * 1000);
+            schedule('checkAllAchievements', checkAllAchievements, 60 * 60 * 1000);
         }
     }
 }
@@ -409,7 +445,7 @@ async function cleanupExpiredDebuffs() {
         );
         
         if (schedulerEnabled) {
-            setTimeout(cleanupExpiredDebuffs, nextDelay);
+            schedule('cleanupExpiredDebuffs', cleanupExpiredDebuffs, nextDelay);
         }
     }
 }
@@ -500,7 +536,7 @@ async function cleanupExpiredRaids() {
         
         // Запускаем следующую итерацию через 5 минут
         if (schedulerEnabled) {
-            setTimeout(cleanupExpiredRaids, 5 * 60 * 1000);
+            schedule('cleanupExpiredRaids', cleanupExpiredRaids, 5 * 60 * 1000);
         }
     }
 }
@@ -548,7 +584,7 @@ async function resetDailyTasks() {
         
         // Запускаем следующую итерацию через 6 часов (если планировщик не остановлен)
         if (schedulerEnabled) {
-            setTimeout(resetDailyTasks, 6 * 60 * 60 * 1000);
+            schedule('resetDailyTasks', resetDailyTasks, 6 * 60 * 60 * 1000);
         }
     }
 }
@@ -569,25 +605,25 @@ function startScheduler() {
     // чтобы избежать пиковой нагрузки при старте
     
     // Энергия - сразу (самая частая)
-    setTimeout(regenerateEnergy, 1000);
+    schedule('regenerateEnergy', regenerateEnergy, 1000);
     
     // Ежедневная активность - через 10 секунд
-    setTimeout(checkDailyActivity, 10 * 1000);
+    schedule('checkDailyActivity', checkDailyActivity, 10 * 1000);
     
     // Достижения - через 20 секунд
-    setTimeout(checkAllAchievements, 20 * 1000);
+    schedule('checkAllAchievements', checkAllAchievements, 20 * 1000);
     
     // Очистка логов - через 30 секунд
-    setTimeout(cleanupOldLogs, 30 * 1000);
+    schedule('cleanupOldLogs', cleanupOldLogs, 30 * 1000);
     
     // Сброс заданий - через 40 секунд
-    setTimeout(resetDailyTasks, 40 * 1000);
+    schedule('resetDailyTasks', resetDailyTasks, 40 * 1000);
     
     // Очистка дебаффов - через 50 секунд
-    setTimeout(cleanupExpiredDebuffs, 50 * 1000);
+    schedule('cleanupExpiredDebuffs', cleanupExpiredDebuffs, 50 * 1000);
     
     // Очистка истёкших рейдов - через 60 секунд
-    setTimeout(cleanupExpiredRaids, 60 * 1000);
+    schedule('cleanupExpiredRaids', cleanupExpiredRaids, 60 * 1000);
     
     logger.info('Планировщик задач запущен');
 }

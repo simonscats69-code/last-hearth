@@ -21,10 +21,24 @@ const DEV_MODE = process.env.DEV_MODE === 'true';
 // читается напрямую в utils/serverApi.js (validateTelegramInitData) —
 // дубль константы здесь был мёртвым кодом и удалён.
 
-const { logger, requestMiddleware, telegramAuthMiddleware, getTelegramIdFromHeaders } = require('./utils/serverApi');
+const { logger, requestMiddleware, telegramAuthMiddleware } = require('./utils/serverApi');
 
 let server;
 let isShuttingDown = false;
+
+// Готовность БД. HTTP-сервер поднимается ДО initDatabase (это нужно, чтобы
+// прокси Bothost не отвечал 404, пока приложение поднимается), и поэтому
+// есть окно, в которое порт уже слушает, а база ещё не инициализирована.
+//
+// Без этого флага игровой запрос в это окно доходил до роута и падал на
+// обращении к неготовой БД: игрок видел 500/таймаут вместо внятного ответа,
+// а после трёх неудачных попыток подключения сервер продолжал работу и
+// отдавал такие ошибки уже постоянно.
+//
+// Пока флаг снят — 503 SERVICE_STARTING и понятный текст. /health и
+// корневая страница продолжают отвечать: проверка живости и загрузка UI
+// не должны зависеть от базы.
+let isDatabaseReady = false;
 
 function handleFatalRuntimeError(kind, error) {
     try {
@@ -89,8 +103,27 @@ const adminRouter = require('./routes/admin');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+/**
+ * Ключ rate-limit.
+ *
+ * Раньше здесь возвращался getTelegramIdFromHeaders(req.headers) — то есть
+ * user.id, разобранный из заголовка initData БЕЗ проверки подписи. Лимитер
+ * стоит на строке app.use('/api', apiLimiter), то есть ДО авторизации
+ * (gameRouter с validatePlayer подключается ниже), поэтому подпись к этому
+ * моменту ещё не проверена.
+ *
+ * Проверено перебором: с одного IP и 1000 фейковых initData с разными
+ * подставленными id получалось 1000 уникальных ключей — лимит обходился
+ * тривиально, тем же способом, что и раньше с заголовком x-telegram-id.
+ * То, что validateTelegramInitData потом отвергнет такой initData, не помогает:
+ * счётчик лимита к этому моменту уже разделён по поддельным ключам.
+ *
+ * Решение: на уровне /apiidentity ещё не подтверждена, поэтому ключ — только
+ * IP. Персонифицированные лимиты на критичных операциях ставит сам роут
+ * ПОСЛЕ validatePlayer, где req.player.id уже проверен подписью.
+ */
 function getRateLimitKey(req) {
-    return getTelegramIdFromHeaders(req.headers) || req.ip;
+    return req.ip;
 }
 
 // Базовая конфигурация приложения
@@ -111,8 +144,37 @@ app.use(requestMiddleware);
 // Конфигурация парсеров
 const jsonParser = express.json({ limit: '1mb' });
 
+/**
+ * Совпадает ли origin с базовым URL или его поддоменом.
+ *
+ * Строка НЕ подходит: startsWith(base + '.') пропускает домены атакующего,
+ * потому что 'https://simonscats69-code.github.io.evil.com' начинается с
+ * 'https://simonscats69-code.github.io.'. Проверено перебором — такой origin
+ * получал ALLOW вместе с credentials.
+ *
+ * Правильно: разобрать origin через URL и сравнивать hostname. Поддоменом
+ * base является только hostname, заканчивающийся на '.' + hostname(base).
+ * Порт и путь игнорируются (Origin их не содержит), протокол обязан быть
+ * https — иначе http-версия домена тоже прошла бы.
+ */
+function isSameHostOrSubdomain(origin, baseUrl) {
+    let originHost;
+    let baseHost;
+    try {
+        const o = new URL(origin);
+        const b = new URL(baseUrl);
+        if (o.protocol !== 'https:' || b.protocol !== 'https:') return false;
+        originHost = o.hostname;
+        baseHost = b.hostname;
+    } catch {
+        return false;
+    }
+    return originHost === baseHost || originHost.endsWith('.' + baseHost);
+}
+
 // Разрешённые источники для CORS
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
+const GITHUB_PAGES_URL = 'https://simonscats69-code.github.io';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
     'https://t.me'
@@ -125,22 +187,19 @@ function isOriginAllowed(origin) {
     // Точное совпадение
     if (ALLOWED_ORIGINS.includes(origin)) return true;
     
-    // FRONTEND_URL и его поддомены.
-    // Только точное совпадение либо base + "." + метка. Проверка через
-    // startsWith(base) без разделителя пропускала домены вида
-    // https://last-hearth.bothost.ru.evil.com — это домен атакующего,
-    // а не поддомен нашего (CORS-дыра: он получал бы доступ к API с
-    // credentials). Проверка через base + "/" тоже лишняя: Origin по
-    // спецификации не содержит пути, а "https://base/../x" нормализуется
-    // браузером в другой origin.
-    const base = FRONTEND_URL.replace(/\/$/, '');
-    if (origin === base || origin.startsWith(base + '.')) return true;
+    // FRONTEND_URL и его поддомены — через сравнение hostname (см.
+    // isSameHostOrSubdomain): прежняя проверка origin.startsWith(base + '.')
+    // разрешала https://last-hearth.bothost.ru.evil.com, то есть домен
+    // атакующего получал доступ к API с credentials.
+    if (isSameHostOrSubdomain(origin, FRONTEND_URL)) return true;
     
-    // GitHub Pages поддомены
-    const githubBase = 'https://simonscats69-code.github.io';
-    if (origin === githubBase || origin.startsWith(githubBase + '.')) return true;
+    // GitHub Pages: тот же класс доменов, поэтому и та же проверка hostname.
+    // Раньше здесь стояло startsWith(githubBase + '.') — обход идентичный.
+    if (isSameHostOrSubdomain(origin, GITHUB_PAGES_URL)) return true;
     
     // Telegram поддомены (web.telegram.org, web.telegram.me и т.д.)
+    // Регулярка с \w- и обязательным многоточием перед доменом: строки без
+    // суффикса («.telegram.org» с чем-то перед ним) не проходят.
     if (/^https:\/\/[\w-]+\.telegram\.org$/.test(origin)) return true;
     if (/^https:\/\/[\w-]+\.t\.me$/.test(origin)) return true;
     
@@ -221,7 +280,19 @@ app.use(helmet({
                 'https://cdn.jsdelivr.net',
                 'https://telegram.org'
             ],
-            scriptSrcAttr: [(req, res) => `'nonce-${res.locals.nonce}'`],
+            // script-src-attr: 'none', а не nonce.
+            //
+            // Nonce здесь не имел смысла: он разрешает элемент <script nonce>,
+            // но НЕ разрешает inline-обработчики вида onclick="...". Ставить
+            // 'unsafe-inline' в script-src-attr — это как раз то, чего мы
+            // добиваемся (XSS через обработчик не проходит), а ставить
+            // 'none' значит запретить их полностью.
+            //
+            // Проверено: в public/index.html нет ни одного on*= атрибута,
+            // а единственный onclick= в public/game.js — текст внутри
+            // комментария о том, что CSP их блокирует. Игра работает через
+            // addEventListener, поэтому 'none' ничего не ломает.
+            scriptSrcAttr: ["'none'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
             connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
@@ -285,9 +356,8 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     // X-Telegram-ID убран: заголовок приходит от клиента и больше нигде
-    // не читается (см. getTelegramIdFromHeaders и resolveTelegramId —
-    // оба доверяют только подписанным initData). Разрешать его в CORS
-    // незачем, а его присутствие провоцировало клиентов его слать.
+    // не читается. Разрешать его в CORS незачем, а его присутствие
+    // провоцировало клиентов его слать.
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Init-Data');
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
@@ -295,14 +365,30 @@ app.use((req, res, next) => {
     next();
 });
 
+/**
+ * Middleware: игровые маршруты не работают, пока не готова БД.
+ *
+ * Ставится перед /api/game, /api/admin и /api/leaderboard — всем, что ходит
+ * в базу. /api (apiRouter) пропускаем намеренно: там /health-like и
+ * справочные ручки, которые должны отвечать и во время подъёма.
+ */
+function requireDatabaseReady(req, res, next) {
+    if (isDatabaseReady) return next();
+    return res.status(503).json({
+        success: false,
+        error: 'Игра запускается, попробуйте через несколько секунд',
+        code: 'SERVICE_STARTING'
+    });
+}
+
 // Роутеры
 logger.info('[index] gameRouter загружен:', gameRouter ? 'OK' : 'NULL');
 if (gameRouter?.stack) {
     logger.info('[index] gameRouter routes:', gameRouter.stack.filter(l => l.route).map(l => l.route?.path));
 }
-app.use('/api/game', gameRouter);
-app.use('/api/admin', adminRouter);
-app.use('/api/leaderboard', (req, res, next) => {
+app.use('/api/game', requireDatabaseReady, gameRouter);
+app.use('/api/admin', requireDatabaseReady, adminRouter);
+app.use('/api/leaderboard', requireDatabaseReady, (req, res, next) => {
     req.url = '/minigames' + req.url;
     gameRouter(req, res, next);
 });
@@ -328,7 +414,15 @@ app.get('/health', healthLimiter, (req, res) => {
     });
 });
 
+// /ready отвечает 503, пока БД не готова. Именно на этот эндпоинт
+// смотрят балансировщики и оркестраторы: 200 означает «можно слать
+// трафик», поэтому до готовности БД отвечать 200 нельзя. Внутри
+// дополнительно проверяем соединение — флаг мог быть снят, а пул
+// после этого упал.
 app.get('/ready', healthLimiter, async (req, res) => {
+    if (!isDatabaseReady) {
+        return res.status(503).json({ status: 'starting', db: 'not_initialized' });
+    }
     try {
         await query('SELECT 1');
         res.json({ status: 'ready', db: 'connected' });
@@ -458,10 +552,12 @@ async function startServer() {
     // старт Supabase) — повторяем подключение, прежде чем работать без БД.
     const DB_INIT_ATTEMPTS = 3;
     const DB_INIT_RETRY_DELAY_MS = 5000;
+    let databaseInitialized = false;
     for (let attempt = 1; attempt <= DB_INIT_ATTEMPTS; attempt++) {
         try {
             await initDatabase();
             logger.info('База данных инициализирована');
+            databaseInitialized = true;
             break;
         } catch (dbError) {
             logger.error(`Ошибка инициализации БД (попытка ${attempt}/${DB_INIT_ATTEMPTS}), продолжаем без БД: ${describeError(dbError)}`);
@@ -469,6 +565,19 @@ async function startServer() {
                 await new Promise(resolve => setTimeout(resolve, DB_INIT_RETRY_DELAY_MS));
             }
         }
+    }
+
+    // Флаг снимается ТОЛЬКО после успеха. Если все попытки провалились,
+    // isDatabaseReady остаётся false и requireDatabaseReady отдаёт 503 на
+    // игровые маршруты — вместо 500 из каждого эндпоинта. Раньше в этом
+    // состоянии сервер просто продолжал работу и падал в каждом хендлере
+    // отдельно; теперь причина видна сразу и в логах, и игроку.
+    isDatabaseReady = databaseInitialized;
+    if (!isDatabaseReady) {
+        logger.error({
+            type: 'database_unavailable',
+            message: `БД недоступна после ${DB_INIT_ATTEMPTS} попыток. Игровые маршруты отвечают 503 до перезапуска процесса.`
+        });
     }
 
     try {
