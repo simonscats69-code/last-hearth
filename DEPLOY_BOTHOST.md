@@ -28,15 +28,13 @@ MINI_APP_URL=https://твой-домен.bothost.tech
 FRONTEND_URL=https://твой-домен.bothost.tech
 # Числовые Telegram ID админов через запятую (доступ к /metrics и админ-роутам)
 ADMIN_IDS=123456789
-# Случайная hex-строка; без неё в проде WebSocket-подключения отклоняются
-WS_TOKEN_SECRET=your_random_hex_secret
 ```
 
 Примечания:
 - `?sslmode=require` в `DATABASE_URL` оставлять можно: код (`db/database.js`)
   сам вырезает `sslmode` из строки и включает TLS без строгой проверки цепочки
   (иначе pg 8.20 падает с `SELF_SIGNED_CERT_IN_CHAIN` на сертификате Supabase).
-- `SECRET_KEY`, `ADSGRAM_APP_ID`, `NODE_ENV`, `PORT`, `DOMAIN` задавать не нужно —
+- `SECRET_KEY`, `NODE_ENV`, `PORT`, `DOMAIN` задавать не нужно —
   бот работает в режиме polling, а порт/домен выдаёт платформа.
 - Если ни `DATABASE_URL`, ни `DB_HOST` не заданы, pg подключается к
   `localhost:5432` — в контейнере это всегда `ECONNREFUSED`. В логах старт
@@ -72,7 +70,7 @@ WS_TOKEN_SECRET=your_random_hex_secret
 - Приложение само подключает `https://telegram.org/js/telegram-web-app.js`
   (см. `public/index.html`), поэтому даже открытие по ссылке с fragment
   `#tgWebAppData=...` авторизуется штатно. Fragment живёт ограниченное время
-  (окно проверки задаётся `MAX_INIT_DATA_AGE_SECONDS`, по умолчанию 48 ч).
+  (окно проверки задаётся `MAX_INIT_DATA_AGE_SECONDS`, по умолчанию 24 ч).
 - Клиент берёт initData в таком порядке: SDK Telegram → fragment ссылки
   (`getInitDataFromHash()` в `game.js`) → dev-заглушка `hash=dummy`.
   Поэтому игра работает даже если `telegram.org` недоступен.

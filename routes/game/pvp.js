@@ -17,7 +17,6 @@ const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
 const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment } = require('../../utils/game-helpers');
-const realtime = require('../../utils/realtime');
 
 
 
@@ -138,20 +137,27 @@ router.get('/players', async (req, res) => {
             });
         }
 
-        // Получаем игроков на той же локации с пагинацией
+        // Получаем игроков на той же локации с пагинацией.
+        // Фильтры те же, что и в проверке атаки (/attack): banned исключает
+        // забаненных (иначе они видны как цели, хотя атаковать их нельзя),
+        // health > 0 — мёртвый противник всё равно отклоняется в /attack
+        // («Противник уже мертв»), то есть это был клик в никуда.
         const players = await queryAll(`
             SELECT id, telegram_id, username, first_name, level, 
                    health, max_health, strength, endurance, agility,
                    pvp_wins, pvp_rating, pvp_streak
             FROM players 
             WHERE current_location_id = $1 AND id != $2
+              AND banned = false AND health > 0
             LIMIT $3 OFFSET $4
         `, [player.current_location_id, playerId, limit, offset]);
 
-        // Общее количество игроков
+        // Общее количество игроков (те же фильтры, иначе pagination.total
+        // не совпадает с реальным числом строк в players)
         const countResult = await queryOne(`
             SELECT COUNT(*) as total FROM players 
             WHERE current_location_id = $1 AND id != $2
+              AND banned = false AND health > 0
         `, [player.current_location_id, playerId]);
         const total = parseInt(countResult?.total || 0);
 
@@ -425,14 +431,13 @@ router.post('/attack-hit', async (req, res) => {
 
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
-            // Энергия: метку last_energy_update двигаем ВМЕСТЕ со списанием.
-            // Раньше она оставалась старой, и клиент (getEffectivePlayerStatus)
-            // дочитывал регенерацию от устаревшей метки — показывал энергию,
-            // которой на сервере уже нет.
+            // Энергия: last_energy_update НЕ двигаем — реген идёт от реально
+            // прошедшего времени. Раньше здесь стояло NOW(), из-за чего удар
+            // обнулял накопленный реген (то же, что было с лутом в world.js).
+            // Единое правило описано в utils/game-helpers.js (recalcEnergy).
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1),
-                     last_energy_update = NOW()
+                 SET energy = GREATEST(0, energy - $1)
                  WHERE id = $2
                  RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, attackerId]
@@ -460,9 +465,9 @@ router.post('/attack-hit', async (req, res) => {
                     [battle_id]
                 );
 
-                // P2-14: уведомляем противника (best-effort: сбой WS не должен ломать бой)
-                try { realtime.notifyPlayer?.(defenderId, 'pvp_dodge', { battleId: battle_id }); } catch { /* ignore */ }
-
+                // Уведомление противнику раньше отправлялось через WebSocket.
+                // Модуль utils/realtime.js удалён: клиент к WebSocket не подключался
+                // ни разу, поэтому уклонение защитник увидит на своём экране PvP.
                 return {
                     dodged: true,
                     battleEnded: false,
@@ -633,16 +638,10 @@ await client.query(`
                     [attackerId, defenderId]
                 );
 
-                // P2-14: уведомляем противника о поражении/завершении
-                // (best-effort: сбой WS не должен ломать бой)
-                try {
-                    realtime.notifyPlayer?.(defenderId, 'pvp_defeat', {
-                        battleId: battle_id,
-                        by: attackerId,
-                        damage,
-                        coinsLost: coinsReward
-                    });
-                } catch { /* ignore */ }
+                // Раньше здесь уходило уведомление противнику через WebSocket.
+                // WebSocket удалён вместе с utils/realtime.js: клиент к нему
+                // не подключался ни разу. Поражение противник увидит на своём
+                // экране PvP — там бой подтягивается по /api/game/pvp/matches.
 
                 // Логируем завершение боя
                 await logPlayerAction(playerId, 'pvp_battle_win', {

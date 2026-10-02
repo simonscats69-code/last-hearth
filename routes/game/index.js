@@ -8,6 +8,7 @@ const router = express.Router();
 const { queryOne } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger } = require('../../utils/serverApi');
+const { generateReferralCode } = require('../../utils/referralCode');
 
 // Rate limiters
 const authLimiter = rateLimit({
@@ -96,22 +97,32 @@ if (bossesRouter?.stack) {
 const clansRouter = safeRequire('./clans', 'clans');
 const pvpRouter = safeRequire('./pvp', 'pvp');
 const playerRouter = safeRequire('./player', 'player');
-const debuffsRouter = safeRequire('./debuffs', 'debuffs');
 const itemsRouter = safeRequire('./items', 'items');
 const statusRouter = safeRequire('./status', 'status');
 const minigamesRouter = safeRequire('./minigames', 'minigames');
 
-function buildReferralCode(telegramId) {
-    try {
-        return `LH-${BigInt(String(telegramId)).toString(36).toUpperCase()}`.slice(0, 20);
-    } catch {
-        return `LH-${String(telegramId).slice(-10)}`;
-    }
-}
+const REFERRAL_COLLISION = '23505';
 
 async function upsertPlayerFromTelegramUser(user) {
     const telegramId = Number(user.id);
 
+    // Retry: с UNIQUE-индексом на referral_code коллизия кода бросает 23505,
+    // а ON CONFLICT ниже обрабатывает только конфликт по telegram_id.
+    // Вероятность ничтожна (32^8 вариантов), но одна неудачная попытка
+    // не должна приводить к 500 на регистрации.
+    const MAX_CODE_ATTEMPTS = 5;
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await upsertOnce(user, telegramId);
+        } catch (err) {
+            const isReferralCollision = err?.code === REFERRAL_COLLISION &&
+                String(err?.constraint || '').includes('referral_code');
+            if (!isReferralCollision || attempt >= MAX_CODE_ATTEMPTS) throw err;
+        }
+    }
+}
+
+async function upsertOnce(user, telegramId) {
     return await queryOne(`
         INSERT INTO players (
             telegram_id,
@@ -135,7 +146,10 @@ async function upsertPlayerFromTelegramUser(user) {
         user.username || null,
         user.first_name || 'Player',
         user.last_name || null,
-        buildReferralCode(telegramId)
+        // Единый генератор: раньше здесь был LH-<base36(telegram_id)> без
+        // случайной части, из-за чего коды в игре были двух разных видов
+        // и предсказуемыми.
+        generateReferralCode()
     ]);
 }
 
@@ -247,7 +261,6 @@ router.use('/bosses', bossesRouter);
 router.use('/clans', clansRouter);
 router.use('/pvp', pvpRouter);
 router.use('/player', playerRouter);
-router.use('/debuffs', debuffsRouter);
 router.use('/items', itemsRouter);
 router.use('/status', statusRouter);
 router.use('/minigames', minigamesRouter);

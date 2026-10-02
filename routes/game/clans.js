@@ -40,8 +40,19 @@ router.get('/clan', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
     
+    // Отсутствие клана — это НЕ ошибка запроса, а обычное состояние игрока.
+    // Раньше здесь был fail(..., 'NOT_IN_CLAN') = HTTP 400, и браузер писал в
+    // консоль красное «Failed to load resource: 400» при каждом открытии
+    // экрана клана. Клиент всё равно трактует in_clan:false как «клана нет»
+    // (loadClan в public/game.js), поэтому отдаём 200 + явное состояние.
     if (!player.clan_id) {
-        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+        return ok(res, {
+            in_clan: false,
+            is_leader: false,
+            clan: null,
+            members: [],
+            player_role: null
+        });
     }
     
     const data = await queryOne(`

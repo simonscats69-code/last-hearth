@@ -20,10 +20,6 @@
         {
             "files": ["public/shared/equipment.js"],
             "env": { "browser": true, "node": true }
-        },
-        {
-            "files": ["*.test.js"],
-            "env": { "jest": true }
         }
     ],
     "rules": {

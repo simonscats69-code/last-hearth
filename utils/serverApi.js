@@ -3,27 +3,23 @@
  * Объединяет: валидацию, ответы API, транзакции, логирование, обработку ошибок, Telegram авторизацию
  */
 
-const { query, queryOne, transaction: tx } = require('../db/database');
-const winston = require('winston');
+// Раньше здесь импортировался ещё и query — он нужен был только
+// logPlayerAction, который переехал в utils/log.js вместе с логированием.
+const { queryOne, transaction: tx } = require('../db/database');
 const crypto = require('crypto');
 const { randomUUID } = require('crypto');
-const path = require('path');
-const fs = require('fs');
+const { recordRequest } = require('./metrics');
 
-const ERROR_CODES = {
-    BAD_REQUEST: { status: 400, message: 'Некорректный запрос' },
-    UNAUTHORIZED: { status: 401, message: 'Требуется авторизация' },
-    FORBIDDEN: { status: 403, message: 'Доступ запрещён' },
-    NOT_FOUND: { status: 404, message: 'Ресурс не найден' },
-    TOO_MANY_REQUESTS: { status: 429, message: 'Слишком много запросов' },
-    INTERNAL_ERROR: { status: 500, message: 'Внутренняя ошибка сервера' },
-    DATABASE_ERROR: { status: 500, message: 'Ошибка базы данных' },
-    EXTERNAL_SERVICE_ERROR: { status: 502, message: 'Ошибка внешнего сервиса' },
-};
-
-const TABLES = Object.freeze({
-    PLAYER_ACTIONS: 'player_logs'
-});
+// Логирование вынесено в utils/log.js, чтобы разорвать цикл
+// db/players.js -> utils/serverApi.js -> db/players.js.
+// Теперь db/players.js импортирует логирование оттуда же, а serverApi
+// переиспользует тот же экземпляр — дублирования логгера не возникает.
+//
+// Импортируются ровно те, что нужны в теле файла ИЛИ в реэкспорте ниже:
+// 6 роутов (clans, debuffs, items, player, status, pvp) берут
+// logPlayerAction/handleLogError из serverApi — реэкспорт для них обязателен,
+// пока все потребители не переведены на прямой импорт из utils/log.js.
+const { logger, logPlayerAction, logPlayerError, serializeJSONField } = require('./log');
 
 const ERROR_MESSAGES = Object.freeze({
     INSUFFICIENT_COINS: 'Недостаточно монет',
@@ -56,68 +52,10 @@ if (process.env.NODE_ENV !== 'test') {
     }, 60000);
 }
 
-// Создаём директорию для логов
-const logDir = path.join(__dirname, '../logs');
-if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
-}
-
-// JSON формат для продакшена
-const jsonFormat = winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.errors({ stack: true }),
-    winston.format.json()
-);
-
-// Транспорты
-const transports = [
-    new winston.transports.File({
-        filename: path.join(logDir, 'error.log'),
-        level: 'error',
-        maxsize: 5 * 1024 * 1024,
-        maxFiles: 5
-    }),
-    new winston.transports.File({
-        filename: path.join(logDir, 'combined.log'),
-        maxsize: 5 * 1024 * 1024,
-        maxFiles: 5
-    })
-];
-
-// NODE_ENV=test (так задаёт jest) — консоль не нужна: негативные тесты
-// валидации намеренно зовут validateTelegramInitData с пустыми параметрами,
-// и их warn-сообщения засоряют вывод тестов вместо отчёта jest.
-if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
-    transports.push(
-        new winston.transports.Console({
-            format: winston.format.combine(
-                winston.format.colorize(),
-                winston.format.timestamp({ format: 'HH:mm:ss' }),
-                winston.format.printf(({ level, message, timestamp, stack }) => {
-                    let msg = message;
-                    if (typeof message === 'object' && message !== null) {
-                        msg = JSON.stringify(message, null, 2);
-                    }
-                    if (stack) {
-                        return `${timestamp} ${level}: ${msg}\n${stack}`;
-                    }
-                    return `${timestamp} ${level}: ${msg}`;
-                })
-            )
-        })
-    );
-}
-
-const logger = winston.createLogger({
-    level: process.env.LOG_LEVEL || 'info',
-    format: jsonFormat,
-    defaultMeta: { service: 'last-hearth-api' },
-    transports
-});
-
-logger.on('error', err => {
-    logger.error('Logger subsystem error:', err);
-});
+// Настройка логгера (директория логов, форматы, транспорты, обработчик
+// ошибок самого логгера) переехала в utils/log.js вместе с
+// logPlayerAction/logPlayerError/serializeJSONField/handleLogError.
+// Здесь они импортированы оттуда, поэтому дубликатов нет.
 
 /**
  * Санитайз чувствительных данных в логах
@@ -143,12 +81,15 @@ function sanitize(obj, seen = new WeakSet()) {
     return clone;
 }
 
+/**
+ * Идентификатор клиента для rate-limit и логов.
+ *
+ * ВАЖНО: заголовок x-telegram-id НЕ учитывается. Он приходит от клиента
+ * и подделывается одним curl, из-за чего лимиты обходились перебором
+ * значений заголовка. Идентификатор берётся только из ПОДПИСАННЫХ
+ * initData (подпись проверяется в validateTelegramInitData) либо из IP.
+ */
 function getTelegramIdFromHeaders(headers = {}) {
-    const directTelegramId = headers['x-telegram-id'];
-    if (directTelegramId) {
-        return String(directTelegramId);
-    }
-
     const initData = headers['x-telegram-init-data'] || headers['x-init-data'];
     if (!initData || typeof initData !== 'string') {
         return null;
@@ -176,10 +117,9 @@ function requestMiddleware(req, res, next) {
             const duration = Date.now() - start;
             const isProd = process.env.NODE_ENV === 'production';
 
-            // Ленивый require — realtime.js сам импортирует serverApi (logger),
-            // прямой импорт наверху создал бы циклическую зависимость.
+            // Прямой импорт наверху файла: metrics.js не тянет serverApi,
+            // поэтому циклической зависимости больше нет.
             try {
-                const { recordRequest } = require('./realtime');
                 recordRequest(req.originalUrl || req.url || 'unknown', res.statusCode, duration);
             } catch {
                 // метрики не должны ломать обработку запроса
@@ -223,40 +163,10 @@ function requestMiddleware(req, res, next) {
 }
 
 /**
- * Логирование игровых действий
+ * Логирование ошибок и действий игрока, сериализация JSON для журнала и
+ * обработчик ошибок логирования живут в utils/log.js — импортированы выше.
+ * Определения удалены оттуда, чтобы не было двух реализаций.
  */
-function logGameAction(playerId, action, details = {}) {
-    logger.info({
-        type: 'game_action',
-        playerId,
-        action,
-        ...details
-    });
-}
-
-/**
- * Логирование ошибок игроков
- */
-function logPlayerError(playerId, error, context = {}) {
-    logger.error({
-        type: 'player_error',
-        playerId,
-        message: error.message,
-        stack: error.stack,
-        ...context
-    });
-}
-
-/**
- * Логирование безопасности
- */
-function logSecurity(event, details = {}) {
-    logger.warn({
-        type: 'security',
-        event,
-        ...details
-    });
-}
 
 /**
  * Проверка ID (целое число > 0)
@@ -272,65 +182,6 @@ function validateId(value, fieldName = 'ID') {
 }
 
 /**
- * Проверка строки с различными опциями
- */
-function validateString(value, fieldName = 'строка', options = {}) {
-    const { minLength = 1, maxLength = 100, pattern } = options;
-    if (value === undefined || value === null) {
-        return { ok: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (typeof value !== 'string') {
-        return { ok: false, error: `${fieldName} должна быть строкой`, code: 'INVALID_TYPE' };
-    }
-    const trimmed = value.trim();
-    if (trimmed.length < minLength) {
-        return { ok: false, error: `${fieldName} слишком короткая (мин. ${minLength} символов)`, code: 'TOO_SHORT' };
-    }
-    if (trimmed.length > maxLength) {
-        return { ok: false, error: `${fieldName} слишком длинная (макс. ${maxLength} символов)`, code: 'TOO_LONG' };
-    }
-    if (pattern && !pattern.test(trimmed)) {
-        return { ok: false, error: `${fieldName} содержит недопустимые символы`, code: 'INVALID_FORMAT' };
-    }
-    return { ok: true, value: trimmed };
-}
-
-/**
- * Проверка индекса массива (0 <= idx < maxLength)
- */
-function validateIndex(value, maxLength, fieldName = 'индекс') {
-    if (value === undefined || value === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (!Number.isInteger(value)) {
-        return { valid: false, error: `${fieldName} должен быть целым числом`, code: 'INVALID_TYPE' };
-    }
-    if (value < 0 || value >= maxLength) {
-        return { valid: false, error: `${fieldName} должен быть в диапазоне [0, ${maxLength - 1}]`, code: 'OUT_OF_RANGE' };
-    }
-    return { valid: true };
-}
-
-/**
- * Проверка булева значения
- */
-function validateBoolean(value, fieldName = 'значение') {
-    if (value === undefined || value === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (typeof value === 'boolean') {
-        return { valid: true, value };
-    }
-    if (typeof value === 'string') {
-        const lower = value.toLowerCase();
-        if (lower === 'true' || lower === 'false') {
-            return { valid: true, value: lower === 'true' };
-        }
-    }
-    return { valid: false, error: `${fieldName} должно быть булевым значением`, code: 'INVALID_TYPE' };
-}
-
-/**
  * Проверка, является ли пользователь админом
  */
 function isAdmin(userId, adminList) {
@@ -338,22 +189,6 @@ function isAdmin(userId, adminList) {
         return false;
     }
     return adminList.includes(String(userId));
-}
-
-/**
- * Проверка числового диапазона
- */
-function validateRange(value, min, max, fieldName = 'значение') {
-    if (value === undefined || value === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (!Number.isInteger(value)) {
-        return { valid: false, error: `${fieldName} должно быть целым числом`, code: 'INVALID_TYPE' };
-    }
-    if (value < min || value > max) {
-        return { valid: false, error: `${fieldName} должно быть в диапазоне [${min}, ${max}]`, code: 'OUT_OF_RANGE' };
-    }
-    return { valid: true };
 }
 
 /**
@@ -376,39 +211,6 @@ function sanitizeName(name, maxLength = 50) {
         return { valid: false, error: `Имя слишком длинное (макс. ${maxLength} символов)`, code: 'TOO_LONG', value: sanitized.substring(0, maxLength) };
     }
     return { valid: true, value: sanitized };
-}
-
-/**
- * Проверка положительного целого числа (>= 1)
- */
-function validatePositiveInt(value, fieldName = 'значение') {
-    if (value === undefined || value === null) {
-        return { valid: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (!Number.isInteger(value) || value < 1) {
-        return { valid: false, error: `${fieldName} должно быть положительным целым числом`, code: 'INVALID_POSITIVE_INT' };
-    }
-    return { valid: true };
-}
-
-/**
- * Проверка количества монет
- */
-function validateCoins(value) {
-    if (value === undefined || value === null) {
-        return { valid: false, error: 'Требуется количество монет', code: 'MISSING_FIELD' };
-    }
-    if (!Number.isInteger(value)) {
-        return { valid: false, error: 'Количество монет должно быть целым числом', code: 'INVALID_TYPE' };
-    }
-    if (value < 0) {
-        return { valid: false, error: 'Количество монет не может быть отрицательным', code: 'NEGATIVE_AMOUNT' };
-    }
-    const MAX_COINS = 1000000000;
-    if (value > MAX_COINS) {
-        return { valid: false, error: `Количество монет не может превышать ${MAX_COINS}`, code: 'AMOUNT_TOO_LARGE' };
-    }
-    return { valid: true };
 }
 
 /**
@@ -447,47 +249,11 @@ function unauthorized(res, message = 'Требуется авторизация'
 }
 
 /**
- * Доступ запрещён (403)
+ * Транзакции: единая реализация живёт в db/database.js (transaction).
+ * Раньше здесь была копия withTransaction(client, fn), которая вдобавок
+ * принимала ГОТОВЫЙ client из пула и делала по нему BEGIN — вызывать её
+ * было нельзя без риска повесить чужое соединение, и никто не вызывал.
  */
-function forbidden(res, message = 'Доступ запрещён', code = 'FORBIDDEN') {
-    return res.status(403).json({ success: false, error: message, code });
-}
-
-/**
- * Некорректный запрос (400)
- */
-function badRequest(res, message, code = 'BAD_REQUEST') {
-    return res.status(400).json({ success: false, error: message, code });
-}
-
-/**
- * Утилита для выполнения транзакций с автоматическим BEGIN/COMMIT/ROLLBACK
- */
-async function withTransaction(client, fn) {
-    await client.query('BEGIN');
-    try {
-        const result = await fn(client);
-        await client.query('COMMIT');
-        return result;
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    }
-}
-
-/**
- * Middleware для валидации параметров запроса
- */
-function guard(validations = []) {
-    return function(req, res, next) {
-        for (const validation of validations) {
-            if (!validation || !validation.ok) {
-                return fail(res, validation?.error || 'Ошибка валидации', validation?.code || 'VALIDATION_ERROR', 400);
-            }
-        }
-        next();
-    };
-}
 
 /**
  * Middleware-обёртка для catch ошибок в асинхронных обработчиках
@@ -496,20 +262,6 @@ function wrap(fn) {
     return function(req, res, next) {
         Promise.resolve(fn(req, res, next)).catch(next);
     };
-}
-
-/**
- * Сериализация значения в JSON-строку
- */
-function serializeJSONField(value) {
-    if (value === undefined || value === null) return '{}';
-    if (typeof value === 'function') return '{}';
-    try {
-        return JSON.stringify(value);
-    } catch (error) {
-        logger.warn('serializeJSONField failed', { error: error.message });
-        return '{}';
-    }
 }
 
 /**
@@ -570,194 +322,6 @@ async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
 
         return await fn(client, lockedPlayer.rows[0]);
     });
-}
-
-/**
- * Выполнить функцию в транзакции с блокировкой клана
- */
-async function withClanLock(clanId, fn) {
-    if (!Number.isInteger(clanId) || clanId <= 0) {
-        throw { message: 'Некорректный ID клана', code: 'INVALID_CLAN_ID', statusCode: 400 };
-    }
-
-    return await tx(async (client) => {
-        const lockedClanResult = await client.query(
-            'SELECT * FROM clans WHERE id = $1 FOR UPDATE SKIP LOCKED',
-            [clanId]
-        );
-        const lockedClan = lockedClanResult.rows[0] || null;
-        if (!lockedClan) {
-            throw { message: 'Клан не найден', code: 'CLAN_NOT_FOUND', statusCode: 404 };
-        }
-        return await fn(client, lockedClan);
-    });
-}
-
-/**
- * Выполнить функцию в транзакции с блокировкой игрока и клана
- */
-async function withPlayerAndClanLock(playerId, clanId, fn) {
-    if (!Number.isInteger(playerId) || playerId <= 0) {
-        throw { message: 'Некорректный ID игрока', code: 'INVALID_PLAYER_ID', statusCode: 400 };
-    }
-    if (!Number.isInteger(clanId) || clanId <= 0) {
-        throw { message: 'Некорректный ID клана', code: 'INVALID_CLAN_ID', statusCode: 400 };
-    }
-
-    return await tx(async (client) => {
-        const lockedPlayerResult = await client.query(
-            'SELECT * FROM players WHERE id = $1 FOR UPDATE SKIP LOCKED',
-            [playerId]
-        );
-        const lockedPlayer = lockedPlayerResult.rows[0] || null;
-        if (!lockedPlayer) {
-            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-        }
-        const lockedClanResult = await client.query(
-            'SELECT * FROM clans WHERE id = $1 FOR UPDATE SKIP LOCKED',
-            [clanId]
-        );
-        const lockedClan = lockedClanResult.rows[0] || null;
-        if (!lockedClan) {
-            throw { message: 'Клан не найден', code: 'CLAN_NOT_FOUND', statusCode: 404 };
-        }
-        return await fn(client, lockedPlayer, lockedClan);
-    });
-}
-
-/**
- * Middleware: проверка что игрок состоит в клане
- */
-async function ensureInClan(req, res, next) {
-    try {
-        const playerId = req.player?.id;
-        if (!playerId) {
-            return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
-        }
-
-        const playerWithClan = await queryOne(
-            'SELECT c.*, p.clan_role FROM players p ' +
-            'LEFT JOIN clans c ON p.clan_id = c.id ' +
-            'WHERE p.id = $1',
-            [playerId]
-        );
-
-        if (!playerWithClan || !playerWithClan.clan_id) {
-            return res.status(400).json({ success: false, error: 'Вы не состоите в клане', code: 'NOT_IN_CLAN' });
-        }
-
-        req.clan = {
-            id: playerWithClan.clan_id,
-            name: playerWithClan.name,
-            role: playerWithClan.clan_role,
-            leaderId: playerWithClan.leader_id,
-            membersCount: playerWithClan.members_count,
-            level: playerWithClan.level
-        };
-        req.playerClan = playerWithClan;
-        next();
-    } catch (err) {
-        logger.error({ type: 'ensureInClan_error', message: err.message });
-        return res.status(500).json({ success: false, error: 'Ошибка проверки клана', code: 'INTERNAL_ERROR' });
-    }
-}
-
-/**
- * Проверить достаточно ли ресурсов у игрока
- */
-function checkResources(player, resources, options = {}) {
-    const { allowNegative = false } = options;
-
-    if (resources.coins !== undefined) {
-        if (!Number.isInteger(resources.coins)) return { valid: false, error: 'Некорректное значение монет', code: 'INVALID_AMOUNT' };
-        if (!allowNegative && resources.coins < 0) return { valid: false, error: 'Количество монет не может быть отрицательным', code: 'INVALID_AMOUNT' };
-        if (player.coins == null || player.coins < resources.coins) {
-            return { valid: false, error: `Недостаточно монет. Требуется: ${resources.coins}, у вас: ${player.coins}`, code: 'INSUFFICIENT_COINS', required: resources.coins, available: player.coins };
-        }
-    }
-    if (resources.stars !== undefined) {
-        if (!Number.isInteger(resources.stars)) return { valid: false, error: 'Некорректное значение звёзд', code: 'INVALID_AMOUNT' };
-        if (!allowNegative && resources.stars < 0) return { valid: false, error: 'Количество звёзд не может быть отрицательным', code: 'INVALID_AMOUNT' };
-        if (player.stars == null || player.stars < resources.stars) {
-            return { valid: false, error: `Недостаточно звёзд. Требуется: ${resources.stars}, у вас: ${player.stars}`, code: 'INSUFFICIENT_STARS', required: resources.stars, available: player.stars };
-        }
-    }
-    if (resources.energy !== undefined) {
-        if (!Number.isInteger(resources.energy)) return { valid: false, error: 'Некорректное значение энергии', code: 'INVALID_AMOUNT' };
-        if (!allowNegative && resources.energy < 0) return { valid: false, error: 'Энергия не может быть отрицательной', code: 'INVALID_AMOUNT' };
-        if (player.energy == null || player.energy < resources.energy) {
-            return { valid: false, error: `Недостаточно энергии. Требуется: ${resources.energy}, у вас: ${player.energy}`, code: 'INSUFFICIENT_ENERGY', required: resources.energy, available: player.energy };
-        }
-    }
-    if (resources.health !== undefined) {
-        if (!Number.isInteger(resources.health)) return { valid: false, error: 'Некорректное значение здоровья', code: 'INVALID_AMOUNT' };
-        if (!allowNegative && resources.health < 0) return { valid: false, error: 'Здоровье не может быть отрицательным', code: 'INVALID_AMOUNT' };
-        if (player.health == null || player.health < resources.health) {
-            return { valid: false, error: `Недостаточно здоровья. Требуется: ${resources.health}, у вас: ${player.health}`, code: 'INSUFFICIENT_HEALTH', required: resources.health, available: player.health };
-        }
-    }
-    return { valid: true };
-}
-
-/**
- * Проверить лимит клана (участники)
- */
-function checkClanMembersLimit(clan, additionalMembers = 1) {
-    if (!clan) return { valid: false, error: 'Клан не найден', code: 'CLAN_NOT_FOUND' };
-    const currentMembers = clan.members_count || 0;
-    const maxMembers = clan.max_members || 50;
-    if (currentMembers + additionalMembers > maxMembers) {
-        return { valid: false, error: `Клан полный. Максимум участников: ${maxMembers}`, code: 'CLAN_FULL', current: currentMembers, max: maxMembers };
-    }
-    return { valid: true };
-}
-
-/**
- * Централизованный обработчик ошибок логирования
- */
-function handleLogError(error, context) {
-    logger.error(`[${context}] Ошибка логирования`, { message: error.message, stack: error.stack });
-}
-
-/**
- * Универсальное логирование действия игрока
- * @param {number} playerId - ID игрока
- * @param {string} action - Действие
- * @param {object} metadata - Метаданные
- * @param {object} client - Опциональный клиент БД (для использования внутри транзакции)
- */
-async function logPlayerAction(playerId, action, metadata = {}, client = null) {
-    if (!playerId || !action) {
-        logger.error('[logPlayerAction] Некорректные параметры');
-        return;
-    }
-
-    try {
-        const execFn = client
-            ? (sql, params) => client.query(sql, params)
-            : (sql, params) => query(sql, params);
-
-        await execFn(
-            `INSERT INTO ${TABLES.PLAYER_ACTIONS} (player_id, action, metadata, created_at) VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, serializeJSONField(metadata)]
-        );
-    } catch (error) {
-        // Внутри транзакции (client передан) — пробрасываем ошибку,
-        // чтобы транзакция откатилась и операция+лог были атомарны.
-        // Вне транзакции — глотаем ошибку, чтобы логирование не ломало игровые операции.
-        if (client) {
-            throw error;
-        }
-        handleLogError(error, 'logPlayerAction');
-    }
-}
-
-/**
- * Функция для обработки ошибок БД
- */
-function handleDbError(err, context = 'DB_OPERATION') {
-    logger.error({ type: 'database_error', context, message: err.message, code: err.code });
-    return { success: false, error: 'DATABASE_ERROR', code: 'DATABASE_ERROR' };
 }
 
 /**
@@ -823,7 +387,12 @@ function validateTelegramInitData(initData, botToken) {
 
         const now = Math.floor(Date.now() / 1000);
         const age = now - authDate;
-        const MAX_AGE = parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '172800', 10);
+        // initData — подписанный Telegram bearer-токен: кто им владеет, тот
+        // от имени игрока. 48 часов (старое значение по умолчанию) — слишком
+        // широкое окно для перехвата (ссылка, кэш браузера, прокси).
+        // Telegram выдаёт initData при каждом открытии Mini App, поэтому
+        // сутки достаточно: вернувшийся позже просто получит новый токен.
+        const MAX_AGE = parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '86400', 10);
         if (age < -300 || age > MAX_AGE) {
             logger.warn('initData истёк или время не синхронизировано', { age, authDate, now, maxAge: MAX_AGE });
             return null;
@@ -940,21 +509,12 @@ module.exports = {
     // Логирование
     logger,
     requestMiddleware,
-    logGameAction,
     logPlayerError,
-    logSecurity,
     sanitize,
 
     // Валидация
     validateId,
-    validateString,
-    validateIndex,
-    validateBoolean,
-    validateRange,
     sanitizeName,
-    validatePositiveInt,
-    validateCoins,
-
     // Ответы API
     ok,
     fail,
@@ -965,10 +525,6 @@ module.exports = {
     handleError,
     notFound,
     unauthorized,
-    forbidden,
-    badRequest,
-    withTransaction,
-    guard,
     wrap,
 
     // JSON утилиты
@@ -980,26 +536,15 @@ module.exports = {
 
     // Транзакции с блокировкой
     withPlayerLock,
-    withClanLock,
-    withPlayerAndClanLock,
 
-    // Middleware для клана
-    ensureInClan,
-
-    // Валидация ресурсов
-    checkResources,
-    checkClanMembersLimit,
-
-    // Логирование игроков (унифицировано): (playerId, action, metadata, client?)
+    // Логирование действий игрока: реэкспорт из utils/log.js.
+    // Отдельно от logger/logPlayerError выше, потому что используется
+    // другими модулями (роуты логируют действия, db/players.js — начисление
+    // опыта). Определение живёт в utils/log.js, здесь только ссылка на него.
     logPlayerAction,
 
-    TABLES,
-
     // Обработка ошибок
-    ERROR_CODES,
     ERROR_MESSAGES,
-    handleDbError,
-
     // Утилиты игроков
     getPlayerByTelegramId,
 
@@ -1013,14 +558,19 @@ module.exports = {
     // PlayerHelper для bosses.js и других модулей
     PlayerHelper: {
         async addExperience(playerId, exp, client = null) {
+            // Раньше эти три импорта были ленивыми (внутри функции) — так был
+            // разорван цикл db/players.js <-> utils/serverApi.js. Цикл устранён
+            // переносом логирования в utils/log.js, поэтому импорты можно
+            // поднять наверх: db/players.js больше не ссылается на serverApi,
+            // а gameConstants и database не ссылаются на этот файл.
             const { addExperienceWithLevelUp } = require('../db/players');
             const { getExpForLevel } = require('./gameConstants');
+            const { pool } = require('../db/database');
 
             if (client) {
                 return await addExperienceWithLevelUp(client, playerId, exp, getExpForLevel);
             }
 
-            const { pool } = require('../db/database');
             const poolClient = await pool.connect();
             try {
                 await poolClient.query('BEGIN');

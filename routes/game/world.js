@@ -248,9 +248,12 @@ router.post('/search', async (req, res) => {
         await client.query('BEGIN');
         
         // SELECT с явным списком полей вместо SELECT *
+        // total_actions обязателен: ниже считается comboBonus по (total_actions+1) % 10.
+        // Раньше поле не выбиралось, updatedPlayer.total_actions был undefined,
+        // (undefined + 1) % 10 === 0 всегда false — комбо-бонус не давался никогда.
         const playerResult = await client.query(`
             SELECT id, energy, max_energy, current_location_id, radiation, inventory, 
-                   equipment, luck, health, level, experience, buffs
+                   equipment, luck, health, level, experience, buffs, total_actions
             FROM players WHERE id = $1 FOR UPDATE
         `, [playerId]);
         
@@ -455,6 +458,19 @@ router.post('/search', async (req, res) => {
                 if (activeBuffs.loot_x2 && newItem.type !== 'key') {
                     addItemToInventory(inventory, { ...newItem }, foundItem);
                     itemsCollected += 1;
+                }
+
+                // Лимит слотов перепроверяем ПОСЛЕ обоих добавлений.
+                // Проверка выше (до лота) не защищала: при 99 слотах и
+                // нестакуемом предмете бафф x2 добавлял ещё два слота и
+                // инвентарь становился 101 — лимит 100 молча превышался.
+                if (inventory.length > MAX_INVENTORY_SLOTS) {
+                    await client.query('ROLLBACK');
+                    return res.json({
+                        success: false,
+                        error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
+                        code: 'INVENTORY_FULL'
+                    });
                 }
 
                 inventoryUpdate = JSON.stringify(inventory);

@@ -196,10 +196,6 @@ function formatTime(seconds) {
 }
 
 
-// closeModal не используется - удалён дубликат
-
-
-
 /**
  * Получить категорию предмета
  * @param {number|string} itemId - ID предмета
@@ -299,8 +295,8 @@ window.escapeHtml = escapeHtml;
 window.escapeAttribute = escapeAttribute;
 window.formatNumber = formatNumber;
 window.formatPercent = formatPercent;
-// showModal/hideModal - в game-animations.js
-// showScreen - в game-core.js
+// showModal/hideModal/showScreen определены ниже, в секции анимаций боссов
+// и управлении экранами соответственно.
 window.getItemCategory = getItemCategory;
 window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;
@@ -351,7 +347,8 @@ const endpoints = {
     bosses: { endpoint: '/game/bosses', method: 'GET' },
     
     // Колесо удачи
-    wheelInfo: { endpoint: '/game/wheel', method: 'GET' },
+    // wheelInfo удалён: loadWheelInfo() ходит напрямую через
+    // gameApi.get('/game/wheel'), сгенерированный метод никто не вызывал.
     wheelSpin: { endpoint: '/game/wheel/spin', method: 'POST' },
     
     // Статус и магазин
@@ -360,8 +357,8 @@ const endpoints = {
     achievements: { endpoint: '/achievements/progress', method: 'GET' },
     
     // Рейтинги
-    ratingsPlayers: { endpoint: '/rating/players', method: 'GET' },
-    ratingsClans: { endpoint: '/rating/clans', method: 'GET' },
+    // ratingsPlayers/ratingsClans удалены: loadRating(type) собирает путь
+    // динамически — apiRequest(`/rating/${type}`), из словаря они не брались.
     
     // Клан
     clan: { endpoint: '/game/clans/clan', method: 'GET' },
@@ -373,7 +370,9 @@ const endpoints = {
     pvpAttack: { endpoint: '/game/pvp/attack', method: 'POST' },
     
     // Рефералы
-    referralCode: { endpoint: '/game/player/referrals', method: 'GET' },
+    // referralCode удалён: loadReferralCode() ходит напрямую на
+    // /api/game/player/referral/code, а путь в словаре был устаревшим
+    // (/game/player/referrals — такого маршрута на сервере нет).
     referralUse: { endpoint: '/game/player/referral/use', method: 'POST' },
 
     // Рейдовые боссы
@@ -760,13 +759,12 @@ gameApi.endpoints = endpoints;
 gameApi.cache = { get: getCached, set: setCached, invalidate: invalidateCache };
 
 // ============================================================================
-// API ЗАПРОСЫ - используются через game-systems.js и game-ui.js
+// API ЗАПРОСЫ - используются всеми игровыми системами этого файла
 // ============================================================================
 /**
- * game-core.js - Ядро игры
+ * Ядро игры
  * Основные константы, утилиты и система управления состоянием
- * 
- * Подключение: после game-utils.js и game-api.js
+ *
  * Зависимости: gameState, getTelegramId, showNotification, apiRequest
  */
 
@@ -1404,60 +1402,6 @@ if ('serviceWorker' in navigator) {
 }
 
 // ============================================================================
-// ADSGRAM
-// ============================================================================
-
-const ADSGRAM_APP_ID = window.ADSGRAM_APP_ID || '';
-
-// AdsGram инициализация (с проверкой доступности)
-let Adsgram = null;
-if (window.Adsgram && ADSGRAM_APP_ID) {
-    try {
-        Adsgram = window.Adsgram.init({
-            blockId: ADSGRAM_APP_ID
-        });
-    } catch (e) {
-        console.warn('[AdsGram] Ошибка инициализации:', e);
-    }
-}
-
-async function watchAd() {
-    if (!Adsgram) {
-        showModal('⚠️ Реклама', 'Реклама временно недоступна. Попробуй позже!');
-        return;
-    }
-
-    try {
-        await Adsgram.showRewarded({
-            onStart: () => {
-            },
-            onReward: () => {
-                if (!gameState.player || !gameState.player.status) {
-                    showModal('⚠️ Ошибка', 'Данные игрока не загружены');
-                    return;
-                }
-
-                const status = gameState.player.status;
-                const maxEnergy = status.max_energy || 100;
-                const currentEnergy = status.energy || 0;
-                syncPlayerEnergyState(Math.min(maxEnergy, currentEnergy + 20), maxEnergy, new Date().toISOString());
-                updateProfileUI(gameState.player);
-                refreshPlayerEnergyUI();
-                showModal('✅ Награда', '+20 энергии за просмотр рекламы!');
-            },
-            onError: (error) => {
-                console.error('AdsGram error:', error);
-                showModal('⚠️ Ошибка', 'Не удалось показать рекламу');
-            },
-            onEnd: () => {
-            }
-        });
-    } catch (error) {
-        console.warn('[watchAd] Ошибка показа рекламы:', error);
-    }
-}
-
-// ============================================================================
 // ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
 // ============================================================================
 
@@ -1474,8 +1418,6 @@ window.Loader = Loader;
 window.Templates = Templates;
 window.API = API;
 window.RenderCache = RenderCache;
-window.Adsgram = Adsgram;
-window.watchAd = watchAd;
 
 // ============================================================================
 // СИСТЕМА ПРЕДПРОСМОТРА УРОНА И ЭНЕРГИИ
@@ -1701,6 +1643,19 @@ function showScreen(screenName) {
  * Обработчик открытия экрана
  * @param {string} screenName - имя экрана
  */
+/**
+ * Обертка для загрузчиков экрана: почти все они делают await apiRequest
+ * без собственного try/catch, и голый вызов давал UnhandledPromiseRejection
+ * в консоли при любой сетевой ошибке. Здесь реджекция логируется и гасится,
+ * а сам промис возвращается — вызывающий может всё ещё дождаться его.
+ */
+function safeAsync(name, promise) {
+    Promise.resolve(promise).catch(error => {
+        console.error(`[${name}] Не удалось загрузить экран:`, error);
+    });
+    return promise;
+}
+
 function onScreenOpen(screenName) {
     switch (screenName) {
         case 'main':
@@ -1733,19 +1688,17 @@ function onScreenOpen(screenName) {
             break;
 
         case 'inventory':
-            // Загружаем инвентарь
-            loadInventory();
+            safeAsync('inventory', loadInventory());
             break;
 
         case 'weapon-select':
-            // Загружаем оружие для выбора
-            loadWeapons();
+            safeAsync('weapon-select', loadWeapons());
             break;
 
         case 'bosses':
             // Загружаем боссов
             if (!actionLocks['loadBosses']) {
-                loadBosses();
+                safeAsync('bosses', loadBosses());
             }
             break;
 
@@ -1755,52 +1708,43 @@ function onScreenOpen(screenName) {
             break;
 
         case 'rating':
-            // Загружаем рейтинг
-            loadRating();
+            safeAsync('rating', loadRating());
             break;
 
         case 'clan':
-            // Загружаем клан
-            loadClan();
+            safeAsync('clan', loadClan());
             break;
 
         case 'clans-list':
-            // Загружаем список кланов
-            loadClansList();
+            safeAsync('clans-list', loadClansList());
             break;
 
         case 'achievements':
-            // Загружаем достижения
-            loadAchievements();
+            safeAsync('achievements', loadAchievements());
             break;
 
         case 'market':
-            // Загружаем магазин за монеты
-            loadCoinShop();
+            safeAsync('market', loadCoinShop());
             break;
 
         case 'pvp-players':
-            // Загружаем список игроков PvP
-            loadPVPGamePlayers();
+            safeAsync('pvp-players', loadPVPGamePlayers());
             break;
 
         case 'pvp-stats':
-            // Загружаем статистику PvP
-            loadPVPStats();
+            safeAsync('pvp-stats', loadPVPStats());
             break;
 
         case 'wheel':
-            // Колесо удачи
-            loadWheelInfo();
+            safeAsync('wheel', loadWheelInfo());
             break;
 
         case 'referral':
-            // Реферальная программа
-            loadReferralScreen();
+            safeAsync('referral', loadReferralScreen());
             break;
 
         case 'clan-chat':
-            loadClanChat();
+            safeAsync('clan-chat', loadClanChat());
             break;
     }
 }
@@ -1887,11 +1831,16 @@ function initTabHandlers() {
         });
     });
 
-    // Табы достижений
+    // Табы достижений.
+    // .catch обязателен: filterAchievements() делает await apiRequest без
+    // собственного try/catch, и реджек션 без обработчика всплывает как
+    // UnhandledPromiseRejection. Раньше здесь был голый вызов.
     document.querySelectorAll('.achievement-category-btn').forEach(tab => {
         bindClickOnce(tab, `achievements${tab.dataset.category || ''}`, () => {
             const category = tab.dataset.category;
-            filterAchievements(category);
+            filterAchievements(category).catch(error => {
+                console.error('[achievements] Не удалось загрузить категорию:', error);
+            });
         });
     });
 
@@ -1955,10 +1904,9 @@ window.showBossFight = showBossFight;
 window.backToBosses = backToBosses;
 window.hideLoadingScreen = hideLoadingScreen;
 /**
- * game-systems.js - Игровые системы
+ * Игровые системы
  * Основная логика игры: профиль, инвентарь, крафт, боссы, кланы, PvP, рынок, рефералы, база
- * 
- * Подключение: после game-core.js
+ *
  * Зависимости: gameState, apiRequest, showModal, showNotification, playSound, lockAction, unlockAction
  */
 
@@ -2103,21 +2051,11 @@ async function initGame() {
             body: { telegram_id: telegramId, initData }
         });
         
-        // Загружаем профиль с обработкой ошибок
-        try {
-            await loadProfile();
-        } catch (profileError) {
-            console.error('[initGame] Ошибка загрузки профиля:', profileError);
-            // Продолжаем - профиль может быть загружен позже
-        }
-        
-        // Загружаем локации с обработкой ошибок
-        try {
-            await loadLocations();
-        } catch (locationsError) {
-            console.error('[initGame] Ошибка загрузки локаций:', locationsError);
-            // Продолжаем - локации могут быть загружены позже
-        }
+        // loadProfile() и loadLocations() сами гасят свои ошибки (не бросают
+        // наружу), чтобы падение перерисовки не выглядело как провал операции.
+        // Отдельные try/catch здесь были лишними и никогда не срабатывали.
+        await loadProfile();
+        await loadLocations();
 
         // Проверяем, успешно ли загрузился профиль
         if (!gameState.player) {
@@ -2191,19 +2129,25 @@ async function loadProfile() {
     // устаревшие монеты/XP/инвентарь даже при явном loadProfile()
     invalidateCache('profile');
 
-    const response = await apiRequest('/api/game/profile');
+    // Функция НЕ бросает исключение наружу. Раньше await apiRequest стоял
+    // здесь без try/catch, и реджекция улетала в catch вызывающего кода.
+    // Так как loadProfile() вызывается ПОСЛЕ успешной мутации (продажа,
+    // покупка, перемещение), игрок видел «Не удалось продать предмет»,
+    // хотя продажа прошла — падал только перерисованный профиль.
+    try {
+        const response = await apiRequest('/api/game/profile');
 
-    if (!response?.success) {
-        console.error('Ошибка загрузки профиля:', response?.message || 'Unknown error');
-        return;
-    }
+        if (!response?.success) {
+            console.error('Ошибка загрузки профиля:', response?.message || 'Unknown error');
+            return;
+        }
 
-    const payload = response?.data || response;
+        const payload = response?.data || response;
 
-    if (!payload || typeof payload !== 'object') {
-        console.error('Неверный формат ответа профиля:', response);
-        return;
-    }
+        if (!payload || typeof payload !== 'object') {
+            console.error('Неверный формат ответа профиля:', response);
+            return;
+        }
 
     // Распаковываем вложенный объект player в плоскую структуру,
     // которую ожидает остальной UI
@@ -2252,9 +2196,17 @@ async function loadProfile() {
     // Обновляем UI
     updateProfileUI(playerData);
     refreshPlayerEnergyUI();
+    } catch (error) {
+        // Сетевая ошибка или таймаут. Молча гасим: вызывающий код уже
+        // показал результат своей операции (продажа, покупка, переход),
+        // и сообщение об ошибке здесь было бы ложным.
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        console.error('[loadProfile] Не удалось обновить профиль:', error);
+    }
 }
 
-// Ссылка на константу интервала энергии из game-core.js
+// Интервал регена энергии. Сервер считает его так же (utils/game-helpers.js:
+// Math.floor(elapsedSec / 60)), поэтому расхождение значений видно сразу:
 const ENERGY_REGEN_INTERVAL_MS = CONSTANTS?.INTERVALS?.ENERGY_UPDATE || 60000;
 
 function ensurePlayerStatus() {
@@ -3124,18 +3076,26 @@ function updateConditionsUI(status) {
  * Загрузка списка локаций
  */
 async function loadLocations() {
-    const response = await apiRequest('/api/game/locations');
-    const data = response.data || response;
-    gameState.locations = data.locations || [];
+    // Как и loadProfile: не бросаем наружу. Иначе ошибка загрузки локаций
+    // превращалась в «Не удалось переместиться» / «Не удалось найти лут»,
+    // хотя сама операция уже завершилась успешно.
+    try {
+        const response = await apiRequest('/api/game/locations');
+        const data = response.data || response;
+        gameState.locations = data.locations || [];
 
-    // Обновляем текущую локацию игрока, если профиль уже загружен
-    if (gameState.player?.current_location_id) {
-        gameState.player.location = gameState.locations.find(
-            loc => loc.id === gameState.player.current_location_id
-        ) || gameState.player.location || null;
+        // Обновляем текущую локацию игрока, если профиль уже загружен
+        if (gameState.player?.current_location_id) {
+            gameState.player.location = gameState.locations.find(
+                loc => loc.id === gameState.player.current_location_id
+            ) || gameState.player.location || null;
+        }
+
+        syncUnlockedLocations(false);
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        console.error('[loadLocations] Не удалось загрузить локации:', error);
     }
-
-    syncUnlockedLocations(false);
 }
 
 /**
@@ -4084,22 +4044,101 @@ function renderWeapons(weapons) {
 }
 
 /**
- * Атака босса с использованием оружия из инвентаря
+ * Общая вступительная проверка атаки по боссу.
+ *
+ * Раньше она копировалась в attackBoss() и attackWithWeapon(): блокировка
+ * двойного нажатия и проверка энергии. Различаться могло только одно —
+ * сам `lockAction`, который здесь не используется осознанно: обе функции
+ * работают с actionLocks.attackBoss и обязаны снимать её в own finally,
+ * иначе блокировка залипала бы после неудачного запроса.
+ *
+ * @returns {boolean} true — можно атаковать, false — атака отклонена
  */
-async function attackWithWeapon(itemIndex) {
-    if (!gameState.currentBoss) return;
-    
-    if (actionLocks.attackBoss) return;
-    actionLocks.attackBoss = true;
-    
+function canStartBossAttack() {
+    if (!gameState.currentBoss) return false;
+    if (actionLocks.attackBoss) return false;
+
     const status = gameState.player?.status;
     const isFreeAttack = Boolean(gameState.buffs?.free_energy);
     if (!status || (!isFreeAttack && status.energy < 1)) {
         showModal('⚠️ Нет энергии', 'Подожди пока восстановится или купи за звёзды');
-        actionLocks.attackBoss = false;
-        return;
+        return false;
     }
-    
+
+    actionLocks.attackBoss = true;
+    return true;
+}
+
+/**
+ * Обновить полосу HP босса на экране боя.
+ *
+ * Раньше эти четыре строки дублировались в attackBoss() и attackWithWeapon():
+ * правка (например, добавление анимации) гарантированно расходилась бы
+ * между двумя путями атаки.
+ */
+function updateBossHealthUi(bossHp, bossMaxHp) {
+    const hpPercent = Math.max(0, Math.min(100, (Number(bossHp) / Number(bossMaxHp)) * 100));
+    const bar = document.getElementById('boss-health-bar');
+    const text = document.getElementById('boss-health-text');
+    if (bar) bar.style.width = `${hpPercent}%`;
+    if (text) text.textContent = `${bossHp}/${bossMaxHp}`;
+
+    if (gameState.currentBoss) {
+        gameState.currentBoss.hp = bossHp;
+        gameState.currentBoss.max_hp = bossMaxHp;
+        gameState.currentBoss.health = bossHp;
+        gameState.currentBoss.max_health = bossMaxHp;
+    }
+}
+
+/**
+ * Общая часть «босс убит» для обоих путей атаки.
+ *
+ * Раньше дублировалась почти целиком: анимации, сброс currentBattle,
+ * отложенная перезагрузка списка боссов и обновление профиля. Различались
+ * только количество конфетти и то, что обычная атака чистит RenderCache.
+ *
+ * @param {object} rewards - rewards из ответа сервера
+ * @param {number|null} mastery - мастерство (null = не показывать)
+ * @param {number} confettiCount - сколько частиц конфетти
+ * @param {boolean} clearRenderCache - чистить ли кэш рендеринга
+ * @param {string|null} sound - звук победы (null = без звука)
+ */
+function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound = null) {
+    if (clearRenderCache) RenderCache.clear();
+    if (sound) playSound(sound);
+
+    showVictoryFlash?.();
+    showBossDeathParticles?.();
+    showConfetti?.(confettiCount);
+    if (rewards?.key?.boss_name) showKeyAnimation?.();
+    showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', rewards || {}, mastery ?? null);
+
+    gameState.currentBoss = null;
+    gameState.activeBattle = null;
+
+    // Блокировку loadBosses держим до конца перезагрузки списка.
+    actionLocks.loadBosses = true;
+    setTimeout(() => {
+        loadBosses().catch((loadError) => {
+            console.error('Boss reload error:', loadError);
+            actionLocks.loadBosses = false;
+        });
+    }, 2200);
+
+    // После убийства изменились монеты/XP/ключи/инвентарь/мастерство —
+    // RenderCache.clean() чистит только UI-кэш, данные обновляет только сервер.
+    loadProfile().catch((profileError) => {
+        console.error('Не удалось обновить профиль после победы:', profileError);
+    });
+}
+
+/**
+ * Атака босса с использованием оружия из инвентаря
+ */
+async function attackWithWeapon(itemIndex) {
+    if (!canStartBossAttack()) return;
+
     try {
         const result = await apiRequest('/api/game/bosses/attack-with-weapon', {
             method: 'POST',
@@ -4123,17 +4162,8 @@ async function attackWithWeapon(itemIndex) {
                 log.scrollTop = log.scrollHeight;
             }
             
-            const hpPercent = Math.max(0, Math.min(100, (result.data.boss_hp / result.data.boss_max_hp) * 100));
-            const bossHealthBar = document.getElementById('boss-health-bar');
-            const bossHealthText = document.getElementById('boss-health-text');
-            if (bossHealthBar) bossHealthBar.style.width = `${hpPercent}%`;
-            if (bossHealthText) bossHealthText.textContent = `${result.data.boss_hp}/${result.data.boss_max_hp}`;
+            updateBossHealthUi(result.data.boss_hp, result.data.boss_max_hp);
 
-            gameState.currentBoss.hp = result.data.boss_hp;
-            gameState.currentBoss.max_hp = result.data.boss_max_hp;
-            gameState.currentBoss.health = result.data.boss_hp;
-            gameState.currentBoss.max_health = result.data.boss_max_hp;
-             
             syncPlayerEnergyState(
                 result.data.energy,
                 gameState.player?.status?.max_energy,
@@ -4149,29 +4179,7 @@ async function attackWithWeapon(itemIndex) {
             }
             
             if (result.data.killed) {
-                showVictoryFlash?.();
-                showBossDeathParticles?.();
-                showConfetti?.(120);
-                if (result.data.rewards?.key?.boss_name) {
-                    showKeyAnimation?.();
-                }
-                showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', result.data.rewards || {}, result.data.mastery ?? null);
-                gameState.currentBoss = null;
-                gameState.activeBattle = null;
-                // Держим блокировку loadBosses до завершения перезагрузки списка
-                actionLocks.loadBosses = true;
-                setTimeout(() => {
-                    loadBosses().catch((loadError) => {
-                        console.error('Boss reload error:', loadError);
-                        actionLocks.loadBosses = false;
-                    });
-                }, 2200);
-
-                // После убийства изменились монеты/XP/ключи/инвентарь/мастерство —
-                // подтягиваем профиль, иначе UI покажет устаревшие значения.
-                loadProfile().catch((profileError) => {
-                    console.error('Не удалось обновить профиль после победы оружием:', profileError);
-                });
+                onBossDefeated(result.data.rewards, result.data.mastery ?? null, 120, false);
             } else {
                 // Оружие израсходовано — инвентарь на сервере уже изменился
                 loadInventory().catch((invError) => {
@@ -4203,21 +4211,10 @@ async function openWeaponSelect() {
  * Обновляем HP босса, показываем анимацию урона, обрабатываем убийство
  */
 async function attackBoss() {
-    if (!gameState.currentBoss) return;
-    
-    // Блокировка двойного нажатия
-    if (actionLocks.attackBoss) return;
-    actionLocks.attackBoss = true;
-    
-    // Проверка энергии
-    const status = gameState.player?.status;
+    if (!canStartBossAttack()) return;
+
     const isFreeAttack = Boolean(gameState.buffs?.free_energy);
-    if (!status || (!isFreeAttack && status.energy < 1)) {
-        showModal('⚠️ Нет энергии', 'Подожди пока восстановится или купи за звёзды');
-        actionLocks.attackBoss = false;
-        return;
-    }
-    
+
     const btn = document.getElementById('attack-boss-btn');
     if (btn) {
         btn.disabled = true;
@@ -4248,11 +4245,7 @@ async function attackBoss() {
             }
             
             // Обновляем HP босса
-            const hpPercent = Math.max(0, Math.min(100, (result.boss_hp / result.boss_max_hp) * 100));
-            const bossHealthBar = document.getElementById('boss-health-bar');
-            const bossHealthText = document.getElementById('boss-health-text');
-            if (bossHealthBar) bossHealthBar.style.width = `${hpPercent}%`;
-            if (bossHealthText) bossHealthText.textContent = `${result.boss_hp}/${result.boss_max_hp}`;
+            updateBossHealthUi(result.boss_hp, result.boss_max_hp);
             
             // Обновляем энергию игрока.
             // last_energy_update обязателен: без него клиент посчитает реген
@@ -4272,55 +4265,21 @@ async function attackBoss() {
                 setTimeout(() => energyUsed.classList.remove('show'), 500);
             }
             
-            // Сохраняем текущее HP в state
-            gameState.currentBoss.health = result.boss_hp;
-            gameState.currentBoss.max_health = result.boss_max_hp;
-            gameState.currentBoss.hp = result.boss_hp;
-            gameState.currentBoss.max_hp = result.boss_max_hp;
-            
             // Проверка на победу
             if (result.boss_defeated) {
-                // Сбрасываем кэш, т.к. список боссов и инвентарь изменились
-                RenderCache.clear();
-                
-                playSound('victory');
-                showVictoryFlash?.();
-                showBossDeathParticles?.();
-                showConfetti?.(140);
-                if (result.rewards?.key?.boss_name) {
-                    showKeyAnimation?.();
-                }
-                showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', result.rewards || {}, result.mastery ?? null);
-                gameState.currentBoss = null;
-                gameState.activeBattle = null;
-                
-                // Обновляем мастерство
+                // Сообщение о мастерпечатаем ДО сброса currentBoss и
+                // до перезагрузки списка — потом onBossDefeated обнулит
+                // currentBoss, и подпись экрана боя уже не нужна.
                 if (result.mastery !== undefined) {
                     const masteryText = document.createElement('p');
                     masteryText.className = 'mastery-gain';
-                    // masteryText.innerHTML с Number(): значение приходит с сервера,
+                    // innerHTML с Number(): значение приходит с сервера,
                     // и без приведения строка ушла бы в innerHTML как HTML
                     masteryText.innerHTML = `<span class="star">⭐</span> Мастерство: ${Number(result.mastery) || 0}`;
                     if (log) log.appendChild(masteryText);
                 }
-                
-                // Загружаем новых боссов
-                // Держим блокировку loadBosses до завершения перезагрузки списка
-                actionLocks.loadBosses = true;
-                setTimeout(() => {
-                    loadBosses().catch((loadError) => {
-                        console.error('Boss reload error:', loadError);
-                        actionLocks.loadBosses = false;
-                    });
-                }, 2200);
 
-                // ПЕРЕЗАГРУЖАЕМ ПРОФИЛЬ: после убийства на сервере изменились
-                // монеты, XP, ключи, инвентарь и мастерство. RenderCache.clear()
-                // чистит только UI-кэш и эти данные НЕ обновляет, поэтому
-                // интерфейс показывал бы устаревшие значения.
-                loadProfile().catch((profileError) => {
-                    console.error('Не удалось обновить профиль после победы:', profileError);
-                });
+                onBossDefeated(result.rewards, result.mastery ?? null, 140, true, 'victory');
             }
             
             playSound('attack');
@@ -4415,7 +4374,9 @@ async function loadClan() {
             renderNoClanScreen();
         }
     } catch (error) {
-        // 400 NOT_IN_CLAN — ожидаемое состояние, не показываем ошибку игроку
+        // Старый деплой отдавал 400 NOT_IN_CLAN, пока игрок не состоял в клане.
+        // Текущий сервер отвечает 200 + in_clan:false (ветка выше), поэтому
+        // сюда мы попадаем только на старом бэкенде или при настоящей ошибке.
         const isNotInClan = error.status === 400
             || error.code === 'NOT_IN_CLAN'
             || /не состоите в клане/i.test(error.message || '');
@@ -5379,11 +5340,10 @@ window.loadRating = loadRating;
 window.renderRating = renderRating;
 window.healInfections = healInfections;
 /**
- * game-ui.js - Интерфейс и обработчики событий
+ * Интерфейс и обработчики событий
  * Обработчики DOM, фильтры, модальные окна, PvP, достижения, рефералы
- * 
- * Подключение: после game-systems.js
- * Зависимости: все функции из game-core.js и game-systems.js
+ *
+ * Зависимости: игровые системы этого файла
  */
 
 // ============================================================================
@@ -5446,25 +5406,42 @@ function initInventoryControls() {
 let currentAchievementCategory = null;
 
 /**
- * Загрузка достижений
+ * Загрузить прогресс достижений и отрисовать экран.
+ *
+ * Раньше этот код был скопирован в loadAchievements() и filterAchievements()
+ * целиком (запрос + три вызова рендера + фильтрация по категории). Правка
+ * одного из них — например, добавление новой секции на экран — обязательно
+ * забывала другой, и фильтр показывал устаревшую разметку.
+ *
+ * @param {string|null} category - категория для фильтра, null = все
+ * @param {string} logPrefix - префикс для сообщения об ошибке
  */
-async function loadAchievements() {
+async function renderAchievementsScreen(category, logPrefix) {
+    currentAchievementCategory = category;
     try {
         const data = await apiRequest('/api/achievements/progress');
-        
+
         if (data && data.progress) {
             renderAchievementsStats(data.stats);
             renderAchievementsCategories(data.categories);
-            
-            if (currentAchievementCategory) {
-                renderAchievementsList(data.progress.filter(a => a.category === currentAchievementCategory));
+
+            if (category) {
+                renderAchievementsList(data.progress.filter(a => a.category === category));
             } else {
                 renderAchievementsList(data.progress);
             }
         }
     } catch (error) {
-        console.error('Ошибка загрузки достижений:', error);
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        console.error(`${logPrefix}:`, error);
     }
+}
+
+/**
+ * Загрузка достижений
+ */
+async function loadAchievements() {
+    await renderAchievementsScreen(currentAchievementCategory, 'Ошибка загрузки достижений');
 }
 
 /**
@@ -5512,24 +5489,13 @@ function renderAchievementsCategories(categories) {
 }
 
 /**
- * Фильтрация достижений по категории
+ * Фильтрация достижений по категории.
+ *
+ * Дублировала loadAchievements() целиком; теперь только переключает
+ * категорию и просит общий хелпер перерисовать экран.
  */
 async function filterAchievements(category) {
-    currentAchievementCategory = category;
-    
-    // Фильтруем уже загруженные данные вместо перезагрузки
-    const data = await apiRequest('/api/achievements/progress');
-    
-    if (data && data.progress) {
-        renderAchievementsStats(data.stats);
-        renderAchievementsCategories(data.categories);
-        
-        if (currentAchievementCategory) {
-            renderAchievementsList(data.progress.filter(a => a.category === currentAchievementCategory));
-        } else {
-            renderAchievementsList(data.progress);
-        }
-    }
+    await renderAchievementsScreen(category, '[filterAchievements] Не удалось загрузить достижения');
 }
 
 /**
@@ -6054,7 +6020,8 @@ async function loadReferralStats() {
         if (result.success) {
             setElementText('total-referrals', result.stats.total_referrals);
             setElementText('total-coins-earned', result.stats.total_coins_earned);
-            setElementText('total-stars-earned', result.stats.total_stars_earned);
+            // total_stars_earned больше не выводится: Stars за рефералов
+            // не начисляются, карточка удалена из шаблона выше.
         }
     } catch (error) {
         console.error('Ошибка загрузки статистики рефералов:', error);
@@ -6073,19 +6040,39 @@ async function loadReferralsList() {
         if (result.success && result.referrals.length > 0) {
             listContainer.innerHTML = result.referrals.map(ref => {
                 const joinedDate = new Date(ref.joined_at).toLocaleDateString();
+
+                // Бонусы приходят с сервера двумя наборами: earned_* — уровень
+                // достигнут, level_* — выплачено. Раньше сервер отдавал
+                // level_10 и level_20 жёстко как false, поэтому звёзды ⭐⭐ и ⭐⭐⭐
+                // не могли появиться в принципе.
+                const b = ref.bonuses || {};
                 const bonusIcons = [];
-                if (ref.bonuses.level_5) bonusIcons.push('⭐');
-                if (ref.bonuses.level_10) bonusIcons.push('⭐⭐');
-                if (ref.bonuses.level_20) bonusIcons.push('⭐⭐⭐');
-                
+                const bonusTitles = [];
+
+                const addBonus = (earned, claimed, icon, level) => {
+                    if (!earned) return;
+                    bonusIcons.push(claimed ? icon : '☆');
+                    bonusTitles.push(claimed
+                        ? `Бонус за ${level} уровень — получен`
+                        : `Бонус за ${level} уровень — доступен к получению`);
+                };
+
+                addBonus(b.earned_5, b.level_5, '⭐', 5);
+                addBonus(b.earned_10, b.level_10, '⭐⭐', 10);
+                addBonus(b.earned_20, b.level_20, '⭐⭐⭐', 20);
+
+                const title = bonusTitles.length
+                    ? ` title="${escapeAttribute(bonusTitles.join('; '))}"`
+                    : '';
+
                 return `
                     <div class="referral-item">
                         <div class="referral-info">
                             <div class="referral-name">${escapeHtml(ref.first_name || ref.username || 'Игрок')}</div>
-                            <div class="referral-level">Уровень ${ref.level}</div>
+                            <div class="referral-level">Уровень ${escapeHtml(ref.level)}</div>
                             <div class="referral-joined">Присоединился: ${joinedDate}</div>
                         </div>
-                        <div class="referral-bonuses">${bonusIcons.join(' ') || '🕐'}</div>
+                        <div class="referral-bonuses"${title}>${bonusIcons.join(' ') || '🕐'}</div>
                     </div>
                 `;
             }).join('');
@@ -6155,10 +6142,13 @@ async function changeReferralCode() {
         if (result.success) {
             const codeEl = document.getElementById('referral-code');
             const changeSection = document.getElementById('referral-change-section');
-            if (codeEl) codeEl.textContent = payload.code;
+            if (codeEl) codeEl.textContent = payload.code || newCode;
+            // Смена доступна один раз за аккаунт, поэтому секция скрывается
+            // навсегда. Сервер вернёт can_change: false — на случай, если
+            // раздел открыли повторно без перезагрузки экрана.
             if (changeSection) changeSection.style.display = 'none';
             if (newCodeInput) newCodeInput.value = '';
-            showModal('✅ Успех', 'Реферальный код изменён!');
+            showModal('✅ Успех', 'Реферальный код изменён! Повторно изменить его уже нельзя.');
         } else {
             showModal('❌ Ошибка', result.error || 'Не удалось изменить код');
         }
@@ -6324,7 +6314,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initGame();
         initReferralHandlers();
         
-        // Инициализация навигации из game-core.js
+        // Инициализация навигации
         if (typeof initNavigationHandlers === 'function') {
             initNavigationHandlers();
         }
@@ -7061,10 +7051,9 @@ function generateScreens() {
                         <span class="stat-value" id="total-coins-earned">0</span>
                         <span class="stat-label">Монет заработано</span>
                     </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="total-stars-earned">0</span>
-                        <span class="stat-label">Stars заработано</span>
-                    </div>
+                    <!-- Карточка «Stars заработано» удалена: Stars за рефералов
+                         не начисляются (см. player.js, GET /referral/stats),
+                         и карточка обещала награду, которой нет. -->
                 </div>
                 <div class="referral-list" id="referrals-list"></div>
             </div>
@@ -7809,8 +7798,6 @@ window.buyCoinItem = buyCoinItem;
  * Объединяет:
  * - Система частиц (Particle System) - Canvas анимации
  * - Карта города (City Map) - Canvas отрисовка
- * 
- * Подключение: после game-core.js
  */
 
 
@@ -8050,39 +8037,68 @@ function showSparks(x, y, count = 15) {
 
 
 /**
+ * Общие данные канвы карты: контекст, размеры и список локаций.
+ * renderLocations() и redrawMap() нуждались в одинаковой прологовой
+ * части, которая раньше была скопирована в обе.
+ */
+function readMapCanvas(canvas) {
+    return {
+        ctx: canvas.getContext('2d'),
+        width: canvas.width,
+        height: canvas.height,
+        locations: gameState.locations || []
+    };
+}
+
+/**
+ * Рисует карту целиком: фон, дороги, локации.
+ *
+ * Единственная реализация отрисовки. Раньше renderLocations() и
+ * redrawMap() каждая содержали свою копию (ctx/clearRect/фон/позиции/
+ * дороги/локации) — правка, например, нового слоя карты попадала
+ * только в одну из них, и карта выглядела по-разному при первом рендере
+ * и при наведении мыши.
+ *
+ * @param {Object|null} hoveredLoc - локация под курсором (для подсветки)
+ */
+function paintCityMap(hoveredLoc) {
+    const canvas = document.getElementById('city-map');
+    if (!canvas) return;
+
+    const { ctx, width, height, locations } = readMapCanvas(canvas);
+
+    ctx.clearRect(0, 0, width, height);
+    drawCityBackground(ctx, width, height);
+
+    const positions = calculateLocationPositions(locations.length, width, height);
+    drawRoads(ctx, positions);
+
+    locations.forEach((loc, index) => {
+        const pos = positions[index];
+        const isHovered = Boolean(hoveredLoc && hoveredLoc.id === loc.id);
+        drawLocation(ctx, loc, pos, isHovered);
+    });
+}
+
+/**
  * Отрисовка локаций на Canvas карте
  */
 function renderLocations() {
     const canvas = document.getElementById('city-map');
     if (!canvas) return;
-    
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-    
-    // Очищаем canvas
-    ctx.clearRect(0, 0, width, height);
-    
-    // Рисуем фон карты (постапокалиптический город)
-    drawCityBackground(ctx, width, height);
-    
-    // Определяем позиции локаций на карте
-    const locations = gameState.locations || [];
-    const positions = calculateLocationPositions(locations.length, width, height);
-    
+
+    const { width, height, locations } = readMapCanvas(canvas);
+
     // Сохраняем позиции для кликов
     gameState.locationPositions = {};
-    
-    // Рисуем дороги между локациями
-    drawRoads(ctx, positions);
-    
-    // Рисуем локации
+    const positions = calculateLocationPositions(locations.length, width, height);
     locations.forEach((loc, index) => {
         const pos = positions[index];
         gameState.locationPositions[loc.id] = { x: pos.x, y: pos.y, radius: 30 };
-        drawLocation(ctx, loc, pos);
     });
-    
+
+    paintCityMap(null);
+
     // Обработчик клика по карте
     canvas.onclick = (e) => {
         const rect = canvas.getBoundingClientRect();
@@ -8164,29 +8180,12 @@ function renderLocations() {
 }
 
 /**
- * Перерисовка карты с подсветкой
+ * Перерисовка карты с подсветкой.
+ * Отрисовка живёт в paintCityMap(), здесь только передаём подсветку.
  * @param {Object} hoveredLoc - локация под курсором
  */
 function redrawMap(hoveredLoc) {
-    const canvas = document.getElementById('city-map');
-    if (!canvas) return;
-    
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-    
-    ctx.clearRect(0, 0, width, height);
-    drawCityBackground(ctx, width, height);
-    
-    const locations = gameState.locations || [];
-    const positions = calculateLocationPositions(locations.length, width, height);
-    drawRoads(ctx, positions);
-    
-    locations.forEach((loc, index) => {
-        const pos = positions[index];
-        const isHovered = hoveredLoc && hoveredLoc.id === loc.id;
-        drawLocation(ctx, loc, pos, isHovered);
-    });
+    paintCityMap(hoveredLoc || null);
 }
 
 /**

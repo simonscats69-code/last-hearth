@@ -12,7 +12,10 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger } = require('../../utils/serverApi');
-const { normalizeInventory, getActiveBuffs, createInventoryItem } = require('../../utils/game-helpers');
+const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory } = require('../../utils/game-helpers');
+// Единый источник правды: тот же, что в world.js и items.js. Раньше лимит
+// не проверялся вовсе, и награда за босса могла сделать инвентарь больше 100.
+const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
 
 // Ключи на босса — читаются из БД (поле bosses.keys_required), fallback = 3
 async function getKeysRequiredForBoss(client, bossId) {
@@ -382,21 +385,58 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
 
         if (grantedQuantity <= 0) continue;
 
+        // Реально выданное количество: бафф loot_x2 мог дать больше, чем
+        // помещается в инвентарь, и разница просто не выдаётся.
+        let actuallyGranted = 0;
+
+        // Раньше здесь был безусловный inventory.push(...) в цикле по
+        // grantedQuantity: ни стакования, ни проверки лимита. Награда за
+        // босса могла довести инвентарь до 200+ слотов, обходя лимит 100,
+        // который проверялся только в world.js и items.js.
         for (let i = 0; i < grantedQuantity; i++) {
-            inventory.push(createInventoryItem(template, {
+            if (inventory.length >= MAX_INVENTORY_SLOTS) break;
+
+            const item = createInventoryItem(template, {
                 quantity: 1,
                 upgrade_level: 0,
                 modifications: {}
-            }));
+            });
+
+            // Стакуем, если предмет для этого пригоден: стопка аптечек
+            // не должна занимать по отдельному слоту каждую.
+            const slotsAdded = addItemToInventory(inventory, item, template);
+            if (slotsAdded > 0 && inventory.length > MAX_INVENTORY_SLOTS) {
+                // Новый слот уже создан сверх лимита — откатываем его.
+                inventory.pop();
+                break;
+            }
+            actuallyGranted++;
+        }
+
+        if (actuallyGranted === 0) {
+            logger.warn('Награда за босса не выдана: инвентарь заполнен', {
+                playerId,
+                slots: inventory.length,
+                maxSlots: MAX_INVENTORY_SLOTS
+            });
+            continue;
+        }
+        if (actuallyGranted < grantedQuantity) {
+            logger.warn('Награда за босса обрезана по лимиту инвентаря', {
+                playerId,
+                wanted: grantedQuantity,
+                granted: actuallyGranted,
+                maxSlots: MAX_INVENTORY_SLOTS
+            });
         }
 
         granted.push({
             id: template.id,
             name: template.name,
             icon: template.icon || '📦',
-            quantity: grantedQuantity
+            quantity: actuallyGranted
         });
-        totalGrantedCount += grantedQuantity;
+        totalGrantedCount += actuallyGranted;
     }
 
     if (granted.length) {
@@ -787,10 +827,14 @@ router.post('/attack-boss', async (req, res) => {
             const newHp = Math.max(0, activeBattle.boss.hp - damage);
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
+            // Трата энергии НЕ двигает last_energy_update: реген идёт от
+            // реально прошедшего времени (то же правило, что в world.js:493
+            // и в recalcEnergy). Раньше здесь стояло last_energy_update = NOW(),
+            // и каждый удар обнулял накопленный реген — игрок, фармящий лут
+            // и атакующий босса, получал разное поведение от одного поля.
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1),
-                     last_energy_update = NOW()
+                 SET energy = GREATEST(0, energy - $1)
                  WHERE id = $2
                  RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, playerId]
@@ -920,10 +964,10 @@ router.post('/attack-with-weapon', async (req, res) => {
 
             const newHp = Math.max(0, activeBattle.boss.hp - damage);
 
+            // См. комментарий выше про last_energy_update при атаке с оружием.
             const energyResult = await client.query(`
                 UPDATE players
                 SET energy = GREATEST(0, energy - $1),
-                    last_energy_update = NOW(),
                     inventory = $2
                 WHERE id = $3
                 RETURNING energy, max_energy, last_energy_update
@@ -1340,10 +1384,10 @@ router.post('/raid/:id/attack', async (req, res) => {
             const newTotalDamage = session.damage_dealt + damage;
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
+            // См. комментарий выше: реген не сбрасывается при трате.
             const energyResult = await client.query(
                 `UPDATE players
-                 SET energy = GREATEST(0, energy - $1),
-                     last_energy_update = NOW()
+                 SET energy = GREATEST(0, energy - $1)
                  WHERE id = $2
                  RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, playerId]

@@ -171,28 +171,14 @@ async function transaction(fn) {
     }
 }
 
-async function initDatabase() {
-    const target = describeDbTarget();
-    if (!process.env.DATABASE_URL && !process.env.DB_HOST) {
-        logger.warn(`DATABASE_URL и DB_HOST не заданы — подключаемся к ${target}. ` +
-            'В Docker/контейнере это почти наверняка ошибка: задайте DATABASE_URL в окружении (панель Bothost).');
-    }
-    logger.info('Подключение к БД: ' + target);
-    try {
-        await pool.query('SELECT 1');
-        logger.info('Подключение к БД установлено');
-        const { createTables, runMigrations, seedDatabase, seedAchievements } = require('./schema');
-        await createTables();
-        await runMigrations();
-        await seedDatabase();
-        await seedAchievements();
-        return true;
-    } catch (error) {
-        logger.error(`Ошибка инициализации БД (${target}): ${describeError(error)}`);
-        throw error;
-    }
-}
-
+/**
+ * initDatabase вынесен в db/init.js.
+ *
+ * Причина: отсюда требовался ./schema, а он импортирует query из этого же
+ * файла — получался цикл db/database.js <-> db/schema.js, удерживаемый
+ * ленивым require внутри initDatabase. Теперь database.js вообще не знает
+ * про schema: единственный, кто связывает подключение и DDL, — db/init.js.
+ */
 async function closePool() {
     try {
         await pool.end();
@@ -208,7 +194,6 @@ module.exports = {
     queryOne,
     queryAll,
     transaction,
-    initDatabase,
     closePool,
     setLogger,
     describeError,

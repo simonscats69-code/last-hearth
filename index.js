@@ -17,7 +17,7 @@ try {
 // ADMIN_IDS парсится один раз при старте
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
 const DEV_MODE = process.env.DEV_MODE === 'true';
-// Окно валидации initData (MAX_INIT_DATA_AGE_SECONDS, по умолчанию 48 ч)
+// Окно валидации initData (MAX_INIT_DATA_AGE_SECONDS, по умолчанию 24 ч)
 // читается напрямую в utils/serverApi.js (validateTelegramInitData) —
 // дубль константы здесь был мёртвым кодом и удалён.
 
@@ -75,8 +75,12 @@ const crypto = require('crypto');
 
 const { startScheduler } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/game-helpers');
-const { initWebSocket, getMetrics, stopHeartbeat } = require('./utils/realtime');
-const { initDatabase, query, closePool, setLogger, describeError } = require('./db/database');
+const { getMetrics } = require('./utils/metrics');
+const { query, closePool, setLogger, describeError } = require('./db/database');
+// initDatabase живёт в db/init.js — он связывает подключение (database.js)
+// и DDL (schema.js). Импорт отсюда, а не из database.js, чтобы тот не
+// зависел от schema и цикл импортов не появлялся снова.
+const { initDatabase } = require('./db/init');
 const { setupWebhook, bot } = require('./webhook');
 const gameRouter = require('./routes/game');
 const apiRouter = require('./routes/api');
@@ -121,9 +125,16 @@ function isOriginAllowed(origin) {
     // Точное совпадение
     if (ALLOWED_ORIGINS.includes(origin)) return true;
     
-    // FRONTEND_URL и его поддомены (точно или subdomain)
+    // FRONTEND_URL и его поддомены.
+    // Только точное совпадение либо base + "." + метка. Проверка через
+    // startsWith(base) без разделителя пропускала домены вида
+    // https://last-hearth.bothost.ru.evil.com — это домен атакующего,
+    // а не поддомен нашего (CORS-дыра: он получал бы доступ к API с
+    // credentials). Проверка через base + "/" тоже лишняя: Origin по
+    // спецификации не содержит пути, а "https://base/../x" нормализуется
+    // браузером в другой origin.
     const base = FRONTEND_URL.replace(/\/$/, '');
-    if (origin === base || origin.startsWith(base + '.') || origin.startsWith(base + '/')) return true;
+    if (origin === base || origin.startsWith(base + '.')) return true;
     
     // GitHub Pages поддомены
     const githubBase = 'https://simonscats69-code.github.io';
@@ -208,8 +219,7 @@ app.use(helmet({
                 "'self'",
                 (req, res) => `'nonce-${res.locals.nonce}'`,
                 'https://cdn.jsdelivr.net',
-                'https://telegram.org',
-                'https://sad.adsgram.ai'
+                'https://telegram.org'
             ],
             scriptSrcAttr: [(req, res) => `'nonce-${res.locals.nonce}'`],
             styleSrc: ["'self'", "'unsafe-inline'"],
@@ -274,7 +284,11 @@ app.use((req, res, next) => {
     }
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-ID, X-Init-Data');
+    // X-Telegram-ID убран: заголовок приходит от клиента и больше нигде
+    // не читается (см. getTelegramIdFromHeaders и resolveTelegramId —
+    // оба доверяют только подписанным initData). Разрешать его в CORS
+    // незачем, а его присутствие провоцировало клиентов его слать.
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Init-Data');
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
     }
@@ -372,12 +386,6 @@ function shutdown(signal) {
     }
     isShuttingDown = true;
     
-    try {
-        stopHeartbeat();
-        logger.info('WebSocket heartbeat остановлен');
-    } catch (err) {
-        logger.warn('Ошибка остановки heartbeat:', err.message);
-    }
 
     try {
         if (bot && typeof bot.stop === 'function') {
@@ -416,11 +424,6 @@ function startHttpServer(port) {
     return new Promise((resolve, reject) => {
         const srv = app.listen(port, '0.0.0.0', () => {
             logger.info(`Сервер запущен на порту ${port}`);
-            try {
-                initWebSocket(srv);
-            } catch (wsError) {
-                logger.error('Ошибка инициализации WebSocket:', wsError.message);
-            }
             resolve(srv);
         });
         srv.on('error', reject);

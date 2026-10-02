@@ -41,8 +41,6 @@ TG_BOT_TOKEN=your_bot_token
 MINI_APP_URL=https://your-app.bothost.ru
 WEBHOOK_URL=https://your-app.bothost.ru/webhook
 ADMIN_IDS=
-WS_TOKEN_SECRET=your_ws_secret_here
-ADSGRAM_APP_ID=your_adsgram_app_id
 SECRET_KEY=your_secret_key
 ```
 
@@ -73,7 +71,7 @@ last-hearth/
 │   ├── config.js            # Конфигурация окружения
 │   ├── game-helpers.js      # Нормализация состояния + достижения
 │   ├── gameConstants.js     # Игровые формулы
-│   ├── realtime.js          # WebSocket realtime-уведомления
+│   ├── metrics.js           # Метрики сервера (GET /metrics)
 │   ├── scheduler.js         # Фоновые задачи
 │   └── serverApi.js         # Серверные утилиты, auth, метрики
 └── public/
@@ -106,7 +104,6 @@ last-hearth/
 
 ### Монетизация
 - Telegram Stars
-- AdsGram реклама
 - Внутриигровые покупки
 
 ## Разработка

@@ -8,10 +8,11 @@
  * - Расчёт влияния на статы
  */
 
-const express = require('express');
-const router = express.Router();
 const { transaction: tx } = require('../../db/database');
-const { logger, safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
+// logger раньше использовался только в удалённых HTTP-роутах. Ошибки из
+// DebuffAPI ловит вызывающий: world.js пишет их в лог сам, status.js
+// отдаёт наружу через handleError (5xx без внутреннего текста).
+const { safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
 const { normalizeInventory } = require('../../utils/game-helpers');
 const { 
     DEBUFF_TYPES, 
@@ -455,135 +456,17 @@ const DebuffAPI = {
     }
 };
 
-
-
-/**
- * GET /debuffs/status - получить статус дебаффов
- */
-router.get('/status', async (req, res) => {
-    try {
-        const player = req.player;
-
-        // Получаем активные дебаффы
-        const active = DebuffAPI.getActive(player);
-
-        // Получаем модификаторы
-        const modifiers = DebuffAPI.getModifiers(player);
-
-        const warnings = active
-            .filter((debuff) => debuff.expiresAt)
-            .filter((debuff) => (new Date(debuff.expiresAt).getTime() - Date.now()) < 30 * 60 * 1000)
-            .map((debuff) => `${debuff.type}_expiring`);
-        
-        res.json({
-            success: true,
-            debuffs: {
-                radiation: safeJsonParse(player.radiation, { level: 0 }),
-                infections: safeJsonParse(player.infections, []),
-                active,
-                modifiers,
-                warnings,
-                damage: 0
-            }
-        });
-    } catch (error) {
-        logger.error('[debuffs] Ошибка получения статуса', { error: error.message });
-        res.status(500).json({ success: false, error: 'Внутренняя ошибка сервера' });
-    }
-});
-
-/**
- * POST /debuffs/check - принудительная проверка дебаффов
- */
-router.post('/check', async (req, res) => {
-    try {
-        const player = req.player;
-        const result = await DebuffAPI.check(player.id);
-        
-        res.json({
-            success: true,
-            ...result
-        });
-    } catch (error) {
-        logger.error('[debuffs] Ошибка проверки', { error: error.message });
-        res.status(500).json({ success: false, error: 'Внутренняя ошибка сервера' });
-    }
-});
-
-/**
- * POST /debuffs/cure - лечить дебафф предметом
- */
-router.post('/cure', async (req, res) => {
-    try {
-        const { cureType, itemId, item_index } = req.body;
-        const playerId = req.player.id;
-        const normalizedItemIndex = item_index === undefined ? null : Number(item_index);
-        
-        // Валидация
-        if (!cureType || (itemId === undefined && item_index === undefined)) {
-            return res.status(400).json({
-                success: false,
-                error: 'cureType и itemId/item_index обязательны'
-            });
-        }
-
-        const normalizedCureType = cureType === 'debuff' ? 'auto' : cureType;
-        
-        if (normalizedCureType !== 'auto' && !DEBUFF_CURES[normalizedCureType]) {
-            return res.status(400).json({
-                success: false,
-                error: `Неверный тип лечения. Доступно: ${Object.keys(DEBUFF_CURES).join(', ')}`
-            });
-        }
-
-        if (item_index !== undefined && !Number.isInteger(normalizedItemIndex)) {
-            return res.status(400).json({
-                success: false,
-                error: 'item_index должен быть целым числом'
-            });
-        }
-        
-        const result = await DebuffAPI.cure(playerId, normalizedCureType, itemId, normalizedItemIndex);
-        
-        res.json({
-            success: true,
-            ...result,
-            message: `Использован ${result.itemUsed}!`
-        });
-    } catch (error) {
-        logger.error('[debuffs] Ошибка лечения', { error: error.message, code: error.code, stack: error.stack });
-        // Различаем типы ошибок: валидация - 400, внутренние - 500
-        const isValidationError = error.code
-            && ['INVALID_TYPE', 'MISSING_ITEM_ID', 'ITEM_NOT_FOUND'].includes(error.code);
-        const statusCode = error.statusCode || (isValidationError ? 400 : 500);
-
-        // Для 500 наружу отдаём обобщённый текст: внутреннее сообщение
-        // (например, от PostgreSQL) игроку знать не нужно
-        const message = statusCode < 500
-            ? error.message
-            : 'Внутренняя ошибка сервера. Попробуй позже.';
-
-        res.status(statusCode).json({ success: false, error: message });
-    }
-});
-
-/**
- * Внутренний API: применить дебафф
- * 
- * ВНИМАНИЕ: Этот endpoint УДАЛЕН из публичного API, так как позволяет
- * игрокам самостоятельно накладывать дебаффы, что нарушает игровой баланс.
- * 
- * Для применения дебаффов используйте DebuffAPI.apply() напрямую:
- * 
- *   const { DebuffAPI } = require('./debuffs');
- *   await DebuffAPI.apply(playerId, 'radiation', 3, { source: 'location_123' });
- * 
- * или вызывайте из других модулей:
- * 
- *   const { DebuffAPI } = require('./debuffs');
- *   await DebuffAPI.apply(playerId, 'zombie_infection', 2, { source: 'zombie_456' });
- */
-
+// Публичные HTTP-маршруты дебаффов удалены: GET /debuffs/status,
+// POST /debuffs/check и POST /debuffs/cure не вызывались клиентом
+// (слово "debuff" в public/game.js не встречается ни разу).
+// Модуль остаётся внутренним API: его используют world.js (DebuffAPI.apply)
+// и status.js (DebuffAPI.cure). Если понадобится отдельный экран дебаффов,
+// маршруты надо писать заново вместе с UI — и вместе с проверкой, что в 5xx
+// наружу не уходит внутренний текст ошибки.
+//
+// Применять дебаффы напрямую из других модулей:
+//   const { DebuffAPI } = require('./debuffs');
+//   await DebuffAPI.apply(playerId, 'zombie_infection', 2, { source: 'zone_5' });
 
 // Экспорт для использования в других модулях
-module.exports = { router, DebuffAPI };
+module.exports = { DebuffAPI };

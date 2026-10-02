@@ -12,6 +12,33 @@ const { telegramAuthMiddleware, logger } = require('../utils/serverApi');
 // Это устанавливает req.telegramUser после валидации подписи Telegram
 router.use(telegramAuthMiddleware);
 
+/**
+ * Проверка :telegramId из параметров маршрута.
+ *
+ * Раньше одна и та же проверка копировалась в 4 обработчика. Кроме
+ * дублирования, isNaN(Number(x)) пропускает не-числовые значения:
+ * Number('') === 0, Number('1e3') === 1000, Number('0x10') === 16,
+ * Number('Infinity') === Infinity — все дают isNaN === false.
+ * SQL-инъекции это не давало (значение идёт параметром $n), но
+ * мусорный ID доходил до БД и падал там ошибкой типа вместо понятного 400.
+ *
+ * @returns {string|null} текст ошибки или null, если ID корректен
+ */
+function validateTelegramIdParam(rawId) {
+    if (rawId === undefined || rawId === null || String(rawId).trim() === '') {
+        return 'Не указан Telegram ID';
+    }
+    const str = String(rawId).trim();
+    if (!/^\d{1,20}$/.test(str)) {
+        return 'Некоректный Telegram ID';
+    }
+    const num = Number(str);
+    if (!Number.isSafeInteger(num) || num <= 0) {
+        return 'Некоректный Telegram ID';
+    }
+    return null;
+}
+
 // Middleware для проверки админа
 // ВАЖНО: используем req.telegramUser установленный telegramAuthMiddleware
 function requireAdmin(req, res, next) {
@@ -69,8 +96,9 @@ router.get('/player/:telegramId', requireAdmin, async (req, res) => {
         const { telegramId } = req.params;
         
         // Валидация telegramId
-        if (!telegramId || isNaN(Number(telegramId))) {
-            return res.status(400).json({ error: 'Некорректный Telegram ID' });
+        const idError = validateTelegramIdParam(telegramId);
+        if (idError) {
+            return res.status(400).json({ error: idError });
         }
         
         const result = await query(
@@ -98,8 +126,9 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
         const { telegramId } = req.params;
         
         // Валидация telegramId
-        if (!telegramId || isNaN(Number(telegramId))) {
-            return res.status(400).json({ error: 'Некорректный Telegram ID' });
+        const idError = validateTelegramIdParam(telegramId);
+        if (idError) {
+            return res.status(400).json({ error: idError });
         }
         
         const { energy, health, experience } = req.body;
@@ -176,8 +205,9 @@ router.post('/player/:telegramId/ban', requireAdmin, async (req, res) => {
         const { telegramId } = req.params;
         
         // Валидация telegramId
-        if (!telegramId || isNaN(Number(telegramId))) {
-            return res.status(400).json({ error: 'Некорректный Telegram ID' });
+        const idError = validateTelegramIdParam(telegramId);
+        if (idError) {
+            return res.status(400).json({ error: idError });
         }
         
         const { reason } = req.body;
@@ -211,8 +241,9 @@ router.post('/player/:telegramId/unban', requireAdmin, async (req, res) => {
         const { telegramId } = req.params;
         
         // Валидация telegramId
-        if (!telegramId || isNaN(Number(telegramId))) {
-            return res.status(400).json({ error: 'Некорректный Telegram ID' });
+        const idError = validateTelegramIdParam(telegramId);
+        if (idError) {
+            return res.status(400).json({ error: idError });
         }
         
         const result = await query(

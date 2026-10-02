@@ -91,17 +91,6 @@ function createInventoryItem(item, options = {}) {
 }
 
 /**
- * Получить категорию предмета инвентаря без жёсткой привязки к диапазонам ID
- */
-function getInventoryItemCategory(item) {
-    if (!item || typeof item !== 'object') {
-        return 'misc';
-    }
-
-    return String(item.category || item.type || 'misc').toLowerCase();
-}
-
-/**
  * Нормализация радиации
  */
 function normalizeRadiation(value) {
@@ -279,20 +268,6 @@ function getActiveBuffs(value, now = Date.now()) {
     }
 
     return active;
-}
-
-/**
- * Проверка активности конкретного баффа
- */
-function isBuffActive(value, effect, now = Date.now()) {
-    return Boolean(getActiveBuffs(value, now)[effect]);
-}
-
-/**
- * Получить общий уровень инфекций
- */
-function getInfectionLevel(value) {
-    return normalizeInfections(value).reduce((sum, infection) => sum + (infection.level || 0), 0);
 }
 
 /**
@@ -716,13 +691,10 @@ module.exports = {
     normalizeInventory,
     normalizeItemStats,
     createInventoryItem,
-    getInventoryItemCategory,
     normalizeRadiation,
     normalizeInfections,
     normalizePlayerBuffs,
     getActiveBuffs,
-    isBuffActive,
-    getInfectionLevel,
     buildPlayerStatus,
     recalcEnergy,
     normalizeEquipment,

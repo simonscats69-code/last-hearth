@@ -6,6 +6,7 @@ const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('./db/database');
 const { logger } = require('./utils/serverApi');
 const { MINI_APP_URL } = require('./utils/config');
+const { generateReferralCode } = require('./utils/referralCode');
 
 // Проверка наличия токена бота
 const BOT_TOKEN = process.env.TG_BOT_TOKEN;
@@ -64,12 +65,10 @@ async function setupWebhook(app) {
                 const maxAttempts = 5;
                 
                 while (attempts < maxAttempts && !playerCreated) {
-                    // Генерируем код на основе telegramId и случайной строки
-                    try {
-                        referralCode = `LH-${BigInt(String(telegramId)).toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
-                    } catch {
-                        referralCode = `LH-${String(telegramId).slice(-10)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`.slice(0, 20);
-                    }
+                    // Случайный код, не зависящий от telegramId.
+                    // Раньше тут был LH-<base36(telegramId)>-<случайные 4>:
+                    // обратимое преобразование позволяло вычислить чужие коды.
+                    referralCode = generateReferralCode();
                     
                     try {
                         player = await queryOne(`

@@ -1,10 +1,13 @@
-/**
+﻿/**
  * Схема базы данных - единственный источник правды по DDL
  * Все CREATE TABLE, INDEX, ALTER TABLE здесь
  */
 
 const { query } = require('./database');
 const pg = require('pg');
+// Нужен миграции уникальности реферального кода: дубликатам выдаются
+// новые коды тем же генератором, что и при регистрации.
+const { generateReferralCode } = require('../utils/referralCode');
 
 /**
  * Безопасное экранирование идентификаторов PostgreSQL
@@ -131,9 +134,6 @@ async function createTables() {
             END
         WHERE min_level IS NULL OR min_level = 1
     `);
-
-    // УДАЛЕНО: Таблица сетов предметов (не используется)
-    // УДАЛЕНО: Таблица связи предметов с сетами (не используется)
 
     // Таблица предметов
     await query(`
@@ -543,8 +543,6 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_clan ON clan_applications(clan_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_player ON clan_applications(player_id)`);
 
-    // Индексы для pvp_matches — УДАЛЕНЫ (таблица удалена, используется pvp_battles)
-
     // Индексы для pvp_cooldowns
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_player ON pvp_cooldowns(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_expires ON pvp_cooldowns(expires_at)`);
@@ -763,8 +761,7 @@ async function runMigrations() {
     // Миграции для дебаффов
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS infections JSONB DEFAULT '[]'`);
 
-    // УДАЛЕНО: миграции для крафта (items_crafted, unique_items)
-    // Миграции для исследования
+    // Миграция: достижения исследования
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS locations_visited JSONB DEFAULT '[]'`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS clans_joined INTEGER DEFAULT 0`);
 
@@ -773,6 +770,52 @@ async function runMigrations() {
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_code_changed BOOLEAN DEFAULT false`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referred_by INTEGER`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_bonus_claimed BOOLEAN DEFAULT false`);
+
+    // Миграция: уникальность реферального кода.
+    //
+    // Раньше UNIQUE не было, при этом:
+    //   - webhook.js ловил 23505 по referral_code, но constraint не мог
+    //     сработать (retry-цикл был мёртвым);
+    //   - POST /referral/use делает SELECT id ... WHERE referral_code = $1
+    //     и берёт rows[0], то есть при дублях бонус уходил наугад.
+    //
+    // Прежде чем добавить индекс, у дубликатов (кроме самой ранней записи,
+    // id = MIN, чей код мог уже быть роздан) выдаём новые коды — иначе
+    // CREATE UNIQUE INDEX упал бы и миграция не прошла бы.
+    const duplicates = await query(`
+        SELECT referral_code
+        FROM players
+        WHERE referral_code IS NOT NULL AND referral_code <> ''
+        GROUP BY referral_code
+        HAVING COUNT(*) > 1
+        ORDER BY MIN(id)
+    `);
+
+    for (const dup of duplicates.rows) {
+        const conflictRows = await query(
+            `SELECT id FROM players WHERE referral_code = $1 AND id <> (
+                SELECT MIN(id) FROM players WHERE referral_code = $1
+            )`,
+            [dup.referral_code]
+        );
+
+        for (const row of conflictRows.rows) {
+            let newCode = generateReferralCode();
+            let attempts = 0;
+            // Крайне маловероятно, но проверяем, что новый код тоже свободен
+            while (attempts < 10) {
+                const taken = await query('SELECT id FROM players WHERE referral_code = $1', [newCode]);
+                if (taken.rows.length === 0) break;
+                newCode = generateReferralCode();
+                attempts++;
+            }
+            await query('UPDATE players SET referral_code = $1 WHERE id = $2', [newCode, row.id]);
+        }
+
+        console.warn(`[migrate] Дубликаты реферального кода «${dup.referral_code}»: перевыдано кодов — ${conflictRows.rows.length}`);
+    }
+
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_players_referral_code_unique ON players(referral_code)`);
 
     // Миграции для магазина Stars
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS buffs JSONB DEFAULT '{}'`);
@@ -947,7 +990,6 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
         ['players', 'chk_players_agility', 'CHECK (agility >= 1)', ['agility']],
         ['players', 'chk_players_intelligence', 'CHECK (intelligence >= 1)', ['intelligence']],
         ['players', 'chk_players_luck', 'CHECK (luck >= 1)', ['luck']],
-        // УДАЛЕНО: chk_players_crafting - система крафта удалена
         ['players', 'chk_players_pvp_rating', 'CHECK (pvp_rating >= 0)', ['pvp_rating']],
         ['locations', 'chk_locations_danger_level', 'CHECK (danger_level >= 1 AND danger_level <= 10)', ['danger_level']],
         ['locations', 'chk_locations_radiation', 'CHECK (radiation >= 0)', ['radiation']],
@@ -1068,8 +1110,6 @@ async function seedDatabase() {
         `, [loc.name, loc.description, loc.radiation, loc.infection, loc.min_level, loc.danger_level, loc.icon, loc.color]);
     }
 
-    // УДАЛЕНО: Сеты предметов (не используются)
-
     // Боссы
     const bosses = [
         { name: 'Крысиный король', description: 'Огромная радиоактивная крыса', max_health: 500, reward_experience: 50, reward_coins: 25, icon: '🐀' },
@@ -1115,7 +1155,6 @@ async function seedDatabase() {
         { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', stats: { defense: 25, radiation_resist: 6, infection_resist: 4 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
         { name: 'Противогаз', description: 'Защита от радиации', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { radiation_resist: 20, infection_resist: 12 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
         { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { defense: 10, infection_resist: 5 }, durability: 80, max_durability: 80, price: 80, icon: '⛑️' },
-        // УДАЛЕНО: материалы для крафта (Металлолом, Древесина, Ткань, Пластик, Электроника, Провода, Химикаты, Титан, Уран, Кристалл силы, Ядерный элемент)
         { name: 'Патроны', description: 'Патроны для оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '📦' },
         // Ключи для боссов (1 = не требуется, 2-10 = нужны ключи)
         { name: 'Ключ от Бездомного психа', description: 'Ключ для разблокировки босса 2', type: 'key', category: 'key', rarity: 'uncommon', stackable: true, price: 0, icon: '🗝️', boss_level: 2 },
@@ -1133,12 +1172,10 @@ async function seedDatabase() {
         { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, icon: '🛡️', stats: { radiation_cure: 5 } },
         { name: 'Плазменный пистолет', description: 'Экспериментальное оружие', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 80, ammo: 12 }, durability: 250, max_durability: 250, price: 2500, icon: '🔮' },
         { name: 'Экзо-костюм', description: 'Тяжёлая броня', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, icon: '🤖' },
-        // УДАЛЕНО: материалы для крафта (Титан, Уран)
         { name: 'Сыворотка мутанта', description: 'Даёт сверхспособности', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬', stats: { energy: 50 } },
         { name: 'Эликсир бессмертия', description: 'Полное воскрешение', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, icon: '⭐', stats: { health: 100 } },
         { name: 'Лазерная винтовка', description: 'Оружие из будущего', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', stats: { damage: 150, ammo: 20 }, durability: 500, max_durability: 500, price: 10000, icon: '⚡' },
         { name: 'Броня стражей', description: 'Легендарная броня', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, icon: '👑' }
-        // УДАЛЕНО: материалы для крафта (Кристалл силы, Ядерный элемент)
     ];
     for (const item of items) {
         await query(`

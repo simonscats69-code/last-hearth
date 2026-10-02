@@ -156,9 +156,12 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
                 await client.query('ROLLBACK');
                 return res.json({ success: false, error: 'Недостаточно Stars', code: 'NO_STARS' });
             }
-            // Списываем Stars (без изменения last_wheel_spin для платных вращений)
+            // Списываем Stars (без изменения last_wheel_spin для платных вращений).
+            // GREATEST(0, ...): колонка под CHECK (stars >= 0), поэтому простое
+            // "stars - 1" при гонке двух платных вращений дало бы 500 с
+            // нарушением constraint вместо понятной бизнес-ошибки.
             await client.query(
-                'UPDATE players SET stars = stars - 1 WHERE id = $1',
+                'UPDATE players SET stars = GREATEST(0, stars - 1) WHERE id = $1',
                 [playerId]
             );
         } else {
@@ -194,9 +197,21 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
                 [newEnergy, playerId]
             );
         } else if (prize.type === 'multiplier') {
-            // Умножаем монеты (от текущего значения)
-            const newCoins = Math.floor((player.coins || 0) * prize.value);
-            const bonus = newCoins - (player.coins || 0);
+            // «x2 к монетам» = удвоение баланса, значит выплата равна САМОМУ
+            // балансу (coins * (value - 1)), а не новому значению.
+            //
+            // Регрессия: стояло newCoins = coins * value, и при value=2 это
+            // ровно то же самое по модулю, но при любом value > 2 выплата
+            // становилась coins*value, то есть прибавлялось в 3-4 раза больше
+            // баланса за одно платное вращение. Плюс выплата неограниченно
+            // росла вместе с балансом — множитель позволял фармить монеты
+            // быстрее любого источника в игре.
+            //
+            // Ограничиваем: не более +2000 монет за одно вращение.
+            const MAX_MULTIPLIER_BONUS = 2000;
+            const multiplier = Math.max(2, Math.floor(prize.value) || 2);
+            const rawBonus = Math.floor((player.coins || 0) * (multiplier - 1));
+            const bonus = Math.max(0, Math.min(rawBonus, MAX_MULTIPLIER_BONUS));
             const updateCooldown = !is_paid ? ', last_wheel_spin = NOW()' : '';
             
             if (bonus > 0) {
@@ -205,6 +220,8 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
                     [bonus, playerId]
                 );
             } else if (!is_paid) {
+                // Нулевые монеты: удвоение нечего, но бесплатное вращение
+                // всё равно потрачено — кулдаун обязан обновиться.
                 await client.query(
                     'UPDATE players SET last_wheel_spin = NOW() WHERE id = $1',
                     [playerId]
@@ -346,9 +363,11 @@ router.post(['/purchase', '/'], async (req, res) => {
             });
         }
         
-        // Списываем Stars
+        // Списываем Stars. GREATEST(0, ...) по той же причине, что и в колесе:
+        // колонка под CHECK (stars >= 0). Проверка playerStars < price выше
+        // защищает при одиночном запросе, GREATEST — страховка от гонки.
         await client.query(
-            'UPDATE players SET stars = stars - $1 WHERE id = $2',
+            'UPDATE players SET stars = GREATEST(0, stars - $1) WHERE id = $2',
             [price, playerId]
         );
         

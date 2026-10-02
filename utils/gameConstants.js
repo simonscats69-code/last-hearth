@@ -11,7 +11,6 @@
 const sharedEquipment = require('../public/shared/equipment.js');
 
 // Формулы опыта — не используются, фактический расчёт в getExpForLevel()
-// Устаревшие константы удалены для чистоты кода.
 /**
  * Расчёт опыта для уровня (долгосрочная игра)
  * P0-3: мягкая экспоненциальная кривая вместо линейной,
@@ -100,8 +99,6 @@ function calculateDropChance(luck) {
     const chance = 10 + (luck * 0.4);
     return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
 }
-
-// УДАЛЕНО: функция calculateCraftSuccess() - система крафта удалена
 
 // Таблицы лута по локациям
 const LOOT_TABLES = {
@@ -437,7 +434,6 @@ module.exports = {
     GAME_CONFIG,
     RISK_TIERS,
     LOOT_TABLES,
-    // EXP_FORMULA удалена — не используется
     ITEM_CATEGORIES,
     // Дебаффы
     DEBUFF_TYPES,
@@ -448,7 +444,6 @@ module.exports = {
     getExpForLevel,
     getTotalExpForLevel,
     calculateDropChance,
-    // УДАЛЕНО: calculateCraftSuccess - система крафта удалена
     getLootTable,
     rollItemRarity,
     rollLootDrop,

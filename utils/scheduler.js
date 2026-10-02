@@ -62,13 +62,30 @@ async function regenerateEnergy() {
     isRunning.energy = true;
     
     try {
-        // Прямой запрос без tx() - одиночный UPDATE не требует транзакции
+        // Реген накопительный: игрок мог не заходить 10 минут и должен
+        // получить все 10 единиц, а не одну.
+        //
+        // Регрессия: стояло energy + 1 и last_energy_update = NOW(). Метка
+        // сдвигалась на «сейчас», хотя начислена всего минута, поэтому
+        // недобранное время терялось безвозвратно. Плюс это конфликтовало
+        // с recalcEnergy() из utils/game-helpers.js, который считает реген
+        // от last_energy_update и двигает метку на last + regen*60000 —
+        // два разных правила для одного поля давали двойной счёт.
+        //
+        // Теперь правило одно (здесь и в recalcEnergy): прибавляем
+        // floor((NOW() - last_energy_update) / 1 минута) и двигаем метку
+        // ровно на восстановленное время, а не в NOW().
         const result = await query(`
-            UPDATE players 
-            SET energy = LEAST(max_energy, energy + 1),
-                last_energy_update = NOW()
-            WHERE energy < max_energy 
-            AND (last_energy_update IS NULL OR last_energy_update < NOW() - INTERVAL '1 minute')
+            UPDATE players
+            SET energy = LEAST(
+                    max_energy,
+                    energy + FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(last_energy_update, NOW() - INTERVAL '1 minute'))) / 60)::int
+                ),
+                last_energy_update = COALESCE(last_energy_update, NOW())
+                    + (FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(last_energy_update, NOW() - INTERVAL '1 minute'))) / 60)::int
+                       * INTERVAL '1 minute')
+            WHERE energy < max_energy
+              AND COALESCE(last_energy_update, NOW() - INTERVAL '1 minute') < NOW() - INTERVAL '1 minute'
             RETURNING id, energy, max_energy
         `);
         

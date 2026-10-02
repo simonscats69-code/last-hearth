@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../db/database');
 const { logger, safeJsonParse, safeJsonParse: parseAchievementCondition, validateTelegramInitData, getPlayerByTelegramId } = require('../utils/serverApi');
-const { getAchievementCurrentValue, getAchievementTargetValue, getAchievementRuntimeContext } = require('../utils/game-helpers');
+const { getAchievementCurrentValue, getAchievementTargetValue, getAchievementRuntimeContext, grantCurrencyReward } = require('../utils/game-helpers');
 
 /**
  * Определить Telegram ID из запроса.
@@ -399,29 +399,10 @@ router.post('/achievements/claim', async (req, res) => {
                 throw { statusCode: 400, message: 'Награда уже получена' };
             }
 
-            // Обновляем баланс игрока
-            const updates = [];
-            const params = [player.id];
-            let paramIndex = 2;
-
-            if (reward.coins && reward.coins > 0) {
-                updates.push(`coins = coins + $${paramIndex}`);
-                params.push(reward.coins);
-                paramIndex++;
-            }
-
-            if (reward.stars && reward.stars > 0) {
-                updates.push(`stars = stars + $${paramIndex}`);
-                params.push(reward.stars);
-                paramIndex++;
-            }
-
-            if (updates.length > 0) {
-                await client.query(`
-                    UPDATE players SET ${updates.join(', ')}, updated_at = NOW()
-                    WHERE id = $1
-                `, params);
-            }
+            // Обновляем баланс игрока (общая начислялка валюты).
+            // touchUpdatedAt=true — здесь это историческое поведение:
+            // профиль игрока должен отражать момент получения награды.
+            await grantCurrencyReward(client, player.id, reward, true);
 
             // Отмечаем награду как полученную
             await client.query(`
@@ -491,7 +472,7 @@ router.get('/game-info', async (req, res) => {
 // Обрабатываем OPTIONS для CORS
 router.options('/verify-telegram', (req, res) => {
     res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-ID');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Init-Data');
     res.sendStatus(200);
 });
 
