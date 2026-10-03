@@ -225,13 +225,24 @@
 
     /**
      * Порог здоровья, ниже которого срабатывает автолечение.
+     *
+     * Пустое значение (null/undefined/'') — это «настройка не задана»,
+     * а не ноль: Number(null) === 0 проходил проверку isFinite и молча
+     * зажимался в минимум 10%, пока интерфейс в том же случае показывал
+     * дефолтные 35% (Number(x) || DEFAULT_AUTO_HEAL_THRESHOLD в player.js
+     * и game.js). Сервер лечился по 10%, игрок видел 35% — то же
+     * расхождение UI/БД, что и у P0-2.
+     *
      * @param {number} maxHealth максимум здоровья
      * @param {number} [threshold] пользовательский порог в процентах
      * @returns {number} HP, ниже которых нужно лечиться
      */
     function getAutoHealThreshold(maxHealth, threshold) {
-        const percent = Number.isFinite(Number(threshold))
-            ? Math.min(AUTO_HEAL_THRESHOLD_MAX, Math.max(AUTO_HEAL_THRESHOLD_MIN, Number(threshold)))
+        const isBlank = threshold === null || threshold === undefined
+            || (typeof threshold === 'string' && threshold.trim() === '');
+        const value = isBlank ? NaN : Number(threshold);
+        const percent = Number.isFinite(value)
+            ? Math.min(AUTO_HEAL_THRESHOLD_MAX, Math.max(AUTO_HEAL_THRESHOLD_MIN, value))
             : DEFAULT_AUTO_HEAL_THRESHOLD;
         return Math.max(1, Math.floor((Math.max(1, Number(maxHealth) || 1) * percent) / 100));
     }
@@ -257,8 +268,16 @@
      * @returns {object|null} выбранный предмет или null
      */
     function selectHealItem(items, options = {}) {
+        // stack не указан вовсе — считаем, что предмета хватает (1 шт).
+        // Но ЯВНЫЙ 0 — пустой стек: раньше `stack || 1` превращал ноль
+        // в единицу, и автолечение выбирало предмет, которого у игрока нет
+        // (та же ловушка `||`, что и в P1-5 со стаками инвентаря).
+        const hasStock = (item) => {
+            if (item.stack === undefined || item.stack === null || item.stack === '') return true;
+            return Number(item.stack) > 0;
+        };
         const usable = (Array.isArray(items) ? items : [])
-            .filter((item) => item && Number(item.heal) > 0 && Number(item.stack || 1) > 0);
+            .filter((item) => item && Number(item.heal) > 0 && hasStock(item));
 
         const regular = usable.filter((item) => !Number(item.stars_price));
         const pool = regular.length > 0 ? regular : usable;
