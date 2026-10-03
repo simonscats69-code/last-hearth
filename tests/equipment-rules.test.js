@@ -5,6 +5,11 @@
  * расхождение правил здесь ломает обе стороны сразу.
  */
 const rules = require('../public/shared/equipment');
+const fs = require('fs');
+const path = require('path');
+
+/** Прочитать исходник проекта — для проверок «клиент и сервер не разошлись». */
+const read = (relative) => fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
 
 describe('Потолок пассивного регена', () => {
     test('60% от максимума, округление вниз', () => {
@@ -179,15 +184,56 @@ describe('Интервал регена энергии', () => {
     });
 });
 
+describe('Магазин за звёзды: один каталог для клиента и сервера', () => {
+    test('все товары имеют цену, эффект и категорию', () => {
+        expect(rules.STAR_SHOP_ITEMS.length).toBe(10);
+        for (const item of rules.STAR_SHOP_ITEMS) {
+            expect(item.id).toBeTruthy();
+            expect(item.name).toBeTruthy();
+            expect(Number.isInteger(item.price)).toBe(true);
+            expect(item.price).toBeGreaterThan(0);
+            expect(item.effect).toBeTruthy();
+            expect(['buffs', 'cosmetics']).toContain(item.category);
+            // Бафф живёт ограниченное время, косметика — навсегда.
+            if (item.category === 'buffs') expect(item.duration).toBeGreaterThan(0);
+        }
+    });
+
+    test('id уникальны: иначе сервер спишет цену чужого товара', () => {
+        const ids = rules.STAR_SHOP_ITEMS.map((item) => item.id);
+        expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    test('поиск по id и по категории', () => {
+        expect(rules.getStarShopItem('buff_loot_1h').price).toBe(5);
+        expect(rules.getStarShopItem('cosm_frame_elite').category).toBe('cosmetics');
+        expect(rules.getStarShopItem('нет_такого')).toBeNull();
+        expect(rules.getStarShopItem(undefined)).toBeNull();
+        expect(rules.getStarShopItemsByCategory('buffs')).toHaveLength(5);
+        expect(rules.getStarShopItemsByCategory('cosmetics')).toHaveLength(5);
+        expect(rules.getStarShopItemsByCategory('unknown')).toHaveLength(0);
+    });
+
+    test('клиент и сервер берут один каталог, а не две копии', () => {
+        const client = read('public/game.js');
+        const server = read('routes/game/minigames.js');
+        expect(client).toMatch(/getStarShopItemsByCategory/);
+        // Старые копии, из-за которых цены могли разойтись.
+        expect(client).not.toMatch(/id:\s*'buff_loot_1h'/);
+        expect(server).not.toMatch(/BUFFS_CONFIG|COSMETICS_CONFIG/);
+        expect(server).toMatch(/getStarShopItem/);
+        // Сервер берёт цену из каталога, а не из своей переменной.
+        expect(server).toMatch(/itemConfig\.price/);
+        expect(server).not.toMatch(/itemConfig\.stars/);
+    });
+});
+
 /**
  * Карта расхождений «сервер ↔ клиент». Юнит-тесты модуля его не видят:
  * баг появляется, когда одна из сторон забывает общий файл правил и заводит
  * свою копию — так родились регрессии P0-2, P1-4 и пороги риска 2/5/8.
  */
 describe('Синхронизация клиента и сервера (статические проверки)', () => {
-    const fs = require('fs');
-    const path = require('path');
-    const read = (relative) => fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
     const between = (source, from, to) => {
         const start = source.indexOf(from);
         const end = source.indexOf(to, start);

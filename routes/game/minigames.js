@@ -253,24 +253,14 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
 // ПОКУПКИ ЗА STARS (из purchase.js)
 // ==========================================
 
-const BUFFS_CONFIG = {
-    'buff_loot_1h': { name: 'x2 Добыча', duration: 3600, effect: 'loot_x2', stars: 5 },
-    'buff_energy_1h': { name: 'Бесплатная энергия', duration: 3600, effect: 'free_energy', stars: 3 },
-    'buff_radiation_1h': { name: 'Анти-rad', duration: 3600, effect: 'no_radiation', stars: 2 },
-    'buff_exp_1h': { name: 'x2 Опыт', duration: 3600, effect: 'exp_x2', stars: 4 },
-    'buff_loot_daily': { name: 'x2 Добыча (24ч)', duration: 86400, effect: 'loot_x2', stars: 20 },
-};
-
-const COSMETICS_CONFIG = {
-    'cosm_glow_gold': { name: 'Золотое свечение', effect: 'glow_gold', stars: 50 },
-    'cosm_glow_blue': { name: 'Синее свечение', effect: 'glow_blue', stars: 30 },
-    'cosm_frame_elite': { name: 'Элитная рамка', effect: 'frame_elite', stars: 100 },
-    'cosm_title_veteran': { name: 'Звание: Ветеран', effect: 'title_veteran', stars: 25 },
-    'cosm_particles_fire': { name: 'Огненные частицы', effect: 'particles_fire', stars: 40 },
-};
+// Каталог покупок за Stars — в public/shared/equipment.js, том же файле,
+// что читает браузер. Раньше он жил здесь и в SHOP_ITEMS клиента: цены
+// совпадали случайно, любая правка одной стороны показывала бы игроку одну
+// цену и списывала другую.
+const { getStarShopItem } = require('../../public/shared/equipment.js');
 
 function getItemConfig(itemId) {
-    return BUFFS_CONFIG[itemId] || COSMETICS_CONFIG[itemId] || null;
+    return getStarShopItem(itemId);
 }
 
 /**
@@ -337,7 +327,7 @@ router.post(['/purchase', '/'], async (req, res) => {
         });
     }
     
-    const price = itemConfig.stars;
+    const price = itemConfig.price;
     const client = await pool.connect();
     
     try {
@@ -377,7 +367,7 @@ router.post(['/purchase', '/'], async (req, res) => {
         
         let reward = null;
         
-        if (BUFFS_CONFIG[item_id]) {
+        if (itemConfig.category === 'buffs') {
             const expiresAt = new Date(Date.now() + itemConfig.duration * 1000);
             await grantPlayerBuff(client, playerId, itemConfig.effect, expiresAt.toISOString(), existingBuffs);
             reward = {
@@ -385,7 +375,7 @@ router.post(['/purchase', '/'], async (req, res) => {
                 effect: itemConfig.effect,
                 expires_at: expiresAt.toISOString()
             };
-        } else if (COSMETICS_CONFIG[item_id]) {
+        } else if (itemConfig.category === 'cosmetics') {
             await grantPlayerCosmetic(client, playerId, itemConfig.effect, existingCosmetics);
             reward = {
                 type: 'cosmetic',

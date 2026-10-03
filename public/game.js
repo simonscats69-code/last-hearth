@@ -7698,31 +7698,30 @@ function generateScreens() {
  * - Косметика (эффекты, скины)
  */
 
-// Данные товаров магазина
-const SHOP_ITEMS = {
-    // Баффы
-    buffs: [
-        { id: 'buff_loot_1h', name: 'x2 Добыча', desc: 'Удвоенный лут на 1 час', icon: '📦', price: 5, currency: 'stars', duration: 3600, effect: 'loot_x2' },
-        { id: 'buff_energy_1h', name: 'Бесплатная энергия', desc: 'Энергия не тратится 1 час', icon: '⚡', price: 3, currency: 'stars', duration: 3600, effect: 'free_energy' },
-        { id: 'buff_radiation_1h', name: 'Анти-rad', desc: 'Защита от радиации 1 час', icon: '☢️', price: 2, currency: 'stars', duration: 3600, effect: 'no_radiation' },
-        { id: 'buff_exp_1h', name: 'x2 Опыт', desc: 'Удвоенный опыт 1 час', icon: '⬆️', price: 4, currency: 'stars', duration: 3600, effect: 'exp_x2' },
-        { id: 'buff_loot_daily', name: 'x2 Добыча (24ч)', desc: 'Удвоенный лут на 24 часа', icon: '📦', price: 20, currency: 'stars', duration: 86400, effect: 'loot_x2' },
-    ],
-    
-    // Мини-игры
-    minigames: [
-        { id: 'miniwheel', name: 'Колесо удачи', desc: 'Крути колесо бесплатно или за Stars', icon: '🎡', price: 0, currency: 'free', type: 'game', game: 'wheel' },
-    ],
-    
-    // Косметика
-    cosmetics: [
-        { id: 'cosm_glow_gold', name: 'Золотое свечение', desc: 'Золотое свечение вокруг профиля', icon: '✨', price: 50, currency: 'stars', type: 'effect', effect: 'glow_gold' },
-        { id: 'cosm_glow_blue', name: 'Синее свечение', desc: 'Синее свечение вокруг профиля', icon: '💠', price: 30, currency: 'stars', type: 'effect', effect: 'glow_blue' },
-        { id: 'cosm_frame_elite', name: 'Элитная рамка', desc: 'Особая рамка профиля', icon: '🖼️', price: 100, currency: 'stars', type: 'frame', effect: 'frame_elite' },
-        { id: 'cosm_title_veteran', name: 'Звание: Ветеран', desc: 'Звание под ником', icon: '🎖️', price: 25, currency: 'stars', type: 'title', effect: 'title_veteran' },
-        { id: 'cosm_particles_fire', name: 'Огненные частицы', desc: 'Огненные частицы при действиях', icon: '🔥', price: 40, currency: 'stars', type: 'particles', effect: 'particles_fire' },
-    ]
-};
+/**
+ * Каталог товаров берётся из общего файла правил (shared/equipment.js) —
+ * там же, откуда его читает сервер и откуда списывает цену. Раньше в клиенте
+ * стояла вторая копия с ценами: игрок видел бы одну цену, а сервер списал бы
+ * другую, а проверка `player.stars < item.price` отказала бы при достаточном
+ * балансе.
+ *
+ * Мини-игра в каталоге не продаётся — это ссылка на колесо, поэтому она
+ * остаётся здесь.
+ */
+const SHOP_ITEMS = (() => {
+    const shared = window.EquipmentShared;
+    const fromShared = (category) => (shared && typeof shared.getStarShopItemsByCategory === 'function'
+        ? shared.getStarShopItemsByCategory(category).map((item) => ({ ...item, currency: 'stars' }))
+        : []);
+
+    return {
+        buffs: fromShared('buffs'),
+        minigames: [
+            { id: 'miniwheel', name: 'Колесо удачи', desc: 'Крути колесо бесплатно или за Stars', icon: '🎡', price: 0, currency: 'free', type: 'game', game: 'wheel' },
+        ],
+        cosmetics: fromShared('cosmetics')
+    };
+})();
 
 /**
  * Открытие магазина (рендерит категорию)

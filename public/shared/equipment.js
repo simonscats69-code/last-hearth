@@ -811,7 +811,55 @@ function resolveEquipmentSlot(item) {
         return totals;
     }
 
+    /* ================= МАГАЗИН ЗА ЗВЁЗДЫ =================
+     *
+     * Каталог покупок жил в двух копиях: BUFFS_CONFIG/COSMETICS_CONFIG на
+     * сервере (routes/game/minigames.js) и SHOP_ITEMS в клиенте. Цены
+     * совпадали — пока совпадали. Любая правка одной стороны показывала бы
+     * игроку одну цену и списывала другую, а проверка баланса в клиенте
+     * (`player.stars < item.price`) отказала бы при достаточном числе звёзд.
+     *
+     * Правило простое: цену, эффект и длительность знает только эта таблица.
+     * Колесо удачи устроено так же — клиент берёт призы из ответа сервера.
+     */
+    const STAR_SHOP_ITEMS = Object.freeze([
+        // Баффы
+        Object.freeze({ id: 'buff_loot_1h', name: 'x2 Добыча', desc: 'Удвоенный лут на 1 час', icon: '📦', price: 5, category: 'buffs', duration: 3600, effect: 'loot_x2' }),
+        Object.freeze({ id: 'buff_energy_1h', name: 'Бесплатная энергия', desc: 'Энергия не тратится 1 час', icon: '⚡', price: 3, category: 'buffs', duration: 3600, effect: 'free_energy' }),
+        Object.freeze({ id: 'buff_radiation_1h', name: 'Анти-rad', desc: 'Защита от радиации 1 час', icon: '☢️', price: 2, category: 'buffs', duration: 3600, effect: 'no_radiation' }),
+        Object.freeze({ id: 'buff_exp_1h', name: 'x2 Опыт', desc: 'Удвоенный опыт 1 час', icon: '⬆️', price: 4, category: 'buffs', duration: 3600, effect: 'exp_x2' }),
+        Object.freeze({ id: 'buff_loot_daily', name: 'x2 Добыча (24ч)', desc: 'Удвоенный лут на 24 часа', icon: '📦', price: 20, category: 'buffs', duration: 86400, effect: 'loot_x2' }),
+        // Косметика
+        Object.freeze({ id: 'cosm_glow_gold', name: 'Золотое свечение', desc: 'Золотое свечение вокруг профиля', icon: '✨', price: 50, category: 'cosmetics', type: 'effect', effect: 'glow_gold' }),
+        Object.freeze({ id: 'cosm_glow_blue', name: 'Синее свечение', desc: 'Синее свечение вокруг профиля', icon: '💠', price: 30, category: 'cosmetics', type: 'effect', effect: 'glow_blue' }),
+        Object.freeze({ id: 'cosm_frame_elite', name: 'Элитная рамка', desc: 'Особая рамка профиля', icon: '🖼️', price: 100, category: 'cosmetics', type: 'frame', effect: 'frame_elite' }),
+        Object.freeze({ id: 'cosm_title_veteran', name: 'Звание: Ветеран', desc: 'Звание под ником', icon: '🎖️', price: 25, category: 'cosmetics', type: 'title', effect: 'title_veteran' }),
+        Object.freeze({ id: 'cosm_particles_fire', name: 'Огненные частицы', desc: 'Огненные частицы при действиях', icon: '🔥', price: 40, category: 'cosmetics', type: 'particles', effect: 'particles_fire' })
+    ]);
+
+    /**
+     * Товар магазина за звёзды по id.
+     * @param {string} id идентификатор товара
+     * @returns {object|null}
+     */
+    function getStarShopItem(id) {
+        if (!id) return null;
+        return STAR_SHOP_ITEMS.find((item) => item.id === id) || null;
+    }
+
+    /**
+     * Товары одной категории ('buffs'/'cosmetics') в порядке каталога.
+     * @param {string} category
+     * @returns {Array<object>}
+     */
+    function getStarShopItemsByCategory(category) {
+        return STAR_SHOP_ITEMS.filter((item) => item.category === category);
+    }
+
     return {
+        STAR_SHOP_ITEMS,
+        getStarShopItem,
+        getStarShopItemsByCategory,
         EQUIPMENT_SLOTS,
         COMBAT_SLOTS,
         resolveEquipmentSlot,
