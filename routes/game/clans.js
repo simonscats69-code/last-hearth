@@ -534,13 +534,18 @@ router.post('/clan/donate', wrap(async (req, res) => {
 
         // Списание с игрока и добавление в казну клана
         await client.query(
-            `UPDATE players SET coins = coins - $1, clan_donated = clan_donated + $1 
+            // COALESCE: у старых записей счётчик пожертвований мог быть NULL,
+            // и clan_donated замирал навсегда вместо роста.
+            `UPDATE players SET coins = coins - $1, clan_donated = COALESCE(clan_donated, 0) + $1
              WHERE id = $2`,
             [donation, playerId]
         );
-        
+
         await client.query(
-            `UPDATE clans SET total_donated = total_donated + $1, coins = coins + $1 WHERE id = $2`,
+            `UPDATE clans
+                SET total_donated = COALESCE(total_donated, 0) + $1,
+                    coins = COALESCE(coins, 0) + $1
+              WHERE id = $2`,
             [donation, player.clan_id]
         );
         

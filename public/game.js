@@ -7318,10 +7318,10 @@ function generateScreens() {
             <div class="screen-content">
                 <div class="wheel-container">
                     <div class="wheel" id="wheel">
-                        <div class="wheel-prizes">
-                            <span class="prize">10</span><span class="prize">25</span><span class="prize">50</span>
-                            <span class="prize">100</span><span class="prize">x2</span><span class="prize">⚡20</span>
-                        </div>
+                        <!-- Секторы и подписи рисует renderWheelSectors() из списка призов
+                     с сервера: раньше здесь стояли шесть захардкоженных
+                     подписей, которые разъезжались с реальными призами. -->
+                <div class="wheel-prizes"></div>
                     </div>
                     <button class="btn" id="wheel-free-btn">🎡 Бесплатно</button>
                     <button class="btn" id="wheel-paid-btn">⭐ За 1 звезду</button>
@@ -7818,6 +7818,46 @@ const WHEEL_PRIZES = [
 let wheelPrizes = WHEEL_PRIZES;
 
 /**
+ * Отрисовка секторов колеса по списку призов с сервера.
+ *
+ * Раньше и градиент секторов (conic-gradient с шестью фиксированными
+ * границами), и подписи (шесть правил :nth-child) были захардкожены под
+ * ровно шесть призов. Стоило серверу вернуть другой набор — и подписи
+ * разъезжались с секторами, а анимация подсвечивала не то. Теперь и цвет,
+ * и угол считаются из актуального списка.
+ *
+ * @param {string[]} [palette] цвета секторов
+ */
+function renderWheelSectors(palette) {
+    const wheel = document.getElementById('wheel');
+    const wrap = wheel?.querySelector('.wheel-prizes');
+    if (!wheel || !wrap) return;
+
+    const prizes = Array.isArray(wheelPrizes) && wheelPrizes.length ? wheelPrizes : WHEEL_PRIZES;
+    const count = prizes.length;
+    const segment = 360 / count;
+
+    const colors = palette || [
+        '#e74c3c', '#f39c12', '#2ecc71', '#3498db', '#9b59b6', '#e67e22', '#1abc9c', '#c0392b'
+    ];
+    const stops = prizes
+        .map((_, index) => `${colors[index % colors.length]} ${index * segment}deg ${(index + 1) * segment}deg`)
+        .join(', ');
+    wheel.style.background = `conic-gradient(${stops})`;
+
+    // Радиус считаем от реального размера колеса: колесо адаптивное, и
+    // фиксированное смещение в CSS переставало попадать на обод.
+    const size = wheel.clientWidth || 260;
+    const radius = Math.max(36, Math.round(size * 0.35));
+
+    wrap.innerHTML = prizes.map((prize, index) => {
+        const angle = -90 + segment * (index + 0.5);
+        // Контр-поворот (-angle) держит текст горизонтальным.
+        return `<span class="prize" style="transform: translate(-50%, -50%) rotate(${angle}deg) translateY(-${radius}px) rotate(${-angle}deg)">${escapeHtml(prize.text || '')}</span>`;
+    }).join('');
+}
+
+/**
  * Открытие колеса удачи.
  * Данные подгружает onScreenOpen('wheel') — здесь только переход.
  */
@@ -7850,6 +7890,7 @@ async function loadWheelInfo() {
                 text: p.text
             }));
         }
+        renderWheelSectors();
 
         if (freeBtn) {
             freeBtn.disabled = !canSpinFree;
@@ -7861,7 +7902,9 @@ async function loadWheelInfo() {
         if (paidBtn) {
             const stars = Number(gameState.player?.stars || 0);
             paidBtn.disabled = stars < 1;
-            paidBtn.textContent = stars < 1 ? '⭐ Нужен 1 Star' : '⭐ За 1 Star';
+            // Раньше здесь было «За 1 Star»: JS перезаписывал подпись в шаблоне
+            // при каждом открытии колеса и возвращал английский текст.
+            paidBtn.textContent = stars < 1 ? '⭐ Нужна 1 звезда' : '⭐ За 1 звезду';
         }
 
         if (freeInfo) {
