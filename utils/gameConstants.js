@@ -98,18 +98,48 @@ function rollItemRarity(locationId, luck = 1) {
     const modifiedTable = { ...table };
     
     // Распределяем бонус удачи: чем выше редкость, тем больший бонус
+    //
+    // Регрессия: раньше бонус начислялся «в вакуум» — к четырём редкостям
+    // уходило 2.5 × luckBonus, а из common вычиталось всего 0.25 × luckBonus.
+    // Сумма таблицы уезжала за 100 (локация 5 при luck 150 — до 133.75), и
+    // кумулятивная сумма достигала 100 РАНЬШЕ legendary. Итог: чем выше
+    // удача, тем реже самый редкий дроп — при luck ≥ 80 legendary не
+    // выпадал вообще. Теперь бонус берётся из common, а если common не
+    // хватает — доли пропорционально урезаются, сумма всегда 100. При этом
+    // common не обнуляется полностью: иначе на сильной удаче обычные
+    // предметы не выпадали бы вообще (проверено: 0 из 4000 бросков).
     if (luck > 10) {
-        // legendary: полный бонус
-        modifiedTable.legendary = Math.min(25, (modifiedTable.legendary || 0) + luckBonus);
-        // epic: 80% от бонуса
-        modifiedTable.epic = Math.min(40, (modifiedTable.epic || 0) + (luckBonus * 0.8));
-        // rare: 50% от бонуса
-        modifiedTable.rare = Math.min(50, (modifiedTable.rare || 0) + (luckBonus * 0.5));
-        // uncommon: 20% от бонуса
-        modifiedTable.uncommon = Math.min(50, (modifiedTable.uncommon || 0) + (luckBonus * 0.2));
-        // common: уменьшаем на сумму добавленного
-        const addedBonus = (luckBonus * 0.1) + (luckBonus * 0.08) + (luckBonus * 0.05) + (luckBonus * 0.02);
-        modifiedTable.common = Math.max(0, (modifiedTable.common || 0) - addedBonus);
+        // Потолок бонуса для каждой редкости
+        const BONUS_CAPS = { legendary: 25, epic: 40, rare: 50, uncommon: 50 };
+        // Доля luckBonus, достающаяся редкости
+        const BONUS_SHARES = { legendary: 1, epic: 0.8, rare: 0.5, uncommon: 0.2 };
+        const BONUS_ORDER = ['legendary', 'epic', 'rare', 'uncommon'];
+        // Минимум, который common обязан сохранить при любой удаче
+        const COMMON_FLOOR_PERCENT = 1;
+
+        const baseCommon = Math.max(0, Number(table.common) || 0);
+        const spendable = Math.max(0, baseCommon - COMMON_FLOOR_PERCENT);
+        const planned = {};
+        let plannedTotal = 0;
+
+        for (const rarity of BONUS_ORDER) {
+            const current = Math.max(0, Number(table[rarity]) || 0);
+            const target = Math.min(BONUS_CAPS[rarity], current + luckBonus * BONUS_SHARES[rarity]);
+            planned[rarity] = Math.max(0, target - current);
+            plannedTotal += planned[rarity];
+        }
+
+        // Сколько common реально можно отдать: если не хватает, режем все
+        // доли пропорционально — сумма таблицы обязана остаться 100.
+        const scale = plannedTotal > spendable && plannedTotal > 0
+            ? spendable / plannedTotal
+            : 1;
+
+        for (const rarity of BONUS_ORDER) {
+            const current = Math.max(0, Number(table[rarity]) || 0);
+            modifiedTable[rarity] = current + planned[rarity] * scale;
+        }
+        modifiedTable.common = baseCommon - plannedTotal * scale;
     }
     
     let cumulative = 0;

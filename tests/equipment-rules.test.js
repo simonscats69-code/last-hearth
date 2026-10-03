@@ -5,6 +5,7 @@
  * расхождение правил здесь ломает обе стороны сразу.
  */
 const rules = require('../public/shared/equipment');
+const gameConstants = require('../utils/gameConstants');
 const fs = require('fs');
 const path = require('path');
 
@@ -225,6 +226,75 @@ describe('Магазин за звёзды: один каталог для кл�
         // Сервер берёт цену из каталога, а не из своей переменной.
         expect(server).toMatch(/itemConfig\.price/);
         expect(server).not.toMatch(/itemConfig\.stars/);
+    });
+});
+
+describe('Таблицы лута', () => {
+    test('сумма шансов в каждой локации равна 100', () => {
+        for (const [id, table] of Object.entries(gameConstants.LOOT_TABLES)) {
+            const sum = Object.values(table).reduce((a, b) => a + b, 0);
+            expect({ id, sum }).toEqual({ id, sum: 100 });
+        }
+    });
+
+    test('getLootTable: неизвестная локация даёт безопасную первую', () => {
+        expect(gameConstants.getLootTable(1)).toBe(gameConstants.LOOT_TABLES[1]);
+        expect(gameConstants.getLootTable(99)).toBe(gameConstants.LOOT_TABLES[1]);
+        expect(gameConstants.getLootTable(undefined)).toBe(gameConstants.LOOT_TABLES[1]);
+    });
+
+    /**
+     * Регрессия: бонус удачи начислялся «в вакуум» — к редкостям уходило
+     * 2.5 × luckBonus, из common вычиталось 0.25 × luckBonus. Сумма
+     * переваливала за 100, и кумулятивная сумма достигала 100 раньше
+     * legendary: при luck ≥ 80 самый редкий дроп не выпадал вообще.
+     */
+    test('бонус удачи не делает legendary недостижимым', () => {
+        const original = Math.random;
+        try {
+            for (const [id, table] of Object.entries(gameConstants.LOOT_TABLES)) {
+                for (const luck of [1, 10, 11, 30, 60, 80, 100, 150, 500]) {
+                    Math.random = () => 1 - 1e-9; // максимальный roll
+                    const rolled = gameConstants.rollItemRarity(Number(id), luck);
+                    // Если legendary есть в базовой таблице, он обязан
+                    // оставаться достижимым при любой удаче.
+                    if (table.legendary > 0) expect(rolled).toBe('legendary');
+                }
+            }
+        } finally {
+            Math.random = original;
+        }
+    });
+
+    test('rollItemRarity всегда возвращает известную редкость', () => {
+        const allowed = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
+        for (let i = 0; i < 500; i++) {
+            const rolled = gameConstants.rollItemRarity(5, 150);
+            expect(allowed).toContain(rolled);
+        }
+    });
+
+    /**
+     * Баланс: удача обязана повышать долю редких, а не понижать.
+     * Проверяем на большой выборке, чтобы не поймать случайный шум.
+     */
+    test('удача сдвигает баланс в сторону редких предметов', () => {
+        const N = 4000;
+        const countRarities = (luck) => {
+            const counts = {};
+            for (let i = 0; i < N; i++) {
+                const rarity = gameConstants.rollItemRarity(5, luck);
+                counts[rarity] = (counts[rarity] || 0) + 1;
+            }
+            return counts;
+        };
+
+        const lowLuck = countRarities(1);
+        const highLuck = countRarities(150);
+
+        expect(highLuck.legendary).toBeGreaterThan(lowLuck.legendary || 0);
+        expect(highLuck.epic).toBeGreaterThan(lowLuck.epic || 0);
+        expect(highLuck.common).toBeLessThan(lowLuck.common || 0);
     });
 });
 
