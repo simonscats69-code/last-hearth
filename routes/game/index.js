@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { queryOne } = require('../../db/database');
+const { query, queryOne, describeError } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger } = require('../../utils/serverApi');
 const { generateReferralCode } = require('../../utils/referralCode');
@@ -39,38 +39,27 @@ const purchaseLimiter = rateLimit({
     keyGenerator: (req) => req.player?.id || req.ip
 });
 
-// Safe require - не падает если модуль не найден
+// Загрузка роутеров без шума в логах.
+//
+// Здесь было четыре logger.info на КАЖДЫЙ модуль («Попытка загрузить»,
+// «загружен, тип», «имеет stack…», «возвращаем как есть») плюс ещё два блока
+// на world и bosses с дампом маршрутов — около 40 строк на каждый старт
+// процесса. Реальную ошибку логирует только catch, поэтому успешные
+// сообщения ушли на debug: на уровне info старт остаётся читаемым.
 function safeRequire(path, name) {
     try {
-        logger.info(`[game] Попытка загрузить ${name} из ${path}`);
         let module = require(path);
-        logger.info(`[game] Модуль ${name} загружен, тип:`, typeof module);
-        
-        if (typeof module === 'function') {
-            if (Array.isArray(module.stack)) {
-                logger.info(`[game] ${name} имеет stack (Express router), возвращаем как есть`);
-                return module;
-            }
-            logger.info(`[game] ${name} вызываем как функцию()`);
+
+        if (typeof module === 'function' && !Array.isArray(module.stack)) {
             module = module();
         }
-        
-        if (module && typeof module === 'object' && module.router) {
-            logger.info(`[game] ${name} имеет .router, возвращаем его`);
-            return module.router;
+
+        if (module && typeof module === 'object') {
+            if (module.router) return module.router;
+            if (module.get || module.post || module.put || module.delete || module.patch) return module;
+            if (Array.isArray(module.stack)) return module;
         }
-        
-        if (module && typeof module === 'object' && (module.get || module.post || module.put || module.delete || module.patch || module.handle)) {
-            logger.info(`[game] ${name} является Express router, возвращаем как есть`);
-            return module;
-        }
-        
-        if (module && typeof module === 'object' && Array.isArray(module.stack)) {
-            logger.info(`[game] ${name} имеет stack (Express router), возвращаем как есть`);
-            return module;
-        }
-        
-        logger.info(`[game] ${name} возвращаем как есть (${typeof module})`);
+
         return module;
     } catch (error) {
         logger.error(`[game] Ошибка загрузки ${name}:`, error.message, error.stack);
@@ -84,20 +73,11 @@ function safeRequire(path, name) {
 const worldRouter = safeRequire('./world', 'world');
 const bossesRouter = safeRequire('./bosses', 'bosses');
 
-logger.info('[game] worldRouter загружен:', worldRouter ? 'OK' : 'NULL');
-if (worldRouter?.stack) {
-    logger.info('[game] world routes:', worldRouter.stack.map(r => r.route?.path).filter(Boolean));
-}
-
-logger.info('[game] bossesRouter загружен:', bossesRouter ? 'OK' : 'NULL');
-if (bossesRouter?.stack) {
-    logger.info('[game] bosses routes:', bossesRouter.stack.map(r => r.route?.path).filter(Boolean));
-}
-
 const clansRouter = safeRequire('./clans', 'clans');
 const pvpRouter = safeRequire('./pvp', 'pvp');
 const playerRouter = safeRequire('./player', 'player');
 const itemsRouter = safeRequire('./items', 'items');
+const workshopRouter = safeRequire('./workshop', 'workshop');
 const statusRouter = safeRequire('./status', 'status');
 const minigamesRouter = safeRequire('./minigames', 'minigames');
 
@@ -219,19 +199,62 @@ async function validatePlayer(req, res, next) {
         
         req.player = buildRequestPlayer(validated.user, dbPlayer);
         req.telegramAuth = validated;
-        
+
+        // Отметка активности. Колонка last_action_time была DEFAULT NOW()
+        // при регистрации и больше НИКОГДА не обновлялась: игроки вечно
+        // считались офлайн в кланах (is_online), а планировщик достижений
+        // выбирал для проверки только тех, кто зарегистрировался за сутки.
+        // Пишем не чаще раза в 5 минут на игрока — иначе это лишний UPDATE
+        // на каждый запрос; троттлинг держится в памяти процесса.
+        touchPlayerActivity(dbPlayer.id);
+
         logger.info('[validatePlayer] Авторизация успешна', {
             telegramId: validated.user.id,
             playerId: dbPlayer.id,
             firstName: validated.user.first_name,
             username: validated.user.username
         });
-        
+
         next();
     } catch (error) {
         logger.error('[game] Ошибка валидации игрока:', error);
         return res.status(500).json({ error: 'Ошибка сервера' });
     }
+}
+
+/**
+ * Отметка «игрок активен» с троттлингом.
+ *
+ * Запись в БД делается не чаще раза в 5 минут на игрока: защита
+ * last_action_time нужна кланам (онлайн), планировщику достижений и
+ * админской статистике, но обновлять её на каждом запросе слишком дорого.
+ *
+ * @param {number} playerId
+ */
+const ACTIVITY_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+const lastActivityTouch = new Map();
+
+function touchPlayerActivity(playerId) {
+    const id = Number(playerId);
+    if (!Number.isInteger(id) || id <= 0) return;
+
+    const now = Date.now();
+    const last = lastActivityTouch.get(id) || 0;
+    if (now - last < ACTIVITY_TOUCH_INTERVAL_MS) return;
+
+    lastActivityTouch.set(id, now);
+
+    // Ошибку не пробрасываем: отметка активности не должна ломать запрос.
+    query(
+        `UPDATE players
+            SET last_action_time = NOW()
+          WHERE id = $1
+            AND (last_action_time IS NULL OR last_action_time < NOW() - INTERVAL '5 minutes')`,
+        [id]
+    ).catch((error) => {
+        lastActivityTouch.delete(id);
+        logger.warn('[activity] Не удалось обновить last_action_time', describeError(error));
+    });
 }
 
 // ====== RATE LIMITERS FIRST (защита от DoS через неавторизованные запросы) ======
@@ -242,7 +265,17 @@ router.use('/pvp/attack', criticalActionLimiter);
 router.use('/pvp/attack-hit', criticalActionLimiter);
 router.use('/minigames/wheel/spin', criticalActionLimiter);
 router.use('/minigames/purchase', purchaseLimiter);
+// Ремонт и улучшение — траты валюты, поэтому под тем же лимитом покупок.
 router.use('/items/buy', purchaseLimiter);
+router.use('/workshop/repair', purchaseLimiter);
+router.use('/workshop/upgrade', purchaseLimiter);
+router.use('/workshop/modify', purchaseLimiter);
+router.use('/items/buy-stars', purchaseLimiter);
+// Алиас /inventory монтирует тот же роутер предметов (см. конец файла),
+// поэтому лимиты трат монет нужно продублировать: иначе /inventory/buy
+// и /inventory/buy-stars проходили бы мимо purchaseLimiter.
+router.use('/inventory/buy', purchaseLimiter);
+router.use('/inventory/buy-stars', purchaseLimiter);
 router.use(authLimiter); // Лимит на auth-запросы
 router.use(generalActionLimiter);
 
@@ -262,6 +295,7 @@ router.use('/clans', clansRouter);
 router.use('/pvp', pvpRouter);
 router.use('/player', playerRouter);
 router.use('/items', itemsRouter);
+router.use('/workshop', workshopRouter);
 router.use('/status', statusRouter);
 router.use('/minigames', minigamesRouter);
 

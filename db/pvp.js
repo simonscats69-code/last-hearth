@@ -9,6 +9,9 @@
  */
 
 const { query, queryOne } = require('./database');
+// Правила предметов (прочность/апгрейд/защита) — те же, что в бою с боссами,
+// иначе PvP и боссы считались бы по разным правилам.
+const equipmentRules = require('../public/shared/equipment.js');
 
 /**
  * Проверка, защищён ли игрок от PvP (уровень < 5)
@@ -102,10 +105,14 @@ async function createPVPMatch(attackerId, defenderId, locationId, client = null)
 
 /**
  * Расчёт базового урона в PvP (детерминированный, без уклонения)
- * Формула совпадает с логикой роута: сила*2 + ловкость*0.8 + оружие,
- * поправка на разницу уровней ±1% за уровень, снижение от выносливости
- * защитника (soft cap 60%), минимум 1 урон.
- * @param {object} attacker - атакующий ({ strength, agility, level, equipment })
+ *
+ * Формула: сила*2 + ловкость*0.8 + оружие, поправка на разницу уровней ±1% за
+ * уровень, снижение выносливостью защитника (soft cap 60%), затем защита
+ * брони (applyDefenseReduction) — минимум 1 урон.
+ *
+ * Раньше броня вообще не участвовала: stats.defense игнорировался, а урон
+ * оружия считался из сырого поля damage без учёта прочности и улучшений.
+ * @param {object} attacker - атакующий ({ strength, agility, level, equipment, set_damage })
  * @param {object} defender - защищающийся ({ endurance, level, equipment })
  * @returns {{damage: number}} объект с итоговым уроном
  */
@@ -116,9 +123,20 @@ function calculatePVPDamage(attacker, defender) {
     let damage = Number(a.strength || 0) * 2 + Number(a.agility || 0) * 0.8;
 
     const aEq = a.equipment && typeof a.equipment === 'object' ? a.equipment : {};
-    if (aEq.weapon && aEq.weapon.damage) {
-        damage += Number(aEq.weapon.damage || 0);
-    }
+    const dEq = d.equipment && typeof d.equipment === 'object' ? d.equipment : {};
+
+    // Урон оружия с учётом прочности и уровня улучшения (0 у сломанного).
+    //
+    // Дальний бой даёт +25% урона в PvP (stats.pvp_bonus), а разброс
+    // (stats.variance у дробовика и реактивной пушки) применяется только к
+    // урону ОРУЖИЯ: разброс от всего урона бойца ломал бы расчёт.
+    const weapon = aEq.weapon;
+    const weaponBase = equipmentRules.getEffectiveStatValue(weapon, ['damage']);
+    const pvpBonus = 1 + Math.min(100, Number(weapon && weapon.stats && weapon.stats.pvp_bonus) || 0) / 100;
+    damage += equipmentRules.rollVarianceDamage(weaponBase * pvpBonus, Number(weapon && weapon.stats && weapon.stats.variance) || 0);
+
+    // Бонус сета атакующего (+15 урона за 4 части «Бандитского сета»).
+    damage += Number(a.set_damage || 0);
 
     // Влияние уровня: ±1% за разницу уровней
     damage *= 1 + (Number(a.level || 1) - Number(d.level || 1)) * 0.01;
@@ -128,7 +146,8 @@ function calculatePVPDamage(attacker, defender) {
     const defenseReduction = Math.min(60, endurance / (endurance + 60) * 60);
     damage = Math.floor(damage * (1 - defenseReduction / 100));
 
-    return { damage: Math.max(1, damage) };
+    // Защита снаряжения защитника (мягкий предел 60%)
+    return { damage: equipmentRules.applyDefenseReduction(damage, equipmentRules.calculateDefenseTotal(dEq)) };
 }
 
 /**

@@ -16,7 +16,13 @@ const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
 const { logger, logPlayerError, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
-const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment } = require('../../utils/game-helpers');
+const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory } = require('../../utils/game-helpers');
+// Лимит слотов инвентаря — из общего файла правил, иначе кража предмета
+// могла выдать 101-й слот и заблокировать добычу.
+const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
+// Тот же файл правил отвечает и за «снаряжение ли это» — от этого зависит,
+// крадут ли предмет целиком или одну штуку из стака.
+const equipmentRules = require('../../public/shared/equipment.js');
 
 
 
@@ -42,6 +48,15 @@ const handleError = (res, error, action, playerId) => {
 
     if (error.message.includes('энергия') || error.message.includes('ENERGY')) {
         code = 'INSUFFICIENT_ENERGY';
+        statusCode = 400;
+    } else if (error.message.includes('уже завершён') || error.message.includes('уже закончен')) {
+        // Обычное игровое состояние, а не ошибка сервера: раньше уходило в
+        // INTERNAL_ERROR с HTTP 500, и клиент показывал «ошибка сервера»
+        // вместо понятного сообщения и не обновлял состояние боя.
+        code = 'BATTLE_FINISHED';
+        statusCode = 409;
+    } else if (error.message.includes('мертв')) {
+        code = 'PLAYER_DEAD';
         statusCode = 400;
     } else if (error.message.includes('не найден') || error.message.includes('локации')) {
         code = 'NOT_FOUND';
@@ -448,8 +463,10 @@ router.post('/attack-hit', async (req, res) => {
             // P1-6: формулы с насыщением (soft caps) — вынесены в db/pvp.js
             const attackerEq = normalizeEquipment(attacker.equipment);
             const defenderEq = normalizeEquipment(defender.equipment);
+            // Бонус сета атакующего (урон) — считаем один раз для обоих.
+            const attackerSetBonuses = await getSetBonuses(attackerEq);
             let damage = pvp.calculatePVPDamage(
-                { ...attacker, equipment: attackerEq },
+                { ...attacker, equipment: attackerEq, set_damage: attackerSetBonuses.damage || 0 },
                 { ...defender, equipment: defenderEq }
             ).damage;
 
@@ -486,9 +503,25 @@ router.post('/attack-hit', async (req, res) => {
             // Применяем урон
             const newHealth = Math.max(0, defender.health - damage);
 
+            // Износ снаряжения: оружие атакующего и броня защитника.
+            // Раньше PvP вообще ничего не изнашивал — прочность была мёртвой.
+            const attackerBroken = wearEquipmentSlots(client, attackerId, attackerEq, ['weapon']);
+            const defenderBroken = wearEquipmentSlots(client, defenderId, defenderEq,
+                ['body', 'head', 'hands', 'legs', 'boots', 'armor', 'helmet', 'accessory']);
+
             await client.query(`
-                UPDATE players SET health = $1 WHERE id = $2
-            `, [newHealth, defenderId]);
+                UPDATE players
+                   SET health = $1,
+                       equipment = $2::jsonb
+                 WHERE id = $3
+            `, [newHealth, JSON.stringify(defenderEq), defenderId]);
+
+            // Износ оружия атакующего сохраняем ВСЕГДА, а не только при поломке:
+            // иначе −1 прочности за удар просто терялся бы в памяти.
+            await client.query(
+                'UPDATE players SET equipment = $1::jsonb WHERE id = $2',
+                [JSON.stringify(attackerEq), attackerId]
+            );
 
             await client.query(
                 `UPDATE players
@@ -532,11 +565,31 @@ router.post('/attack-hit', async (req, res) => {
 
                 if (Math.random() < 0.1) {
                     const [stolen] = pvp.getRandomItemsToSteal(defenderInventory, 1);
-                    if (stolen) {
+                    // Украденный предмет должен поместиться: раньше шёл
+                    // прямой attackerInventory.push(stolen) — без проверки
+                    // лимита в 100 слотов и без стакования. При полном
+                    // инвентаре атакующий получал 101-й слот, и любая добыча
+                    // сразу упиралась в INVENTORY_FULL.
+                    // Снаряжение не стакуется, поэтому «втиснуть» его можно
+                    // только в пустой слот — если мест нет, предмет просто
+                    // не крадётся (у проигравшего он остаётся).
+                    if (stolen && attackerInventory.length < MAX_INVENTORY_SLOTS) {
                         const stolenIndex = defenderInventory.indexOf(stolen);
-                        defenderInventory.splice(stolenIndex, 1);
-                        stolenItem = stolen;
-                        attackerInventory.push(stolen);
+                        const stackQuantity = Math.max(1, Number(stolen.quantity || 1));
+                        const isEquipment = equipmentRules.isEquipmentItem(stolen);
+
+                        // Из стака крадётся ОДНА штука, а не весь стак: раньше
+                        // splice удалял запись целиком, и проигравший терял,
+                        // например, все 99 собранных консервов.
+                        if (!isEquipment && stackQuantity > 1) {
+                            defenderInventory[stolenIndex] = { ...stolen, quantity: stackQuantity - 1 };
+                            addItemToInventory(attackerInventory, { ...stolen, quantity: 1 }, null);
+                            stolenItem = { ...stolen, quantity: 1 };
+                        } else {
+                            defenderInventory.splice(stolenIndex, 1);
+                            addItemToInventory(attackerInventory, { ...stolen }, null);
+                            stolenItem = stolen;
+                        }
                     }
                 }
 
@@ -670,7 +723,11 @@ await client.query(`
                     damage,
                     yourHealth: attacker.health,
                     targetHealth: newHealth,
-                    maxHealth: defender.max_health
+                    maxHealth: defender.max_health,
+                    // Слоты сломанного снаряжения — клиент предупреждает игрока,
+                    // что пора в мастерскую.
+                    your_broken_equipment: attackerBroken,
+                    target_broken_equipment: defenderBroken
                 },
                 energy_left: energyLeft,
                 last_energy_update: energyLastUpdate,

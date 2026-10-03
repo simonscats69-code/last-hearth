@@ -1500,78 +1500,17 @@ function updateEnergyTimer() {
 }
 
 /**
- * Предпросмотр урона по боссу
- * @param {number} bossId - ID босса
- * @returns {Promise<object>} данные о уроне
+ * Удалены getDamagePreview и updateDamagePreviewUI вместе с блоком
+ * damage-preview на экране выбора оружия: функцию никто не вызывал,
+ * предпросмотр не отображался, а список оружия и так показывает урон
+ * каждого ствола. Вместе с ними удалены обращения к /bosses/bonuses —
+ * единственным потребителем был этот мёртвый предпросмотр.
  */
-async function getDamagePreview(bossId) {
-    try {
-        // Серверный эндпоинт: GET /api/game/bosses/bonuses
-        const data = await apiRequest('/game/bosses/bonuses');
-
-        if (data?.success && data?.data?.bonuses) {
-            const bonus = data.data.bonuses.find(b => b.boss_id === bossId);
-            if (bonus) {
-                const totalDamage = Number(bonus.current_damage || 0);
-                const masteryBonus = Number(bonus.mastery_bonus || 0);
-                const baseDamage = Math.max(1, totalDamage - masteryBonus);
-
-                return {
-                    baseDamage,
-                    masteryBonus,
-                    levelBonus: 0,
-                    totalDamage,
-                    kills: bonus.defeated_count || 0
-                };
-            }
-        }
-        return null;
-    } catch (e) {
-        console.error('Ошибка получения предпросмотра урона:', e);
-        return null;
-    }
-}
-
-/**
- * Обновить UI предпросмотра урона
- * @param {number} bossId - ID босса
- */
-async function updateDamagePreviewUI(bossId) {
-    const previewEl = document.getElementById('damage-preview');
-    if (!previewEl) return;
-    
-    const damageData = await getDamagePreview(bossId);
-    
-    if (damageData) {
-        previewEl.innerHTML = `
-            <div class="damage-preview-line">
-                <span>Базовый урон:</span>
-                <span class="damage-base">${damageData.baseDamage}</span>
-            </div>
-            <div class="damage-preview-line">
-                <span>Бонус мастерства:</span>
-                <span class="damage-mastery">+${damageData.masteryBonus}</span>
-            </div>
-            <div class="damage-preview-line">
-                <span>Бонус уровня:</span>
-                <span class="damage-level">+${damageData.levelBonus}</span>
-            </div>
-            <div class="damage-preview-total">
-                <span>Итого:</span>
-                <span class="damage-total">${damageData.totalDamage}</span>
-            </div>
-        `;
-    } else {
-        previewEl.innerHTML = '<div class="damage-preview-loading">Загрузка...</div>';
-    }
-}
 
 // Экспорт новых функций
 window.getTimeToNextEnergy = getTimeToNextEnergy;
 window.formatTimeMs = formatTimeMs;
 window.updateEnergyTimer = updateEnergyTimer;
-window.getDamagePreview = getDamagePreview;
-window.updateDamagePreviewUI = updateDamagePreviewUI;
 
 // ============================================================================
 // УПРАВЛЕНИЕ ЭКРАНАМИ
@@ -2168,9 +2107,14 @@ async function loadProfile() {
     playerData.energy = playerData.status.energy;
     playerData.max_energy = playerData.status.max_energy;
 
-    // Прогресс опыта по формуле сервера: 500 * lvl * (1 + lvl / 25)
+    // Прогресс опыта по ОБЩЕЙ формуле (public/shared/equipment.js — тот же файл,
+// что читает сервер). Раньше формула была продублирована здесь второй
+// копией: любое изменение одной из двух копий делало полосу опыта врущей.
+    const sharedRules = window.EquipmentShared;
     const level = Math.max(1, Number(playerData.level || 1));
-    const expNeeded = Math.round(500 * level * (1 + level / 25));
+    const expNeeded = sharedRules && typeof sharedRules.getExpForLevel === 'function'
+        ? sharedRules.getExpForLevel(level)
+        : Math.round(500 * level * (1 + level / 25));
     const expCurrent = Number(playerData.experience || 0);
     playerData.exp_progress = {
         current: expCurrent,
@@ -2325,16 +2269,6 @@ function refreshPlayerEnergyUI() {
 
     if (typeof updateEnergyTimer === 'function') {
         updateEnergyTimer();
-    }
-}
-
-// Исправленная функция - теперь только уровень влияет на дроп
-function updateDropChanceDisplay() {
-    const luck = gameState.player?.stats?.luck || gameState.player?.luck || 1;
-    const dropChance = Math.min(60, 10 + (luck * 0.4));
-    const dropChanceEl = document.getElementById('player-drop-chance');
-    if (dropChanceEl) {
-        dropChanceEl.textContent = `${Math.round(dropChance * 10) / 10}%`;
     }
 }
 
@@ -2505,6 +2439,23 @@ function getMainRecommendation(player) {
         };
     }
 
+    // Ежедневный бонус живёт 24 часа — дешевле всего напомнить о нём
+    // здесь: раньше механику было видно только кнопкой на экране.
+    const lastBonus = player.last_daily_bonus ? new Date(player.last_daily_bonus).getTime() : 0;
+    if (!lastBonus || Date.now() - lastBonus >= 24 * 60 * 60 * 1000) {
+        const streak = Number(player.daily_streak || 0);
+        return {
+            tone: 'ready',
+            state: 'Награда',
+            title: streak > 0 ? `Ежедневный бонус: день ${streak + 1}` : 'Забери ежедневный бонус',
+            text: 'Раз в сутки за серию дней: монеты каждый день и звезда каждый третий.',
+            primary: '🎁 Бонус доступен прямо сейчас',
+            secondary: streak > 0 ? `🔥 Серия: ${streak} дн.` : '⌛ Серия начнётся с первого дня',
+            actionLabel: 'Забрать бонус',
+            action: 'daily'
+        };
+    }
+
     if (achievementInsight.value !== 'Нет задач' && achievementInsight.desc.includes('готова')) {
         return {
             tone: 'ready',
@@ -2593,93 +2544,58 @@ function updateMainRecommendationUI(player) {
     }
 }
 
-function updateMainProgressCards(player) {
-    const expProgress = player.exp_progress || { current: 0, needed: 0 };
-    const remainingXp = Math.max(0, Number(expProgress.needed || 0) - Number(expProgress.current || 0));
-    const nextLevelValue = document.getElementById('next-level-value');
-    const nextLevelDesc = document.getElementById('next-level-desc');
-    if (nextLevelValue) nextLevelValue.textContent = `${remainingXp} XP`;
-    if (nextLevelDesc) nextLevelDesc.textContent = `До уровня ${(player.level || 1) + 1}`;
-
-    const bossInsight = getBossInsight();
-    const nextBossValue = document.getElementById('next-boss-value');
-    const nextBossDesc = document.getElementById('next-boss-desc');
-    if (nextBossValue) nextBossValue.textContent = bossInsight.value;
-    if (nextBossDesc) nextBossDesc.textContent = bossInsight.desc;
-
-    const rewardInsight = getAchievementInsight();
-    const nextRewardValue = document.getElementById('next-reward-value');
-    const nextRewardDesc = document.getElementById('next-reward-desc');
-    if (nextRewardValue) nextRewardValue.textContent = rewardInsight.value;
-    if (nextRewardDesc) nextRewardDesc.textContent = rewardInsight.desc;
-}
-
+/**
+ * Карточки целей: следующий босс и следующая зона.
+ *
+ * Раньше здесь читался `player.journey`, которого сервер НЕ отдаёт: в
+ * профиле есть только `progress`. Поэтому обе карточки навсегда показывали
+ * заглушки «Нет цели» и «Все зоны открыты» — то есть врали игроку и были
+ * чистым шумом на экране. Теперь цели вычисляются из данных, которые
+ * действительно есть: список боссов (refreshMainScreenInsights кладёт его в
+ * mainInsights) и список локаций.
+ */
 function updateJourneyProgress(player) {
-    const journey = player.journey || {};
-    const bossesKilledEl = document.getElementById('journey-bosses-killed');
     const mainBossEl = document.getElementById('journey-main-boss');
     const mainBossDescEl = document.getElementById('journey-main-boss-desc');
     const nextZoneEl = document.getElementById('journey-next-zone');
     const nextZoneDescEl = document.getElementById('journey-next-zone-desc');
-    const riskLabelEl = document.getElementById('journey-risk-label');
-    const riskDescEl = document.getElementById('journey-risk-desc');
 
-    if (bossesKilledEl) {
-        bossesKilledEl.textContent = String(journey.bosses_killed || player.stats_ext?.bosses_killed || 0);
-    }
+    // --- Следующий босс: первый, кого ещё не побеждали ---
+    const bosses = getMainInsightsStore().bosses;
+    const nextBoss = Array.isArray(bosses)
+        ? bosses.find((boss) => Number(boss.defeated_count || 0) === 0)
+        : null;
 
     if (mainBossEl) {
-        mainBossEl.textContent = journey.current_main_boss?.name || 'Нет цели';
+        mainBossEl.textContent = nextBoss ? nextBoss.name : 'Все побеждены';
     }
     if (mainBossDescEl) {
-        if (journey.current_main_boss) {
-            mainBossDescEl.textContent = journey.current_main_boss.defeated
-                ? `Уже побеждён ${journey.current_main_boss.kills} раз`
-                : 'Следующая главная цель';
+        if (!nextBoss) {
+            mainBossDescEl.textContent = 'Финальный страж позади';
+        } else if (nextBoss.is_unlocked) {
+            mainBossDescEl.textContent = `Доступен · урон ${Number(nextBoss.current_damage) || 0}`;
         } else {
-            mainBossDescEl.textContent = 'Боссы ещё не определены';
+            const required = Number(nextBoss.required_keys) || 1;
+            const owned = Number(nextBoss.owned_keys) || 0;
+            mainBossDescEl.textContent = `Ключи: ${owned}/${required}`;
         }
     }
+
+    // --- Следующая зона: первая, на которую не хватает уровня ---
+    const level = Math.max(1, Number(player?.level) || 1);
+    const zones = Array.isArray(gameState.locations) ? gameState.locations : [];
+    const nextZone = zones.find((zone) => {
+        const required = Number(zone.required_level ?? zone.min_level ?? 1);
+        return required > level;
+    });
 
     if (nextZoneEl) {
-        nextZoneEl.textContent = journey.next_zone?.name || 'Все зоны открыты';
+        nextZoneEl.textContent = nextZone ? nextZone.name : 'Все зоны открыты';
     }
     if (nextZoneDescEl) {
-        nextZoneDescEl.textContent = journey.next_zone
-            ? `Нужен уровень ${journey.next_zone.required_level}, риск ${journey.next_zone.danger_level}/7`
-            : 'Дальше только освоение самых опасных мест';
-    }
-
-    if (riskLabelEl) {
-        riskLabelEl.textContent = journey.mastered_risk?.label || 'Стабильный риск';
-    }
-    if (riskDescEl) {
-        riskDescEl.textContent = journey.mastered_risk
-            ? `Освоен уровень опасности ${journey.mastered_risk.danger_level}/7`
-            : 'Пока открыт только стартовый риск';
-    }
-}
-
-function updateMainBonuses(player) {
-    updateDropChanceDisplay();
-
-    const strength = Number(player.stats?.strength || player.strength || 1);
-    const weaponDamage = Number(player.equipment?.weapon?.damage || 0);
-    const damagePreviewEl = document.getElementById('player-damage-preview');
-    if (damagePreviewEl) {
-        damagePreviewEl.textContent = `+${strength + weaponDamage}`;
-    }
-
-    const status = player.status || {};
-    const survivalPreviewEl = document.getElementById('player-survival-preview');
-    if (survivalPreviewEl) {
-        if ((status.radiation || 0) >= 5 || (status.infections || 0) > 0) {
-            survivalPreviewEl.textContent = 'Риск';
-        } else if ((status.health || 0) <= ((status.max_health || 100) * 0.5)) {
-            survivalPreviewEl.textContent = 'Низкое HP';
-        } else {
-            survivalPreviewEl.textContent = 'Стабильно';
-        }
+        nextZoneDescEl.textContent = nextZone
+            ? `Уровень ${Number(nextZone.required_level ?? nextZone.min_level) || 1} · риск ${Number(nextZone.danger_level) || 1}/7`
+            : 'Открыты самые опасные места';
     }
 }
 
@@ -2772,66 +2688,14 @@ function findBestPreparationItem(type) {
     return null;
 }
 
-function updateRiskSummary(player) {
-    const status = player.status || {};
-    const health = Number(status.health || 0);
-    const maxHealth = Math.max(1, Number(status.max_health || 100));
-    const healthPercent = Math.round((health / maxHealth) * 100);
-    const radiation = Number(status.radiation || 0);
-    const infections = Number(status.infections || 0);
-
-    const card = document.getElementById('risk-summary-card');
-    const levelEl = document.getElementById('risk-summary-level');
-    const textEl = document.getElementById('risk-summary-text');
-    const actionEl = document.getElementById('risk-summary-action');
-    const zoneRisk = getCurrentZoneRiskProfile(player);
-
-    let risk = 'safe';
-    let level = 'Стабильно';
-    let text = 'Пока всё под контролем — можно безопасно продолжать вылазку.';
-    let action = 'Ищи лут';
-
-    if (health <= 0 || radiation >= 8 || infections >= 3) {
-        risk = 'danger';
-        level = 'Критическое состояние';
-        text = 'Есть высокий шанс сорвать прогресс. Сначала стабилизируй персонажа.';
-        action = 'Срочно лечиться';
-    } else if (!zoneRisk.isPrepared && zoneRisk.score >= 6) {
-        risk = 'danger';
-        level = `Зона: ${zoneRisk.label}`;
-        text = 'Текущая локация слишком опасна для твоей подготовки. Сначала усили защиту или возьми расходники.';
-        action = 'Сначала подготовиться';
-    } else if (!zoneRisk.isPrepared) {
-        risk = 'warning';
-        level = `Зона: ${zoneRisk.label}`;
-        text = 'Локация уже выгоднее, но без подготовки дебаффы будут копиться слишком быстро.';
-        action = 'Купить подготовку';
-    } else if (healthPercent <= 50 || radiation >= 5 || infections > 0) {
-        risk = 'warning';
-        level = 'Повышенный риск';
-        text = 'Можно играть дальше, но дебаффы и низкое здоровье уже заметно мешают.';
-        action = 'Купить расходники';
-    }
-
-    if (card) card.dataset.risk = risk;
-    if (levelEl) levelEl.textContent = level;
-    if (textEl) textEl.textContent = text;
-    if (actionEl) actionEl.textContent = action;
-}
-
-function setQuickEntryBadge(id, text) {
-    const badge = document.getElementById(id);
-    if (!badge) return;
-
-    if (!text) {
-        badge.style.display = 'none';
-        badge.textContent = '';
-        return;
-    }
-
-    badge.style.display = 'inline-flex';
-    badge.textContent = text;
-}
+/**
+ * Удалены updateQuickEntryBadges и setQuickEntryBadge: бейджи «доступно»,
+ * «нужно», «награда» ставились на кнопки быстрого доступа, но элементов
+ * bosses-badge / shop-badge / rating-badge / pvp-badge в разметке нет —
+ * функции молча ничего не делали, но требовали данных о боссах и
+ * достижениях, то есть лишние запросы при каждом обновлении экрана.
+ * Совет «что делать» теперь даёт единственная карточка рекомендаций.
+ */
 
 function syncUnlockedLocations(announce = false) {
     if (!Array.isArray(gameState.locations) || !gameState.locations.length || !gameState.player) {
@@ -2864,28 +2728,17 @@ function syncUnlockedLocations(announce = false) {
     });
 }
 
-function updateQuickEntryBadges(player) {
-    const bossInsight = getBossInsight();
-    const rewardInsight = getAchievementInsight();
-    const locationDanger = Number(player.location?.danger_level || 1);
-    const status = player.status || {};
-    const zoneRisk = getCurrentZoneRiskProfile(player);
-
-    setQuickEntryBadge('bosses-badge', bossInsight.available ? 'доступно' : 'цель');
-    setQuickEntryBadge('shop-badge', (!zoneRisk.isPrepared || (status.radiation || 0) >= 5 || (status.infections || 0) > 0 || (status.health || 0) <= ((status.max_health || 100) * 0.5)) ? 'нужно' : 'запасы');
-    setQuickEntryBadge('rating-badge', rewardInsight.desc.includes('готова') ? 'награда' : 'топы');
-    setQuickEntryBadge('pvp-badge', locationDanger >= 6 ? 'опасно' : 'закрыто');
-}
-
 function updateMainScreenInsights(player) {
     if (!player) return;
 
+    // Три функции-дубли удалены вместе с их блоками разметки:
+    // updateMainProgressCards (карточки Опыт/Боссы/Достижения),
+    // updateMainBonuses (пилюли Урон/Дроп/Выживаемость) и
+    // updateRiskSummary (карточка «Состояние»).
+    // Карточка рекомендаций ниже уже показывает состояние, совет и действие,
+    // поэтому экран больше не повторяет одну мысль четыре раза.
     updateMainRecommendationUI(player);
-    updateMainProgressCards(player);
     updateJourneyProgress(player);
-    updateMainBonuses(player);
-    updateRiskSummary(player);
-    updateQuickEntryBadges(player);
     updateZonePreparationUI(player);
 }
 
@@ -2893,6 +2746,9 @@ function handleMainGuidanceAction(action) {
     switch (action) {
         case 'search':
             document.getElementById('search-btn')?.click();
+            break;
+        case 'daily':
+            claimDailyBonus();
             break;
         case 'bosses':
             showScreen('bosses');
@@ -2978,6 +2834,8 @@ function updateProfileUI(player) {
     }
 
     renderActiveBuffs(player.buffs || gameState.buffs || {});
+
+    updateDailyBonusUI(player);
     
     // Обновляем отображение переломов и инфекций
     updateConditionsUI(status);
@@ -2986,6 +2844,43 @@ function updateProfileUI(player) {
     refreshMainScreenInsights().catch(error => {
         console.debug('Не удалось обновить инсайты главного экрана:', error);
     });
+}
+
+/**
+ * Ежедневный бонус: доступность кнопки и серия дней.
+ *
+ * Механика была недоступна из UI: эндпоинта /daily-bonus не существовало,
+ * хотя бот обещал бонус на команду /daily, а профиль отдаёт daily_streak.
+ * Кнопка появляется только когда бонус реально доступен.
+ */
+function updateDailyBonusUI(player) {
+    const button = document.getElementById('daily-bonus-btn');
+    if (!button) return;
+
+    const streak = Number(player?.daily_streak || 0);
+    const lastBonus = player?.last_daily_bonus ? new Date(player.last_daily_bonus).getTime() : 0;
+    const readyAt = lastBonus + 24 * 60 * 60 * 1000;
+    const available = !lastBonus || Date.now() >= readyAt;
+
+    button.style.display = available ? '' : 'none';
+    button.dataset.dailyStreak = String(streak);
+    button.textContent = streak > 0 ? `🎁 Ежедневный бонус (день ${streak + 1})` : '🎁 Получить ежедневный бонус';
+}
+
+/** Забрать ежедневный бонус */
+async function claimDailyBonus() {
+    if (!lockAction('dailyBonus')) return;
+    try {
+        const result = await apiRequest('/api/game/player/daily-bonus', { method: 'POST' });
+        showNotification(`🎁 ${result.data?.message || 'Бонус получен'}`, 'success');
+        playSound('coin');
+        await loadProfile().catch(() => null);
+        RenderCache.clear();
+    } catch (error) {
+        showNotification(error?.message || 'Не удалось получить бонус', 'error');
+    } finally {
+        unlockAction('dailyBonus');
+    }
 }
 
 function renderActiveBuffs(buffs = {}) {
@@ -3135,18 +3030,22 @@ async function searchLoot() {
             RenderCache.clear();
             
             // Анимация лута если предмет найден
-            if (result.found_item) {
+            if (result.found_key) {
+                // Ключ босса хранится в boss_keys, а не в инвентаре:
+                // сервер присылает его отдельным полем found_key.
+                showLootAnimation(result.found_key);
+                showModal(
+                    '🗝️ Найден ключ!',
+                    `${result.found_key.name} — откроет бой с боссом «${result.found_key.boss_name}».`
+                );
+                playSound('loot');
+                invalidateCache('bosses');
+            } else if (result.found_item) {
                 showLootAnimation(result.found_item);
-                if (result.found_item.type === 'key') {
-                    showKeyAnimation?.();
-                    showConfetti?.(80);
-                    showKeyRewardCelebration?.(result.found_item.name);
-                } else {
-                    showModal(
-                        '🎉 Предмет найден!',
-                        `Вы нашли: ${result.found_item.name} (${result.found_item.rarity})`
-                    );
-                }
+                showModal(
+                    '🎉 Предмет найден!',
+                    `Вы нашли: ${result.found_item.name} (${result.found_item.rarity})`
+                );
             } else {
                 showModal(
                     '🔍 Поиск',
@@ -3335,14 +3234,15 @@ async function checkPlayerStatus() {
 function isEquippableInventoryItem(item) {
     if (!item || typeof item !== 'object') return false;
 
-    const type = String(item.type || '').toLowerCase();
-    const slot = String(item.slot || '').toLowerCase();
-    const category = String(item.category || '').toLowerCase();
+    // Слот определяет общий файл правил (public/shared/equipment.js) — тот же,
+    // что использует сервер. Раньше здесь был свой список, в котором не было
+    // слотов body/head/hands/legs: такие предметы клиент считал неэкипируемыми.
+    if (window.EquipmentShared?.resolveEquipmentSlot) {
+        return Boolean(window.EquipmentShared.resolveEquipmentSlot(item));
+    }
 
-    return type === 'weapon'
-        || type === 'armor'
-        || ['weapon', 'armor', 'helmet', 'boots', 'accessory'].includes(slot)
-        || ['weapon', 'armor'].includes(category);
+    const type = String(item.type || '').toLowerCase();
+    return type === 'weapon' || type === 'armor' || type === 'helmet';
 }
 
 async function useItem(itemId, options = {}) {
@@ -3411,11 +3311,41 @@ async function loadInventory() {
         renderEquipment(data.equipment);
         renderInventoryCapacity();
         renderInventoryWithFilters(inventoryItems);
+        // Мастерская тянет цены ремонта/улучшения с сервера, поэтому грузится
+        // после отрисовки панели снаряжения.
+        renderWorkshopPanel();
 
     } catch (error) {
         console.error('Inventory error:', error);
         showNotification('Не удалось загрузить инвентарь', 'error');
     }
+}
+
+/**
+ * Прочность и уровень улучшения надетого предмета.
+ *
+ * Считаем через EquipmentShared — тот же модуль, что использует сервер,
+ * поэтому цифры в панели и в бою всегда совпадают.
+ */
+function renderEquipmentState(item) {
+    const rules = window.EquipmentShared;
+    if (!rules) return '';
+
+    const durability = rules.getDurabilityInfo(item);
+    const upgradeLevel = rules.getUpgradeLevel(item);
+    const parts = [];
+
+    if (upgradeLevel > 0) {
+        parts.push(`<span class="equip-slot-upgrade">+${upgradeLevel}</span>`);
+    }
+
+    if (durability.isBroken) {
+        parts.push('<span class="equip-slot-durability is-broken">⚠️ сломано</span>');
+    } else if (durability.current < durability.max) {
+        parts.push(`<span class="equip-slot-durability">🔧 ${durability.current}/${durability.max}</span>`);
+    }
+
+    return parts.length ? `<span class="equip-slot-state">${parts.join(' ')}</span>` : '';
 }
 
 /**
@@ -3454,16 +3384,223 @@ function renderEquipment(equipment) {
                         <span class="equip-slot-empty">пусто</span>
                     </div>`;
                 }
-                return `<div class="equip-slot rarity-${item.rarity || 'common'}">
-                    <span class="equip-slot-icon">${item.icon || '📦'}</span>
+                return `<div class="equip-slot rarity-${escapeHtml(item.rarity || 'common')}">
+                    <span class="equip-slot-icon">${escapeHtml(item.icon || '📦')}</span>
                     <span class="equip-slot-info">
                         <span class="equip-slot-name">${escapeHtml(item.name || label)}</span>
                         <span class="equip-slot-label">${escapeHtml(RARITY_LABELS[item.rarity] || '')}</span>
+                        ${renderEquipmentState(item)}
                     </span>
+                    <!-- Снятие было невозможно: слот можно было только заменить
+                         другим предметом. Кнопка возвращает вещь в инвентарь. -->
+                    <button class="btn equip-unequip-btn" data-ws-unequip="${escapeAttribute(slot)}"
+                            title="Снять">✕</button>
                 </div>`;
             }).join('')}
         </div>
+        <div id="workshop-panel" class="inv-workshop"></div>
     `;
+}
+
+/**
+ * Блок мастерской: ремонт и улучшение надетого снаряжения.
+ *
+ * Данные берём с /api/game/workshop (там считаются цены по тем же правилам,
+ * что и на сервере), поэтому кнопки сразу показывают реальную стоимость.
+ */
+async function renderWorkshopPanel() {
+    const root = document.getElementById('workshop-panel');
+    if (!root) return;
+
+    try {
+        const response = await apiRequest('/api/game/workshop');
+        const data = response?.data || response;
+        const slots = Array.isArray(data.slots) ? data.slots : [];
+
+        if (slots.length === 0) {
+            root.innerHTML = '';
+            return;
+        }
+
+        // Монетам в мастерской нужно быть свежими: покупка в магазине или
+        // продажа лута меняет баланс, и цена кнопки должна быть актуальной.
+        const coins = Number(gameState.player?.coins ?? data.coins ?? 0);
+        root.innerHTML = `
+            <h4 class="inv-equipment-title">Мастерская · 🪙 ${formatNumber(coins)}</h4>
+            <div class="inv-workshop-list">
+                ${slots.map((entry) => renderWorkshopSlot(entry, data)).join('')}
+            </div>
+        `;
+
+        bindWorkshopActions();
+    } catch (error) {
+        console.warn('Не удалось загрузить мастерскую:', error);
+        root.innerHTML = '';
+    }
+}
+
+/** Снять предмет из слота обратно в инвентарь */
+async function unequipSlot(slot) {
+    if (!lockAction(`unequip-${slot}`)) return;
+    try {
+        const result = await apiRequest('/api/game/inventory/unequip', {
+            method: 'POST',
+            body: { slot }
+        });
+        showNotification(`🎒 ${result.message || 'Предмет снят'}`, 'success');
+        RenderCache.clear();
+        await loadInventory();
+        await loadProfile();
+    } catch (error) {
+        showNotification(error?.message || 'Не удалось снять предмет', 'error');
+    } finally {
+        unlockAction(`unequip-${slot}`);
+    }
+}
+
+/** Модификации для строки мастерской */
+function renderWorkshopModifications(entry, data) {
+    const list = Array.isArray(entry.modifications) ? entry.modifications : [];
+    if (list.length === 0) return '';
+
+    const buttons = list.map((modification) => {
+        const cost = modification.cost;
+        const maxed = !cost;
+        const materials = cost?.materials || {};
+        const materialText = Object.entries(materials)
+            .map(([name, quantity]) => {
+                const owned = Number(data.materials?.[name] || 0);
+                return `${owned >= Number(quantity) ? '✅' : '❌'} ${escapeHtml(name)} ${owned}/${quantity}`;
+            })
+            .join(' ');
+
+        return `
+            <div class="inv-workshop-mod">
+                <span class="inv-workshop-mod-name">${modification.icon} ${escapeHtml(modification.name)} ${modification.level}/${modification.max_level}</span>
+                <button class="ws-btn ws-btn-mod" data-ws-modify="${entry.slot}"
+                        data-ws-modification="${escapeAttribute(modification.key)}" ${maxed ? 'disabled' : ''}>
+                    ${maxed ? 'максимум' : `+1 · 🪙 ${formatNumber(cost.coins)}`}
+                </button>
+                ${materialText ? `<span class="inv-workshop-mod-mats">${materialText}</span>` : ''}
+            </div>
+        `;
+    }).join('');
+
+    return `<div class="inv-workshop-mods">${buttons}</div>`;
+}
+
+/** Строка мастерской для одного слота */
+function renderWorkshopSlot(entry, data) {
+    const { slot, item, durability, repair_cost: repairCost, upgrade_cost: upgradeCost } = entry;
+    const materials = upgradeCost?.materials || {};
+
+    const materialText = Object.entries(materials)
+        .map(([name, quantity]) => {
+            const owned = Number(data.materials?.[name] || 0);
+            const enough = owned >= Number(quantity);
+            return `${enough ? '✅' : '❌'} ${escapeHtml(name)} ${owned}/${quantity}`;
+        })
+        .join('<br>');
+
+    return `
+        <div class="inv-workshop-slot">
+            <div class="inv-workshop-head">
+                <span class="inv-workshop-name">${item.icon || '📦'} ${escapeHtml(item.name)}${item.upgrade_level ? ` +${item.upgrade_level}` : ''}</span>
+                <span class="inv-workshop-dur ${durability.is_broken ? 'is-broken' : ''}">
+                    ${durability.is_broken ? '⚠️ сломано' : `🔧 ${durability.current}/${durability.max}`}
+                </span>
+            </div>
+            <div class="inv-workshop-actions">
+                <button class="ws-btn" data-ws-repair="${slot}" ${repairCost > 0 ? '' : 'disabled'}>
+                    🔧 Ремонт · 🪙 ${formatNumber(repairCost)}
+                </button>
+                <button class="ws-btn" data-ws-upgrade="${slot}" ${upgradeCost ? '' : 'disabled'}>
+                    ⬆️ Улучшение${upgradeCost ? ` · 🪙 ${formatNumber(upgradeCost.coins)}` : ' · максимум'}
+                </button>
+            </div>
+            ${materialText ? `<div class="inv-workshop-materials">${materialText}</div>` : ''}
+            ${renderWorkshopModifications(entry, data)}
+        </div>
+    `;
+}
+
+/** Обработчики кнопок мастерской */
+function bindWorkshopActions() {
+    document.querySelectorAll('[data-ws-unequip]').forEach(button => {
+        bindClickOnce(button, `ws-unequip-${button.dataset.wsUnequip}`, () => unequipSlot(button.dataset.wsUnequip));
+    });
+
+    document.querySelectorAll('[data-ws-repair]').forEach(button => {
+        bindClickOnce(button, `ws-repair-${button.dataset.wsRepair}`, () => repairEquipmentSlot(button.dataset.wsRepair));
+    });
+
+    document.querySelectorAll('[data-ws-upgrade]').forEach(button => {
+        bindClickOnce(button, `ws-upgrade-${button.dataset.wsUpgrade}`, () => upgradeEquipmentSlot(button.dataset.wsUpgrade));
+    });
+
+    document.querySelectorAll('[data-ws-modify]').forEach(button => {
+        bindClickOnce(button, `ws-modify-${button.dataset.wsModify}-${button.dataset.wsModification}`, () => modifyEquipmentSlot(
+            button.dataset.wsModify,
+            button.dataset.wsModification
+        ));
+    });
+}
+
+async function modifyEquipmentSlot(slot, modification) {
+    if (!lockAction('workshopModify')) return;
+    try {
+        const result = await apiRequest('/api/game/workshop/modify', {
+            method: 'POST',
+            body: { slot, modification }
+        });
+        showNotification(`🔩 ${result.message || 'Модификация установлена'}`, 'success');
+        playSound('coin');
+        RenderCache.clear();
+        await loadInventory();
+        await renderWorkshopPanel();
+    } catch (error) {
+        showNotification(error?.message || 'Не удалось установить модификацию', 'error');
+    } finally {
+        unlockAction('workshopModify');
+    }
+}
+
+async function repairEquipmentSlot(slot) {
+    if (!lockAction('workshopRepair')) return;
+    try {
+        const result = await apiRequest('/api/game/workshop/repair', {
+            method: 'POST',
+            body: { slot }
+        });
+        showNotification(`🔧 ${result.message || 'Отремонтировано'}`, 'success');
+        playSound('coin');
+        RenderCache.clear();
+        await loadInventory();
+        await renderWorkshopPanel();
+    } catch (error) {
+        showNotification(error?.message || 'Не удалось отремонтировать', 'error');
+    } finally {
+        unlockAction('workshopRepair');
+    }
+}
+
+async function upgradeEquipmentSlot(slot) {
+    if (!lockAction('workshopUpgrade')) return;
+    try {
+        const result = await apiRequest('/api/game/workshop/upgrade', {
+            method: 'POST',
+            body: { slot }
+        });
+        showNotification(`⬆️ ${result.message || 'Улучшено'}`, 'success');
+        playSound('coin');
+        RenderCache.clear();
+        await loadInventory();
+        await renderWorkshopPanel();
+    } catch (error) {
+        showNotification(error?.message || 'Не удалось улучшить', 'error');
+    } finally {
+        unlockAction('workshopUpgrade');
+    }
 }
 
 /**
@@ -3488,17 +3625,65 @@ function renderInventoryCapacity() {
 }
 
 /**
+ * Разобрать предмет (или стек) на материалы.
+ * Отдельный режим в инвентаре: раньше предмет можно было только продать
+ * за 35% цены, поэтому 100 слотов забивались ненужным снаряжением.
+ * @param {number|string} itemIndex - индекс слота в инвентаре
+ */
+async function dropItem(itemIndex) {
+    if (!lockAction('dropItem')) return;
+
+    try {
+        const result = await apiRequest('/api/game/inventory/drop', {
+            method: 'POST',
+            body: { item_index: parseInt(itemIndex, 10) }
+        });
+
+        if (result?.success) {
+            const materials = (result.materials || [])
+                .map((material) => `${material.icon || '📦'} ${material.name} ×${material.quantity}`)
+                .join(', ');
+
+            showNotification(
+                materials ? `♻️ ${result.message} → ${materials}` : `♻️ ${result.message}`,
+                'success'
+            );
+            playSound('coin');
+            RenderCache.clear();
+            await loadInventory();
+            await loadProfile();
+        } else {
+            showNotification(result?.error || 'Не удалось разобрать предмет', 'error');
+        }
+    } catch (error) {
+        console.error('Drop item error:', error);
+        showNotification(error?.message || 'Не удалось разобрать предмет', 'error');
+
+        // Индекс мог протухнуть — перерисуем список.
+        if (error?.code === 'ITEM_NOT_IN_INVENTORY' || error?.status === 400) {
+            await loadInventory();
+        }
+    } finally {
+        unlockAction('dropItem');
+    }
+}
+
+/**
  * Продать предмет за монеты.
  * Закрывает петлю экономики: добыча → использование → продажа.
  * @param {number|string} itemIndex - индекс слота в инвентаре
+ * @param {number} [quantity] - сколько продать из стека (по умолчанию весь)
  */
-async function sellItem(itemIndex) {
+async function sellItem(itemIndex, quantity = null) {
     if (!lockAction('sellItem')) return;
 
     try {
         const result = await apiRequest('/api/game/inventory/sell', {
             method: 'POST',
-            body: { item_index: parseInt(itemIndex, 10) }
+            body: {
+                item_index: parseInt(itemIndex, 10),
+                ...(quantity ? { quantity: parseInt(quantity, 10) } : {})
+            }
         });
 
         if (result?.success) {
@@ -3561,7 +3746,7 @@ function renderInventory(items) {
 
         slot.dataset.index = item.index;
         slot.innerHTML = `
-            <span class="item-icon">${item.icon || '📦'}</span>
+            <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
             <span class="item-name">${escapeHtml(name)}</span>
             ${amount > 1 ? `<span class="item-count">${amount}</span>` : ''}
             ${isSellMode
@@ -3583,7 +3768,21 @@ function renderInventory(items) {
                     showNotification('Этот предмет нельзя продать', 'warning');
                     return;
                 }
+                // Стеку предлагаем выбор: одна штука или весь стек.
+                // Раньше продавался только весь стек, а это неудобно, когда
+                // нужно оставить пару аптечек.
+                if (amount > 1 && canAskStackChoice(item)) {
+                    showStackSellDialog(item, amount, sellPrice);
+                    return;
+                }
                 sellItem(item.index);
+                return;
+            }
+            if (currentInventoryMode === 'drop') {
+                if (!confirm(`Разобрать «${name}»? Снаряжение даст материалы, остальное просто пропадёт.`)) {
+                    return;
+                }
+                dropItem(item.index);
                 return;
             }
             useItem(item.index, { equip: isEquippable });
@@ -3598,6 +3797,53 @@ function renderInventory(items) {
 
         grid.appendChild(slot);
     }
+}
+
+/**
+ * Диалог продажи части стека.
+ *
+ * Отдельная функция, а не window.prompt: промпт в Telegram WebApp выглядит
+ * чужеродно и на некоторых платформах не поддерживается.
+ */
+function showStackSellDialog(item, amount, unitPrice) {
+    const modal = document.getElementById('modal');
+    const title = document.getElementById('modal-title');
+    const message = document.getElementById('modal-message');
+    if (!modal || !title || !message) {
+        sellItem(item.index);
+        return;
+    }
+
+    title.textContent = `Продать: ${item.name || 'предмет'}`;
+    message.textContent = `В стопке ${amount} шт. по ${unitPrice} 🪙. Сколько продать?`;
+    openModalElement(modal);
+
+    const close = hideModal;
+    const actions = [
+        { label: `Продать 1 шт. (+${unitPrice} 🪙)`, onClick: () => sellItem(item.index, 1) },
+        { label: `Продать всё (+${unitPrice * amount} 🪙)`, onClick: () => sellItem(item.index, amount) },
+        { label: 'Отмена', onClick: () => {} }
+    ];
+
+    const box = document.createElement('div');
+    box.className = 'modal-actions';
+    for (const action of actions) {
+        const button = document.createElement('button');
+        button.className = 'modal-action-btn';
+        button.textContent = action.label;
+        bindClickOnce(button, `sell-stack-${item.index}-${action.label}`, () => {
+            close();
+            action.onClick();
+        });
+        box.appendChild(button);
+    }
+    message.appendChild(box);
+}
+
+/** Снаряжение не стакается, поэтому выбор количества нужен только для стопок */
+function canAskStackChoice(item) {
+    const type = String(item.type || '').toLowerCase();
+    return !['weapon', 'armor'].includes(type) && !item.slot;
 }
 
 /**
@@ -3720,13 +3966,20 @@ function renderBossesInfo(info) {
         return;
     }
 
-    // info.* приходит с сервера — экранируем, иначе это XSS-вектор
+    // Правила режимов приходят с сервера (bosses.js → data.info) и не меняются
+    // от игрока к игроку. Раньше они занимали карточку из трёх строк над
+    // списком боссов — постоянный шум на главном экране раздела. Теперь это
+    // свёрнутая подсказка «Правила»: видна по требованию, а не всегда.
+    // info.* приходит с сервера — экранируем, иначе это XSS-вектор.
     container.innerHTML = `
-        <div class="bosses-info-card">
-            <div><strong>Соло:</strong> ${escapeHtml(info.solo || '')}</div>
-            <div><strong>Прокачка:</strong> ${escapeHtml(info.mastery || '')}</div>
-            <div><strong>Массовый бой:</strong> ${escapeHtml(info.raids || '')}</div>
-        </div>
+        <details class="bosses-rules">
+            <summary>Правила режимов</summary>
+            <ul class="bosses-rules-list">
+                <li><strong>Соло:</strong> ${escapeHtml(info.solo || '')}</li>
+                <li><strong>Прокачка:</strong> ${escapeHtml(info.mastery || '')}</li>
+                <li><strong>Массовый бой:</strong> ${escapeHtml(info.raids || '')}</li>
+            </ul>
+        </details>
     `;
 }
 
@@ -3796,6 +4049,7 @@ function renderBosses(bosses) {
                 <div class="boss-hp-text">${formatNumber(currentHp)} / ${formatNumber(maxHp)} HP</div>
                 <div class="boss-mastery">Побеждено: ${defeatedCount}</div>
                 <div class="boss-damage">Урон по боссу: ${currentDamage}</div>
+                ${boss.damage_percent ? `<div class="boss-counter">Ответный удар: ~${boss.damage_percent}% здоровья (защита снижает)</div>` : ''}
                 <div class="boss-reward">💰 ${boss.reward_coins || 0} | ✨ ${boss.reward_experience || 0} XP</div>
                 <div class="boss-keys ${isUnlocked ? 'unlocked' : ''}">
                     <span class="keys-owned">🔑 ${playerKeys}/${keysRequired}</span>
@@ -4024,8 +4278,19 @@ function renderWeapons(weapons) {
     
     for (const weapon of weapons) {
         const item = document.createElement('div');
-        item.className = 'weapon-item';
+        item.className = `weapon-item ${weapon.is_broken ? 'is-broken' : ''}`;
         item.dataset.index = weapon.index;
+
+        const durabilityText = weapon.is_broken
+            ? '⚠️ сломано — отремонтируйте'
+            : (weapon.durability < weapon.max_durability
+                ? `🔧 ${Number(weapon.durability)}/${Number(weapon.max_durability)}`
+                : '');
+
+        // Тип оружия важен: ближний бой бьёт боссов, дальний — людей в PvP.
+        const rangeLabel = weapon.category === 'melee'
+            ? '<div class="weapon-tag melee">ближний бой · +40% к боссам</div>'
+            : '<div class="weapon-tag ranged">дальний бой · +25% в PvP</div>';
 
         // Название/иконка приходят из инвентаря игрока (серверные данные) —
         // без экранирования это XSS-вектор.
@@ -4034,11 +4299,17 @@ function renderWeapons(weapons) {
             <div class="weapon-info">
                 <div class="weapon-name">${escapeHtml(weapon.name)}</div>
                 <div class="weapon-damage">Урон: +${Number(weapon.damage) || 0}</div>
+                ${durabilityText ? `<div class="weapon-durability">${escapeHtml(durabilityText)}</div>` : ''}
+                ${rangeLabel}
             </div>
             <span class="weapon-rarity ${escapeAttribute(weapon.rarity)}">${escapeHtml(weapon.rarity)}</span>
         `;
 
-        item.addEventListener('click', () => attackWithWeapon(weapon.index));
+        if (weapon.is_broken) {
+            item.classList.add('disabled');
+        } else {
+            item.addEventListener('click', () => attackWithWeapon(weapon.index));
+        }
         list.appendChild(item);
     }
 }
@@ -4159,10 +4430,31 @@ async function attackWithWeapon(itemIndex) {
                 // weapon_used приходит с сервера — экранируем
                 damageText.innerHTML = `<span class="hit">⚔️</span> Использовал <strong>${escapeHtml(result.data.weapon_used)}</strong>! Нанёс <strong>${Number(result.data.damage) || 0}</strong> урона!`;
                 log.appendChild(damageText);
+
+                // Износ оружия виден сразу после удара: без этой строки игрок
+                // не понимает, зачем заглядывать в мастерскую.
+                const maxDurability = Number(result.data.weapon_max_durability) || 0;
+                if (maxDurability > 0) {
+                    const left = Number(result.data.weapon_durability) || 0;
+                    const wearText = document.createElement('p');
+                    wearText.className = 'damage';
+                    const tone = result.data.weapon_broken || left === 0
+                        ? ' <strong style="color:#ff595e">сломано — отремонтируй</strong>'
+                        : left <= Math.ceil(maxDurability * 0.2)
+                            ? ' <strong style="color:#ffcc00">почти сломано</strong>'
+                            : '';
+                    wearText.innerHTML = `🔧 Прочность оружия: ${left}/${maxDurability}${tone}`;
+                    log.appendChild(wearText);
+                }
+
                 log.scrollTop = log.scrollHeight;
             }
             
             updateBossHealthUi(result.data.boss_hp, result.data.boss_max_hp);
+
+            appendCounterDamageToLog(result.data);
+            updatePlayerHealthUi(result.data.health);
+            warnAboutBrokenEquipment(result.data.broken_equipment);
 
             syncPlayerEnergyState(
                 result.data.energy,
@@ -4181,7 +4473,7 @@ async function attackWithWeapon(itemIndex) {
             if (result.data.killed) {
                 onBossDefeated(result.data.rewards, result.data.mastery ?? null, 120, false);
             } else {
-                // Оружие израсходовано — инвентарь на сервере уже изменился
+                // Прочность оружия изменилась — инвентарь на сервере уже обновлён
                 loadInventory().catch((invError) => {
                     console.error('Не удалось обновить инвентарь после атаки оружием:', invError);
                 });
@@ -4246,6 +4538,10 @@ async function attackBoss() {
             
             // Обновляем HP босса
             updateBossHealthUi(result.boss_hp, result.boss_max_hp);
+
+            appendCounterDamageToLog(result);
+            updatePlayerHealthUi(result.player_health);
+            warnAboutBrokenEquipment(result.broken_equipment);
             
             // Обновляем энергию игрока.
             // last_energy_update обязателен: без него клиент посчитает реген
@@ -4298,6 +4594,61 @@ async function attackBoss() {
         }
         actionLocks.attackBoss = false;
     }
+}
+
+/**
+ * Ответный урон босса в лог боя.
+ *
+ * Раньше босс не бил в ответ (колонка bosses.damage не использовалась), и
+ * игрок не знал, что здоровье вообще можно потерять в бою.
+ * @param {object} payload - ответ /attack-boss или /attack-with-weapon
+ */
+function appendCounterDamageToLog(payload) {
+    const taken = Number(payload?.damage_taken ?? payload?.data?.damage_taken ?? 0);
+    if (taken <= 0) return;
+
+    const log = document.getElementById('fight-log');
+    if (!log) return;
+
+    const line = document.createElement('p');
+    line.className = 'damage damage-taken';
+    line.innerHTML = `<span class="hit">💥</span> Ответный удар: <strong>-${taken}</strong> HP`;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+
+    if (Number(payload?.health ?? payload?.data?.health ?? 0) <= 0) {
+        showModal('💀 Вы погибли', 'Здоровье кончилось. Используйте аптечку, чтобы продолжить бой.', 'error');
+    }
+}
+
+/** Обновить здоровье игрока в UI после боя */
+function updatePlayerHealthUi(health) {
+    const value = Number(health);
+    if (!Number.isFinite(value)) return;
+
+    if (!gameState.player) return;
+    if (!gameState.player.status) gameState.player.status = {};
+    gameState.player.status.health = value;
+
+    // Те же элементы, что и в updateProfileUI: полоса и подпись «x/y».
+    const maxHealth = Number(gameState.player.status.max_health) || 100;
+    const healthText = document.getElementById('health-text');
+    if (healthText) healthText.textContent = `${value}/${maxHealth}`;
+
+    const healthBar = document.getElementById('health-bar');
+    if (healthBar) {
+        healthBar.style.width = `${Math.max(0, Math.min(100, (value / maxHealth) * 100))}%`;
+    }
+}
+
+/**
+ * Предупреждение о сломанном снаряжении.
+ * @param {string[]|undefined} brokenSlots
+ */
+function warnAboutBrokenEquipment(brokenSlots) {
+    if (!Array.isArray(brokenSlots) || brokenSlots.length === 0) return;
+
+    showNotification('⚠️ Снаряжение сломано — почините его в мастерской (инвентарь → снаряжение)', 'warning', 5000);
 }
 
 /**
@@ -5078,6 +5429,74 @@ async function healInfections() {
     }
 }
 
+/**
+ * Выбор локации на карте (тап или наведение).
+ *
+ * Показывает название, радиацию, инфекцию, уровень и оценку риска именно
+ * ВЫБРАННОЙ зоны — раньше эта информация жила только в обработчике наведения
+ * и была недоступна на телефоне. Переход выполняется отдельной кнопкой.
+ *
+ * @param {object} loc локация из списка локаций
+ */
+function selectMapLocation(loc) {
+    if (!loc) return;
+
+    const nameEl = document.querySelector('.map-location-name');
+    if (nameEl) nameEl.textContent = `${loc.icon || ''} ${loc.name || ''}`.trim();
+
+    const infoEl = document.getElementById('map-location-info');
+    const travelBtn = document.getElementById('map-travel-btn');
+
+    // Оценка риска зоны считается для подготовки игрока: если он без защиты,
+    // это честнее, чем просто «радиация 40».
+    const risk = getCurrentZoneRiskProfile({
+        location: loc,
+        equipment: gameState.player?.equipment || {}
+    });
+    const level = Math.max(1, Number(gameState.player?.level) || 1);
+    const requiredLevel = Number(loc.required_level ?? loc.min_level ?? 1);
+    const isCurrent = Number(gameState.player?.current_location_id) === Number(loc.id);
+
+    if (infoEl) {
+        infoEl.style.display = '';
+        // textContent по частям: название и числа через textContent,
+        // чтобы данные сервера не попали в разметку как HTML.
+        infoEl.textContent =
+            `☢️ ${Number(loc.radiation) || 0} · 🦠 ${Number(loc.infection) || 0} · ⚠️ риск ${Number(loc.danger_level) || 1}/7 · ${risk.label}`;
+        infoEl.dataset.locked = requiredLevel > level ? 'true' : 'false';
+    }
+
+    if (travelBtn) {
+        if (isCurrent) {
+            travelBtn.style.display = 'none';
+        } else {
+            travelBtn.style.display = '';
+            travelBtn.textContent = requiredLevel > level
+                ? `🔒 Нужен уровень ${requiredLevel}`
+                : 'Перейти';
+            travelBtn.disabled = requiredLevel > level;
+            travelBtn.dataset.locationId = loc.id;
+        }
+    }
+}
+
+/** Переход в выбранную на карте локацию (кнопка «Перейти») */
+function travelToSelectedLocation() {
+    const travelBtn = document.getElementById('map-travel-btn');
+    const locationId = Number(travelBtn?.dataset.locationId);
+    if (!locationId) return;
+
+    const loc = (gameState.locations || []).find((item) => Number(item.id) === locationId);
+    const level = Math.max(1, Number(gameState.player?.level) || 1);
+    const requiredLevel = Number(loc?.required_level ?? loc?.min_level ?? 1);
+
+    if (requiredLevel > level) {
+        showModal('🔒 Заблокировано', `Нужен уровень ${requiredLevel} для входа`);
+        return;
+    }
+    moveToLocation(locationId);
+}
+
 function updateMapRiskPreview() {
     const infoContainer = document.querySelector('.map-info');
     if (!infoContainer) return;
@@ -5387,15 +5806,19 @@ function initInventoryControls() {
         });
     }
 
-    // Переключатель «использовать / продать»
-    document.querySelectorAll('.inv-mode-btn').forEach(btn => {
-        bindClickOnce(btn, `inv-mode-${btn.dataset.invMode || 'use'}`, () => {
-            currentInventoryMode = btn.dataset.invMode === 'sell' ? 'sell' : 'use';
-            document.querySelectorAll('.inv-mode-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            renderInventoryWithFilters(gameState.inventory);
+    // Третий режим — «Разобрать»: снаряжение превращается в материалы,
+        // остальные предметы просто выбрасываются. Без него инвентарь на
+        // 100 слотах был тупиком: продать ненужное можно было только за 35%.
+        document.querySelectorAll('.inv-mode-btn').forEach(btn => {
+            bindClickOnce(btn, `inv-mode-${btn.dataset.invMode || 'use'}`, () => {
+                currentInventoryMode = ['sell', 'drop'].includes(btn.dataset.invMode)
+                    ? btn.dataset.invMode
+                    : 'use';
+                document.querySelectorAll('.inv-mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                renderInventoryWithFilters(gameState.inventory);
+            });
         });
-    });
 }
 
 // ============================================================================
@@ -5422,7 +5845,10 @@ async function renderAchievementsScreen(category, logPrefix) {
         const data = await apiRequest('/api/achievements/progress');
 
         if (data && data.progress) {
-            renderAchievementsStats(data.stats);
+            // Блок «Выполнено достижений X / Y» удалён: та же информация
+            // стоит в каждой кнопке категории («Боссы (3/5)») и в каждой
+            // карточке достижения. Отдельная шапка была третьим местом,
+            // где показывалось одно и то же число.
             renderAchievementsCategories(data.categories);
 
             if (category) {
@@ -5445,17 +5871,9 @@ async function loadAchievements() {
 }
 
 /**
- * Отрисовка статистики достижений
+ * Удалены renderAchievementsStats и блок achievements-stats:
+ * счётчик «X / Y» дублировался в кнопках категорий и в карточках.
  */
-function renderAchievementsStats(stats) {
-    const container = document.getElementById('achievements-stats');
-    if (!container) return;
-    
-    container.innerHTML = `
-        <div class="total">${stats.completed} / ${stats.total_achievements}</div>
-        <div class="subtitle">Выполнено достижений</div>
-    `;
-}
 
 /**
  * Отрисовка категорий достижений
@@ -5520,24 +5938,29 @@ function renderAchievementsList(achievements) {
             console.error('JSON.parse reward failed:', ach.reward);
             reward = ach.reward;
         }
-        const rarityClass = `rarity-${ach.rarity || 'common'}`;
-        
+        const rarityClass = `rarity-${escapeHtml(ach.rarity || 'common')}`;
+        // Числа приводим явно: percent попадает в style, current/target — в текст,
+        // и без приведения строка ответа ушла бы в разметку как есть.
+        const percent = Math.max(0, Math.min(100, Number(ach.percent) || 0));
+        const current = Number(ach.current) || 0;
+        const target = Number(ach.target) || 0;
+
         html += `
             <div class="achievement-card ${ach.completed ? 'completed' : ''} ${rarityClass}">
-                <div class="icon">${ach.icon || '🏆'}</div>
+                <div class="icon">${escapeHtml(ach.icon || '🏆')}</div>
                 <div class="info">
                     <div class="name">${escapeHtml(ach.name || '')}</div>
                     <div class="description">${escapeHtml(ach.description || '')}</div>
                     <div class="progress">
                         <div class="progress-bar">
-                            <div class="progress-fill" style="width: ${ach.percent}%"></div>
+                            <div class="progress-fill" style="width: ${percent}%"></div>
                         </div>
-                        <div class="progress-text">${ach.current}/${ach.target}</div>
+                        <div class="progress-text">${current}/${target}</div>
                     </div>
-                    ${reward && (reward.coins > 0 || reward.stars > 0) ? `
+                    ${reward && (Number(reward.coins) > 0 || Number(reward.stars) > 0) ? `
                         <div class="reward">
-                            ${reward.coins > 0 ? `<span class="reward-item">💰 ${reward.coins}</span>` : ''}
-                            ${reward.stars > 0 ? `<span class="reward-item">⭐ ${reward.stars}</span>` : ''}
+                            ${Number(reward.coins) > 0 ? `<span class="reward-item">🪙 ${Number(reward.coins)}</span>` : ''}
+                            ${Number(reward.stars) > 0 ? `<span class="reward-item">⭐ ${Number(reward.stars)}</span>` : ''}
                         </div>
                     ` : ''}
                 </div>
@@ -6248,7 +6671,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function initEventHandlers() {
         // Основные кнопки
         document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
-        document.getElementById('map-btn')?.addEventListener('click', () => showScreen('map'));
+        document.getElementById('map-travel-btn')?.addEventListener('click', travelToSelectedLocation);
         document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => openWeaponSelect());
         document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
         document.getElementById('market-btn')?.addEventListener('click', () => showScreen('market'));
@@ -6364,6 +6787,11 @@ document.addEventListener('click', (event) => {
         return;
     }
 
+    if (target.closest('#daily-bonus-btn')) {
+        claimDailyBonus();
+        return;
+    }
+
     const achievementFilterBtn = target.closest('[data-achievement-filter]');
     if (achievementFilterBtn) {
         filterAchievements(achievementFilterBtn.dataset.achievementFilter || null);
@@ -6375,6 +6803,12 @@ document.addEventListener('click', (event) => {
         // Передаём саму кнопку: buyCoinItem блокирует и восстанавливает
         // именно её, а не все кнопки списка
         buyCoinItem(Number(buyBtn.dataset.buyCoinItem), buyBtn);
+        return;
+    }
+
+    const buyStarBtn = target.closest('[data-buy-star-item]');
+    if (buyStarBtn) {
+        buyStarItem(Number(buyStarBtn.dataset.buyStarItem), buyStarBtn);
         return;
     }
 
@@ -6407,7 +6841,7 @@ document.addEventListener('click', (event) => {
 window.initInventoryControls = initInventoryControls;
 window.currentAchievementCategory = currentAchievementCategory;
 window.loadAchievements = loadAchievements;
-window.renderAchievementsStats = renderAchievementsStats;
+
 window.renderAchievementsCategories = renderAchievementsCategories;
 window.filterAchievements = filterAchievements;
 window.renderAchievementsList = renderAchievementsList;
@@ -6537,21 +6971,19 @@ function generateScreens() {
                     </div>
                 </section>
 
-                <!-- Быстрые действия -->
+                <!-- Главное действие. Вторую кнопку «Карта» убрали: она дублировала
+                     пункт нижней навигации и стояла рядом с единственным
+                     действием, ради которого игрок сюда приходит. -->
                 <section class="actions-section">
                     <button class="action-btn search-btn" id="search-btn">
                         <span class="btn-icon">🔍</span>
                         <span class="btn-text">Искать</span>
                         <span class="btn-cost">-1 ⚡</span>
                     </button>
-                    <button class="action-btn" id="map-btn">
-                        <span class="btn-icon">🗺️</span>
-                        <span class="btn-text">Карта</span>
-                    </button>
                 </section>
                 <section class="extra-actions">
                     <button class="extra-btn" id="shop-btn">🏪 Магазин ⭐</button>
-                    <button class="extra-btn" id="market-btn">💰 Рынок</button>
+                    <button class="extra-btn" id="market-btn">🛒 Рынок</button>
                     <button class="extra-btn" id="wheel-btn">🎡 Колесо</button>
                     <button class="extra-btn" id="rating-btn">🏆 Рейтинг</button>
                     <button class="extra-btn" id="pvp-btn">⚔️ PvP</button>
@@ -6559,47 +6991,17 @@ function generateScreens() {
                     <button class="extra-btn" id="referral-btn">📨 Рефералы</button>
                 </section>
 
-                <!-- Прогресс-карточки -->
-                <section class="quick-progress-section">
-                    <div class="quick-progress-grid" id="main-progress-cards">
-                        <div class="progress-card">
-                            <span class="progress-card-label">Опыт</span>
-                            <span class="progress-card-value" id="next-level-value">0 XP</span>
-                            <span class="progress-card-desc" id="next-level-desc">До уровня 2</span>
-                        </div>
-                        <div class="progress-card">
-                            <span class="progress-card-label">Боссы</span>
-                            <span class="progress-card-value" id="next-boss-value">Все открыты</span>
-                            <span class="progress-card-desc" id="next-boss-desc">Боссы</span>
-                        </div>
-                        <div class="progress-card">
-                            <span class="progress-card-label">Достижения</span>
-                            <span class="progress-card-value" id="next-reward-value">Нет задач</span>
-                            <span class="progress-card-desc" id="next-reward-desc">Достижения</span>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Бонусы -->
-                <section class="player-bonuses">
-                    <div class="bonus-pill">⚔️ Урон: <span id="player-damage-preview">+1</span></div>
-                    <div class="bonus-pill">📦 Шанс дропа: <span id="player-drop-chance">10%</span></div>
-                    <div class="bonus-pill">🛡️ Выживаемость: <span id="player-survival-preview">Стабильно</span></div>
-                </section>
-
-                <!-- Сводка состояния: риск и рекомендация (updateRiskSummary) -->
-                <section class="status-section">
-                    <div class="risk-summary-card" id="risk-summary-card" data-risk="safe">
-                        <div class="risk-summary-main">
-                            <span class="risk-summary-label">Состояние</span>
-                            <strong id="risk-summary-level">Стабильно</strong>
-                            <p id="risk-summary-text">Пока всё под контролем — можно безопасно продолжать вылазку.</p>
-                        </div>
-                        <div class="risk-summary-side">
-                            <span class="risk-summary-action" id="risk-summary-action">Ищи лут</span>
-                        </div>
-                    </div>
-                </section>
+                <!-- Убраны три блока-дубли:
+                     1) quick-progress (Опыт/Боссы/Достижения) — опыт виден по
+                        полосе в шапке, боссы и достижения — на своих экранах;
+                     2) player-bonuses (Урон/Шанс дропа/Выживаемость) — повторяли
+                        состояние, а «шанс дропа» считался по формуле 10+luck*0.4,
+                        которая НЕ совпадает с серверной calculateDropChance:
+                        игрок видел неверный процент;
+                     3) risk-summary («Состояние» + текст + «Ищи лут») — полностью
+                        дублировал карточку «Что делать сейчас» с действием.
+                     Вместо трёх карточек осталась одна карточка рекомендаций,
+                     которая уже содержит состояние, совет и кнопку действия. -->
 
                 <!-- Активные баффы -->
                 <div class="active-buffs-section" id="active-buffs-section" style="display:none;margin:0 16px 16px">
@@ -6607,15 +7009,21 @@ function generateScreens() {
                     <div class="active-buffs-list" id="active-buffs-list"></div>
                 </div>
 
-                <!-- Journey Progress -->
+                <!-- Ежедневный бонус: виден только когда бонус доступен (updateDailyBonusUI) -->
+                <section class="daily-bonus-section" style="margin:0 16px 16px">
+                    <button class="btn daily-bonus-btn" id="daily-bonus-btn" style="display:none;width:100%">
+                        🎁 Получить ежедневный бонус
+                    </button>
+                </section>
+
+                <!-- Прогресс: только цели. Раньше здесь стояли ещё три карточки
+                     (Опыт / Боссы / Достижения) — они дублировали полосу опыта,
+                     карточку рекомендаций и отдельные экраны, из-за чего экран
+                     показывал одну и ту же мысль четыре раза. -->
                 <section class="journey-progress-section">
                     <div class="journey-progress-grid">
                         <div class="journey-card">
-                            <span class="journey-label">Боссов убито</span>
-                            <span class="journey-value" id="journey-bosses-killed">0</span>
-                        </div>
-                        <div class="journey-card">
-                            <span class="journey-label">Главный босс</span>
+                            <span class="journey-label">Следующий босс</span>
                             <span class="journey-value" id="journey-main-boss">Нет цели</span>
                             <span class="journey-desc" id="journey-main-boss-desc"></span>
                         </div>
@@ -6623,11 +7031,6 @@ function generateScreens() {
                             <span class="journey-label">Следующая зона</span>
                             <span class="journey-value" id="journey-next-zone">Все открыты</span>
                             <span class="journey-desc" id="journey-next-zone-desc"></span>
-                        </div>
-                        <div class="journey-card">
-                            <span class="journey-label">Освоенный риск</span>
-                            <span class="journey-value" id="journey-risk-label">Стабильно</span>
-                            <span class="journey-desc" id="journey-risk-desc"></span>
                         </div>
                     </div>
                 </section>
@@ -6642,6 +7045,13 @@ function generateScreens() {
             <div class="map-container">
                 <div class="map-info">
                     <span class="map-location-name">Выберите локацию</span>
+                    <!-- Появляется по тапу: в мобильном WebView наведения нет,
+                         а раньше тап сразу уводил в зону — игрок шёл туда,
+                         не видя ни радиации, ни риска. -->
+                    <div class="map-location-info" id="map-location-info" style="display:none"></div>
+                    <button class="btn map-travel-btn" id="map-travel-btn" style="display:none;width:100%;margin-top:8px">
+                        Перейти
+                    </button>
                 </div>
                 <canvas id="city-map" width="350" height="400"></canvas>
                 <div class="location-preparation" id="location-preparation-panel">
@@ -6690,6 +7100,7 @@ function generateScreens() {
                     <div class="inv-mode" role="group" aria-label="Действие с предметом">
                         <button class="inv-mode-btn active" data-inv-mode="use">Использовать</button>
                         <button class="inv-mode-btn" data-inv-mode="sell">Продать</button>
+    <button class="inv-mode-btn" data-inv-mode="drop">Разобрать</button>
                     </div>
                 </div>
                 <div class="inv-equipment" id="inventory-equipment"></div>
@@ -6759,8 +7170,10 @@ function generateScreens() {
                 <h2>🔪 Выбор оружия</h2>
             </div>
             <div class="weapon-select-content">
-                <p class="weapon-info">Выберите оружие для атаки. Оружие будет использовано и исчезнет из инвентаря!</p>
-                <div id="damage-preview"></div>
+                <!-- Текст про «исчезнет из инвентаря» остался от старой механики,
+                     где мощная атака стирала оружие целиком. Теперь оружие
+                     изнашивается на 1 прочность и чинится в мастерской. -->
+                <p class="weapon-info">Выберите оружие для удара. Оно потратит 1 единицу прочности (чинится в мастерской).</p>
                 <div class="weapon-list" id="weapon-list"></div>
             </div>
         </div>
@@ -6846,8 +7259,11 @@ function generateScreens() {
         <!-- Магазин за монеты -->
         <div class="screen" id="market-screen">
             <div class="screen-header">
-                <h2>💰 Магазин</h2>
-                <span class="shop-coins-balance">💰 <strong id="shop-coins-balance">0</strong></span>
+                // Заголовок совпадает с кнопкой на главном экране. Раньше экран за монеты
+                // назывался «Магазин», как и экран за звёзды, — два разных
+                // магазина с одинаковым названием.
+                <h2>🛒 Рынок</h2>
+                <span class="shop-coins-balance">🪙 <strong id="shop-coins-balance">0</strong></span>
             </div>
             <div class="screen-content">
                 <div class="shop-categories">
@@ -6876,7 +7292,7 @@ function generateScreens() {
                         </div>
                     </div>
                     <button class="btn" id="wheel-free-btn">🎡 Бесплатно</button>
-                    <button class="btn" id="wheel-paid-btn">⭐ За 1 Star</button>
+                    <button class="btn" id="wheel-paid-btn">⭐ За 1 звезду</button>
                     <p id="wheel-free-info">Загрузка...</p>
                     <p id="wheel-paid-info">Платное вращение доступно всегда.</p>
                 </div>
@@ -7011,7 +7427,6 @@ function generateScreens() {
                 <h2>🏆 Достижения</h2>
             </div>
             <div class="screen-content">
-                <div class="achievements-stats" id="achievements-stats"></div>
                 <div class="achievements-categories" id="achievements-categories"></div>
                 <div class="achievements-list" id="achievements-list"></div>
             </div>
@@ -7679,8 +8094,12 @@ function renderCoinShop() {
                     </div>
                 </div>
                 <div class="shop-item-buy">
-                    <div class="shop-item-price">💰 ${formatNumber(item.price || 0)}</div>
-                    <button class="buy-btn" data-buy-coin-item="${safeItemId}">Купить</button>
+                    <div class="shop-item-price">
+                        ${item.price > 0 ? `💰 ${formatNumber(item.price)}` : ''}
+                        ${item.stars_price > 0 ? `<div class="shop-item-stars">⭐ ${formatNumber(item.stars_price)}</div>` : ''}
+                    </div>
+                    ${item.price > 0 ? `<button class="buy-btn" data-buy-coin-item="${safeItemId}">Купить</button>` : ''}
+                    ${item.stars_price > 0 ? `<button class="buy-btn buy-btn-stars" data-buy-star-item="${safeItemId}">За звёзды</button>` : ''}
                 </div>
             </div>
         `;
@@ -7712,6 +8131,63 @@ function renderItemStats(stats) {
     if (stats.radiation_resist) statLines.push(`🛡️ Защита от радиации: ${Number(stats.radiation_resist)}`);
     if (stats.infection_resist) statLines.push(`🧪 Защита от инфекции: ${Number(stats.infection_resist)}`);
     return statLines.join('<br>');
+}
+
+/**
+ * Купить предмет за звёзды.
+ *
+ * Раньше колонка items.stars_price показывалась в магазине, но купить по ней
+ * было нельзя: обработчик знал только про монеты.
+ */
+async function buyStarItem(itemId, triggerButton = null) {
+    const item = coinShopItems.find(i => i.id === itemId);
+    if (!item) return;
+
+    const price = Number(item.stars_price || 0);
+    const playerStars = Number(gameState.player?.stars || 0);
+
+    if (playerStars < price) {
+        showModal('❌ Недостаточно звёзд', `Нужно ${formatNumber(price)} ⭐, у вас ${formatNumber(playerStars)}`);
+        return;
+    }
+
+    if (!confirm(`Купить ${item.name} за ${formatNumber(price)} звёзд?`)) {
+        return;
+    }
+
+    // Списание звёзд: блокировка от двойного клика обязательна.
+    if (!lockAction('buyStarItem')) return;
+
+    const button = triggerButton instanceof Element
+        ? triggerButton
+        : document.querySelector(`[data-buy-star-item="${itemId}"]`);
+    if (button) button.disabled = true;
+
+    try {
+        const response = await gameApi.post('/game/items/buy-stars', { item_id: itemId, quantity: 1 });
+        const payload = response?.data || response;
+
+        if (response?.success) {
+            showNotification(`⭐ ${payload.message || 'Куплено за звёзды'}`, 'success');
+            playSound('coin');
+
+            if (typeof gameState.player === 'object') {
+                gameState.player.stars = Number(payload.stars_total ?? (playerStars - price));
+            }
+
+            RenderCache.clear();
+            await loadCoinShop();
+            await loadInventory();
+        } else {
+            showNotification(response?.error || 'Не удалось купить за звёзды', 'error');
+        }
+    } catch (error) {
+        console.error('Buy with stars error:', error);
+        showNotification(error?.message || 'Не удалось купить за звёзды', 'error');
+    } finally {
+        if (button) button.disabled = false;
+        unlockAction('buyStarItem');
+    }
 }
 
 async function buyCoinItem(itemId, triggerButton = null) {
@@ -8115,11 +8591,12 @@ function renderLocations() {
             const dist = Math.sqrt((x - pos.x) ** 2 + (y - pos.y) ** 2);
             
             if (dist < pos.radius) {
-                if (loc.unlocked) {
-                    moveToLocation(loc.id);
-                } else {
-                    showModal('🔒 Заблокировано', `Нужен уровень ${loc.min_level} для входа`);
-                }
+                // Тап по локации теперь ВЫБИРАЕТ её и показывает детали,
+                // а не переводит сразу. Причина: игра идёт в мобильном
+                // Telegram WebView, где наведения мыши нет — игрок тапал по
+                // зоне и уезжал в неё, не увидев ни радиации, ни инфекции,
+                // ни риска. Переход — явной кнопкой.
+                selectMapLocation(loc);
                 return;
             }
         }
@@ -8145,36 +8622,26 @@ function renderLocations() {
             }
         }
         
-        // Обновляем информацию о локации
-        const infoEl = document.querySelector('.map-location-name');
-        if (infoEl && hoveredLoc) {
-            infoEl.textContent = `${hoveredLoc.icon} ${hoveredLoc.name}`;
-            const infoContainer = document.querySelector('.map-info');
-            if (infoContainer && !infoContainer.querySelector('.map-location-info')) {
-                const info = document.createElement('div');
-                info.className = 'map-location-info';
-                const fakePlayer = {
-                    location: hoveredLoc,
-                    equipment: gameState.player?.equipment || {}
-                };
-                const risk = typeof getCurrentZoneRiskProfile === 'function'
-                    ? getCurrentZoneRiskProfile(fakePlayer)
-                    : { label: 'Неизвестно' };
-                info.textContent = `☢️ Радиация: ${hoveredLoc.radiation} | 🦠 Инфекция: ${hoveredLoc.infection || 0} | ${hoveredLoc.unlocked ? '✅' : '🔒'} ${risk.label}`;
-                infoContainer.appendChild(info);
-            }
-        }
-        
+        // Обновляем информацию о локации — общая функция для наведения и тапа.
+        // Раньше наведение и тап расходились: мышь показывала детали (создавая
+        // DOM-узел на лету), а палец на телефоне не показывал ничего и сразу
+        // переводил в зону.
+        selectMapLocation(hoveredLoc);
+
         // Перерисовываем с подсветкой
         redrawMap(hoveredLoc);
     };
-    
+
     canvas.onmouseleave = () => {
-        const infoContainer = document.querySelector('.map-info');
-        const info = infoContainer?.querySelector('.map-location-info');
-        if (info) info.remove();
-        const infoEl = document.querySelector('.map-location-name');
-        if (infoEl) infoEl.textContent = 'Выберите локацию';
+        const infoEl = document.getElementById('map-location-info');
+        if (infoEl) infoEl.style.display = 'none';
+        const travelBtn = document.getElementById('map-travel-btn');
+        if (travelBtn) {
+            travelBtn.style.display = 'none';
+            delete travelBtn.dataset.locationId;
+        }
+        const nameEl = document.querySelector('.map-location-name');
+        if (nameEl) nameEl.textContent = 'Выберите локацию';
         redrawMap(null);
     };
 }

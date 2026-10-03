@@ -158,34 +158,39 @@ async function checkDailyActivity() {
         logger.warn('dailyActivity: пропуск, предыдущая задача ещё выполняется');
         return;
     }
-    
+
     const startTime = Date.now();
     isRunning.dailyActivity = true;
-    
+
     try {
-        // Обнуляем streak для игроков, которые не заходили более 2 дней
-        const resetResult = await query(`
-            UPDATE players 
+        // Серия дней (daily_streak) больше НЕ растёт здесь.
+//
+// Раньше стояло:
+//   UPDATE players SET daily_streak = LEAST(365, daily_streak + 1)
+//    WHERE last_action_time > NOW() - INTERVAL '20 hours'
+//      AND last_action_time < NOW() - INTERVAL '4 hours'
+// Задача ходит каждый час, поэтому игрок, не заходивший 4–20 часов,
+// получал +1 серии ЕЖЕДОЧАСНО — до +16 в сутки и потолок 365 за сутки.
+// Теперь серию ведёт единственный источник: игрок сам забирает ежедневный
+// бонус (POST /player/daily-bonus), где серия растёт один раз в сутки и
+// обнуляется при пропуске больше 48 часов.
+//
+// Здесь остаётся только сброс серий у игроков, которые давно не заходили и
+// никогда не заберут бонус.
+const resetResult = await query(`
+            UPDATE players
             SET daily_streak = 0
             WHERE last_action_time < NOW() - INTERVAL '2 days'
-            AND daily_streak > 0
+            AND COALESCE(daily_streak, 0) > 0
             RETURNING id
         `);
-        
+
         if (resetResult.rows.length > 0) {
-            logger.info({ 
-                type: 'streak_reset', 
-                players_affected: resetResult.rows.length 
+            logger.info({
+                type: 'streak_reset',
+                players_affected: resetResult.rows.length
             });
         }
-        
-        // Увеличиваем streak для активных игроков (с ограничением max=365)
-        await query(`
-            UPDATE players 
-            SET daily_streak = LEAST(365, daily_streak + 1)
-            WHERE last_action_time > NOW() - INTERVAL '20 hours'
-            AND last_action_time < NOW() - INTERVAL '4 hours'
-        `);
         
         const duration = Date.now() - startTime;
         metrics.dailyActivity.total++;
@@ -298,7 +303,7 @@ async function processBatchParallel(players) {
         const chunkResults = await Promise.allSettled(
             chunk.map(player => processPlayerAchievements(player))
         );
-        results.push(...chunkResults.map(r => r.value));
+        results.push(...chunkResults.map(r => r.value || { success: false }));
     }
     
     return results;

@@ -230,16 +230,22 @@ function addItemToInventory(inventory, newItem, dbItem) {
         }
     }
 
-    // Что не влезло в стеки — отдельным слотом.
+    // Что не влезло в стеки — новыми слотами.
     // Раньше здесь был безусловный push(newItem) с ПОЛНЫМ quantity:
-    // при max_stack=5 и добавлении 4 в стек из 4 получалось 5 + 4 = 9,
-    // а не 5 + 3 — лишние предметы «терялись» в арифметике.
-    if (remaining > 0) {
-        inventory.push({ ...newItem, quantity: remaining });
-        return 1; // создан новый слот
+    // при max_stack=5 и покупке 4 в стек из 4 получалось 5 + 4 = 9,
+    // а не 5 + 3 — лишние предметы «терялись» в арифметике. Вторая ошибка
+    // того же места: остаток мог превысить max_stack (покупка 12 при
+    // max_stack=10 давала один слот на 12 штук). Теперь режем на полные
+    // стеки и возвращаем точное число новых слотов.
+    let slotsAdded = 0;
+    while (remaining > 0) {
+        const chunk = Math.min(maxStack, remaining);
+        inventory.push({ ...newItem, quantity: chunk });
+        remaining -= chunk;
+        slotsAdded++;
     }
 
-    return 0; // всё ушло в существующие стеки
+    return slotsAdded;
 }
 
 /**
@@ -341,14 +347,137 @@ function normalizeEquipment(raw) {
     const eq = safeParseJson(raw, {});
     if (!eq || typeof eq !== 'object') return {};
 
-    const VALID_SLOTS = ['weapon', 'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'];
+    // Список слотов берём из public/shared/equipment.js: раньше он был
+    // продублирован здесь строкой, и любой расхождение означало предметы,
+    // которые сервер считает «надетыми», а бой — не учитывает.
     const out = {};
-    for (const slot of VALID_SLOTS) {
+    for (const slot of equipmentRules.COMBAT_SLOTS) {
         if (eq[slot] && typeof eq[slot] === 'object' && !Array.isArray(eq[slot])) {
             out[slot] = eq[slot];
         }
     }
     return out;
+}
+
+// ==========================================
+// СЕТЫ, ИЗНОС И СЧЁТЧИКИ ПРОГРЕССА
+// ==========================================
+
+// Общие правила предметов живут в public/shared/equipment.js — оттуда же
+// берём прочность, апгрейд и бонусы сетов, чтобы сервер и клиент считали
+// одинаково.
+const equipmentRules = require('../public/shared/equipment.js');
+
+/**
+ * Бонусы сетов по надетой экипировке.
+ * @param {object} equipment экипировка игрока
+ * @returns {Promise<Record<string, number>>}
+ */
+async function getSetBonuses(equipment) {
+    const sets = await query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
+    return equipmentRules.calculateSetBonuses(equipment, (sets.rows || []).map((row) => ({
+        id: row.id,
+        bonus_2: safeParseJson(row.bonus_2, {}),
+        bonus_3: safeParseJson(row.bonus_3, {}),
+        bonus_4: safeParseJson(row.bonus_4, {})
+    })));
+}
+
+/**
+ * Износ экипировки по слотам и запись результата.
+ *
+ * Раньше колонка durability была мёртвой: оружие в «сильной атаке» просто
+ * удалялось из инвентаря целиком (один удар — минус дорогое оружие), а надетое
+ * снаряжение не изнашивалось. Теперь износ симметричен: 1 единица за удар,
+ * сломанный предмет теряет бонусы, но остаётся и чинится в мастерской.
+ *
+ * @param {object} client клиент БД (транзакция)
+ * @param {number} playerId
+ * @param {object} equipment экипировка (мутируется)
+ * @param {string[]} slots какие слоты изнашивать
+ * @returns {string[]} список слотов, где предмет сломался (для ответа клиенту)
+ */
+function wearEquipmentSlots(client, playerId, equipment, slots) {
+    if (!equipment || !Array.isArray(slots) || slots.length === 0) return [];
+
+    const broken = [];
+    for (const slot of slots) {
+        const item = equipment[slot];
+        if (!item) continue;
+        equipment[slot] = equipmentRules.wearEquipment(item, 1);
+        if (equipmentRules.getDurabilityInfo(equipment[slot]).isBroken) {
+            broken.push(slot);
+        }
+    }
+    return broken;
+}
+
+/**
+ * Записать износ экипировки в БД (обязательно внутри транзакции).
+ * @returns {Promise<void>}
+ */
+async function saveEquipment(client, playerId, equipment) {
+    await client.query(
+        'UPDATE players SET equipment = $1::jsonb WHERE id = $2',
+        [JSON.stringify(equipment), playerId]
+    );
+}
+
+/**
+ * Пополнить unique_items новыми id предметов.
+ *
+ * Поле читают достижения «Коллекционер»/«Хранитель» (10 и 25 уникальных
+ * предметов), но не обновлял никто — прогресс навсегда оставался 0.
+ *
+ * @param {object} client клиент БД
+ * @param {number} playerId
+ * @param {Iterable<number|string>} itemIds
+ */
+async function trackCollectedItems(client, playerId, itemIds) {
+    const ids = [...new Set([...itemIds].map(Number).filter(Number.isFinite))];
+    if (ids.length === 0) return;
+
+    await client.query(`
+        UPDATE players
+           SET unique_items = (
+                   SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb)
+                     FROM jsonb_array_elements_text(
+                         COALESCE(unique_items, '[]'::jsonb) || $2::jsonb
+                     ) AS value
+               )
+         WHERE id = $1
+    `, [playerId, JSON.stringify(ids)]);
+}
+
+/**
+ * Прогресс ежедневного задания.
+ *
+ * Поля current_value/completed в daily_tasks были, но их не менял ни один
+ * обработчик: задания показывались, но не выполнялись. task_type совпадает с
+ * теми, что выдаёт routes/api.js: search / boss_damage / collect_items.
+ *
+ * @param {object} client клиент БД
+ * @param {number} playerId
+ * @param {string} taskType
+ * @param {number} amount на сколько увеличить прогресс
+ * @returns {Promise<number>} новое значение current_value (0 — заданий нет)
+ */
+async function progressDailyTask(client, playerId, taskType, amount) {
+    const delta = Math.max(0, Math.round(Number(amount) || 0));
+    if (delta === 0) return 0;
+
+    const result = await client.query(`
+        UPDATE daily_tasks
+           SET current_value = LEAST(target_value, current_value + $3),
+               completed = (LEAST(target_value, current_value + $3) >= target_value)
+         WHERE player_id = $1
+           AND task_type = $2
+           AND completed = false
+           AND expires_at > NOW()
+        RETURNING current_value
+    `, [playerId, taskType, delta]);
+
+    return result.rows[0]?.current_value || 0;
 }
 
 // ==========================================
@@ -514,12 +643,19 @@ async function checkAchievements(playerId, client = null) {
 }
 
 /**
- * Вставить достижение и выдать награду (в транзакции)
+ * Пометить достижение выполненным (в транзакции).
+ *
+ * ВАЖНО: награду здесь НЕ выдаём. Раньше эта функция сразу добавляла
+ * монеты/звёзды, а потом ещё и POST /api/achievements/:id/claim выдавал их
+ * повторно — игрок получал двойную награду за каждое достижение.
+ * Теперь единственный источник выдачи — эндпоинт claim (кнопка «Получить»
+ * в UI), а здесь только факт выполнения с reward_claimed = false.
  */
 async function insertAchievement(client, playerId, ach, progressValue) {
     const reward = safeParseJson(ach.reward, {});
 
-    // Вставляем или обновляем достижение
+    // Вставляем или обновляем достижение. ON CONFLICT НЕ трогает
+    // reward_claimed: уже полученная награда остаётся полученной.
     const insertResult = await client.query(
         `INSERT INTO player_achievements (player_id, achievement_id, progress_value, completed, completed_at, reward_claimed)
          VALUES ($1, $2, $3, true, NOW(), false)
@@ -531,35 +667,11 @@ async function insertAchievement(client, playerId, ach, progressValue) {
 
     if (insertResult.rowCount === 0) return false;
 
-    // Выдаём награду
-    const updates = [];
-    const params = [playerId];
-    let paramIndex = 2;
-
-    if (reward.coins && reward.coins > 0) {
-        updates.push(`coins = coins + $${paramIndex}`);
-        params.push(reward.coins);
-        paramIndex++;
-    }
-
-    if (reward.stars && reward.stars > 0) {
-        updates.push(`stars = stars + $${paramIndex}`);
-        params.push(reward.stars);
-        paramIndex++;
-    }
-
-    if (updates.length > 0) {
-        await client.query(
-            `UPDATE players SET ${updates.join(', ')} WHERE id = $1`,
-            params
-        );
-    }
-
     logger.info({
         type: 'achievement_unlocked',
         playerId,
         achievement: ach.name,
-        reward
+        reward_available: reward
     });
 
     return true;
@@ -698,10 +810,18 @@ module.exports = {
     buildPlayerStatus,
     recalcEnergy,
     normalizeEquipment,
-calculateSellPrice,
-addItemToInventory,
-SELL_RATE,
-SELL_FLOOR_BY_RARITY,
+    calculateSellPrice,
+    addItemToInventory,
+    SELL_RATE,
+    SELL_FLOOR_BY_RARITY,
+
+    // Правила предметов и счётчики прогресса
+    equipmentRules,
+    getSetBonuses,
+    wearEquipmentSlots,
+    saveEquipment,
+    trackCollectedItems,
+    progressDailyTask,
     
     // Функции достижений (achievements.js)
     getAchievementCurrentValue,

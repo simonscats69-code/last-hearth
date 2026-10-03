@@ -506,10 +506,7 @@ html, body {
 }
 
 .main-guidance-section,
-.quick-progress-section,
 .location-section,
-.player-bonuses,
-.status-section,
 .extra-actions,
 .heal-actions{
     padding-left: 16px;
@@ -517,10 +514,7 @@ html, body {
 }
 
 .main-guidance-section,
-.quick-progress-section,
 .location-section,
-.player-bonuses,
-.status-section,
 .extra-actions{
     margin-bottom: 16px;
 }
@@ -602,12 +596,6 @@ html, body {
     flex: none;
 }
 
-.quick-progress-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
-}
-
 .journey-progress-section {
     padding-left: 16px;
     padding-right: 16px;
@@ -644,35 +632,6 @@ html, body {
 }
 
 .journey-desc {
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.35;
-}
-
-.progress-card {
-    background: var(--bg-card);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 14px;
-    padding: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 112px;
-}
-
-.progress-card-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-secondary);
-}
-
-.progress-card-value {
-    font-size: 16px;
-    line-height: 1.2;
-}
-
-.progress-card-desc {
     font-size: 12px;
     color: var(--text-secondary);
     line-height: 1.35;
@@ -846,8 +805,11 @@ html, body {
 
 
 .search-btn {
+    /* Главное действие экрана: кнопка «Искать» осталась единственной в
+       блоке действий, поэтому занимает всю ширину и читается как основная. */
     background: linear-gradient(135deg, var(--accent-green), #2E7D32);
-    flex: 2;
+    flex: 1;
+    box-shadow: 0 6px 20px rgba(76, 175, 80, 0.25);
 }
 
 .btn-icon {
@@ -862,23 +824,6 @@ html, body {
 .btn-cost {
     font-size: 12px;
     color: rgba(255,255,255,0.7);
-}
-
-.player-bonuses {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.bonus-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 12px;
 }
 
 .active-buffs-section {
@@ -920,66 +865,6 @@ html, body {
     color: var(--text-secondary);
     font-size: 11px;
 }
-
-/* Статусы персонажа */
-
-.risk-summary-card {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 14px 16px;
-    border-radius: 16px;
-    margin-bottom: 12px;
-    background: rgba(74, 124, 63, 0.15);
-    border: 1px solid rgba(74, 124, 63, 0.4);
-}
-
-.risk-summary-card[data-risk="warning"] {
-    background: rgba(204, 85, 0, 0.16);
-    border-color: rgba(204, 85, 0, 0.45);
-}
-
-.risk-summary-card[data-risk="danger"] {
-    background: rgba(139, 0, 0, 0.18);
-    border-color: rgba(255, 89, 94, 0.45);
-}
-
-.risk-summary-main {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.risk-summary-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-secondary);
-}
-
-.risk-summary-main strong {
-    font-size: 18px;
-}
-
-.risk-summary-main p {
-    font-size: 13px;
-    color: var(--text-secondary);
-    line-height: 1.4;
-    margin: 0;
-}
-
-.risk-summary-side {
-    display: flex;
-    align-items: center;
-}
-
-.risk-summary-action {
-    font-size: 12px;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-}
-
 
 /* Состояния: переломы и инфекции */
 .conditions-grid {
@@ -1549,6 +1434,218 @@ html, body {
     font-size: 11px;
     color: var(--text-secondary);
     font-style: italic;
+}
+
+/* Состояние снаряжения: прочность и уровень улучшения */
+.equip-slot-state {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 11px;
+}
+
+.equip-slot-upgrade {
+    color: var(--rarity-epic, #9c27b0);
+    font-weight: 700;
+}
+
+.equip-slot-durability {
+    color: var(--text-secondary, #888);
+}
+
+.equip-slot-durability.is-broken {
+    color: #e05252;
+    font-weight: 700;
+}
+
+/* Мастерская: ремонт и улучшение */
+.inv-workshop {
+    margin-top: 12px;
+}
+
+.inv-workshop-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.inv-workshop-slot {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.inv-workshop-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.inv-workshop-dur {
+    color: var(--text-secondary, #999);
+    font-size: 12px;
+}
+
+.inv-workshop-dur.is-broken {
+    color: #e05252;
+    font-weight: 700;
+}
+
+.inv-workshop-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ws-btn {
+    flex: 1 1 auto;
+    min-width: 130px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.ws-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.inv-workshop-materials {
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    line-height: 1.5;
+}
+
+/* Кнопки выбора в модальном окне (продажа части стека) */
+.modal-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.modal-action-btn {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+/* Прочность оружия в окне выбора */
+.weapon-durability {
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+}
+
+.weapon-item.is-broken,
+.weapon-item.disabled {
+    opacity: 0.5;
+}
+
+/* Ответный урон босса в логе боя */
+.damage-taken {
+    color: #e05252;
+}
+
+/* Ответный урон босса в карточке */
+.boss-counter {
+    font-size: 11px;
+    color: #e07a52;
+}
+
+/* Панель выбора локации на карте: тап показывает детали и кнопку перехода */
+.map-location-info {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.map-location-info[data-locked="true"] {
+    color: #ffcc00;
+}
+
+.map-travel-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Кнопка снятия снаряжения: слот можно было только заменить */
+.equip-unequip-btn {
+    margin-left: auto;
+    padding: 4px 8px;
+    min-height: 0;
+    font-size: 12px;
+    line-height: 1;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: var(--text-secondary);
+}
+
+.equip-unequip-btn:active {
+    background: rgba(255, 89, 94, 0.2);
+}
+
+/* Модификации в мастерской */
+.inv-workshop-mods {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.inv-workshop-mod {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+}
+
+.inv-workshop-mod-name {
+    min-width: 120px;
+}
+
+.inv-workshop-mod-mats {
+    color: var(--text-secondary, #999);
+    font-size: 11px;
+}
+
+.ws-btn-mod {
+    min-width: auto;
+    padding: 6px 10px;
+}
+
+/* Тип оружия: ближний/дальний бой */
+.weapon-tag {
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.weapon-tag.melee {
+    color: #ff8a65;
+}
+
+.weapon-tag.ranged {
+    color: #64b5f6;
+}
+
+/* Товары за звёзды в магазине */
+.shop-item-stars {
+    color: #ffc107;
+    font-weight: 700;
 }
 
 @media (max-width: 360px) {
@@ -3150,50 +3247,45 @@ html, body {
 }
 
 
-/* ---------- Предпросмотр урона (выбор оружия) ---------- */
-.damage-preview-line {
-    display: flex;
-    justify-content: space-between;
-    font-size: 13px;
-    color: var(--text-secondary);
-    padding: 3px 0;
-}
-.damage-preview-total {
-    display: flex;
-    justify-content: space-between;
-    font-size: 15px;
-    font-weight: bold;
-    color: var(--text-primary);
-    padding-top: 6px;
-    margin-top: 4px;
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
-}
-.damage-preview-loading {
-    font-size: 13px;
-    color: var(--text-secondary);
-    text-align: center;
-    padding: 8px 0;
-}
-.damage-base, .damage-level, .damage-mastery { color: var(--text-secondary); }
-.damage-total { color: var(--accent-green, #6abf59); }
-
-/* ---------- Достижения: контейнер категорий и legacy ---------- */
-
-.bosses-info {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    margin-bottom: 12px;
-}
-.bosses-info-card {
+/* ---------- Правила режимов боссов (свёрнутый блок) ---------- */
+/* Раньше правила занимали карточку из трёх строк над списком боссов.
+   Теперь это <details> — видна только строка «Правила режимов». */
+.bosses-rules {
     background: var(--bg-card);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 12px;
-    padding: 12px;
+    margin-bottom: 12px;
     font-size: 13px;
+}
+
+.bosses-rules > summary {
+    padding: 10px 12px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    list-style: none;
+}
+
+.bosses-rules > summary::-webkit-details-marker {
+    display: none;
+}
+
+.bosses-rules > summary::before {
+    content: 'ℹ';
+    margin-right: 6px;
+}
+
+.bosses-rules[open] > summary {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.bosses-rules-list {
+    list-style: none;
+    padding: 10px 12px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
+    color: var(--text-secondary);
+    line-height: 1.4;
 }
 
 /* ---------- Колесо удачи: подписи секторов ---------- */
@@ -3478,26 +3570,6 @@ html, body {
 }
 
 /* Достижения */
-.achievements-stats {
-    padding: 16px;
-    background: linear-gradient(135deg, #1a1a3a, #2d2d5a);
-    border-radius: 12px;
-    margin: 16px;
-    text-align: center;
-}
-
-.achievements-stats .total {
-    font-size: 24px;
-    font-weight: bold;
-    color: var(--accent-gold);
-}
-
-.achievements-stats .subtitle {
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-top: 4px;
-}
-
 .achievements-categories {
     display: flex;
     flex-wrap: wrap;

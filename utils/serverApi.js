@@ -334,7 +334,12 @@ async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
  */
 function handleError(res, error, action = 'unknown') {
     const statusCode = error.statusCode || 500;
-    const code = error.code || 'UNKNOWN_ERROR';
+    // Коды ошибок БД (23505, 42P01...) — это внутренние коды Postgres,
+    // отдавать их клиенту незачем. Наружу уходят только наши
+    // буквенно-цифровые коды вида INSUFFICIENT_COINS.
+    const rawCode = typeof error.code === 'string' ? error.code : '';
+    const isOwnCode = /^[A-Z][A-Z0-9_]{2,}$/.test(rawCode);
+    const code = isOwnCode ? rawCode : (statusCode >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR');
     const internalMessage = error.message || 'Внутренняя ошибка сервера';
     const isClientError = statusCode >= 400 && statusCode < 500;
 

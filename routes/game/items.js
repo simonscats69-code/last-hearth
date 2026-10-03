@@ -9,14 +9,17 @@ const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, transaction: tx } = require('../../db/database');
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
-const { normalizeInventory, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory, equipmentRules, getSetBonuses, trackCollectedItems } = require('../../utils/game-helpers');
 
 /**
- * Лимит слотов инвентаря. Должен совпадать с MAX_INVENTORY_SLOTS
- * в routes/game/world.js (там та же проверка при добыче) и с
- * INVENTORY_MAX_SLOTS в public/game.js.
+ * Лимит слотов инвентаря.
+ *
+ * Берётся из public/shared/equipment.js — того же файла, что читает клиент.
+ * Раньше значение 100 было продублировано здесь строкой и в world.js: любое
+ * расхождение означало либо переполнение инвентаря, либо вечную блокировку
+ * добычи.
  */
-const MAX_INVENTORY_SLOTS = 100;
+const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
 
 /**
  * Получить список предметов в магазине
@@ -179,8 +182,16 @@ router.post('/buy', async (req, res) => {
 
         res.json(result);
     } catch (error) {
-        if (error.code === 'INSUFFICIENT_COINS') {
-            return res.status(400).json({ success: false, error: error.message, code: 'INSUFFICIENT_COINS' });
+        // Раньше здесь ловился только INSUFFICIENT_COINS, а ITEM_NOT_FOUND,
+        // PLAYER_NOT_FOUND и INVENTORY_FULL уходили в handleError -> 500
+        // с общим текстом: клиент показывал «ошибка сервера» вместо
+        // «недостаточно монет» или «инвентарь полон».
+        if (['INSUFFICIENT_COINS', 'ITEM_NOT_FOUND', 'PLAYER_NOT_FOUND', 'INVENTORY_FULL'].includes(error.code)) {
+            return res.status(error.statusCode || 400).json({
+                success: false,
+                error: error.message,
+                code: error.code
+            });
         }
         handleError(res, error, 'item_buy');
     }
@@ -216,13 +227,28 @@ router.post(['/use', '/use-item'], async (req, res) => {
             const item = inventory[itemIndex];
 
             if (equip) {
+                // Слот определяет единственный источник правил
+                // (public/shared/equipment.js). Раньше здесь стояло
+                // `item.slot || item.type || 'accessory'`: расходник без слота
+                // (еда, бинт) попадал в слот вроде «food», который не участвует
+                // ни в защите, ни в износе, — предмет исчезал из инвентаря
+                // и молча не давал бонусов.
+                const slot = equipmentRules.resolveEquipmentSlot(item);
+                if (!slot) {
+                    throw {
+                        message: `«${item.name || 'Предмет'}» нельзя надеть — у него нет слота экипировки`,
+                        code: 'NOT_EQUIPMENT',
+                        statusCode: 400
+                    };
+                }
+
                 const equipment = safeJsonParse(player.rows[0].equipment, {});
-                const slot = item.slot || item.type || 'accessory';
-
                 const oldItem = equipment[slot] || null;
-                equipment[slot] = item;
 
+                // Снаряжение не стакается: если в слоте предмет уже лежит,
+                // старый возвращается в инвентарь отдельной записью.
                 inventory.splice(itemIndex, 1);
+                equipment[slot] = item;
                 if (oldItem) inventory.push(oldItem);
 
                 await client.query(
@@ -242,8 +268,15 @@ router.post(['/use', '/use-item'], async (req, res) => {
             const playerRadiation = normalizeRadiation(player.rows[0].radiation);
             const playerInfections = normalizeInfections(player.rows[0].infections);
 
+            // Бонусы сетов: heal_bonus (процент к лечению) и energy_bonus
+            // (плоская прибавка к энергии). Без них Медицинский сет был
+            // просто набором дорогих вещей без преимущества.
+            const setBonuses = await getSetBonuses(safeJsonParse(player.rows[0].equipment, {}));
+
             if (stats.healing || stats.health) {
-                const healAmount = Number(stats.healing || stats.health || 0);
+                const baseHeal = Number(stats.healing || stats.health || 0);
+                const healPercent = Number(stats.heal_bonus || 0) + Number(setBonuses.heal_bonus || 0);
+                const healAmount = Math.max(1, Math.round(baseHeal * (1 + healPercent / 100)));
                 const curHealth = Number(player.rows[0].health || 0);
                 const maxHealth = Number(player.rows[0].max_health || 100);
                 const newHealth = Math.min(maxHealth, curHealth + healAmount);
@@ -253,7 +286,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
             // Еда/вода восстанавливают энергию (стартовый инвентарь содержит stats.energy)
             if (stats.energy) {
-                const energyAmount = Number(stats.energy);
+                const energyAmount = Number(stats.energy) + Number(setBonuses.energy_bonus || 0);
                 if (energyAmount > 0) {
                     updates.push(`energy = LEAST(max_energy, energy + $${params.length + 1})`);
                     params.push(energyAmount);
@@ -325,7 +358,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
         res.json(result);
     } catch (error) {
-        if (error.code === 'ITEM_NOT_IN_INVENTORY' || error.code === 'PLAYER_NOT_FOUND') {
+        if (['ITEM_NOT_IN_INVENTORY', 'PLAYER_NOT_FOUND', 'NOT_EQUIPMENT'].includes(error.code)) {
             // statusCode может отсутствовать — res.status(undefined) дал бы
             // невалидный HTTP-код. Фоллбэк 404 соответствует смыслу ошибки.
             const status = Number(error.statusCode) || 404;
@@ -395,11 +428,20 @@ router.post('/sell', async (req, res) => {
             }
 
             // За одну операцию продаём весь стек — это осознанно:
-            // слот занимает место, а монеты компактнее.
-            const soldQuantity = Math.max(1, Number(item.quantity || 1));
+            // слот занимает место, а монеты компактнее. Клиент может
+            // попросить quantity: 1, чтобы продать одну штуку из стека.
+            const stackQuantity = Math.max(1, Number(item.quantity || 1));
+            const requestedQuantity = Number(req.body?.quantity);
+            const soldQuantity = (Number.isInteger(requestedQuantity) && requestedQuantity > 0)
+                ? Math.min(stackQuantity, requestedQuantity)
+                : stackQuantity;
             const earned = unitPrice * soldQuantity;
 
-            inventory.splice(itemIndex, 1);
+            if (soldQuantity >= stackQuantity) {
+                inventory.splice(itemIndex, 1);
+            } else {
+                inventory[itemIndex] = { ...item, quantity: stackQuantity - soldQuantity };
+            }
 
             const newCoins = Number(playerResult.rows[0].coins || 0) + earned;
 
@@ -436,6 +478,320 @@ router.post('/sell', async (req, res) => {
             });
         }
         handleError(res, error, 'item_sell');
+    }
+});
+
+/**
+ * Разобрать предмет на материалы (POST /items/drop).
+ *
+ * Закрывает тупик с лимитом инвентаря: раньше предмет можно было только
+ * продать за 35% цены или использовать, поэтому 100 слотов забивались
+ * испорченным снаряжением и ненужными расходниками, которые некуда было деть.
+ *
+ * Снаряжение даёт материалы по редкости (calculateScrapYield), остальные
+ * предметы просто выбрасываются: «разбирать» еду бессмысленно.
+ */
+router.post('/drop', async (req, res) => {
+    try {
+        const playerId = req.player.id;
+        const itemIndex = Number(req.body?.item_index);
+
+        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Укажите корректный индекс предмета',
+                code: 'INVALID_INDEX'
+            });
+        }
+
+        const result = await tx(async (client) => {
+            const playerResult = await client.query(
+                'SELECT inventory FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+            if (!playerResult.rows[0]) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
+
+            const inventory = normalizeInventory(playerResult.rows[0].inventory);
+            if (itemIndex >= inventory.length) {
+                throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+            }
+
+            const item = inventory[itemIndex];
+            const stackQuantity = Math.max(1, Number(item.quantity || 1));
+            const requested = Number(req.body?.quantity);
+            const dropQuantity = (Number.isInteger(requested) && requested > 0)
+                ? Math.min(stackQuantity, requested)
+                : stackQuantity;
+
+            // Мест могло хватить не всем материалам. Раньше здесь стоял
+            // `inventory.pop()` с continue: предмет уже был удалён из
+            // инвентаря, а материал не выдавался — игрок терял вещь целиком.
+            // Теперь считаем, что нужно, ДО удаления предмета, и при нехватке
+            // мест откатываем всю операцию (ошибка пробрасывается наружу, а
+            // транзакция откатывается — игрок ничего не теряет).
+            const scrapYield = equipmentRules.calculateScrapYield(item, 1);
+            const materialNames = Object.keys(scrapYield);
+            let materials = [];
+            if (materialNames.length > 0) {
+                const materialResult = await client.query(
+                    'SELECT id, name, type, category, rarity, icon, stats, stackable, max_stack FROM items WHERE name = ANY($1::text[])',
+                    [materialNames]
+                );
+                materials = materialResult.rows;
+                if (materials.length === 0) {
+                    throw {
+                        message: 'Материалы разбора недоступны',
+                        code: 'MATERIAL_MISSING',
+                        statusCode: 500
+                    };
+                }
+            }
+
+            // Мест может не хватить. Считаем это ДО удаления предмета: раньше
+            // здесь стоял `inventory.pop()` с continue, из-за чего игрок терял
+            // вещь целиком (предмет удалён, материал не выдан). Теперь при
+            // нехватке мест бросаем ошибку — транзакция откатывается.
+            if (materials.length > 0) {
+                const projected = inventory.slice();
+                for (const material of materials) {
+                    const quantity = Number(scrapYield[material.name] || 0);
+                    if (quantity <= 0) continue;
+                    addItemToInventory(
+                        projected,
+                        createInventoryItem({ ...material, stats: safeJsonParse(material.stats, {}) }, { quantity }),
+                        material
+                    );
+                }
+
+                const slotsNeeded = Math.max(0, projected.length - inventory.length);
+                const freeSlots = MAX_INVENTORY_SLOTS - inventory.length;
+                if (slotsNeeded > freeSlots) {
+                    throw {
+                        message: `Нужно свободных слотов: ${slotsNeeded}, доступно: ${freeSlots}. Продай или разбери что-нибудь.`,
+                        code: 'INVENTORY_FULL',
+                        statusCode: 400
+                    };
+                }
+            }
+
+            if (dropQuantity >= stackQuantity) {
+                inventory.splice(itemIndex, 1);
+            } else {
+                inventory[itemIndex] = { ...item, quantity: stackQuantity - dropQuantity };
+            }
+
+            const granted = [];
+            for (const material of materials) {
+                const quantity = Number(scrapYield[material.name] || 0);
+                if (quantity <= 0) continue;
+
+                addItemToInventory(
+                    inventory,
+                    createInventoryItem({ ...material, stats: safeJsonParse(material.stats, {}) }, { quantity }),
+                    material
+                );
+                granted.push({ id: material.id, name: material.name, quantity, icon: material.icon || '📦' });
+            }
+
+            await client.query(
+                'UPDATE players SET inventory = $1 WHERE id = $2',
+                [JSON.stringify(inventory), playerId]
+            );
+
+            await logPlayerAction(playerId, 'item_drop', {
+                item_id: item.id,
+                item_name: item.name,
+                quantity: dropQuantity,
+                materials: granted
+            }, client);
+
+            return {
+                success: true,
+                message: `Разобрано: ${item.name}`,
+                item: { id: item.id, name: item.name, icon: item.icon || '📦' },
+                quantity_dropped: dropQuantity,
+                materials: granted
+            };
+        });
+
+        res.json(result);
+    } catch (error) {
+        if (['ITEM_NOT_IN_INVENTORY', 'PLAYER_NOT_FOUND', 'INVENTORY_FULL', 'MATERIAL_MISSING'].includes(error.code)) {
+            return res.status(error.statusCode || 400).json({
+                success: false,
+                error: error.message,
+                code: error.code
+            });
+        }
+        handleError(res, error, 'item_drop');
+    }
+});
+
+/**
+ * POST /items/unequip — снять предмет из слота в инвентарь.
+ * body: { slot }
+ *
+ * Снятие отсутствовало вообще: слот можно было только ЗАМЕНИТЬ другим
+ * предметом. Если игрок надел не тот каску, вернуть предыдущий уже нельзя,
+ * а сет/бонус от неудачного предмета может мешать до конца сессии.
+ */
+router.post('/unequip', async (req, res) => {
+    try {
+        const playerId = req.player.id;
+        const slot = String(req.body?.slot || '');
+
+        const result = await tx(async (client) => {
+            const playerResult = await client.query(
+                'SELECT equipment, inventory FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+            const player = playerResult.rows[0];
+            if (!player) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
+
+            const equipment = normalizeEquipment(player.equipment);
+            const item = equipment[slot];
+            if (!item) {
+                throw { message: 'В этом слоте ничего нет', code: 'SLOT_EMPTY', statusCode: 400 };
+            }
+
+            const inventory = normalizeInventory(player.inventory);
+            if (inventory.length >= MAX_INVENTORY_SLOTS) {
+                throw {
+                    message: `Инвентарь полон (макс. ${MAX_INVENTORY_SLOTS}). Продай или разбери что-нибудь.`,
+                    code: 'INVENTORY_FULL',
+                    statusCode: 400
+                };
+            }
+
+            // Снаряжение не стакуется, поэтому возвращаем его отдельной записью.
+            inventory.push(item);
+            delete equipment[slot];
+
+            await client.query(
+                'UPDATE players SET equipment = $1::jsonb, inventory = $2 WHERE id = $3',
+                [JSON.stringify(equipment), JSON.stringify(inventory), playerId]
+            );
+
+            await logPlayerAction(playerId, 'item_unequip', {
+                slot,
+                item_id: item.id ?? null,
+                item_name: item.name || null
+            }, client);
+
+            return {
+                success: true,
+                message: `${item.name || 'Предмет'} снят`,
+                slot,
+                item: { id: item.id ?? null, name: item.name || 'Предмет', icon: item.icon || '📦' },
+                inventory_slots: inventory.length
+            };
+        });
+
+        res.json(result);
+    } catch (error) {
+        if (['SLOT_EMPTY', 'PLAYER_NOT_FOUND', 'INVENTORY_FULL'].includes(error.code)) {
+            return res.status(error.statusCode || 400).json({
+                success: false,
+                error: error.message,
+                code: error.code
+            });
+        }
+        handleError(res, error, 'item_unequip');
+    }
+});
+
+/**
+ * POST /items/buy-stars — купить предмет за звёзды (POST /items/buy-stars).
+ *
+ * Звёзды выдаются за достижения и ежедневные задания, а тратить их было
+ * негде: колонка items.stars_price читалась только витриной магазина.
+ */
+router.post('/buy-stars', async (req, res) => {
+    try {
+        const playerId = req.player.id;
+        const itemId = Number(req.body?.item_id);
+        const quantity = Math.max(1, Math.min(99, Number(req.body?.quantity || 1)));
+
+        if (!Number.isInteger(itemId) || itemId <= 0) {
+            return res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
+        }
+
+        const result = await tx(async (client) => {
+            const shopItem = await client.query(
+                'SELECT * FROM items WHERE id = $1 AND stars_price > 0',
+                [itemId]
+            );
+            if (!shopItem.rows[0]) {
+                throw { message: 'Предмет не найден или не продаётся за звёзды', code: 'ITEM_NOT_FOUND', statusCode: 404 };
+            }
+
+            const shopItemRow = shopItem.rows[0];
+            const totalStars = Number(shopItemRow.stars_price) * quantity;
+
+            const playerResult = await client.query(
+                'SELECT stars, inventory FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+            const player = playerResult.rows[0];
+            if (!player) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
+            if (Number(player.stars || 0) < totalStars) {
+                throw {
+                    message: `Недостаточно звёзд. Нужно: ${totalStars}, у вас: ${player.stars}`,
+                    code: 'INSUFFICIENT_STARS',
+                    statusCode: 400
+                };
+            }
+
+            const inventory = normalizeInventory(player.inventory);
+            const newItem = createInventoryItem(shopItemRow, { quantity });
+            const addedAsNewSlots = addItemToInventory(inventory, newItem, shopItemRow);
+
+            if (addedAsNewSlots > 0 && inventory.length > MAX_INVENTORY_SLOTS) {
+                throw {
+                    message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов).`,
+                    code: 'INVENTORY_FULL',
+                    statusCode: 400
+                };
+            }
+
+            await client.query(
+                'UPDATE players SET stars = stars - $1, inventory = $2 WHERE id = $3',
+                [totalStars, JSON.stringify(inventory), playerId]
+            );
+
+            await trackCollectedItems(client, playerId, [shopItemRow.id]);
+            await logPlayerAction(playerId, 'item_bought_stars', {
+                item_id: itemId,
+                item_name: shopItemRow.name,
+                quantity,
+                stars_spent: totalStars
+            }, client);
+
+            return {
+                success: true,
+                message: `Куплено за звёзды: ${shopItemRow.name} ×${quantity}`,
+                item: { id: shopItemRow.id, name: shopItemRow.name, icon: shopItemRow.icon || '📦', quantity },
+                stars_spent: totalStars,
+                stars_total: Number(player.stars || 0) - totalStars
+            };
+        });
+
+        res.json(result);
+    } catch (error) {
+        if (['INSUFFICIENT_STARS', 'ITEM_NOT_FOUND', 'INVENTORY_FULL', 'PLAYER_NOT_FOUND'].includes(error.code)) {
+            return res.status(error.statusCode || 400).json({
+                success: false,
+                error: error.message,
+                code: error.code
+            });
+        }
+        handleError(res, error, 'item_buy_stars');
     }
 });
 

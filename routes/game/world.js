@@ -14,7 +14,7 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, addItemToInventory } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
 
 // Кэш пула предметов по rarity:type для быстрого случайного выбора (P2-9)
@@ -162,6 +162,37 @@ function buildInventoryItem(item, rarity) {
         upgrade_level: 0,
         modifications: {}
     });
+}
+
+/**
+ * Шансы выпадения ключей боссов из поиска.
+ *
+ * Источник данных — bosses.key_drop_chance (проценты от дропа) вместе с
+ * именем/иконкой ключевого предмета. Множитель риска локации сохраняем:
+ * чем опаснее зона, тем выше шанс сорвать ключ.
+ *
+ * @param {object} client клиент БД (транзакция)
+ * @returns {Promise<Array<{bossId:number,chance:number,name:string,icon:string,rarity:string,bossName:string}>>}
+ */
+async function getBossKeyChances(client) {
+    const result = await client.query(`
+        SELECT b.id AS boss_id, b.name AS boss_name, b.key_drop_chance,
+               k.name AS key_name, k.icon AS key_icon, k.rarity AS key_rarity
+          FROM bosses b
+          JOIN items k ON k.id = b.required_key_id
+         WHERE b.key_drop_chance > 0
+           AND b.required_key_id IS NOT NULL
+         ORDER BY b.id
+    `);
+
+    return result.rows.map((row) => ({
+        bossId: row.boss_id,
+        bossName: row.boss_name,
+        name: row.key_name,
+        icon: row.key_icon,
+        rarity: row.key_rarity,
+        chance: Math.round(Number(row.key_drop_chance) * 100000) / 100000
+    }));
 }
 
 // =============================================================================
@@ -368,63 +399,62 @@ router.post('/search', async (req, res) => {
         }
         
         const modifiers = calculateDebuffModifiers(updatedPlayer);
-        const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck) * 10) / 10);
+        // Удача от экипировки (например, Сталкерского пояса) раньше игнорировалась:
+        // слот accessory был пустым и поле luck нигде не читалось.
+        const equipmentLuckBonus = equipmentRules.calculateEquipmentLuckBonus(equipment);
+        const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck + equipmentLuckBonus) * 10) / 10);
         const riskAdjustedLuck = Math.max(1, Math.round((effectiveLuck + riskProfile.rarityLuckBonus) * 10) / 10);
         const baseDropChance = calculateDropChance(effectiveLuck);
         const dropChance = Math.min(95, Math.max(0.01, baseDropChance * modifiers.dropChance * riskProfile.rewardMultiplier));
         const rolled = Math.random() * 100;
         
         let foundItem = null;
+        let foundKeyInfo = null;
         let itemRarity = null;
         let expGained = 0;
         let itemsCollected = 0;
         let inventoryUpdate = null;
         
         if (rolled <= dropChance) {
-            // P1-8: ключевые шансы привязаны к boss_id (без хрупкого LIKE по имени)
-            const keyChances = [
-                { bossId: 2, chance: 2.5 },
-                { bossId: 3, chance: 1.25 },
-                { bossId: 4, chance: 0.625 },
-                { bossId: 5, chance: 0.3125 },
-                { bossId: 6, chance: 0.15625 },
-                { bossId: 7, chance: 0.078125 },
-                { bossId: 8, chance: 0.0390625 },
-                { bossId: 9, chance: 0.01953125 },
-                { bossId: 10, chance: 0.009765625 }
-            ].map((key) => ({
-                ...key,
-                chance: Math.round((key.chance * riskProfile.keyChanceMultiplier) * 100000) / 100000
-            }));
-            
+            // Ключи боссов. Шансы берём из bosses.key_drop_chance (в процентах
+            // от дропа) — раньше здесь стояла зашитая таблица, а предмет
+            // находился джойном items -> bosses по required_key_id, который у
+            // всех боссов был NULL: энергия тратилась, лут не выпадал вообще.
+            //
+            // Ключ НЕ попадает в инвентарь: он хранится в boss_keys (валюта
+            // прогрессии), поэтому за него не тратится слот из 100.
+            const keyChanceRows = await getBossKeyChances(client);
             const keyRoll = Math.random() * 100;
-            
+
             let foundKey = null;
             let cumulativeKeyChance = 0;
-            
-            for (const key of keyChances) {
+
+            for (const key of keyChanceRows) {
                 cumulativeKeyChance += key.chance;
                 if (keyRoll < cumulativeKeyChance) {
                     foundKey = key;
                     break;
                 }
             }
-            
+
             if (foundKey) {
-                const keyResult = await client.query(`
-                    SELECT i.id, i.name, i.type, i.rarity, i.icon
-                    FROM items i
-                    JOIN bosses b ON b.required_key_id = i.id
-                    WHERE b.id = $1
-                    LIMIT 1
-                `, [foundKey.bossId]);
-                
-                foundItem = keyResult.rows[0] ? {
-                    ...keyResult.rows[0],
-                    damage: 0,
-                    defense: 0
-                } : null;
-                itemRarity = foundItem?.rarity || 'epic';
+                // Ключ «Ключ от X» открывает бой с X, а хранится он под
+                // владельцем предыдущего босса: boss_keys.boss_id = X - 1.
+                const ownerBossId = Math.max(1, foundKey.bossId - 1);
+                await client.query(`
+                    INSERT INTO boss_keys (player_id, boss_id, quantity)
+                    VALUES ($1, $2, 1)
+                    ON CONFLICT (player_id, boss_id)
+                    DO UPDATE SET quantity = boss_keys.quantity + 1
+                `, [playerId, ownerBossId]);
+
+                foundKeyInfo = {
+                    name: foundKey.name,
+                    icon: foundKey.icon || '🗝️',
+                    rarity: foundKey.rarity || 'epic',
+                    boss_id: foundKey.bossId,
+                    boss_name: foundKey.bossName
+                };
             } else {
                 itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck);
 
@@ -505,9 +535,13 @@ router.post('/search', async (req, res) => {
         
         // Строим UPDATE динамически с правильными позициями параметров
         // P0-1: НЕ трогаем last_energy_update — реген идёт от реального времени
+        // GREATEST(0, ...) — страховка от гонки: колонка под CHECK (energy >= 0),
+        // та же логика, что в бою с боссом, PvP и колесе.
         const setParts = [
-            'energy = energy - $1',
-            'total_actions = total_actions + 1',
+            'energy = GREATEST(0, energy - $1)',
+            // COALESCE: у старых записей счётчик мог быть NULL, и счётчик
+            // действий навечно замирал в NULL вместо роста.
+            'total_actions = COALESCE(total_actions, 0) + 1',
             'health = GREATEST(0, health - $2)'
         ];
         const params = [energyCost, radiationDamage];
@@ -529,11 +563,22 @@ router.post('/search', async (req, res) => {
         const updateSql = `UPDATE players SET ${setParts.join(', ')} WHERE id = $${params.length} RETURNING energy, max_energy, last_energy_update`;
         
         const energyResult = await client.query(updateSql, params);
-        
+
         const newEnergy = energyResult.rows[0].energy;
         const newMaxEnergy = energyResult.rows[0].max_energy;
         const lastEnergyUpdate = energyResult.rows[0].last_energy_update;
-        
+
+        // Счётчики прогресса. Раньше ни unique_items, ни daily_tasks.current_value
+        // не обновлялись: достижения «Коллекционер»/«Ежедневная победа» и
+        // ежедневные задания оставались на нуле при любых действиях.
+        if (foundItem?.id) {
+            await trackCollectedItems(client, playerId, [foundItem.id]);
+        }
+        await progressDailyTask(client, playerId, 'search', 1);
+        if (itemsCollected > 0) {
+            await progressDailyTask(client, playerId, 'collect_items', itemsCollected);
+        }
+
         await client.query('COMMIT');
         
         logger.info(`[world] Поиск лута`, {
@@ -555,6 +600,9 @@ router.post('/search', async (req, res) => {
                 stats: foundItem.damage ? { damage: foundItem.damage } : 
                        foundItem.defense ? { defense: foundItem.defense } : null
             } : null,
+            // Ключ босса в инвентарь не попадает (хранится в boss_keys),
+            // поэтому клиенту нужен отдельный сигнал, чтобы показать находку.
+            found_key: foundKeyInfo,
             energy: {
                 current: newEnergy,
                 max: newMaxEnergy,
@@ -679,7 +727,18 @@ router.post('/move', async (req, res) => {
         }
         
         await client.query(`
-            UPDATE players SET current_location_id = $1 WHERE id = $2
+            UPDATE players
+               SET current_location_id = $1,
+                   -- locations_visited читает достижение «Путешественник»
+                   -- (3 локации) и «Искатель» (7), но поле никогда не менялось.
+                   locations_visited = (
+                       SELECT COALESCE(jsonb_agg(DISTINCT visited_id), '[]'::jsonb)
+                         FROM jsonb_array_elements_text(
+                             COALESCE(locations_visited, '[]'::jsonb)
+                             || jsonb_build_array($1::text)
+                         ) AS visited_id
+                   )
+             WHERE id = $2
         `, [location_id, playerId]);
         
         await client.query('COMMIT');

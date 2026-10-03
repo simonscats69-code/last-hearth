@@ -248,6 +248,99 @@ router.post('/buy-energy', async (req, res) => {
 });
 
 /**
+ * POST /daily-bonus — ежедневный бонус (раз в 24 часа).
+ *
+ * Механика была обещана, но не существовала: бот отвечает на /daily
+ * «получи ежедневный бонус», в профиле отдаётся daily_streak и
+ * last_daily_bonus, а эндпоинта не было — поля не писал никто, поэтому
+ * серия дней всегда оставалась 0, а достижения по условию streak были
+ * недостижимы.
+ *
+ * Размер награды растёт с серией (каждый день +25 монет, максимум 7 дней),
+ * каждые 3 дня дня — одна звезда. Пропуск больше 48 часов обнуляет серию.
+ */
+const DAILY_BONUS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const DAILY_BONUS_STREAK_LIMIT = 7;
+
+router.post('/daily-bonus', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) {
+            return res.status(401).json({ error: 'Требуется авторизация' });
+        }
+
+        const result = await tx(async (client) => {
+            const result = await client.query(
+                `SELECT id, coins, stars, daily_streak, last_daily_bonus
+                   FROM players WHERE id = $1 FOR UPDATE`,
+                [playerId]
+            );
+            const player = result.rows[0];
+            if (!player) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+
+            const now = Date.now();
+            const lastBonus = player.last_daily_bonus ? new Date(player.last_daily_bonus).getTime() : 0;
+
+            if (lastBonus && now - lastBonus < DAILY_BONUS_COOLDOWN_MS) {
+                const nextIn = Math.ceil((DAILY_BONUS_COOLDOWN_MS - (now - lastBonus)) / 60000);
+                throw {
+                    message: `Бонус уже получен. Следующий через ${nextIn} мин.`,
+                    code: 'DAILY_BONUS_ALREADY_CLAIMED',
+                    statusCode: 400,
+                    next_in_minutes: nextIn,
+                    daily_streak: Number(player.daily_streak || 0)
+                };
+            }
+
+            // Серия сохраняется, только если прошлый бонус был не более двух
+            // суток назад; иначе игрок начинает заново с первого дня.
+            const keepsStreak = lastBonus && (now - lastBonus) <= 2 * DAILY_BONUS_COOLDOWN_MS;
+            const streak = keepsStreak ? Number(player.daily_streak || 0) + 1 : 1;
+            const cappedDay = Math.min(streak, DAILY_BONUS_STREAK_LIMIT);
+
+            const coins = 25 + (cappedDay - 1) * 25;
+            const stars = streak % 3 === 0 ? 1 : 0;
+
+            await client.query(
+                `UPDATE players
+                    SET coins = coins + $1,
+                        stars = stars + $2,
+                        daily_streak = $3,
+                        last_daily_bonus = NOW()
+                  WHERE id = $4`,
+                [coins, stars, streak, playerId]
+            );
+
+            await logPlayerAction(playerId, 'daily_bonus', { coins, stars, streak }, client);
+
+            return {
+                success: true,
+                message: `День ${streak}: +${coins} монет${stars ? ` и +${stars} ⭐` : ''}`,
+                coins: coins,
+                stars: stars,
+                daily_streak: streak,
+                coins_total: Number(player.coins || 0) + coins,
+                stars_total: Number(player.stars || 0) + stars,
+                next_claim_at: new Date(now + DAILY_BONUS_COOLDOWN_MS).toISOString()
+            };
+        });
+
+        res.json({ success: true, data: result });
+    } catch (err) {
+        if (err.code === 'DAILY_BONUS_ALREADY_CLAIMED' || err.code === 'PLAYER_NOT_FOUND') {
+            return res.status(err.statusCode || 400).json({
+                success: false,
+                error: err.message,
+                code: err.code,
+                next_in_minutes: err.next_in_minutes,
+                daily_streak: err.daily_streak
+            });
+        }
+        handleError(res, err, 'daily_bonus');
+    }
+});
+
+/**
  * GET /referrals — рефералы игрока
  */
 router.get('/referrals', async (req, res) => {

@@ -12,21 +12,25 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger } = require('../../utils/serverApi');
-const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory } = require('../../utils/game-helpers');
+const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask } = require('../../utils/game-helpers');
 // Единый источник правды: тот же, что в world.js и items.js. Раньше лимит
 // не проверялся вовсе, и награда за босса могла сделать инвентарь больше 100.
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
 
-// Ключи на босса — читаются из БД (поле bosses.keys_required), fallback = 3
+// Сколько ключей нужно, чтобы открыть бой со СЛЕДУЮЩИМ боссом.
+// Владелец ключа — текущий босс: чтобы начать бой с N, нужны keys_required
+// ключей от босса N-1 (этим же пользуется spendBossKeys).
+// Fallback = 1: раньше здесь стояло 3, при этом за убийство выдавался ровно
+// один ключ — все боссы со второго становились недостижимы навсегда.
 async function getKeysRequiredForBoss(client, bossId) {
     try {
         const result = await client.query(
             'SELECT keys_required FROM bosses WHERE id = $1',
             [bossId]
         );
-        return result.rows[0]?.keys_required || 3;
+        return Math.max(1, Number(result.rows[0]?.keys_required) || 1);
     } catch {
-        return 3;
+        return 1;
     }
 }
 const SOLO_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
@@ -37,38 +41,6 @@ const KILL_DECAY_FACTOR = 0.1;
 
 function validateBossId(bossId) {
     return Number.isInteger(bossId) && bossId > 0;
-}
-
-function getEquipmentBonuses(player) {
-    const equipment = safeJsonParse(player.equipment, {});
-
-    let weaponBonus = 0;
-    let setBonus = 0;
-
-    if (equipment.weapon && equipment.weapon.damage) {
-        weaponBonus = equipment.weapon.damage;
-
-        if (equipment.weapon.modifications?.sharpening) {
-            weaponBonus += equipment.weapon.modifications.sharpening * 2;
-        }
-    }
-
-    if (equipment.set_id) {
-        let setItems = [];
-        if (equipment.set_items) {
-            if (Array.isArray(equipment.set_items)) {
-                setItems = equipment.set_items;
-            } else if (typeof equipment.set_items === 'string') {
-                setItems = safeJsonParse(equipment.set_items, []);
-            }
-        }
-
-        if (setItems.length > 0) {
-            setBonus = setItems.length * Math.floor((player.level || 1) * 0.05);
-        }
-    }
-
-    return { weaponBonus, setBonus };
 }
 
 function calculateDamageBonus(bossId, masteries) {
@@ -92,13 +64,73 @@ function calculateDamageBonus(bossId, masteries) {
     return Math.floor(killBonus);
 }
 
-function calculateDamage(bossId, player, masteries = []) {
-    const { weaponBonus, setBonus } = getEquipmentBonuses(player);
+/**
+ * Спецбонус оружия по ситуации (stats.boss_bonus / stats.pvp_bonus).
+ *
+ * Ближний бой (нож, бита, топор) даёт +40% урона по боссам: подойти вплотную
+ * к мутанту дешевле, чем искать патроны. Дальний бой даёт +25% урона в PvP.
+ * До этого тип оружия не значил ничего — ближний бой был просто слабее.
+ *
+ * @param {object} item оружие из инвентаря
+ * @param {'boss'|'pvp'} context где применяется
+ * @returns {number} множитель, например 1.4 или 1 (без бонуса)
+ */
+function getWeaponContextMultiplier(item, context) {
+    if (!item || typeof item !== 'object') return 1;
+
+    const stats = (item.stats && typeof item.stats === 'object') ? item.stats : {};
+    const percent = Number(context === 'boss' ? stats.boss_bonus : stats.pvp_bonus) || 0;
+    if (percent <= 0) return 1;
+
+    return 1 + Math.min(100, percent) / 100;
+}
+
+/**
+ * Разброс урона оружия (stats.variance, например ±25% у дробовика).
+ * Применяется к урону ОРУЖИЯ, а не к базовому урону игрока: иначе разброс
+ * ±25% от 200 урона босса ломал бы весь расчёт.
+ */
+function applyWeaponVariance(item, damage) {
+    const stats = (item && item.stats && typeof item.stats === 'object') ? item.stats : {};
+    return equipmentRules.rollVarianceDamage(damage, Number(stats.variance) || 0);
+}
+
+function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
+    const equipment = safeJsonParse(player.equipment, {});
+
+    // Урон оружия с учётом прочности и улучшений: сломанный нож даёт 0,
+    // улучшенный снайпер — на +80% к базовому урону.
+    const weapon = equipment.weapon;
+    const weaponDamage = equipmentRules.getEffectiveStatValue(weapon, ['damage']);
+    const weaponMultiplier = getWeaponContextMultiplier(weapon, 'boss');
+    const setDamage = Number(setBonuses.damage || 0);
     const killBonus = calculateDamageBonus(bossId, masteries);
     // Усиливаем базовую прогрессию, чтобы ранние боссы не были чрезмерно затянутыми.
     const levelDamage = Math.max(1, Number(player.level || 1));
     const baseDamage = 3 + (levelDamage * 2);
-    return Math.floor(baseDamage + killBonus + weaponBonus + setBonus);
+    return Math.floor(baseDamage + killBonus + setDamage + weaponDamage * weaponMultiplier);
+}
+
+/**
+ * Урон, который босс наносит игроку в ответ на удар.
+ *
+ * bosses.damage — процент от max_health игрока за удар (3% у первого босса,
+ * 15% у финального). Снижается защитой брони (мягкий предел 60%), поэтому
+ * экипировка впервые влияет на выживание, а не только на цифры в профиле.
+ * Колонка damage была мёртвой: бой с боссом не стоил ничего.
+ *
+ * @param {object} boss строка bosses
+ * @param {number} maxHealth максимум здоровья игрока
+ * @param {object} equipment экипировка игрока
+ * @returns {number} урон (не меньше 1)
+ */
+function calculateBossCounterDamage(boss, maxHealth, equipment) {
+    const percent = Math.max(0, Number(boss && boss.damage) || 0);
+    if (percent <= 0) return 0;
+
+    const raw = Math.ceil((Math.max(1, Number(maxHealth) || 1) * percent) / 100);
+    const defense = equipmentRules.calculateDefenseTotal(equipment || {});
+    return equipmentRules.applyDefenseReduction(raw, defense);
 }
 
 function getNextBossId(bossId) {
@@ -116,6 +148,58 @@ function calculateGrantedQuantity(totalQuantity, multiplier = 1) {
     const fractionalPart = expectedQuantity - guaranteedQuantity;
 
     return guaranteedQuantity + (Math.random() < fractionalPart ? 1 : 0);
+}
+
+/**
+ * Слоты экипировки, которые получают урон от босса.
+ * Броня получает износ всегда, оружие — только если удар пришёл с оружием
+ * (мощная атака) или когда босс отбил удар.
+ */
+function equipmentSlotsToWear({ counterAttack, usedWeapon }) {
+    const slots = [];
+    if (usedWeapon || counterAttack) slots.push('weapon');
+    if (counterAttack) {
+        slots.push('body', 'head', 'hands', 'legs', 'boots', 'armor', 'helmet', 'accessory');
+    }
+    return slots;
+}
+
+/**
+ * Ответный удар босса: урон игроку + износ экипировки.
+ *
+ * Внутри транзакции. Возвращает фактический урон, остаток здоровья и слоты,
+ * где снаряжение сломалось (клиенту нужно показать предупреждение).
+ *
+ * @param {object} client клиент БД (транзакция)
+ * @param {number} playerId
+ * @param {object} boss строка bosses
+ * @param {object} player текущее состояние игрока
+ * @param {object} [options] { usedWeapon: boolean }
+ */
+async function applyBossCounterHit(client, playerId, boss, player, options = {}) {
+    const equipment = safeJsonParse(player.equipment, {});
+    const damage = calculateBossCounterDamage(boss, player.max_health, equipment);
+    if (damage <= 0) {
+        return { damage: 0, health: Number(player.health || 0), broken_slots: [] };
+    }
+
+    const health = Math.max(0, Number(player.health || 0) - damage);
+    const brokenSlots = wearEquipmentSlots(
+        client,
+        playerId,
+        equipment,
+        equipmentSlotsToWear({ counterAttack: true, usedWeapon: options.usedWeapon })
+    );
+
+    await client.query(
+        `UPDATE players
+            SET health = $1,
+                equipment = $2::jsonb
+          WHERE id = $3`,
+        [health, JSON.stringify(equipment), playerId]
+    );
+
+    return { damage, health, broken_slots: brokenSlots };
 }
 
 async function getBossById(client, bossId) {
@@ -309,23 +393,43 @@ async function spendBossKeys(client, playerId, previousBossId) {
     }
 }
 
+/**
+ * Ключи, выдаваемые за убийство босса.
+ *
+ * Смысл колонки boss_keys.boss_id: это id босса, ЧЕЙ ключ у игрока (ключ
+ * выпадает с этого босса и открывает бой со следующим). Такая трактовка
+ * согласована со spendBossKeys(): чтобы начать бой с N, нужны keys_required
+ * ключей от босса N-1.
+ *
+ * Раньше здесь писался nextBossId = bossId + 1, то есть ключ от босса N
+ * записывался как «ключ от N+1». Расход и выдача смотрели в разные строки,
+ * поэтому после убийства первого босса открыть второй было невозможно
+ * ни при каком keys_required.
+ *
+ * @returns {Promise<object|null>} описание выданного ключа или null
+ */
 async function grantNextBossKey(client, playerId, bossId) {
     const nextBossId = getNextBossId(bossId);
-    const bossExists = await getBossById(client, nextBossId);
-    if (!bossExists) return null;
+    const nextBoss = await getBossById(client, nextBossId);
+    if (!nextBoss) return null; // последний босс: ключ вести некуда
+
+    // Сколько ключей нужно на следующий бой — столько и выдаём, чтобы одна
+    // победа гарантированно открывала следующую ступень.
+    const quantity = await getKeysRequiredForBoss(client, bossId);
 
     await client.query(
         `INSERT INTO boss_keys (player_id, boss_id, quantity)
-         VALUES ($1, $2, 1)
+         VALUES ($1, $2, $3)
          ON CONFLICT (player_id, boss_id)
-         DO UPDATE SET quantity = boss_keys.quantity + 1`,
-        [playerId, nextBossId]
+         DO UPDATE SET quantity = boss_keys.quantity + EXCLUDED.quantity`,
+        [playerId, bossId, quantity]
     );
 
     return {
-        boss_id: nextBossId,
-        quantity: 1,
-        boss_name: bossExists.name
+        boss_id: bossId,
+        quantity,
+        unlocks_boss_id: nextBossId,
+        boss_name: nextBoss.name
     };
 }
 
@@ -469,7 +573,10 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
     const grantedKey = await grantNextBossKey(client, playerId, bossId);
     if (grantedKey) rewards.key = grantedKey;
 
-    const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, 0.5 * lootMultiplier);
+    // Множитель 1, а не 0.5: каждый предмет из reward_items выдавался с шансом
+    // 50% (calculateGrantedQuantity), из-за чего обещанная награда за босса
+    // терялась половину раз. Бафф loot_x2 удваивает количество.
+    const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, lootMultiplier);
     if (grantedItems.length) rewards.items = grantedItems;
 
     await client.query(
@@ -480,9 +587,16 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
         [playerId, bossId]
     );
 
-    await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [playerId]);
+    await client.query('UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1', [playerId]);
     await client.query('DELETE FROM player_boss_progress WHERE player_id = $1 AND boss_id = $2', [playerId, bossId]);
     await clearPlayerActiveBattle(client, playerId);
+
+    // Достижения «Коллекционер»/«Хранитель» считают уникальные предметы:
+    // регистрируем выданные награды, иначе прогресс не учитывал лут с боссов.
+    const grantedIds = grantedItems.map((entry) => entry.id).filter(Boolean);
+    if (grantedIds.length > 0) {
+        await trackCollectedItems(client, playerId, grantedIds);
+    }
 
     const kills = (masteries.find(m => m.boss_id === bossId)?.kills || 0) + 1;
     return { rewards, mastery: kills };
@@ -693,16 +807,18 @@ router.get('/bonuses', async (req, res) => {
         const masteryMap = {};
         for (const m of masteries) masteryMap[m.boss_id] = m.kills;
         const bossesResult = await client.query('SELECT id, name FROM bosses ORDER BY id');
+        const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
 
         res.json({
             success: true,
             data: {
                 player_level: player.level,
+                set_bonuses: setBonuses,
                 bonuses: bossesResult.rows.map((boss) => ({
                     boss_id: boss.id,
                     boss_name: boss.name,
                     defeated_count: masteryMap[boss.id] || 0,
-                    current_damage: calculateDamage(boss.id, player, masteries),
+                    current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
                     mastery_bonus: calculateDamageBonus(boss.id, masteries)
                 }))
             }
@@ -735,6 +851,16 @@ router.get('/', async (req, res) => {
         for (const m of masteries) masteryMap[m.boss_id] = m.kills;
 
         const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
+        const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+
+        // Ключ выдаёт ПРЕДЫДУЩИЙ босс, поэтому требование к боссу N — это
+        // keys_required босса N-1. Раньше в required_keys отдавался
+        // keys_required самого босса (то есть сколько его ключей нужно
+        // выбить для следующего) — цифры в UI не сходились с серверной
+        // проверкой ключей при старте боя.
+        const keysRequiredByBoss = new Map(
+            bossesResult.rows.map((boss) => [Number(boss.id), Math.max(1, Number(boss.keys_required) || 1)])
+        );
 
         // Получаем все ключи боссов одним запросом для устранения N+1
         const keysResult = await client.query(
@@ -746,7 +872,7 @@ router.get('/', async (req, res) => {
 
         const bossList = [];
         for (const boss of bossesResult.rows) {
-            const keysRequired = boss.keys_required || 3;
+            const keysRequired = boss.id === 1 ? 0 : (keysRequiredByBoss.get(Number(boss.id) - 1) || 1);
             const ownedKeys = boss.id === 1 ? 0 : (keysMap[String(boss.id - 1)] || 0);
             const isUnlocked = boss.id === 1 || ownedKeys >= keysRequired;
             const soloProgress = activeBattle?.type === 'solo' && activeBattle.boss_id === boss.id
@@ -762,12 +888,15 @@ router.get('/', async (req, res) => {
                 max_hp: boss.max_health,
                 reward_coins: boss.reward_coins,
                 reward_experience: boss.reward_experience,
-                required_keys: boss.id === 1 ? 0 : (boss.keys_required || 3),
+                // Ответный урон босса в процентах от здоровья игрока —
+                // UI показывает его в карточке боя.
+                damage_percent: boss.damage,
+                required_keys: keysRequired,
                 owned_keys: ownedKeys,
                 is_unlocked: isUnlocked,
                 defeated_count: masteryMap[boss.id] || 0,
                 mastery: masteryMap[boss.id] || 0,
-                current_damage: calculateDamage(boss.id, player, masteries),
+                current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
                 can_start_solo: isUnlocked && !activeBattle,
                 can_start_mass: isUnlocked && !activeBattle
             });
@@ -823,9 +952,19 @@ router.post('/attack-boss', async (req, res) => {
             }
 
             const { activeBattle, player, activeBuffs, masteries } = validation;
-            const damage = calculateDamage(bossId, player, masteries);
+            const boss = await getBossById(client, bossId);
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+            const damage = calculateDamage(bossId, player, masteries, setBonuses);
             const newHp = Math.max(0, activeBattle.boss.hp - damage);
             const energyCost = activeBuffs.free_energy ? 0 : 1;
+
+            // Ответный удар босса и износ снаряжения.
+            const counterHit = boss
+                ? await applyBossCounterHit(client, playerId, boss, player)
+                : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
+
+            // Ежедневное задание «Нанеси 100 урона боссам».
+            await progressDailyTask(client, playerId, 'boss_damage', damage);
 
             // Трата энергии НЕ двигает last_energy_update: реген идёт от
             // реально прошедшего времени (то же правило, что в world.js:493
@@ -873,6 +1012,10 @@ router.post('/attack-boss', async (req, res) => {
                 last_energy_update: energyResult.rows[0].last_energy_update,
                 mastery,
                 rewards,
+                // Ответный удар босса: раньше он не существовал вовсе.
+                player_damage_taken: counterHit.damage,
+                player_health: counterHit.health,
+                broken_equipment: counterHit.broken_slots,
                 data: {
                     boss: {
                         id: bossId,
@@ -884,7 +1027,10 @@ router.post('/attack-boss', async (req, res) => {
                     rewards,
                     mastery,
                     energy_left: energyResult.rows[0].energy,
-                    last_energy_update: energyResult.rows[0].last_energy_update
+                    last_energy_update: energyResult.rows[0].last_energy_update,
+                    damage_taken: counterHit.damage,
+                    health: counterHit.health,
+                    broken_equipment: counterHit.broken_slots
                 }
             });
         } catch (error) {
@@ -952,17 +1098,43 @@ router.post('/attack-with-weapon', async (req, res) => {
                 });
             }
 
-            const weaponDamage = weapon.damage || 0;
+            const weaponDamage = applyWeaponVariance(weapon,
+                equipmentRules.getEffectiveStatValue(weapon, ['damage']) * getWeaponContextMultiplier(weapon, 'boss'));
             const weaponName = weapon.name;
 
-            // Удаляем оружие из инвентаря
-            const newInventory = inventory.filter((_, i) => i !== itemIndex);
+            // Сломанное оружие не бьёт. Раньше его нельзя было и сломать
+            // (прочность была мёртвой), а удачный удар просто СТИРАЛ оружие
+            // из инвентаря: бит (цена 45) за один удар 9 урона был строго
+            // хуже продажи — бой с оружием не имел смысла.
+            const durabilityInfo = equipmentRules.getDurabilityInfo(weapon);
+            if (durabilityInfo.isBroken) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Оружие сломано — отремонтируйте его',
+                    code: 'WEAPON_BROKEN',
+                    durability: durabilityInfo.current,
+                    max_durability: durabilityInfo.max
+                });
+            }
 
-            const baseDamage = calculateDamage(bossId, player, masteries);
+            // Износ: −1 прочности вместо удаления предмета.
+            const wornWeapon = equipmentRules.wearEquipment(weapon, 1);
+            inventory[itemIndex] = wornWeapon;
+
+            const boss = await getBossById(client, bossId);
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+            const baseDamage = calculateDamage(bossId, player, masteries, setBonuses);
             const damage = baseDamage + weaponDamage;
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
             const newHp = Math.max(0, activeBattle.boss.hp - damage);
+
+            const counterHit = boss
+                ? await applyBossCounterHit(client, playerId, boss, player, { usedWeapon: true })
+                : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
+
+            await progressDailyTask(client, playerId, 'boss_damage', damage);
 
             // См. комментарий выше про last_energy_update при атаке с оружием.
             const energyResult = await client.query(`
@@ -971,7 +1143,7 @@ router.post('/attack-with-weapon', async (req, res) => {
                     inventory = $2
                 WHERE id = $3
                 RETURNING energy, max_energy, last_energy_update
-            `, [energyCost, JSON.stringify(newInventory), playerId]);
+            `, [energyCost, JSON.stringify(inventory), playerId]);
 
             await client.query(`
                 UPDATE player_boss_progress
@@ -1010,6 +1182,14 @@ router.post('/attack-with-weapon', async (req, res) => {
                     damage: damage,
                     weapon_used: weaponName,
                     weapon_damage: weaponDamage,
+                    weapon_durability: wornWeapon.durability,
+                    weapon_max_durability: wornWeapon.max_durability,
+                    // Сломан ли ствол после удара: клиент выводит предупреждение
+                    // в лог боя, иначе прочность просто исчезала из ответа.
+                    weapon_broken: Number(wornWeapon.durability) <= 0,
+                    damage_taken: counterHit.damage,
+                    health: counterHit.health,
+                    broken_equipment: counterHit.broken_slots,
                     energy: energyResult.rows[0]?.energy || 0,
                     last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                     killed,
@@ -1046,26 +1226,33 @@ router.get('/weapons', async (req, res) => {
         
         const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
         
+        // Мощная атака доступна только с целым оружием: сломанное не бьёт,
+        // а стоило бы ровно столько же, сколько сейчас отображается.
         const weapons = inventory
             .map((item, index) => {
-                if (item.type === 'weapon') {
-                    return {
-                        index,
-                        id: item.id,
-                        name: item.name,
-                        damage: item.damage || 0,
-                        rarity: item.rarity || 'common',
-                        icon: item.icon || '🔪'
-                    };
-                }
-                return null;
+                if (item.type !== 'weapon') return null;
+
+                const durability = equipmentRules.getDurabilityInfo(item);
+                const weaponDamage = equipmentRules.getEffectiveStatValue(item, ['damage']);
+                return {
+                    index,
+                    id: item.id,
+                    name: item.name,
+                    category: item.category || item.type || null,
+                    damage: weaponDamage,
+                    rarity: item.rarity || 'common',
+                    icon: item.icon || '🔪',
+                    durability: durability.current,
+                    max_durability: durability.max,
+                    is_broken: durability.isBroken
+                };
             })
             .filter(Boolean);
 
         res.json({
             success: true,
             weapons,
-            count: weapons.length
+            count: weapons.filter((weapon) => !weapon.is_broken).length
         });
 
     } catch (error) {
@@ -1269,6 +1456,26 @@ router.post('/raid/:id/join', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя присоединиться к массовому бою.', code: 'PLAYER_DEAD' });
             }
 
+            // Ключевая цепочка не должна обходиться через чужой рейд: раньше
+            // join не проверял ключи вообще, и игрок без единого ключа мог
+            // присоединиться к рейду на 10-го босса, бить его и получать
+            // долю наград. Ключи при входе НЕ тратятся (их платит лидер,
+            // который их и запустил) — требуется только наличие.
+            if (raid.boss_id > 1) {
+                const required = await getKeysRequiredForBoss(client, raid.boss_id - 1);
+                const owned = await getPlayerKeyCount(client, playerId, raid.boss_id - 1);
+                if (owned < required) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        error: `Нужно ${required} ключей от босса ${raid.boss_id - 1}, у вас ${owned}`,
+                        code: 'INSUFFICIENT_KEYS',
+                        keys_owned: owned,
+                        keys_required: required
+                    });
+                }
+            }
+
             await client.query(
                 `INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
                  VALUES ($1, $2, $3, 0, NOW(), NOW())
@@ -1379,10 +1586,19 @@ router.post('/raid/:id/attack', async (req, res) => {
             }
 
             const masteries = await getBossMasteries(client, playerId);
-            const damage = calculateDamage(raid.boss_id, player, masteries);
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+            const damage = calculateDamage(raid.boss_id, player, masteries, setBonuses);
             const newHp = Math.max(0, raid.current_health - damage);
             const newTotalDamage = session.damage_dealt + damage;
             const energyCost = activeBuffs.free_energy ? 0 : 1;
+
+            // Ответный урон рейдового босса и износ снаряжения — то же,
+            // что и в соло-бою: иначе рейд был бы полностью безопасным.
+            const raidBoss = await getBossById(client, raid.boss_id);
+            const counterHit = raidBoss
+                ? await applyBossCounterHit(client, playerId, raidBoss, player)
+                : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
+            await progressDailyTask(client, playerId, 'boss_damage', damage);
 
             // См. комментарий выше: реген не сбрасывается при трате.
             const energyResult = await client.query(
@@ -1450,7 +1666,10 @@ router.post('/raid/:id/attack', async (req, res) => {
                         [participant.player_id, raid.boss_id]
                     );
 
-                    await client.query('UPDATE players SET bosses_killed = bosses_killed + 1 WHERE id = $1', [participant.player_id]);
+                    await client.query(
+                    'UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1',
+                    [participant.player_id]
+                );
                 }
 
                 const leaderKey = await grantNextBossKey(client, raid.leader_id, raid.boss_id);
@@ -1480,6 +1699,9 @@ router.post('/raid/:id/attack', async (req, res) => {
                         hp_percent: raid.max_health > 0 ? Math.round((newHp / raid.max_health) * 100) : 0
                     },
                     damage,
+                    damage_taken: counterHit.damage,
+                    health: counterHit.health,
+                    broken_equipment: counterHit.broken_slots,
                     player_energy: energyResult.rows[0]?.energy ?? player.energy,
                     last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                     your_total_damage: newTotalDamage,

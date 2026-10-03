@@ -151,6 +151,7 @@ async function createTables() {
             stats JSONB DEFAULT '{}',
             durability INTEGER DEFAULT 100,
             max_durability INTEGER DEFAULT 100,
+            ammo_type VARCHAR(20) DEFAULT 'none',
             upgrade_level INTEGER DEFAULT 0,
             max_upgrade_level INTEGER DEFAULT 10,
             modifications JSONB DEFAULT '[]',
@@ -160,6 +161,32 @@ async function createTables() {
             image_url VARCHAR(500),
             UNIQUE(name, type)
         );
+    `);
+
+    // Сеты снаряжения. На проде таблицы были созданы вручную и в схеме
+    // отсутствовали: свежий деплой получал код, который к ним обращается,
+    // на БД без этих таблиц. Источник правды для бонусов — items.set_id,
+    // item_set_items — список частей для UI.
+    await query(`
+        CREATE TABLE IF NOT EXISTS item_sets (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            icon VARCHAR(50),
+            bonus_2 JSONB DEFAULT '{}'::jsonb,
+            bonus_3 JSONB DEFAULT '{}'::jsonb,
+            bonus_4 JSONB DEFAULT '{}'::jsonb
+        )
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS item_set_items (
+            id SERIAL PRIMARY KEY,
+            set_id INTEGER NOT NULL REFERENCES item_sets(id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL,
+            piece_number INTEGER DEFAULT 1,
+            UNIQUE (set_id, item_id)
+        )
     `);
 
     // Таблица боссов
@@ -1035,10 +1062,30 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS rarity VARCHAR(20) DEFAULT 'common'`);
 
+    // Достижения: строки без достижения (achievement_id IS NULL) — наследие
+    // старой схемы, где ключом был achievement_key. UNIQUE в Postgres считает
+    // NULL разными значениями, поэтому такие строки свободно копились, но
+    // никогда не находились запросами `WHERE achievement_id = $1`. Удаляем
+    // их и записи-сироты. Идемпотентно: повторный запуск ничего не делает.
+    await query(`
+        DELETE FROM player_achievements pa
+         WHERE pa.achievement_id IS NULL
+            OR NOT EXISTS (SELECT 1 FROM achievements a WHERE a.id = pa.achievement_id)
+    `);
+
     // Миграции для player_achievements
     await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS progress_value INTEGER DEFAULT 0`);
     await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS reward_claimed BOOLEAN DEFAULT false`);
     await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP`);
+
+    // Тип боеприпасов оружия: none / ammo / rockets. Мастерская знает по нему,
+// что тратить на улучшение — патроны или реактивные гранаты.
+    await query(`ALTER TABLE items ADD COLUMN IF NOT EXISTS ammo_type VARCHAR(20) DEFAULT 'none'`);
+
+    // key_drop_chance переводим в проценты (0..100): сид задаёт 2.5% на ключ от
+    // второго босса, а старое ограничение (0..1) такую запись отклоняло.
+    // DROP делаем ДО checkConstraints ниже, чтобы новое ограничение создалось.
+    await query(`ALTER TABLE bosses DROP CONSTRAINT IF EXISTS chk_bosses_key_drop`);
 
     // CHECK constraints для бизнес-правил
     // PostgreSQL не поддерживает синтаксис ADD CONSTRAINT IF NOT EXISTS,
@@ -1064,7 +1111,10 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
         ['bosses', 'chk_bosses_level', 'CHECK (level >= 1)', ['level']],
         ['bosses', 'chk_bosses_max_health', 'CHECK (max_health > 0)', ['max_health']],
         ['bosses', 'chk_bosses_damage', 'CHECK (damage >= 0)', ['damage']],
-        ['bosses', 'chk_bosses_key_drop', 'CHECK (key_drop_chance >= 0 AND key_drop_chance <= 1)', ['key_drop_chance']],
+        // key_drop_chance трактуется как ПРОЦЕНТ от дропа (0..100), а не доля:
+// шанс 2.5% на ключ от второго босса читается из world.js напрямую.
+// Старое ограничение (0..1) не давало записать такие значения.
+['bosses', 'chk_bosses_key_drop', 'CHECK (key_drop_chance >= 0 AND key_drop_chance <= 100)', ['key_drop_chance']],
         ['clans', 'chk_clans_level', 'CHECK (level >= 1)', ['level']],
         ['clans', 'chk_clans_experience', 'CHECK (experience >= 0)', ['experience']],
         ['clans', 'chk_clans_coins', 'CHECK (coins >= 0)', ['coins']],
@@ -1124,24 +1174,21 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
     `);
     await query(`DELETE FROM achievements WHERE category = 'craft'`);
 
-    // Миграция: актуальный баланс оружия ближнего боя.
-    // Сид использует ON CONFLICT (name, type) DO NOTHING, поэтому уже
-    // существующие строки он не обновляет — правим их явно, иначе на
-    // работающем проде остались бы старые значения (Бита дешевле Ножа).
-    const meleeBalance = [
-        { name: 'Нож', price: 20, durability: 50, max_durability: 50, damage: 5 },
-        { name: 'Бита', price: 40, durability: 30, max_durability: 30, damage: 8 }
-    ];
-    for (const weapon of meleeBalance) {
-        await query(`
-            UPDATE items
-               SET price = $1,
-                   durability = $2,
-                   max_durability = $3,
-                   stats = jsonb_set(COALESCE(stats, '{}'::jsonb), '{damage}', to_jsonb($4::integer))
-             WHERE name = $5 AND type = 'weapon'
-        `, [weapon.price, weapon.durability, weapon.max_durability, weapon.damage, weapon.name]);
-    }
+    // Чистка легаси-строк каталога.
+    // 1) «Спирт» существует в проде дважды: старый (type=food, stats={}) и
+    //    новый (type=medicine, stats={health,infection_cure}). Старый в магазине
+    //    выглядел как еда, но /use его игнорировал. Оставляем medicine.
+    // 2) «Клюш от Биологического ужаса» — опечатка, из-за которой на проде
+    //    было два ключа от одного босса, а бой открывался «не тем» ключом.
+    // 3) «Ключ от босса» — безымянный ключ из ранних сборок: он не отвечает
+    //    ни одному боссу, поэтому раздавался только как мусор в инвентаре.
+    // Ключи из инвентарей переезжают в boss_keys (repairPlayerInventories),
+    // а не теряются вместе с удалённой строкой каталога.
+    await query(`
+        DELETE FROM items
+         WHERE (type = 'food' AND name = 'Спирт')
+            OR (type = 'key' AND name IN ('Клюш от босса', 'Клюш от босса.', 'Клюш от Биологического ужаса'))
+    `);
 
     // Supabase Advisor: включение Row Level Security на всех таблицах public.
     // - Приложение подключается ролью postgres (владелец таблиц): RLS владельцу
@@ -1253,41 +1300,32 @@ async function seedDatabase() {
         { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, infection: 80, min_level: 25, danger_level: 7, icon: '🔒', color: '#000000' }
     ];
     for (const loc of locations) {
+        // UPSERT, а не DO NOTHING: на проде у всех локаций min_level = 1
+        // (миграция выводила его из min_luck, который везде был 0), из-за
+        // чего карта фактически не имела прогрессии — доступна была сразу.
         await query(`
             INSERT INTO locations (name, description, radiation, infection, min_level, danger_level, icon, color)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (name) DO NOTHING
+            ON CONFLICT (name) DO UPDATE SET
+                description = EXCLUDED.description,
+                radiation = EXCLUDED.radiation,
+                infection = EXCLUDED.infection,
+                min_level = EXCLUDED.min_level,
+                danger_level = EXCLUDED.danger_level,
+                icon = EXCLUDED.icon,
+                color = EXCLUDED.color
         `, [loc.name, loc.description, loc.radiation, loc.infection, loc.min_level, loc.danger_level, loc.icon, loc.color]);
     }
 
-    // Боссы
-    const bosses = [
-        { name: 'Крысиный король', description: 'Огромная радиоактивная крыса', max_health: 500, reward_experience: 50, reward_coins: 25, icon: '🐀' },
-        { name: 'Бездомный псих', description: 'Сумасшедший выживший с монтировкой', max_health: 2000, reward_experience: 100, reward_coins: 50, icon: '🔪' },
-        { name: 'Медведь-мутант', description: 'Радиоактивный медведь', max_health: 5000, reward_experience: 200, reward_coins: 100, icon: '🐻' },
-        { name: 'Военный дрон', description: 'Боевой дрон с системой охраны', max_health: 10000, reward_experience: 400, reward_coins: 200, icon: '🤖' },
-        { name: 'Главарь мародёров', description: 'Лидер банды радиоактивных бандитов', max_health: 20000, reward_experience: 800, reward_coins: 400, icon: '💀' },
-        { name: 'Биологический ужас', description: 'Мутировавшее существо из лаборатории', max_health: 40000, reward_experience: 1500, reward_coins: 750, icon: '👾' },
-        { name: 'Офицер-нежить', description: 'Бывший военный офицер', max_health: 70000, reward_experience: 3000, reward_coins: 1500, icon: '💂' },
-        { name: 'Гигантский монстр', description: 'Колоссальное существо', max_health: 100000, reward_experience: 6000, reward_coins: 3000, icon: '🦖' },
-        { name: 'Профессор безумия', description: 'Учёный, сошедший с ума', max_health: 150000, reward_experience: 12000, reward_coins: 6000, icon: '🧑‍🔬' },
-        { name: 'Последний страж', description: 'Последний защитник бункера', max_health: 250000, reward_experience: 25000, reward_coins: 12500, icon: '🛡️' }
-    ];
-    for (let i = 0; i < bosses.length; i++) {
-        const boss = bosses[i];
-        const requiredKeyId = i > 0 ? i + 1 : null;
-        await query(`
-            INSERT INTO bosses (name, description, max_health, reward_experience, reward_coins, required_key_id, icon)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (name) DO NOTHING
-        `, [boss.name, boss.description, boss.max_health, boss.reward_experience, boss.reward_coins, requiredKeyId, boss.icon]);
-    }
+    // Боссы сидируются ПОСЛЕ каталога предметов: их reward_items и
+    // required_key_id ссылаются на items по имени, и без предметов в БД
+    // ссылки не разрешить (см. seedBosses ниже).
 
     // Предметы
     const items = [
         { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 10, icon: '🥫', stats: { energy: 5 } },
         { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 15, icon: '💧', stats: { energy: 3 } },
-        { name: 'Спирт', description: 'Медицинский спирт', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 25, icon: '🍺', stats: { health: 15 } },
+        { name: 'Спирт', description: 'Медицинский спирт: обеззараживает раны', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 25, icon: '🍺', stats: { health: 15, infection_cure: 1 } },
         { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 8, icon: '🍪', stats: { energy: 2 } },
         { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 20, icon: '⚡', stats: { energy: 10 } },
         { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 20, icon: '🩹', stats: { health: 10 } },
@@ -1295,53 +1333,642 @@ async function seedDatabase() {
         { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 2 } },
         { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 3 } },
         { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 15 } },
-        // Баланс ближнего боя: цена растёт вместе с уроном.
-        // Раньше Бита (урон 8) стоила 25 — дешевле Ножа (урон 5, цена 30),
-        // то есть строго доминировала над ним. Теперь Нож — дешёвый старт,
-        // Бита — дороже и сильнее (но менее прочная: 30 против 50).
-        { name: 'Нож', description: 'Простой нож выживания', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 5 }, durability: 50, max_durability: 50, price: 20, icon: '🔪' },
-        { name: 'Бита', description: 'Бейсбольная бита', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', stats: { damage: 8 }, durability: 30, max_durability: 30, price: 40, icon: '🏏' },
-        { name: 'Пистолет', description: 'Травматический пистолет', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', stats: { damage: 20, ammo: 8 }, durability: 100, max_durability: 100, price: 200, icon: '🔫' },
-        { name: 'Автомат', description: 'Автоматическое оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 40, ammo: 30 }, durability: 200, max_durability: 200, price: 500, icon: '⚔️' },
-        { name: 'Дробовик', description: 'Охотничий дробовик', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', stats: { damage: 60, ammo: 5 }, durability: 150, max_durability: 150, price: 750, icon: '🔫' },
-        { name: 'Снайперка', description: 'Снайперская винтовка', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 100, ammo: 5 }, durability: 300, max_durability: 300, price: 1500, icon: '🔭' },
-        { name: 'Кожаная куртка', description: 'Простая защита', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, infection_resist: 3 }, durability: 50, max_durability: 50, price: 40, icon: '🧥' },
-        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', stats: { defense: 25, radiation_resist: 6, infection_resist: 4 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
-        { name: 'Противогаз', description: 'Защита от радиации', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { radiation_resist: 20, infection_resist: 12 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
-        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', stats: { defense: 10, infection_resist: 5 }, durability: 80, max_durability: 80, price: 80, icon: '⛑️' },
-        { name: 'Патроны', description: 'Патроны для оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '📦' },
-        // Ключи для боссов (1 = не требуется, 2-10 = нужны ключи)
-        { name: 'Ключ от Бездомного психа', description: 'Ключ для разблокировки босса 2', type: 'key', category: 'key', rarity: 'uncommon', stackable: true, price: 0, icon: '🗝️', boss_level: 2 },
-        { name: 'Ключ от Медведя-мутанта', description: 'Ключ для разблокировки босса 3', type: 'key', category: 'key', rarity: 'rare', stackable: true, price: 0, icon: '🗝️', boss_level: 3 },
-        { name: 'Ключ от Военного дрона', description: 'Ключ для разблокировки босса 4', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️', boss_level: 4 },
-        { name: 'Ключ от Главаря мародёров', description: 'Ключ для разблокировки босса 5', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️', boss_level: 5 },
-        { name: 'Ключ от Биологического ужаса', description: 'Ключ для разблокировки босса 6', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 6 },
-        { name: 'Ключ от Офицера-нежить', description: 'Ключ для разблокировки босса 7', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 7 },
-        { name: 'Ключ от Гигантского монстра', description: 'Ключ для разблокировки босса 8', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 8 },
-        { name: 'Ключ от Профессора безумия', description: 'Ключ для разблокировки босса 9', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 9 },
-        { name: 'Ключ от Последнего стража', description: 'Ключ для разблокировки финального босса 10', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️', boss_level: 10 },
-        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 500, icon: '🧠', stats: { energy: 25 } },
-        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, icon: '💥', stats: { energy: 30 } },
-        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 800, icon: '🏥', stats: { health: 50 } },
-        { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, icon: '🛡️', stats: { radiation_cure: 5 } },
-        { name: 'Плазменный пистолет', description: 'Экспериментальное оружие', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', stats: { damage: 80, ammo: 12 }, durability: 250, max_durability: 250, price: 2500, icon: '🔮' },
-        { name: 'Экзо-костюм', description: 'Тяжёлая броня', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, icon: '🤖' },
-        { name: 'Сыворотка мутанта', description: 'Даёт сверхспособности', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬', stats: { energy: 50 } },
-        { name: 'Эликсир бессмертия', description: 'Полное воскрешение', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, icon: '⭐', stats: { health: 100 } },
-        { name: 'Лазерная винтовка', description: 'Оружие из будущего', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', stats: { damage: 150, ammo: 20 }, durability: 500, max_durability: 500, price: 10000, icon: '⚡' },
-        { name: 'Броня стражей', description: 'Легендарная броня', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, icon: '👑' }
+        // Оружие: только то, что реально встречается в постапокалипсисе.
+        // Никаких плазменных стволов и лазерных винтовок — прошлая версия
+        // сида содержала «Плазменный пистолет» и «Лазерную винтовку», они
+        // переименованы в applyItemRenames() (см. конец файла).
+        //
+        // Два типа боя с разными ролями (stats.boss_bonus / stats.pvp_bonus):
+        //   ближний бой  — +40% урона по боссам (подойти вплотную);
+        //   дальний бой  — +25% урона в PvP.
+        // Раньше тип оружия ничего не значил: ближний бай был просто слабее.
+        //
+        // Экономика: цена за удар = price / durability, а урон за удар = stats.damage.
+        // Энергия тратится на каждый удар, поэтому «дёшево за выстрел» важнее
+        // общего урона оружия.
+        { name: 'Нож', description: 'Складной нож выжившего: тихо, дёшево, всегда с собой', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', ammo_type: 'none', stats: { damage: 5, boss_bonus: 40 }, durability: 50, max_durability: 50, price: 20, icon: '🔪' },
+        { name: 'Бита', description: 'Бейсбольная бита: крепче ножа, но изнашивается быстрее', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', set_id: 4, ammo_type: 'none', stats: { damage: 9, boss_bonus: 40 }, durability: 35, max_durability: 35, price: 45, icon: '🏏' },
+        { name: 'Пистолет', description: 'Пистолет Макарова: 8 патронов и никаких проблем', type: 'weapon', category: 'ranged', rarity: 'common', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 16, pvp_bonus: 25 }, durability: 60, max_durability: 60, price: 90, icon: '🔫' },
+        { name: 'Пистолет ТТ', description: 'Трофейный пистолет: точнее и кучнее «Макарова»', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 24, pvp_bonus: 25 }, durability: 90, max_durability: 90, price: 170, icon: '🔫' },
+        { name: 'Обрез', description: 'Двустволка, перерезанная из охотничьего ружья', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 34, pvp_bonus: 25 }, durability: 40, max_durability: 40, price: 240, icon: '🔫' },
+        { name: 'Топор', description: 'Тяжёлый топор: рубит вблизи, но управляться тяжело', type: 'weapon', category: 'melee', rarity: 'uncommon', slot: 'weapon', ammo_type: 'none', stats: { damage: 15, boss_bonus: 40 }, durability: 70, max_durability: 70, price: 130, icon: '🪓' },
+        { name: 'Автомат', description: 'Автомат из армейских запасов: универсальное оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 48, pvp_bonus: 25 }, durability: 160, max_durability: 160, price: 320, icon: '⚔️' },
+        { name: 'Винтовка Мосина', description: 'Старая магазинная винтовка: дёшево в обслуживании', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 52, pvp_bonus: 25 }, durability: 120, max_durability: 120, price: 380, icon: '🎯' },
+        { name: 'Дробовик', description: 'Охотничий дробовик: разброс урона ±25%', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 62, variance: 25, pvp_bonus: 25 }, durability: 130, max_durability: 130, price: 360, icon: '🔫' },
+        { name: 'Снайперская винтовка', description: 'Снайперская винтовка: один выстрел решает', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 95, pvp_bonus: 25 }, durability: 200, max_durability: 200, price: 850, stars_price: 40, icon: '🔭' },
+        { name: 'Пулемёт', description: 'Станковый пулемёт: тяжёлый, зверский, с чашей патронов', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 85, pvp_bonus: 25 }, durability: 260, max_durability: 260, price: 1100, stars_price: 55, icon: '🔧' },
+        { name: 'Реактивная пушка', description: 'Реактивная пушка: снос любого босса, но зарядов мало', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', ammo_type: 'rockets', stats: { damage: 240, variance: 20, pvp_bonus: 25 }, durability: 35, max_durability: 35, price: 2500, stars_price: 150, icon: '🚀' },
+        // Броня. Слоты hands/boots/accessory не закрывал НИ ОДИН предмет —
+        // 3 из 9 слотов экипировки были пустыми. Новые предметы закрывают
+        // слоты и одновременно собирают 4 сета (items.set_id + item_sets).
+        { name: 'Кожаная куртка', description: 'Простая защита от холода и царапин', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, infection_resist: 3 }, durability: 60, max_durability: 60, price: 40, icon: '🧥' },
+        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 1, stats: { defense: 25, radiation_resist: 6, infection_resist: 4 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
+        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 1, stats: { defense: 10, infection_resist: 5 }, durability: 90, max_durability: 90, price: 80, icon: '⛑️' },
+        { name: 'Военные перчатки', description: 'Перчатки пехоты: защита рук', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 1, stats: { defense: 6 }, durability: 100, max_durability: 100, price: 110, icon: '🧤' },
+        { name: 'Военные ботинки', description: 'Армейские ботинки: защита ног', type: 'armor', category: 'boots', rarity: 'uncommon', slot: 'boots', set_id: 1, stats: { defense: 8 }, durability: 100, max_durability: 100, price: 120, icon: '🥾' },
+        { name: 'Противогаз', description: 'Респиратор: защита от радиации и инфекций', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 2, stats: { radiation_resist: 18, infection_resist: 12 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
+        { name: 'Медицинский халат', description: 'Халат полевого медика', type: 'armor', category: 'body', rarity: 'uncommon', slot: 'body', set_id: 2, stats: { defense: 4, radiation_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 140, icon: '🥼' },
+        { name: 'Медицинские перчатки', description: 'Перчатки с антисептиком', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 2, stats: { defense: 4, infection_resist: 10, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 130, icon: '🧤' },
+        { name: 'Медицинский рюкзак', description: 'Рюкзак с аптечками', type: 'armor', category: 'accessory', rarity: 'uncommon', slot: 'accessory', set_id: 2, stats: { defense: 3, infection_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 150, icon: '🎒' },
+        { name: 'Сталкерский плащ', description: 'Плащ сталкера: защита от радиации', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 3, stats: { defense: 15, radiation_resist: 25 }, durability: 140, max_durability: 140, price: 400, icon: '🧥' },
+        { name: 'Сталкерские сапоги', description: 'Сапоги для долгих переходов', type: 'armor', category: 'boots', rarity: 'rare', slot: 'boots', set_id: 3, stats: { defense: 12, radiation_resist: 5 }, durability: 130, max_durability: 130, price: 350, icon: '🥾' },
+        { name: 'Сталкерский пояс', description: 'Пояс с карго: повышает удачу', type: 'armor', category: 'accessory', rarity: 'rare', slot: 'accessory', set_id: 3, stats: { defense: 4, luck: 5, radiation_resist: 5 }, durability: 120, max_durability: 120, price: 380, icon: '🧭' },
+        { name: 'Сталкерские перчатки', description: 'Перчатки с защитой от радиации', type: 'armor', category: 'hands', rarity: 'rare', slot: 'hands', set_id: 3, stats: { defense: 10, radiation_resist: 15 }, durability: 130, max_durability: 130, price: 360, icon: '🧤' },
+        { name: 'Бандитская куртка', description: 'Куртка мародёра', type: 'armor', category: 'body', rarity: 'common', slot: 'body', set_id: 4, stats: { defense: 8 }, durability: 70, max_durability: 70, price: 90, icon: '🧥' },
+        { name: 'Бандитская бандана', description: 'Маска бандита', type: 'armor', category: 'head', rarity: 'common', slot: 'head', set_id: 4, stats: { defense: 4 }, durability: 60, max_durability: 60, price: 60, icon: '🥷' },
+        { name: 'Бандитские наручи', description: 'Наручи из подручных материалов', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 4, stats: { defense: 7 }, durability: 90, max_durability: 90, price: 110, icon: '🧤' },
+        // Боеприпасы. Патроны — расходник для улучшения любого стрелкового оружия,
+        // реактивные гранаты — только для реактивной пушки. Дорогие и редкие:
+        // их выдают боссы 7-10 и рейды, поэтому пушка остаётся «козырной».
+        { name: 'Патроны', description: 'Патроны для стрелкового оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '🔩' },
+        { name: 'Реактивные гранаты', description: 'Реактивные гранаты для трубы', type: 'resource', category: 'ammo', rarity: 'rare', stackable: true, price: 120, icon: '🚀' },
+        // Ключи боссов. Имя предмета — «Ключ от <имя босса>», и именно
+        // bosses.required_key_id ссылается на предмет с таким именем
+        // (см. wireBossKeys ниже). Хранятся ключи в boss_keys, а не в
+        // инвентаре: это валюта прогрессии, а не вещь, которая занимает слот.
+        { name: 'Ключ от Бездомного психа', description: 'Открывает бой с Бездомным психом', type: 'key', category: 'key', rarity: 'uncommon', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Медведя-мутанта', description: 'Открывает бой с Медведем-мутантом', type: 'key', category: 'key', rarity: 'rare', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Военного дрона', description: 'Открывает бой с Военным дроном', type: 'key', category: 'key', rarity: 'rare', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Главаря мародёров', description: 'Открывает бой с Главой мародёров', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Биологического ужаса', description: 'Открывает бой с Биологическим ужасом', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Офицера-нежить', description: 'Открывает бой с Офицером-нежитью', type: 'key', category: 'key', rarity: 'epic', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Гигантского монстра', description: 'Открывает бой с Гигантским монстром', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Профессора безумия', description: 'Открывает бой с Профессором безумия', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️' },
+        { name: 'Ключ от Последнего стража', description: 'Открывает финальный бой с Последним стражем', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️' },
+        // Товары за звёзды (stars_price): монеты и звёзды — две валюты,
+        // иначе звёзды из достижений и заданий некуда тратить.
+        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 500, stars_price: 5, icon: '🧠', stats: { energy: 25 } },
+        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, stars_price: 6, icon: '💥', stats: { energy: 30 } },
+        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 800, stars_price: 8, icon: '🏥', stats: { health: 50 } },
+        { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, stars_price: 10, icon: '🛡️', stats: { radiation_cure: 5 } },
+        { name: 'Сыворотка мутанта', description: 'Мутантная сыворотка: энергия как у зверя', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬', stats: { energy: 50 } },
+        { name: 'Реаниматор', description: 'Полное восстановление здоровья из госзапаса', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, stars_price: 50, icon: '💉', stats: { health: 100 } },
+        { name: 'Экзо-костюм', description: 'Тяжёлая броня из армейского склада', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, stars_price: 60, icon: '🤖' },
+        { name: 'Броня стражей', description: 'Легендарная броня последнего убежища', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, stars_price: 200, icon: '👑' }
     ];
+
+    // UPSERT, а не DO NOTHING. Именно из-за DO NOTHING на проде оставались
+    // stats = {}, price и category первых версий сида: у всех расходников
+    // /use не находил ни одного обновления («этот предмет нельзя
+    // использовать»), а защита брони нигде не учитывалась. Теперь каталог —
+    // единый источник правды и на новой БД, и на существующей.
     for (const item of items) {
         await query(`
-            INSERT INTO items (name, description, type, category, rarity, stackable, slot, stats, durability, max_durability, price, icon)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            ON CONFLICT (name, type) DO NOTHING
+            INSERT INTO items (name, description, type, category, rarity, stackable, max_stack,
+                               slot, set_id, stats, durability, max_durability, ammo_type, price, stars_price, icon)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (name, type) DO UPDATE SET
+                description = EXCLUDED.description,
+                category = EXCLUDED.category,
+                rarity = EXCLUDED.rarity,
+                stackable = EXCLUDED.stackable,
+                max_stack = EXCLUDED.max_stack,
+                slot = EXCLUDED.slot,
+                set_id = EXCLUDED.set_id,
+                stats = EXCLUDED.stats,
+                durability = EXCLUDED.durability,
+                max_durability = EXCLUDED.max_durability,
+                ammo_type = EXCLUDED.ammo_type,
+                price = EXCLUDED.price,
+                stars_price = EXCLUDED.stars_price,
+                icon = EXCLUDED.icon
         `, [
             item.name, item.description, item.type, item.category, item.rarity || 'common',
-            item.stackable !== false, item.slot || null, JSON.stringify(item.stats || {}),
-            item.durability || 100, item.max_durability || 100, item.price, item.icon
+            item.stackable !== false, Math.max(1, Number(item.max_stack) || 99),
+            item.slot || null, item.set_id || null, JSON.stringify(item.stats || {}),
+            item.durability || 100, item.max_durability || 100, item.ammo_type || 'none',
+            item.price || 0, item.stars_price || 0, item.icon
         ]);
     }
+
+    // Сеты предметов (бонус за 2/3/4 надетых части) и связь items.set_id.
+    await seedSets();
+
+    // Боссы — последними: они ссылаются на предметы по имени.
+    await seedBosses();
+}
+
+/**
+ * Сеты снаряжения.
+ *
+ * Поля bonus_2/bonus_3/bonus_4 — бонус за 2/3/4 надетых предмета сета.
+ * Поддерживаемые ключи (остальные игнорируются):
+ *   damage, defense — урон и защита;
+ *   luck — прибавка к удаче (шанс находки);
+ *   radiation_resist / infection_resist — стойкость к зоне;
+ *   heal_bonus — процент к лечению расходниками;
+ *   energy_bonus — плоская прибавка к энергии из расходников.
+ * Считает их public/shared/equipment.js → calculateSetBonuses().
+ */
+async function seedSets() {
+    const sets = [
+        {
+            id: 1,
+            name: 'Военный сет',
+            description: 'Армейская экипировка выжившего',
+            icon: '🎖️',
+            bonus_2: { defense: 6, radiation_resist: 4 },
+            bonus_3: { defense: 12, infection_resist: 6, radiation_resist: 8 },
+            bonus_4: { defense: 18, infection_resist: 10, radiation_resist: 12, heal_bonus: 10 }
+        },
+        {
+            id: 2,
+            name: 'Медицинский сет',
+            description: 'Оборудование для выживания',
+            icon: '🏥',
+            bonus_2: { heal_bonus: 10, infection_resist: 6 },
+            bonus_3: { heal_bonus: 20, infection_resist: 10 },
+            bonus_4: { heal_bonus: 30, infection_resist: 14, radiation_resist: 10 }
+        },
+        {
+            id: 3,
+            name: 'Сталкерский сет',
+            description: 'Экипировка для исследования зоны',
+            icon: '🎒',
+            bonus_2: { luck: 3, defense: 4 },
+            bonus_3: { luck: 7, radiation_resist: 10 },
+            bonus_4: { luck: 12, radiation_resist: 18, defense: 10, heal_bonus: 10 }
+        },
+        {
+            id: 4,
+            name: 'Бандитский сет',
+            description: 'Оружие и защита мародёра',
+            icon: '💣',
+            bonus_2: { damage: 4, defense: 4 },
+            bonus_3: { damage: 9, defense: 6 },
+            bonus_4: { damage: 15, defense: 10, heal_bonus: 10 }
+        }
+    ];
+
+    // Сначала убираем возможные дубли по имени (старые сиды могли добавить
+    // копию), иначе ON CONFLICT (id) оставил бы две строки с одним именем.
+    await query(`
+        DELETE FROM item_sets newer
+         USING item_sets older
+         WHERE newer.name = older.name
+           AND newer.id > older.id
+    `);
+
+    for (const set of sets) {
+        await query(`
+            INSERT INTO item_sets (id, name, description, icon, bonus_2, bonus_3, bonus_4)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                icon = EXCLUDED.icon,
+                bonus_2 = EXCLUDED.bonus_2,
+                bonus_3 = EXCLUDED.bonus_3,
+                bonus_4 = EXCLUDED.bonus_4
+        `, [
+            set.id, set.name, set.description, set.icon,
+            JSON.stringify(set.bonus_2), JSON.stringify(set.bonus_3), JSON.stringify(set.bonus_4)
+        ]);
+    }
+
+    // Связь «предмет -> сет» живёт в items.set_id (источник правды для бонусов).
+    // Таблицу item_set_items тоже наполняем, чтобы она не была пустой
+    // декорацией: по ней видно, какие предметы входят в сет.
+    await query(`
+        INSERT INTO item_set_items (set_id, item_id, piece_number)
+        SELECT i.set_id, i.id,
+               ROW_NUMBER() OVER (PARTITION BY i.set_id ORDER BY i.id)
+          FROM items i
+         WHERE i.set_id IS NOT NULL
+        ON CONFLICT DO NOTHING
+    `);
+}
+
+/**
+ * Боссы: параметры боя, ключи и награды предметами.
+ *
+ * damage — процент от max_health игрока за один удар босса (ретралиация).
+ * Раньше колонка была мёртвой: бой с боссом вообще не стоил здоровья.
+ * key_drop_chance — шанс (в процентах от дропа), что найденная в луте
+ * находка окажется ключом от этого босса (routes/game/world.js).
+ * keys_required — сколько ключей ЭТОГО босса нужно, чтобы открыть следующего.
+ */
+// damage — процент от max_health игрока за ответный удар босса.
+// Кривая подобрана так, чтобы первый бой (500 HP, ~50 ударов ножом) проходил
+// с одной аптечкой, а финальный босс реально угрожал: броня срезает максимум
+// 60%, поэтому 12% у «Последнего стража» — это ~2-4 удара без защиты.
+async function seedBosses() {
+    // key — имя предмета-ключа, который открывает бой с этим боссом.
+    // Склеивать его из имени босса нельзя: ключи названы в родительном падеже
+    // («Ключ от Бездомного психа»), а bosses.name — в именительном.
+    const bosses = [
+        { name: 'Крысиный король', key: null, description: 'Огромная радиоактивная крыса', max_health: 500, damage: 2, key_drop_chance: 2.5, reward_experience: 50, reward_coins: 25, icon: '🐀', loot: ['Металлолом', 'Консервы', 'Ткань'] },
+        { name: 'Бездомный псих', key: 'Ключ от Бездомного психа', description: 'Сумасшедший выживший с монтировкой', max_health: 2000, damage: 3, key_drop_chance: 1.25, reward_experience: 100, reward_coins: 50, icon: '🔪', loot: ['Пластик', 'Бинт', 'Спирт', 'Топор'] },
+        { name: 'Медведь-мутант', key: 'Ключ от Медведя-мутанта', description: 'Радиоактивный медведь', max_health: 5000, damage: 4, key_drop_chance: 0.625, reward_experience: 200, reward_coins: 100, icon: '🐻', loot: ['Ткань', 'Аптечка', 'Пистолет', 'Обрез'] },
+        { name: 'Военный дрон', key: 'Ключ от Военного дрона', description: 'Боевой дрон с системой охраны', max_health: 10000, damage: 5, key_drop_chance: 0.3125, reward_experience: 400, reward_coins: 200, icon: '🤖', loot: ['Патроны', 'Электроника', 'Армейская каска', 'Автомат'] },
+        { name: 'Главарь мародёров', key: 'Ключ от Главаря мародёров', description: 'Лидер банды радиоактивных бандитов', max_health: 20000, damage: 6, key_drop_chance: 0.15625, reward_experience: 800, reward_coins: 400, icon: '💀', loot: ['Провода', 'Дробовик', 'Бандитская куртка'] },
+        { name: 'Биологический ужас', key: 'Ключ от Биологического ужаса', description: 'Мутировавшее существо из лаборатории', max_health: 40000, damage: 7, key_drop_chance: 0.078125, reward_experience: 1500, reward_coins: 750, icon: '👾', loot: ['Химикаты', 'Антидот', 'Бронежилет', 'Винтовка Мосина'] },
+        { name: 'Офицер-нежить', key: 'Ключ от Офицера-нежить', description: 'Бывший военный офицер', max_health: 70000, damage: 8, key_drop_chance: 0.0390625, reward_experience: 3000, reward_coins: 1500, icon: '💂', loot: ['Титан', 'Реактивные гранаты', 'Нано-аптечка', 'Военные перчатки'] },
+        { name: 'Гигантский монстр', key: 'Ключ от Гигантского монстра', description: 'Колоссальное существо', max_health: 100000, damage: 9, key_drop_chance: 0.01953125, reward_experience: 6000, reward_coins: 3000, icon: '🦖', loot: ['Титан', 'Снайперская винтовка', 'Сталкерский плащ', 'Реактивные гранаты'] },
+        { name: 'Профессор безумия', key: 'Ключ от Профессора безумия', description: 'Учёный, сошедший с ума', max_health: 150000, damage: 10, key_drop_chance: 0.009765625, reward_experience: 12000, reward_coins: 6000, icon: '🧑‍🔬', loot: ['Уран', 'Радиа-кур', 'Пулемёт', 'Экзо-костюм'] },
+        { name: 'Последний страж', key: 'Ключ от Последнего стража', description: 'Последний защитник бункера', max_health: 250000, damage: 12, key_drop_chance: 0.0048828125, reward_experience: 25000, reward_coins: 12500, icon: '🛡️', loot: ['Кристалл силы', 'Реактивная пушка', 'Броня стражей', 'Реактивные гранаты'] }
+    ];
+
+    for (const boss of bosses) {
+        // reward_items хранит item_id, поэтому предметы должны уже существовать:
+        // отсюда порядок вызовов в seedDatabase().
+        const rewardItems = await resolveLootItemIds(boss.loot);
+        const keyItemId = boss.key ? await resolveKeyItemId(boss.key) : null;
+
+        await query(`
+            INSERT INTO bosses (name, description, max_health, damage, key_drop_chance,
+                                keys_required, required_key_id, reward_experience, reward_coins, reward_items, icon)
+            VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10)
+            ON CONFLICT (name) DO UPDATE SET
+                description = EXCLUDED.description,
+                max_health = EXCLUDED.max_health,
+                damage = EXCLUDED.damage,
+                key_drop_chance = EXCLUDED.key_drop_chance,
+                keys_required = EXCLUDED.keys_required,
+                required_key_id = EXCLUDED.required_key_id,
+                reward_experience = EXCLUDED.reward_experience,
+                reward_coins = EXCLUDED.reward_coins,
+                reward_items = EXCLUDED.reward_items,
+                icon = EXCLUDED.icon
+        `, [
+            boss.name, boss.description, boss.max_health, boss.damage, boss.key_drop_chance,
+            keyItemId, boss.reward_experience, boss.reward_coins, JSON.stringify(rewardItems), boss.icon
+        ]);
+    }
+
+    // Если ссылка указывает на несуществующий предмет (ключ ещё не засеян или
+    // строку каталога удалили) — обнуляем: UI не должен показывать ключ,
+    // который получить невозможно.
+    await query(`
+        UPDATE bosses
+           SET required_key_id = NULL
+         WHERE required_key_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM items k WHERE k.id = bosses.required_key_id)
+    `);
+}
+
+/** id предмета-ключа по имени (null, если такого ключа нет в каталоге) */
+async function resolveKeyItemId(name) {
+    const result = await query(
+        `SELECT id FROM items WHERE type = 'key' AND name = $1 LIMIT 1`,
+        [name]
+    );
+    return result.rows[0]?.id ?? null;
+}
+
+/**
+ * Превратить список имён предметов в [{item_id, quantity}].
+ * Неизвестные имена пропускаем, а не падаем: сид не должен ронять старт.
+ */
+async function resolveLootItemIds(names) {
+    if (!Array.isArray(names) || names.length === 0) return [];
+
+    const result = await query(
+        'SELECT id, name FROM items WHERE name = ANY($1::text[])',
+        [names]
+    );
+    const byName = new Map(result.rows.map((row) => [row.name, row.id]));
+
+    const items = [];
+    for (const name of names) {
+        const itemId = byName.get(name);
+        if (itemId) items.push({ item_id: itemId, quantity: 1 });
+    }
+    return items;
+}
+
+/**
+ * Переименования предметов: переносит инвентари игроков и удаляет старые строки.
+ *
+ * Зачем: сид работает по (name, type), поэтому переименование создало бы НОВУЮ
+ * строку каталога, а старая осталась бы жить второй «Снайперкой» — у игроков
+ * в инвентарях остались бы предметы, которых больше нет в магазине и которые
+ * нельзя ни починить, ни улучшить по новым правилам.
+ *
+ * Порядок: вызывается ПОСЛЕ seedDatabase() (новые предметы уже созданы)
+ * и ДО repairPlayerInventories().
+ *
+ * Идемпотентно: если старой строки нет — ничего не делаем.
+ *
+ * @returns {Promise<number>} сколько предметов перенесено
+ */
+async function applyItemRenames() {
+    const renames = [
+        // Фантастика заменена реальным арсеналом постапокалипсиса.
+        { from: ['Плазменный пистолет', 'weapon'], to: ['Пистолет ТТ', 'weapon'] },
+        { from: ['Лазерная винтовка', 'weapon'], to: ['Реактивная пушка', 'weapon'] },
+        { from: ['Снайперка', 'weapon'], to: ['Снайперская винтовка', 'weapon'] },
+        { from: ['Эликсир бессмертия', 'medicine'], to: ['Реаниматор', 'medicine'] }
+    ];
+
+    let moved = 0;
+
+    for (const rename of renames) {
+        const [fromName, fromType] = rename.from;
+        const [toName, toType] = rename.to;
+
+        const source = await query(
+            'SELECT id FROM items WHERE name = $1 AND type = $2',
+            [fromName, fromType]
+        );
+        const target = await query(
+            'SELECT id FROM items WHERE name = $1 AND type = $2',
+            [toName, toType]
+        );
+
+        const oldId = source.rows[0]?.id;
+        const newId = target.rows[0]?.id;
+
+        // Переименование уже применено (или целевого предмета нет) — пропускаем.
+        if (!oldId || !newId || oldId === newId) continue;
+
+        // Инвентарь: меняем id, сохраняя количество, прочность и улучшения.
+        const players = await query(`
+            SELECT id, inventory, equipment
+              FROM players
+             WHERE jsonb_typeof(inventory) = 'array'
+                OR jsonb_typeof(equipment) = 'object'
+        `);
+
+        for (const playerRow of players.rows) {
+            const inventory = normalizeInventoryForRepair(playerRow.inventory);
+            const equipment = normalizeEquipmentForRepair(playerRow.equipment);
+
+            let playerMoved = 0;
+            const nextInventory = inventory.map((entry) => {
+                if (!entry || Number(entry.id) !== Number(oldId)) return entry;
+                playerMoved++;
+                return { ...entry, id: Number(newId), name: toName };
+            });
+
+            let equipmentMoved = 0;
+            for (const slot of Object.keys(equipment)) {
+                const item = equipment[slot];
+                if (!item || Number(item.id) !== Number(oldId)) continue;
+                equipment[slot] = { ...item, id: Number(newId), name: toName };
+                equipmentMoved++;
+            }
+
+            if (playerMoved === 0 && equipmentMoved === 0) continue;
+
+            await query(
+                'UPDATE players SET inventory = $1::jsonb, equipment = $2::jsonb WHERE id = $3',
+                [JSON.stringify(nextInventory), JSON.stringify(equipment), playerRow.id]
+            );
+            moved += playerMoved + equipmentMoved;
+        }
+
+        // Старая строка больше не нужна: предмет живёт под новым именем.
+        await query('DELETE FROM items WHERE id = $1', [oldId]);
+        console.warn(`[migrate] Переименование «${fromName}» -> «${toName}», перенесено предметов: ${moved}`);
+    }
+
+    return moved;
+}
+
+/**
+ * Ремонт данных игроков: инвентари и экипировка приводятся к каталогу.
+ *
+ * Что чинит (по данным аудита прод-базы):
+ * 1) Фантомные предметы `{"id": 1}` / `{"id": 2}` из webhook.js — таких id в
+ *    таблице items нет, поэтому предмет нельзя было ни продать, ни применить
+ *    (в них лежали hunger/thirst — поля другой версии игры). Переводим на
+ *    настоящие «Консервы»/«Воду» по имени.
+ * 2) Ключи боссов лежали в инвентаре обычными предметами, хотя бой открывает
+ *    только boss_keys. Переносим количество в boss_keys, предмет убираем.
+ * 3) Предметы, чей id исчез из каталога (удалённые легаси-строки),
+ *    компенсируем монетами по редкости — иначе игрок терял предмет молча.
+ * 4) Дописываем в предметы поля каталога, которых в старых записях нет:
+ *    price (нужен для цены ремонта), set_id (бонусы сетов), rarity, stats и
+ *    прочность. Старое снаряжение без них получало «вечную» прочность.
+ * 5) Восстанавливаем счётчики прогресса: unique_items (достижения
+ *    «Коллекционер»/«Хранитель») и locations_visited («Путешественник») —
+ *    их никто не обновлял, прогресс всегда был 0.
+ *
+ * Идемпотентно: если чинить нечего — UPDATE не выполняется.
+ * ВАЖНО: вызывается ПОСЛЕ seedDatabase()/seedSets() (нужен актуальный каталог)
+ * и ДО mergeDuplicateInventoryStacks().
+ *
+ * @returns {Promise<number>} сколько игроков реально изменилось
+ */
+async function repairPlayerInventories() {
+    // Ленивый require: game-helpers тянет db/database, который к этому моменту
+    // уже загружен, поэтому цикла зависимостей не возникает.
+    const { SELL_FLOOR_BY_RARITY } = require('../utils/game-helpers');
+
+    const itemRows = await query(`
+        SELECT id, name, type, category, rarity, icon, slot, set_id, price, stats,
+               stackable, max_stack, durability, max_durability
+          FROM items
+    `);
+    if (itemRows.rows.length === 0) return 0;
+
+    const catalog = new Map(itemRows.rows.map((row) => [String(row.id), row]));
+    // Поиск по имени — единственный способ опознать предмет без валидного id.
+    const byName = new Map(itemRows.rows.map((row) => [String(row.name), row]));
+
+    // item_id ключа -> id босса, чей ключ это (владелец ключа = предыдущий
+    // босс: ключ от N открывает бой с N+1).
+    const keyOwners = new Map();
+    const bossRows = await query('SELECT id, required_key_id FROM bosses WHERE required_key_id IS NOT NULL');
+    for (const boss of bossRows.rows) {
+        keyOwners.set(String(boss.required_key_id), Math.max(1, Number(boss.id) - 1));
+    }
+
+    const players = await query(`
+        SELECT id, inventory, equipment FROM players
+         WHERE jsonb_typeof(inventory) = 'array'
+            OR jsonb_typeof(equipment) = 'object'
+    `);
+
+    let changed = 0;
+    for (const playerRow of players.rows) {
+        const inventory = normalizeInventoryForRepair(playerRow.inventory);
+        const equipment = normalizeEquipmentForRepair(playerRow.equipment);
+
+        const keyGrants = new Map();
+        let coins = 0;
+        const repaired = [];
+
+        for (const entry of inventory) {
+            if (!entry || typeof entry !== 'object') continue;
+
+            const row = resolveCatalogRow(entry, catalog, byName);
+            if (!row) {
+                // Предмета больше нет в каталоге: компенсируем монетами.
+                const rarity = String(entry.rarity || 'common');
+                coins += SELL_FLOOR_BY_RARITY[rarity] || SELL_FLOOR_BY_RARITY.common;
+                continue;
+            }
+
+            const quantity = Math.max(1, Number(entry.quantity) || 1);
+
+            if (String(row.type) === 'key') {
+                const ownerBossId = keyOwners.get(String(row.id));
+                if (ownerBossId && ownerBossId > 0) {
+                    keyGrants.set(ownerBossId, (keyGrants.get(ownerBossId) || 0) + quantity);
+                    continue; // ключ уходит в boss_keys, слот освобождается
+                }
+            }
+
+            repaired.push(mergeInventoryEntryWithCatalog(entry, row));
+        }
+
+        for (const slot of Object.keys(equipment)) {
+            const entry = equipment[slot];
+            if (!entry || typeof entry !== 'object') {
+                delete equipment[slot];
+                continue;
+            }
+            const row = resolveCatalogRow(entry, catalog, byName);
+            equipment[slot] = row ? mergeInventoryEntryWithCatalog(entry, row) : entry;
+        }
+
+        const inventoryChanged = JSON.stringify(repaired) !== JSON.stringify(inventory);
+        const equipmentChanged = JSON.stringify(equipment) !== JSON.stringify(playerRow.equipment || {});
+
+        if (!inventoryChanged && !equipmentChanged && coins === 0 && keyGrants.size === 0) {
+            continue;
+        }
+
+        for (const [bossId, quantity] of keyGrants) {
+            await query(`
+                INSERT INTO boss_keys (player_id, boss_id, quantity)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (player_id, boss_id)
+                DO UPDATE SET quantity = boss_keys.quantity + EXCLUDED.quantity
+            `, [playerRow.id, bossId, quantity]);
+        }
+
+        if (coins > 0) {
+            await query('UPDATE players SET coins = coins + $1 WHERE id = $2', [coins, playerRow.id]);
+        }
+
+        if (inventoryChanged || equipmentChanged) {
+            await query(
+                'UPDATE players SET inventory = $1::jsonb, equipment = $2::jsonb WHERE id = $3',
+                [JSON.stringify(repaired), JSON.stringify(equipment), playerRow.id]
+            );
+        }
+
+        await syncProgressCounters(playerRow.id);
+        changed += 1;
+    }
+
+    if (changed > 0) {
+        console.warn(`[migrate] Починено инвентарей игроков: ${changed}`);
+    }
+    return changed;
+}
+
+/** Привести инвентарь к массиву объектов (значение может быть JSON-строкой) */
+function normalizeInventoryForRepair(value) {
+    let parsed = value;
+    if (typeof parsed === 'string') {
+        try {
+            parsed = JSON.parse(parsed);
+        } catch {
+            return [];
+        }
+    }
+    if (Array.isArray(parsed)) return parsed.filter((item) => item && typeof item === 'object');
+    if (parsed && typeof parsed === 'object') return Object.values(parsed).filter((item) => item && typeof item === 'object');
+    return [];
+}
+
+/** Привести экипировку к объекту «слот -> предмет» */
+function normalizeEquipmentForRepair(value) {
+    let parsed = value;
+    if (typeof parsed === 'string') {
+        try {
+            parsed = JSON.parse(parsed);
+        } catch {
+            return {};
+        }
+    }
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+/**
+ * Найти строку каталога для предмета игрока: сначала по id, затем по имени.
+ * Смена id не должна ломать предмет — фантомные «id: 1» опознаются по имени.
+ */
+function resolveCatalogRow(entry, catalog, byName) {
+    const rawId = Number(entry.id);
+    if (Number.isFinite(rawId) && catalog.has(String(rawId))) {
+        return catalog.get(String(rawId));
+    }
+
+    const name = String(entry.name || '').trim();
+    return name && byName.has(name) ? byName.get(name) : null;
+}
+
+/**
+ * Дописать в предмет игрока поля каталога, которых в нём нет.
+ *
+ * price и прочность берём ИЗ КАТАЛОГА, а не из записи игрока: старые записи
+ * хранят цену и прочность первой версии сида (Бита 25/30 вместо 45/35), из-за
+ * чего ремонт стоил бы не по каталожной цене, а изношенный предмет считался бы
+ * «вечно новым». Уровень улучшения (upgrade_level) сохраняем: его задаёт игрок.
+ */
+function mergeInventoryEntryWithCatalog(entry, row) {
+    const hasStats = entry.stats && typeof entry.stats === 'object' && Object.keys(entry.stats).length > 0;
+    const stats = hasStats ? entry.stats : (row.stats || {});
+
+    const catalogMax = Math.max(1, Number(row.max_durability) || Number(row.durability) || 100);
+    const entryMax = Math.max(1, Number(entry.max_durability || entry.durability) || catalogMax);
+    const rawDurability = entry.durability === undefined || entry.durability === null
+        ? catalogMax
+        : Number(entry.durability) || 0;
+
+    // Предмет, который раньше не изнашивался (прочность == своему максимуму),
+    // считаем новым: прочность как механика появилась только сейчас.
+    const wasUnused = rawDurability >= entryMax;
+    const durability = wasUnused ? catalogMax : Math.max(0, Math.min(catalogMax, rawDurability));
+
+    return {
+        ...entry,
+        id: Number(row.id),
+        name: entry.name || row.name,
+        type: row.type,
+        category: entry.category || row.category || row.type,
+        rarity: entry.rarity || row.rarity,
+        icon: entry.icon || row.icon || '📦',
+        slot: entry.slot || row.slot || null,
+        set_id: entry.set_id || row.set_id || null,
+        price: Number(row.price) || 0,
+        stats,
+        durability,
+        max_durability: catalogMax
+    };
+}
+
+/**
+ * Обновить unique_items и locations_visited.
+ * Достижения «Коллекционер»/«Хранитель»/«Путешественник» читали эти поля,
+ * но никто их не наполнял — прогресс всегда оставался 0.
+ */
+async function syncProgressCounters(playerId) {
+    await query(`
+        UPDATE players p
+           SET unique_items = COALESCE((
+                   SELECT jsonb_agg(DISTINCT entry->'id')
+                     FROM jsonb_array_elements(COALESCE(p.inventory, '[]'::jsonb)) entry
+                    WHERE entry->'id' IS NOT NULL
+               ), '[]'::jsonb),
+               locations_visited = CASE
+                   WHEN p.current_location_id IS NULL
+                       THEN COALESCE(p.locations_visited, '[]'::jsonb)
+                   ELSE (
+                       SELECT jsonb_agg(DISTINCT visited_id)
+                         FROM jsonb_array_elements_text(
+                             COALESCE(p.locations_visited, '[]'::jsonb)
+                             || jsonb_build_array(p.current_location_id::text)
+                         ) AS visited_id
+                   )
+               END
+         WHERE p.id = $1
+    `, [playerId]);
 }
 
 /**
@@ -1401,5 +2028,7 @@ module.exports = {
     runMigrations,
     seedDatabase,
     seedAchievements,
-    mergeDuplicateInventoryStacks
+    mergeDuplicateInventoryStacks,
+    applyItemRenames,
+    repairPlayerInventories
 };

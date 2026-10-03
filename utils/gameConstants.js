@@ -20,23 +20,16 @@ const sharedEquipment = require('../public/shared/equipment.js');
  * @param {number} level - Уровень игрока
  * @returns {number} Опыт для следующего уровня
  */
-function getExpForLevel(level) {
-    const lvl = Math.max(1, Number(level) || 1);
-    return Math.round(500 * lvl * (1 + lvl / 25));
-}
+// Формула опыта живёт в public/shared/equipment.js — том же файле, что читает
+    // браузер. Раньше здесь была своя копия и вторая в public/game.js; любая
+    // правка одной из них рассинхронизировала начисление опыта с полосой.
+    const { getExpForLevel, getTotalExpForLevel } = require('../public/shared/equipment.js');
 
 /**
- * Расчёт общего опыта для уровня
- * @param {number} level - Уровень игрока
- * @returns {number} Общий опыт для достижения уровня
+ * Расчёт общего опыта для уровня — тоже живёт в общем файле правил
+ * (см. getTotalExpForLevel в public/shared/equipment.js). Функция ниже
+ * удалена как дубликат.
  */
-function getTotalExpForLevel(level) {
-    let total = 0;
-    for (let i = 1; i < level; i++) {
-        total += getExpForLevel(i);
-    }
-    return total;
-}
 
 const GAME_CONFIG = {
     // Базовые настройки

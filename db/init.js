@@ -50,6 +50,8 @@ async function initDatabase() {
             runMigrations,
             seedDatabase,
             seedAchievements,
+            applyItemRenames,
+            repairPlayerInventories,
             mergeDuplicateInventoryStacks
         } = getSchema();
 
@@ -57,8 +59,14 @@ async function initDatabase() {
         await runMigrations();
         await seedDatabase();
         await seedAchievements();
+        // Переименования — сразу после сидов: новые предметы уже созданы,
+        // старые строки каталога ещё есть, предметы игроков на них ссылаются.
+        await applyItemRenames();
         // После сидов: нужны метаданные items (stackable/max_stack/slot),
         // чтобы свести старые дубли предметов к правилам стакования.
+        // Ремонт идёт до слияния стеков: он чинит состав инвентаря
+        // (фантомные id, ключи в boss_keys), а уже потом стеки сворачиваются.
+        await repairPlayerInventories();
         await mergeDuplicateInventoryStacks();
 
         return true;

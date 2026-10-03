@@ -9,6 +9,18 @@ const { logger, safeJsonParse, safeJsonParse: parseAchievementCondition, validat
 const { getAchievementCurrentValue, getAchievementTargetValue, getAchievementRuntimeContext, grantCurrencyReward } = require('../utils/game-helpers');
 
 /**
+ * Типы ежедневных заданий: цель + награда.
+ *
+ * Ключи task_type использует utils/game-helpers.js → progressDailyTask(),
+ * поэтому новый тип задания нужно сюда же, а не только в обработчик выдачи.
+ */
+const DAILY_TASK_TYPES = [
+    { type: 'search', target: 10, reward: { coins: 50, stars: 1 } },
+    { type: 'boss_damage', target: 100, reward: { coins: 100, stars: 2 } },
+    { type: 'collect_items', target: 5, reward: { coins: 75, stars: 1 } }
+];
+
+/**
  * Определить Telegram ID из запроса.
  *
  * БЕЗОПАСНОСТЬ: доверяем ТОЛЬКО подписанному initData.
@@ -65,11 +77,25 @@ router.get('/shop/items', async (req, res) => {
 });
 
 /**
+ * Ограничение выборки для рейтингов.
+ *
+ * Раньше здесь стояло `parseInt(req.query.limit) || 10` без верхней границы:
+ * запрос вида /rating/players?limit=100000 уходил в базу без LIMIT-клампа и
+ * выгружал всю таблицу игроков. В clans/pvp/world тот же параметр уже
+ * ограничен 100 — здесь дыра была только в этих двух маршрутах.
+ */
+function readLimit(raw, fallback = 10, max = 100) {
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+    return Math.min(parsed, max);
+}
+
+/**
  * Получение рейтинга игроков
  */
 router.get('/rating/players', async (req, res) => {
     try {
-        const limit = parseInt(req.query.limit) || 10;
+        const limit = readLimit(req.query.limit, 10, 100);
         
         // Вычисляем bosses_killed из boss_mastery для точности рейтинга
         const players = await queryAll(`
@@ -94,7 +120,7 @@ router.get('/rating/players', async (req, res) => {
  */
 router.get('/rating/clans', async (req, res) => {
     try {
-        const limit = parseInt(req.query.limit) || 10;
+        const limit = readLimit(req.query.limit, 10, 100);
 
         const clans = await queryAll(`
             SELECT c.id, c.name, c.level, c.experience, 
@@ -131,50 +157,137 @@ router.get('/daily-tasks', async (req, res) => {
             return res.status(404).json({ error: 'Игрок не найден' });
         }
 
-        // Получаем или создаём задания на день (с транзакцией для предотвращения race condition)
-        
-        const tasks = await transaction(async (client) => {
-            // Проверяем существующие задания с блокировкой
-            let existingTasks = await client.query(`
-                SELECT * FROM daily_tasks 
-                WHERE player_id = $1 AND expires_at > NOW()
-                FOR UPDATE
-            `, [player.id]);
+        // Задания на день создаются всегда: уникальный ключ (player_id, task_type,
+// expires_at) делает вставку идемпотентной. Раньше условие было
+// «если не нашлось НИ ОДНОГО задания», поэтому после получения награды за
+// одно задание (строка удаляется) остальные два не восстанавливались,
+// а список выглядел неполным весь день.
+const tasks = await transaction(async (client) => {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 1);
+    expiresAt.setHours(0, 0, 0, 0);
 
-            // Если нет заданий - создаём
-            if (existingTasks.rows.length === 0) {
-                const taskTypes = [
-                    { type: 'search', target: 10, reward: { coins: 50, stars: 1 } },
-                    { type: 'boss_damage', target: 100, reward: { coins: 100, stars: 2 } },
-                    { type: 'collect_items', target: 5, reward: { coins: 75, stars: 1 } }
-                ];
+    for (const taskType of DAILY_TASK_TYPES) {
+        await client.query(
+            `INSERT INTO daily_tasks (player_id, task_type, target_value, reward, expires_at)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (player_id, task_type, expires_at) DO NOTHING`,
+            [player.id, taskType.type, taskType.target, JSON.stringify(taskType.reward), expiresAt]
+        );
+    }
 
-                const expiresAt = new Date();
-                expiresAt.setDate(expiresAt.getDate() + 1);
-                expiresAt.setHours(0, 0, 0, 0);
+    const result = await client.query(
+        `SELECT * FROM daily_tasks
+          WHERE player_id = $1 AND expires_at > NOW()
+          ORDER BY task_type`,
+        [player.id]
+    );
+    return result.rows;
+});
 
-                for (const taskType of taskTypes) {
-                    await client.query(`
-                        INSERT INTO daily_tasks (player_id, task_type, target_value, reward, expires_at)
-                        VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT (player_id, task_type, expires_at) DO NOTHING
-                    `, [player.id, taskType.type, taskType.target, JSON.stringify(taskType.reward), expiresAt]);
-                }
-
-                // Получаем созданные задания
-                existingTasks = await client.query(`
-                    SELECT * FROM daily_tasks 
-                    WHERE player_id = $1 AND expires_at > NOW()
-                `, [player.id]);
-            }
-
-            return existingTasks.rows;
+        res.json({
+            tasks: tasks.map((task) => ({
+                ...task,
+                reward: safeJsonParse(task.reward, {}),
+                current_value: Number(task.current_value || 0),
+                target_value: Number(task.target_value || 0),
+                completed: Boolean(task.completed)
+            }))
         });
-
-        res.json({ tasks });
     } catch (error) {
         logger.error({ type: 'daily_tasks_error', message: error.message });
         res.status(500).json({ error: 'Ошибка получения заданий' });
+    }
+});
+
+/**
+ * Получить награду за ежедневное задание.
+ * POST /api/daily-tasks/:id/claim
+ *
+ * Раньше задания нельзя было даже выполнить: current_value/completed никто не
+ * обновлял, а метода получения награды не существовало вовсе — задание
+ * можно было увидеть и забыть навсегда.
+ */
+router.post('/daily-tasks/:id/claim', async (req, res) => {
+    const telegramId = resolveTelegramId(req);
+    if (!telegramId) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация' });
+    }
+
+    const taskId = Number(req.params.id);
+    if (!Number.isInteger(taskId) || taskId <= 0) {
+        return res.status(400).json({ success: false, error: 'Некорректный id задания', code: 'INVALID_TASK_ID' });
+    }
+
+    try {
+        const result = await transaction(async (client) => {
+            const playerResult = await client.query(
+                'SELECT id, coins, stars FROM players WHERE telegram_id = $1 FOR UPDATE',
+                [telegramId]
+            );
+            const player = playerResult.rows[0];
+            if (!player) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
+
+            const taskResult = await client.query(
+                `SELECT * FROM daily_tasks
+                  WHERE id = $1 AND player_id = $2 AND expires_at > NOW()
+                  FOR UPDATE`,
+                [taskId, player.id]
+            );
+            const task = taskResult.rows[0];
+            if (!task) {
+                throw { message: 'Задание не найдено или истекло', code: 'TASK_NOT_FOUND', statusCode: 404 };
+            }
+            if (!task.completed) {
+                throw {
+                    message: 'Задание ещё не выполнено',
+                    code: 'TASK_NOT_COMPLETED',
+                    statusCode: 400,
+                    current_value: Number(task.current_value || 0),
+                    target_value: Number(task.target_value || 0)
+                };
+            }
+
+            // Награда выдаётся один раз: удаляем задание в той же транзакции.
+            await client.query('DELETE FROM daily_tasks WHERE id = $1', [taskId]);
+
+            const reward = safeJsonParse(task.reward, {});
+            const coins = Number(reward.coins || 0);
+            const stars = Number(reward.stars || 0);
+
+            if (coins > 0 || stars > 0) {
+                await client.query(
+                    `UPDATE players
+                        SET coins = coins + $1,
+                            stars = stars + $2,
+                            daily_tasks_completed = COALESCE(daily_tasks_completed, 0) + 1
+                      WHERE id = $3`,
+                    [coins, stars, player.id]
+                );
+            }
+
+            return {
+                success: true,
+                message: `Награда получена: +${coins} 🪙, +${stars} ⭐`,
+                reward: { coins, stars },
+                coins_total: Number(player.coins || 0) + coins,
+                stars_total: Number(player.stars || 0) + stars
+            };
+        });
+
+        return res.json(result);
+    } catch (error) {
+        if (['TASK_NOT_FOUND', 'TASK_NOT_COMPLETED', 'PLAYER_NOT_FOUND'].includes(error.code)) {
+            return res.status(error.statusCode || 400).json({
+                success: false,
+                error: error.message,
+                code: error.code
+            });
+        }
+        logger.error({ type: 'daily_task_claim_error', message: error.message });
+        return res.status(500).json({ success: false, error: 'Ошибка получения награды' });
     }
 });
 
