@@ -735,19 +735,20 @@ html, body {
 .location-preparation {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 0;
 }
 
 .prep-pill {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 10px;
+    padding: 5px 9px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 12px;
+    font-size: 11px;
 }
 
 .prep-pill.risk {
@@ -763,10 +764,13 @@ html, body {
 }
 
 .location-risk-hint {
-    margin-top: 10px;
-    font-size: 12px;
+    margin-top: 0;
+    width: 100%;
+    max-width: 340px;
+    font-size: 11px;
     color: var(--text-secondary);
-    line-height: 1.4;
+    line-height: 1.35;
+    text-align: center;
 }
 
 /* Кнопки действий */
@@ -1079,29 +1083,47 @@ html, body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 10px;
-    height: calc(100% - 60px);
+    gap: 8px;
+    padding: 10px 12px 16px;
 }
 
+/* Карта не должна прыгать при наведении: фиксируем и ширину, и высоту,
+   иначе появление блока деталей сдвигает canvas на несколько пикселей. */
 #city-map {
+    display: block;
     width: 100%;
-    max-width: 360px;
+    max-width: 340px;
     height: auto;
+    /* На невысоких экранах карта сжимается, но пропорции сохраняются,
+       поэтому блоки под ней не выталкиваются за пределы экрана. */
+    max-height: 46vh;
     border-radius: 16px;
     box-shadow: 0 0 30px rgba(0, 0, 0, 0.6),
                 0 0 60px rgba(74, 144, 217, 0.1),
                 inset 0 0 80px rgba(0, 0, 0, 0.4);
     cursor: pointer;
     background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    /* Отключаем «оттягивание» при касании: карта — целая картинка,
+       жест должен работать как тап, а не как перетаскивание. */
+    touch-action: manipulation;
 }
 
 .map-info {
-    margin-top: 12px;
-    padding: 12px 24px;
+    width: 100%;
+    max-width: 340px;
+    margin-top: 0;
+    padding: 10px 12px;
     background: var(--bg-card);
-    border-radius: 10px;
+    border-radius: 12px;
     text-align: center;
     border: 1px solid rgba(255, 255, 255, 0.1);
+    /* Резервируем место под название, строку деталей и кнопку: блок не
+       меняет высоту при наведении, поэтому карта под ним не сдвигается. */
+    min-height: 104px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    justify-content: center;
 }
 
 .map-location-name {
@@ -1113,7 +1135,13 @@ html, body {
 .map-location-info {
     font-size: 12px;
     color: #888;
-    margin-top: 4px;
+    margin-top: 0;
+    /* Строка деталей всегда занимает место, даже когда локация не выбрана. */
+    min-height: 16px;
+}
+
+.map-travel-btn {
+    min-height: 40px;
 }
 
 
@@ -1566,13 +1594,9 @@ html, body {
     color: #e07a52;
 }
 
-/* Панель выбора локации на карте: тап показывает детали и кнопку перехода */
-.map-location-info {
-    margin-top: 4px;
-    font-size: 12px;
-    color: var(--text-secondary);
-}
-
+/* Состояние блока деталей локации: закрытая зона подсвечивается.
+   Базовые стили (.map-location-info) живут в разделе карты выше — здесь
+   только состояния, иначе правило ниже перебивало бы размеры блока. */
 .map-location-info[data-locked="true"] {
     color: #ffcc00;
 }

@@ -686,10 +686,18 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             // 4xx — детерминированная ошибка клиента: повтор ничего не изменит.
             // Раньше здесь уходили 3 одинаковых запроса (например, 400 «не в клане»).
             // Исключения: 408 (таймаут запроса) и 429 (лимит) — их есть смысл повторить.
+            // 4xx — детерминированная ошибка клиента: повтор ничего не изменит.
+            // Повтор при 429 исключён: сервер только что сказал «слишком быстро»,
+            // а клиент шлёт тот же запрос ещё два раза с нарастающей паузой,
+            // разгоняя лавину. Раньше именно это превращало одну ошибку лимита
+            // в серию из трёх запросов на каждый чих.
             const status = Number(error.status || 0);
-            if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
+            if (status >= 400 && status < 500 && status !== 408) {
                 if (!silent) {
                     console.warn(`[apiRequest] ${status} ${normalizedEndpoint}: ${error.message}`);
+                }
+                if (status === 429 && !silent) {
+                    showNotification('Слишком много запросов — подожди секунду и повтори.', 'warning');
                 }
                 throw error;
             }
@@ -5430,6 +5438,21 @@ async function healInfections() {
 }
 
 /**
+ * Выбранная на карте локация и троттлинг перерисовки.
+ *
+ * lastSelectedMapLocationId — чтобы DOM обновлялся только при смене выбора
+ * (иначе блок деталей мигает и сдвигает карту при каждом движении мыши).
+ *
+ * hoveredMapLocationId + mapRepaintPending — перерисовка canvas не чаще
+ * одного раза на кадр. Раньше mousemove вызывал полную отрисовку карты на
+ * КАЖДОЕ событие: на телефоне это десятки полных repaint в секунду и
+ * постоянное «мерцание», из-за которого попасть по локации было невозможно.
+ */
+let lastSelectedMapLocationId = 0;
+let hoveredMapLocationId = 0;
+let mapRepaintPending = false;
+
+/**
  * Выбор локации на карте (тап или наведение).
  *
  * Показывает название, радиацию, инфекцию, уровень и оценку риска именно
@@ -5440,6 +5463,16 @@ async function healInfections() {
  */
 function selectMapLocation(loc) {
     if (!loc) return;
+
+    // Ключевая строка против «карта прыгает при наведении»: раньше
+    // обработчик mousemove вызывал эту функцию на КАЖДОЕ движение мыши,
+    // а функция переключала display у блока деталей и кнопки «Перейти».
+    // Блок то появлялся, то исчезал — карта под ним сдвигалась вверх-вниз
+    // на несколько пикселей, и наводиться на локации становилось невозможно.
+    // Теперь обновляем DOM только когда выбранная локация реально изменилась.
+    const locationId = Number(loc.id) || 0;
+    if (locationId === lastSelectedMapLocationId) return;
+    lastSelectedMapLocationId = locationId;
 
     const nameEl = document.querySelector('.map-location-name');
     if (nameEl) nameEl.textContent = `${loc.icon || ''} ${loc.name || ''}`.trim();
@@ -5455,12 +5488,10 @@ function selectMapLocation(loc) {
     });
     const level = Math.max(1, Number(gameState.player?.level) || 1);
     const requiredLevel = Number(loc.required_level ?? loc.min_level ?? 1);
-    const isCurrent = Number(gameState.player?.current_location_id) === Number(loc.id);
+    const isCurrent = Number(gameState.player?.current_location_id) === locationId;
 
     if (infoEl) {
-        infoEl.style.display = '';
-        // textContent по частям: название и числа через textContent,
-        // чтобы данные сервера не попали в разметку как HTML.
+        // textContent, а не innerHTML: значения приходят с сервера.
         infoEl.textContent =
             `☢️ ${Number(loc.radiation) || 0} · 🦠 ${Number(loc.infection) || 0} · ⚠️ риск ${Number(loc.danger_level) || 1}/7 · ${risk.label}`;
         infoEl.dataset.locked = requiredLevel > level ? 'true' : 'false';
@@ -5469,6 +5500,7 @@ function selectMapLocation(loc) {
     if (travelBtn) {
         if (isCurrent) {
             travelBtn.style.display = 'none';
+            delete travelBtn.dataset.locationId;
         } else {
             travelBtn.style.display = '';
             travelBtn.textContent = requiredLevel > level
@@ -8603,33 +8635,39 @@ function renderLocations() {
     };
     
     // Обработчик движения мыши (подсветка)
+    //
+    // Две оптимизации против «карта сама ездит под курсором»:
+    // 1) DOM обновляется только при СМЕНЕ локации под курсором;
+    // 2) canvas перерисовывается не чаще одного раза на кадр (requestAnimationFrame),
+    //    а не на каждое событие mousemove — раньше это были десятки полных
+    //    отрисовок в секунду.
     canvas.onmousemove = (e) => {
         const rect = canvas.getBoundingClientRect();
         const scaleX = width / rect.width;
         const scaleY = height / rect.height;
         const x = (e.clientX - rect.left) * scaleX;
         const y = (e.clientY - rect.top) * scaleY;
-        
+
         let hoveredLoc = null;
         for (const loc of locations) {
             const pos = gameState.locationPositions[loc.id];
             if (!pos || pos.radius === undefined) continue;
-            
+
             const dist = Math.sqrt((x - pos.x) ** 2 + (y - pos.y) ** 2);
             if (dist < pos.radius) {
                 hoveredLoc = loc;
                 break;
             }
         }
-        
-        // Обновляем информацию о локации — общая функция для наведения и тапа.
-        // Раньше наведение и тап расходились: мышь показывала детали (создавая
-        // DOM-узел на лету), а палец на телефоне не показывал ничего и сразу
-        // переводил в зону.
-        selectMapLocation(hoveredLoc);
 
-        // Перерисовываем с подсветкой
-        redrawMap(hoveredLoc);
+        const hoveredId = hoveredLoc ? Number(hoveredLoc.id) : 0;
+        if (hoveredId !== hoveredMapLocationId) {
+            hoveredMapLocationId = hoveredId;
+            // Общая функция для наведения и тапа: раньше эти ветки расходились,
+            // и палец на телефоне не показывал детали вообще.
+            selectMapLocation(hoveredLoc);
+            scheduleMapRepaint(hoveredLoc);
+        }
     };
 
     canvas.onmouseleave = () => {
@@ -8642,8 +8680,32 @@ function renderLocations() {
         }
         const nameEl = document.querySelector('.map-location-name');
         if (nameEl) nameEl.textContent = 'Выберите локацию';
-        redrawMap(null);
+
+        hoveredMapLocationId = 0;
+        lastSelectedMapLocationId = 0;
+        scheduleMapRepaint(null);
     };
+}
+
+/**
+ * Перерисовка карты не чаще одного раза на кадр.
+ *
+ * @param {object|null} hoveredLoc локация под курсором
+ */
+function scheduleMapRepaint(hoveredLoc) {
+    if (mapRepaintPending) return;
+    mapRepaintPending = true;
+
+    const paint = () => {
+        mapRepaintPending = false;
+        paintCityMap(hoveredLoc || null);
+    };
+
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(paint);
+    } else {
+        setTimeout(paint, 16);
+    }
 }
 
 /**

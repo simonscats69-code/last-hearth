@@ -10,33 +10,49 @@ const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger } = require('../../utils/serverApi');
 const { generateReferralCode } = require('../../utils/referralCode');
 
-// Rate limiters
-const authLimiter = rateLimit({
+// ====== ЛИМИТЫ ЗАПРОСОВ ======
+//
+// Раньше здесь стоял authLimiter (30/мин, по req.ip), подключённый через
+// router.use() ДО авторизации, то есть фактически ограничивающий ВСЕ
+// игровые запросы 30 в минуту. Отсюда боевые 429 «Слишком много попыток
+// авторизации» на простом ударе по боссу: клиент успевает сделать десяток
+// запросов (профиль, инвентарь, статус, локации) — и лимит исчерпан.
+//
+// Ключевая проблема — ключ по req.ip: в мобильных сетях (CGNAT) один адрес
+// делят десятки игроков, поэтому игроки блокировали друг друга.
+//
+// Теперь:
+//  1) антифлуд по IP — ДО авторизации, только чтобы прикрыть ботов без initData;
+//  2) лимиты конкретных действий (тоже по IP, игрока ещё нет) — крупные;
+//  3) общий лимит игрока — ПОСЛЕ validatePlayer, уже по id игрока.
+const ipFloodLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 30,
-    message: { error: 'Слишком много попыток авторизации', code: 'AUTH_LIMIT' },
+    max: 120,
+    message: { error: 'Слишком много запросов. Подождите минуту.', code: 'IP_RATE_LIMIT' },
     keyGenerator: (req) => req.ip
 });
 
 const criticalActionLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 15,
+    // Удары по боссу и PvP. Энергия (1 за удар) остаётся главным ограничителем,
+    // лимит — только страховка от спама кликом.
+    max: 30,
     message: { error: 'Слишком много атак. Отдохните минуту.', code: 'CRITICAL_ACTION_LIMIT' },
-    keyGenerator: (req) => req.player?.id || req.ip
+    keyGenerator: (req) => req.ip
 });
 
 const generalActionLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 50,
+    max: 60,
     message: { error: 'Слишком много запросов.', code: 'ACTION_LIMIT' },
-    keyGenerator: (req) => req.player?.id || req.ip
+    keyGenerator: (req) => req.ip
 });
 
 const purchaseLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 10,
+    max: 20,
     message: { error: 'Слишком много покупок.', code: 'PURCHASE_LIMIT' },
-    keyGenerator: (req) => req.player?.id || req.ip
+    keyGenerator: (req) => req.ip
 });
 
 // Загрузка роутеров без шума в логах.
@@ -257,7 +273,13 @@ function touchPlayerActivity(playerId) {
     });
 }
 
-// ====== RATE LIMITERS FIRST (защита от DoS через неавторизованные запросы) ======
+// ====== 1. АНТИФЛУД ПО IP (до авторизации: клиент ещё не известен) ======
+// Стоит первым, чтобы бот без валидного initData не долбил обработчики.
+// 120/мин на адрес: в мобильных сетях (CGNAT) адрес общий у многих игроков,
+// поэтому лимит должен быть заметно выше игрового.
+router.use(ipFloodLimiter);
+
+// ====== 2. ЛИМИТЫ ОТДЕЛЬНЫХ ДЕЙСТВИЙ ======
 router.use('/bosses/attack-boss', criticalActionLimiter);
 router.use('/bosses/attack-with-weapon', criticalActionLimiter);
 router.use(/^\/bosses\/raid\/\d+\/attack$/, criticalActionLimiter);
@@ -265,22 +287,35 @@ router.use('/pvp/attack', criticalActionLimiter);
 router.use('/pvp/attack-hit', criticalActionLimiter);
 router.use('/minigames/wheel/spin', criticalActionLimiter);
 router.use('/minigames/purchase', purchaseLimiter);
-// Ремонт и улучшение — траты валюты, поэтому под тем же лимитом покупок.
-router.use('/items/buy', purchaseLimiter);
+// Ремонт, улучшение и модификация — траты ресурсов, поэтому под лимитом покупок.
 router.use('/workshop/repair', purchaseLimiter);
 router.use('/workshop/upgrade', purchaseLimiter);
 router.use('/workshop/modify', purchaseLimiter);
+router.use('/items/buy', purchaseLimiter);
 router.use('/items/buy-stars', purchaseLimiter);
 // Алиас /inventory монтирует тот же роутер предметов (см. конец файла),
 // поэтому лимиты трат монет нужно продублировать: иначе /inventory/buy
 // и /inventory/buy-stars проходили бы мимо purchaseLimiter.
 router.use('/inventory/buy', purchaseLimiter);
 router.use('/inventory/buy-stars', purchaseLimiter);
-router.use(authLimiter); // Лимит на auth-запросы
 router.use(generalActionLimiter);
 
-// ====== ЗАТЕМ ВАЛИДАЦИЯ ======
+// ====== 3. ВАЛИДАЦИЯ ИГРОКА ======
 router.use(validatePlayer);
+
+// ====== 4. ОБЩИЙ ЛИМИТ ИГРОКА (уже по id, а не по IP) ======
+// Раньше authLimiter (30/мин по IP) висел здесь и душил обычный геймплей:
+// пара десятков запросов (профиль, инвентарь, статус, локации, удар по
+// боссу) исчерпывали лимит, и игрок получал 429 «Слишком много попыток
+// авторизации». Теперь ограничение по игроку — 120/мин, чего хватает на
+// бой и фарм, но не даёт спамить в цикле.
+const playerActionLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    message: { success: false, error: 'Слишком много запросов. Подождите минуту.', code: 'PLAYER_RATE_LIMIT' },
+    keyGenerator: (req) => String(req.player?.id || req.ip)
+});
+router.use(playerActionLimiter);
 
 // ====== ЛОГИРОВАНИЕ ======
 router.use((req, res, next) => {
