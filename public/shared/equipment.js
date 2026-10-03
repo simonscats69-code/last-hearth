@@ -185,6 +185,106 @@
         return total;
     }
 
+    /* ================= ОЗДОРОВЛЕНИЕ И ЛЕЧЕНИЕ =================
+     *
+     * Раньше здоровье росло ТОЛЬКО от предметов: кончились аптечки — игрок
+     * застревал, а в бою с боссом нужно было вручную лезть в инвентарь.
+     *
+     * Теперь три слоя:
+     *   1) пассивное восстановление — медленное, до «безопасного» потолка;
+     *   2) автолечение — расходует самый экономный предмет из инвентаря;
+     *   3) ручное лечение — кнопки прямо на главном экране.
+     *
+     * Баланс: реген НЕ доводит до полного здоровья, поэтому аптечки в бою
+     * по-прежнему нужны; реген и предметы закрывают разные ситуации.
+     */
+
+    /** +1 HP за столько миллисекунд */
+    const HEALTH_REGEN_INTERVAL_MS = 90 * 1000;
+
+    /** Потолок регена: 60% от максимума (при 100 HP это 60 HP) */
+    const HEALTH_REGEN_CAP_RATIO = 0.6;
+
+    /** Порог автолечения по умолчанию, % от максимума */
+    const DEFAULT_AUTO_HEAL_THRESHOLD = 35;
+
+    /** Границы настройки порога автолечения */
+    const AUTO_HEAL_THRESHOLD_MIN = 10;
+    const AUTO_HEAL_THRESHOLD_MAX = 90;
+
+    /** Потолок здоровья для пассивного регена */
+    function getHealthRegenCap(maxHealth) {
+        const max = Math.max(1, Number(maxHealth) || 1);
+        return Math.max(1, Math.floor(max * HEALTH_REGEN_CAP_RATIO));
+    }
+
+    /** Сколько HP можно восстановить бесплатно (не выше потолка регена) */
+    function getRegenerableHealth(health, maxHealth) {
+        return Math.max(0, getHealthRegenCap(maxHealth) - Math.max(0, Number(health) || 0));
+    }
+
+    /**
+     * Порог здоровья, ниже которого срабатывает автолечение.
+     * @param {number} maxHealth максимум здоровья
+     * @param {number} [threshold] пользовательский порог в процентах
+     * @returns {number} HP, ниже которых нужно лечиться
+     */
+    function getAutoHealThreshold(maxHealth, threshold) {
+        const percent = Number.isFinite(Number(threshold))
+            ? Math.min(AUTO_HEAL_THRESHOLD_MAX, Math.max(AUTO_HEAL_THRESHOLD_MIN, Number(threshold)))
+            : DEFAULT_AUTO_HEAL_THRESHOLD;
+        return Math.max(1, Math.floor((Math.max(1, Number(maxHealth) || 1) * percent) / 100));
+    }
+
+    /**
+     * Выбрать предмет для автолечения.
+     *
+     * Правило одно и предсказуемое: берём предмет с максимальной
+     * эффективностью (HP за монету), а при равенстве — меньший по силе.
+     *
+     * Звёздные предметы (stars_price) автолечение не трогает, пока в
+     * инвентаре есть хоть одно обычное лекарство. Причина: эффективность
+     * в монетах у Нано-аптечки выше, чем у Аптечки, и без этого правила
+     * автолечение первым делом съедало бы дорогие награды за звёзды.
+     * Дорогие вещи остаются на «чёрный день».
+     *
+     * Раньше здесь был дополнительный фильтр «поднимает ли выше порога»:
+     * на низком здоровье он выбирал Нано-аптечку вместо трёх бинтов, то
+     * есть автолечение съедало дорогие награды игрока. Фильтр убран.
+     *
+     * @param {Array} items кандидаты: {id, name, heal, price, stack, stars_price}
+     * @param {object} options { health, maxHealth, threshold }
+     * @returns {object|null} выбранный предмет или null
+     */
+    function selectHealItem(items, options = {}) {
+        const usable = (Array.isArray(items) ? items : [])
+            .filter((item) => item && Number(item.heal) > 0 && Number(item.stack || 1) > 0);
+
+        const regular = usable.filter((item) => !Number(item.stars_price));
+        const pool = regular.length > 0 ? regular : usable;
+
+        if (pool.length === 0) return null;
+
+        const health = Math.max(0, Number(options.health) || 0);
+        const maxHealth = Math.max(1, Number(options.maxHealth) || 1);
+
+        // Эффективность = HP за 1 монету.
+        const efficiencyOf = (item) => {
+            const price = Number(item.price);
+            if (!Number.isFinite(price) || price <= 0) return 0.5;
+            return Number(item.heal) / price;
+        };
+
+        const sorted = [...pool].sort((a, b) => {
+            const byEfficiency = efficiencyOf(b) - efficiencyOf(a);
+            if (Math.abs(byEfficiency) > 1e-9) return byEfficiency;
+            return Number(a.heal) - Number(b.heal);
+        });
+
+        const best = sorted[0];
+        return { ...best, covers: health + Number(best.heal) >= maxHealth };
+    }
+
     /**
  * Определить слот экипировки для предмета.
  *
@@ -643,6 +743,15 @@ function resolveEquipmentSlot(item) {
         MAX_INVENTORY_SLOTS,
         getExpForLevel,
         getTotalExpForLevel,
+        HEALTH_REGEN_INTERVAL_MS,
+        HEALTH_REGEN_CAP_RATIO,
+        DEFAULT_AUTO_HEAL_THRESHOLD,
+        AUTO_HEAL_THRESHOLD_MIN,
+        AUTO_HEAL_THRESHOLD_MAX,
+        getHealthRegenCap,
+        getRegenerableHealth,
+        getAutoHealThreshold,
+        selectHealItem,
         MAX_UPGRADE_LEVEL,
         UPGRADE_BONUS_PER_LEVEL,
         RARITY_ORDER,

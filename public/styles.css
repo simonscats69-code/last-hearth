@@ -908,6 +908,81 @@ html, body {
     color: var(--text-secondary);
     background: rgba(0, 0, 0, 0.3);
     padding: 2px 6px;
+/* Панель лечения на главном экране: кнопки лекарств + автолечение */
+.heal-panel {
+    margin: 0 16px 12px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: rgba(244, 67, 54, 0.08);
+    border: 1px solid rgba(244, 67, 54, 0.28);
+}
+
+.heal-panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.heal-panel-title {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.heal-panel-hint,
+.heal-panel-empty {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.heal-panel-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.heal-item-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    min-height: 40px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.heal-item-btn:active {
+    background: rgba(76, 175, 80, 0.25);
+}
+
+.heal-item-value {
+    font-weight: 700;
+    color: #7ee787;
+}
+
+.heal-item-stack {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.auto-heal-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.auto-heal-range {
+    width: 100%;
+    margin-top: 4px;
+}
     border-radius: 4px;
 }
 

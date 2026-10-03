@@ -7,7 +7,10 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction: tx } = require('../../db/database');
 const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
-const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress } = require('../../utils/game-helpers');
+const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth } = require('../../utils/game-helpers');
+// Правила лечения (реген, порог автолечения) — из общего файла, который
+// читает и браузер.
+const equipmentRules = require('../../public/shared/equipment.js');
 const { isGeneratedReferralCode } = require('../../utils/referralCode');
 
 // C-6: Whitelist разрешённых полей для обновления профиля
@@ -78,6 +81,19 @@ router.get(['/', '/profile'], async (req, res) => {
             return res.status(404).json({ error: 'Игрок не найден' });
         }
 
+        // Пассивный реген здоровья при каждом заходе в профиль: иначе
+        // игрок не видел бы восстановления, пока не зайдёт в поиск.
+        const updatedPlayer = await tx(async (client) => {
+            const locked = await client.query(
+                'SELECT id, health, max_health, last_hp_regen FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+            return locked.rows[0] ? await regenerateHealth(client, locked.rows[0]) : 0;
+        }).catch(() => 0);
+        if (updatedPlayer > 0) {
+            player.health = Math.min(Number(player.max_health || 0), Number(player.health || 0) + updatedPlayer);
+        }
+
         const achievements = await getPlayerAchievements(playerId);
         const progress = await getPlayerProgress(playerId);
         const status = buildPlayerStatus(player);
@@ -121,7 +137,16 @@ router.get(['/', '/profile'], async (req, res) => {
                     intelligence: player.intelligence,
                     luck: player.luck,
                     items_collected: player.items_collected,
-                    referrals: player.referrals
+                    referrals: player.referrals,
+                    // Настройки лечения: реген и автолечение.
+                    auto_heal_enabled: player.auto_heal_enabled !== false,
+                    auto_heal_threshold: Number(player.auto_heal_threshold) || equipmentRules.DEFAULT_AUTO_HEAL_THRESHOLD,
+                    health_regen_cap: equipmentRules.getHealthRegenCap(player.max_health),
+                    auto_heal_at: equipmentRules.getAutoHealThreshold(
+                        player.max_health,
+                        Number(player.auto_heal_threshold) || equipmentRules.DEFAULT_AUTO_HEAL_THRESHOLD
+                    ),
+                    regen_interval_sec: Math.round(equipmentRules.HEALTH_REGEN_INTERVAL_MS / 1000)
                 },
                 achievements: achievements || [],
                 progress: progress || {},
@@ -337,6 +362,68 @@ router.post('/daily-bonus', async (req, res) => {
             });
         }
         handleError(res, err, 'daily_bonus');
+    }
+});
+
+/**
+ * POST /auto-heal — настройка автолечения.
+ * body: { enabled: boolean, threshold: 10..90 }
+ *
+ * Автолечение: при падении здоровья ниже порога игра сама расходует самый
+ * экономный лечащий предмет из инвентаря. Игроку не нужно в панике искать
+ * аптечку посреди боя с боссом.
+ */
+router.post('/auto-heal', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) return res.status(401).json({ error: 'Требуется авторизация' });
+
+        const { enabled, threshold } = req.body || {};
+        const rules = equipmentRules;
+
+        const result = await tx(async (client) => {
+            const current = await client.query(
+                'SELECT auto_heal_enabled, auto_heal_threshold FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+            if (!current.rows[0]) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
+
+            // Поля не заданы — оставляем как есть (частичное обновление).
+            const nextEnabled = enabled === undefined
+                ? current.rows[0].auto_heal_enabled !== false
+                : Boolean(enabled);
+            const nextThreshold = threshold === undefined
+                ? Number(current.rows[0].auto_heal_threshold) || rules.DEFAULT_AUTO_HEAL_THRESHOLD
+                : rules.getAutoHealThreshold(100, threshold) > 0
+                    ? Math.min(rules.AUTO_HEAL_THRESHOLD_MAX, Math.max(rules.AUTO_HEAL_THRESHOLD_MIN, Math.round(Number(threshold))))
+                    : Number(current.rows[0].auto_heal_threshold) || rules.DEFAULT_AUTO_HEAL_THRESHOLD;
+
+            await client.query(
+                'UPDATE players SET auto_heal_enabled = $1, auto_heal_threshold = $2 WHERE id = $3',
+                [nextEnabled, nextThreshold, playerId]
+            );
+
+            await logPlayerAction(playerId, 'auto_heal_settings', {
+                enabled: nextEnabled,
+                threshold: nextThreshold
+            }, client);
+
+            return {
+                enabled: nextEnabled,
+                threshold: nextThreshold,
+                threshold_min: rules.AUTO_HEAL_THRESHOLD_MIN,
+                threshold_max: rules.AUTO_HEAL_THRESHOLD_MAX
+            };
+        });
+
+        res.json({ success: true, data: result });
+    } catch (err) {
+        if (err.code === 'PLAYER_NOT_FOUND') {
+            return res.status(404).json({ success: false, error: err.message, code: err.code });
+        }
+        handleError(res, err, 'auto_heal_settings');
     }
 });
 

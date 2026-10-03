@@ -2844,6 +2844,7 @@ function updateProfileUI(player) {
     renderActiveBuffs(player.buffs || gameState.buffs || {});
 
     updateDailyBonusUI(player);
+    updateHealPanel(player);
     
     // Обновляем отображение переломов и инфекций
     updateConditionsUI(status);
@@ -2855,7 +2856,137 @@ function updateProfileUI(player) {
 }
 
 /**
- * Ежедневный бонус: доступность кнопки и серия дней.
+ * Панель лечения на главном экране.
+ *
+ * Показывается, когда здоровье неполное. Внутри — все лечащие предметы из
+ * инвентаря крупными кнопками с понятным «+30 HP», настройка автолечения и
+ * подсказка про пассивное восстановление.
+ *
+ * Раньше лечить здоровье было можно только вручную через инвентарь: игрок
+ * не знал, что делать, и терял бой.
+ */
+function updateHealPanel(player) {
+    const panel = document.getElementById('heal-panel');
+    if (!panel || !player) return;
+
+    const shared = window.EquipmentShared;
+    const maxHealth = Math.max(1, Number(player.max_health) || Number(player.status?.max_health) || 1);
+    const health = Math.max(0, Number(player.status?.health ?? player.health) || 0);
+    const missing = maxHealth - health;
+
+    // Инвентарь нужен всегда: показываем панель и когда лечить нечем
+    // (тогда в ней будет подсказка, куда идти).
+    const items = (Array.isArray(gameState.inventory) ? gameState.inventory : [])
+        .map((entry) => {
+            const heal = Number(entry?.stats?.health ?? entry?.stats?.healing ?? entry?.heal ?? 0);
+            if (heal <= 0) return null;
+            return {
+                index: Number(entry.index),
+                id: Number(entry.id),
+                name: entry.name || 'Лекарство',
+                icon: entry.icon || '💊',
+                heal: Math.min(heal, maxHealth),
+                quantity: Math.max(1, Number(entry.quantity || entry.count || 1))
+            };
+        })
+        .filter(Boolean);
+
+    if (missing <= 0 && items.length === 0) {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.style.display = '';
+
+    // Подсказка: что именно сейчас происходит со здоровьем.
+    const hintEl = document.getElementById('heal-panel-hint');
+    if (hintEl) {
+        const cap = shared ? shared.getHealthRegenCap(maxHealth) : Math.floor(maxHealth * 0.6);
+        const interval = shared ? Math.round(shared.HEALTH_REGEN_INTERVAL_MS / 1000) : 90;
+        hintEl.textContent = missing <= 0
+            ? `Здоровье полное · восстановление до ${cap}/${maxHealth} идёт само (+1 HP / ${interval} с)`
+            : `Не хватает ${missing} HP · реген сам поднимет до ${cap}/${maxHealth}`;
+    }
+
+    // Кнопки лечения.
+    const itemsEl = document.getElementById('heal-panel-items');
+    if (itemsEl) {
+        if (items.length === 0) {
+            itemsEl.innerHTML = '<div class="heal-panel-empty">Нет лекарств — купи в магазине или жди восстановления</div>';
+        } else {
+            itemsEl.innerHTML = items.map((item) => `
+                <button class="heal-item-btn" data-heal-index="${item.index}">
+                    <span class="heal-item-icon">${escapeHtml(item.icon)}</span>
+                    <span class="heal-item-name">${escapeHtml(item.name)}</span>
+                    <span class="heal-item-value">+${item.heal} HP</span>
+                    ${item.quantity > 1 ? `<span class="heal-item-stack">×${item.quantity}</span>` : ''}
+                </button>
+            `).join('');
+        }
+    }
+
+    // Настройки автолечения.
+    const enabled = player.auto_heal_enabled !== false;
+    const threshold = Number(player.auto_heal_threshold) || (shared ? shared.DEFAULT_AUTO_HEAL_THRESHOLD : 35);
+    const toggle = document.getElementById('auto-heal-enabled');
+    const range = document.getElementById('auto-heal-threshold');
+    const label = document.getElementById('auto-heal-threshold-label');
+
+    if (toggle) toggle.checked = enabled;
+    if (range) range.value = String(threshold);
+    if (label) {
+        label.textContent = enabled
+            ? `— сработает при ${Math.round((maxHealth * threshold) / 100)} HP`
+            : '— выключено';
+    }
+}
+
+/** Настройка автолечения */
+async function saveAutoHealSettings() {
+    const toggle = document.getElementById('auto-heal-enabled');
+    const range = document.getElementById('auto-heal-threshold');
+    if (!toggle || !range) return;
+
+    try {
+        const result = await apiRequest('/api/game/player/auto-heal', {
+            method: 'POST',
+            body: {
+                enabled: toggle.checked,
+                threshold: Number(range.value)
+            }
+        });
+
+        if (gameState.player) {
+            gameState.player.auto_heal_enabled = result.data?.enabled ?? toggle.checked;
+            gameState.player.auto_heal_threshold = result.data?.threshold ?? Number(range.value);
+        }
+        updateHealPanel(gameState.player);
+    } catch (error) {
+        showNotification(error?.message || 'Не удалось сохранить настройку', 'error');
+    }
+}
+
+/** Использовать лечебный предмет из панели лечения */
+async function healItem(itemIndex) {
+    if (!lockAction('healItem')) return;
+    try {
+        const result = await apiRequest('/api/game/inventory/use-item', {
+            method: 'POST',
+            body: { item_index: itemIndex, equip: false }
+        });
+        if (result.success) {
+            showNotification(`❤️ ${result.message || 'Здоровье восстановлено'}`, 'success');
+            RenderCache.clear();
+            await loadProfile();
+            await loadInventory();
+        }
+    } catch (error) {
+        showNotification(error?.message || 'Не удалось применить лекарство', 'error');
+    } finally {
+        unlockAction('healItem');
+    }
+}
+
+/** Ежедневный бонус: доступность кнопки и серия дней.
  *
  * Механика была недоступна из UI: эндпоинта /daily-bonus не существовало,
  * хотя бот обещал бонус на команду /daily, а профиль отдаёт daily_streak.
@@ -3534,6 +3665,31 @@ function renderWorkshopSlot(entry, data) {
 
 /** Обработчики кнопок мастерской */
 function bindWorkshopActions() {
+    document.querySelectorAll('[data-heal-index]').forEach(button => {
+        bindClickOnce(button, `heal-${button.dataset.healIndex}`, () => healItem(Number(button.dataset.healIndex)));
+    });
+
+    const autoHealToggle = document.getElementById('auto-heal-enabled');
+    if (autoHealToggle && !autoHealToggle.dataset.bound) {
+        autoHealToggle.dataset.bound = '1';
+        autoHealToggle.addEventListener('change', saveAutoHealSettings);
+    }
+
+    const autoHealRange = document.getElementById('auto-heal-threshold');
+    if (autoHealRange && !autoHealRange.dataset.bound) {
+        autoHealRange.dataset.bound = '1';
+        // Ползунок меняется часто — шлём настройку только по отпусканию.
+        autoHealRange.addEventListener('input', () => {
+            const label = document.getElementById('auto-heal-threshold-label');
+            const player = gameState.player;
+            if (label && player) {
+                const maxHealth = Math.max(1, Number(player.max_health) || 1);
+                label.textContent = `— сработает при ${Math.round((maxHealth * Number(autoHealRange.value)) / 100)} HP`;
+            }
+        });
+        autoHealRange.addEventListener('change', saveAutoHealSettings);
+    }
+
     document.querySelectorAll('[data-ws-unequip]').forEach(button => {
         bindClickOnce(button, `ws-unequip-${button.dataset.wsUnequip}`, () => unequipSlot(button.dataset.wsUnequip));
     });
@@ -4623,6 +4779,16 @@ function appendCounterDamageToLog(payload) {
     line.innerHTML = `<span class="hit">💥</span> Ответный удар: <strong>-${taken}</strong> HP`;
     log.appendChild(line);
     log.scrollTop = log.scrollHeight;
+
+    // Автолечение: сервер сам выпил лекарство, сообщаем что именно.
+    const autoHeal = payload?.auto_heal ?? payload?.data?.auto_heal;
+    if (autoHeal?.used) {
+        const healLine = document.createElement('p');
+        healLine.className = 'damage damage-heal';
+        healLine.innerHTML = `❤️ Автолечение: <strong>${escapeHtml(autoHeal.used)}</strong> +${Number(autoHeal.heal) || 0} HP`;
+        log.appendChild(healLine);
+        log.scrollTop = log.scrollHeight;
+    }
 
     if (Number(payload?.health ?? payload?.data?.health ?? 0) <= 0) {
         showModal('💀 Вы погибли', 'Здоровье кончилось. Используйте аптечку, чтобы продолжить бой.', 'error');
@@ -6969,6 +7135,24 @@ function generateScreens() {
                 <div class="heal-actions" id="heal-actions" style="display:none">
                     <button class="heal-btn" id="heal-infections-btn" style="display:none">💊 Лечить инфекции</button>
                 </div>
+
+                <!-- Панель лечения: раньше кнопки лечения здоровья не было
+                     ВООБЩЕ — игрок должен был сам догадаться зайти в инвентарь,
+                     переключить режим и найти аптечку посреди боя с боссом. -->
+                <section class="heal-panel" id="heal-panel" style="display:none">
+                    <div class="heal-panel-head">
+                        <span class="heal-panel-title">❤️ Лечение</span>
+                        <span class="heal-panel-hint" id="heal-panel-hint"></span>
+                    </div>
+                    <div class="heal-panel-items" id="heal-panel-items"></div>
+                    <label class="auto-heal-toggle">
+                        <input type="checkbox" id="auto-heal-enabled">
+                        <span>Автолечение</span>
+                        <span class="auto-heal-threshold" id="auto-heal-threshold-label"></span>
+                    </label>
+                    <input type="range" class="auto-heal-range" id="auto-heal-threshold"
+                           min="10" max="90" step="5" value="35">
+                </section>
 
                 <!-- Текущая локация -->
                 <section class="location-section">

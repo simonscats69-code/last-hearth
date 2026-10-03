@@ -339,6 +339,155 @@ async function recalcEnergy(client, player) {
     player.last_energy_update = newLast;
     return player;
 }
+/**
+ * Пассивное восстановление здоровья — по реально прошедшему времени.
+ *
+ * Правило: +1 HP за 90 секунд, но не выше 60% от максимума. Потолок
+ * существует ради баланса: бесплатно до полного здоровья добраться нельзя,
+ * поэтому аптечки в бою остаются нужны. Реген — страховка ПОСЛЕ боя, а не
+ * замена лекарствам.
+ *
+ * Метка last_hp_regen двигается ровно на восстановленное время (как
+ * last_energy_update у энергии), иначе недобранное время терялось бы.
+ *
+ * @param {object} client клиент БД (транзакция или пул)
+ * @param {object} player объект игрока (мутируется)
+ * @returns {Promise<number>} сколько HP восстановлено
+ */
+async function regenerateHealth(client, player) {
+    const maxHealth = Math.max(1, Number(player.max_health) || 1);
+    const current = Math.max(0, Number(player.health) || 0);
+
+    const regenerable = equipmentRules.getRegenerableHealth(current, maxHealth);
+    const stamp = () => new Date().toISOString();
+
+    if (regenerable <= 0) {
+        // На потолке метку всё равно двигаем: иначе она «застынет» и при
+        // следующем уроне накопится время с прошлого раза.
+        await client.query('UPDATE players SET last_hp_regen = $1 WHERE id = $2', [stamp(), player.id]);
+        player.last_hp_regen = stamp();
+        return 0;
+    }
+
+    const last = player.last_hp_regen ? new Date(player.last_hp_regen).getTime() : NaN;
+    const now = Date.now();
+
+    if (!Number.isFinite(last)) {
+        // Первый запуск: только ставим метку, ничего не начисляем.
+        await client.query('UPDATE players SET last_hp_regen = $1 WHERE id = $2', [stamp(), player.id]);
+        player.last_hp_regen = stamp();
+        return 0;
+    }
+
+    const steps = Math.floor((now - last) / equipmentRules.HEALTH_REGEN_INTERVAL_MS);
+    if (steps <= 0) return 0;
+
+    const restored = Math.min(steps, regenerable);
+    const newHealth = current + restored;
+    // Метку двигаем на фактически начисленное время: если восстановление
+    // уперлось в потолок, «лишнее» время не должно накапливаться.
+    const consumedMs = restored * equipmentRules.HEALTH_REGEN_INTERVAL_MS;
+    const newLast = new Date(last + Math.max(consumedMs, 0)).toISOString();
+
+    await client.query(
+        'UPDATE players SET health = $1, last_hp_regen = $2 WHERE id = $3',
+        [newHealth, newLast, player.id]
+    );
+
+    player.health = newHealth;
+    player.last_hp_regen = newLast;
+    return restored;
+}
+
+/**
+ * Автолечение: если здоровье упало ниже порога, расходуем самый
+ * экономный лечащий предмет из инвентаря.
+ *
+ * Сознательно серверная функция: выбор предмета и списание только здесь,
+ * клиент не может «попросить» вылечить себя бесплатно.
+ *
+ * @param {object} client клиент транзакции
+ * @param {number} playerId
+ * @param {object} player актуальное состояние игрока
+ * @returns {Promise<{used:string,heal:number,health:number}|null>}
+ */
+async function applyAutoHeal(client, playerId, player) {
+    if (!player || player.auto_heal_enabled === false) return null;
+
+    const maxHealth = Math.max(1, Number(player.max_health) || 1);
+    const health = Math.max(0, Number(player.health) || 0);
+    if (health >= maxHealth) return null;
+
+    const threshold = equipmentRules.getAutoHealThreshold(maxHealth, player.auto_heal_threshold);
+    if (health > threshold) return null;
+
+    const inventory = normalizeInventory(player.inventory);
+
+    // Кандидаты: предметы, которые что-то лечат (поле health в stats).
+    const candidates = inventory.filter((entry) => {
+        const heal = Number(entry?.stats?.health ?? entry?.stats?.healing ?? entry?.heal ?? 0);
+        return heal > 0;
+    });
+    if (candidates.length === 0) return null;
+
+    const ids = [...new Set(candidates.map((entry) => Number(entry.id)).filter(Boolean))];
+    const catalogResult = await client.query(
+        `SELECT id, name, icon, price, stars_price, rarity,
+                COALESCE((stats->>'health')::int, 0) AS heal
+           FROM items WHERE id = ANY($1::int[])`,
+        [ids]
+    );
+    const catalog = new Map(catalogResult.rows.map((row) => [row.id, row]));
+
+    const items = candidates
+        .map((entry) => {
+            const meta = catalog.get(Number(entry.id));
+            if (!meta || Number(meta.heal) <= 0) return null;
+            return {
+                id: Number(meta.id),
+                name: meta.name,
+                icon: meta.icon,
+                price: Number(meta.price) || 0,
+                stars_price: Number(meta.stars_price) || 0,
+                heal: Number(meta.heal),
+                stack: inventory
+                    .filter((e) => Number(e.id) === Number(meta.id))
+                    .reduce((sum, e) => sum + Math.max(1, Number(e.quantity || 1)), 0)
+            };
+        })
+        .filter(Boolean);
+
+    const choice = equipmentRules.selectHealItem(items, { health, maxHealth, threshold });
+    if (!choice) return null;
+
+    // Списываем ровно одну штуку выбранного предмета.
+    let remaining = 1;
+    for (let i = 0; i < inventory.length && remaining > 0; i++) {
+        if (Number(inventory[i].id) !== choice.id) continue;
+        const have = Math.max(1, Number(inventory[i].quantity || 1));
+        if (have > remaining) {
+            inventory[i] = { ...inventory[i], quantity: have - remaining };
+            remaining = 0;
+        } else {
+            inventory.splice(i, 1);
+            i--;
+            remaining -= have;
+        }
+    }
+
+    const healed = Math.min(choice.heal, maxHealth - health);
+    const newHealth = health + healed;
+
+    await client.query(
+        'UPDATE players SET health = $1, inventory = $2::jsonb WHERE id = $3',
+        [newHealth, JSON.stringify(inventory), playerId]
+    );
+
+    player.health = newHealth;
+    player.inventory = inventory;
+
+    return { used: choice.name, heal: healed, health: newHealth };
+}
 
 /**
  * Нормализация экипировки с валидацией слотов
@@ -809,6 +958,8 @@ module.exports = {
     getActiveBuffs,
     buildPlayerStatus,
     recalcEnergy,
+    regenerateHealth,
+    applyAutoHeal,
     normalizeEquipment,
     calculateSellPrice,
     addItemToInventory,

@@ -14,7 +14,7 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
 
 // Кэш пула предметов по rarity:type для быстрого случайного выбора (P2-9)
@@ -313,6 +313,9 @@ router.post('/search', async (req, res) => {
 
         // P0-1: пересчитываем энергию по реальному времени (не сбрасывая таймер)
         await recalcEnergy(client, updatedPlayer);
+        // То же для здоровья: медленный реген после боя. Без него игрок,
+        // израсходовавший все аптечки, оставался с 1 HP навсегда.
+        await regenerateHealth(client, updatedPlayer);
 
         const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
         const energyCost = activeBuffs.free_energy ? 0 : 1;

@@ -1062,7 +1062,14 @@ await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS rarity VARCHAR(20) DEFAULT 'common'`);
 
-    // Достижения: строки без достижения (achievement_id IS NULL) — наследие
+    // Здоровье и лечение: пассивный реген и автолечение.
+// До этого колонок не было вовсе — здоровье росло только от предметов,
+// поэтому кончились аптечки — и игрок застревал.
+await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMESTAMP`);
+await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_enabled BOOLEAN DEFAULT false`);
+await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_threshold SMALLINT DEFAULT 35`);
+
+// Достижения: строки без достижения (achievement_id IS NULL) — наследие
     // старой схемы, где ключом был achievement_key. UNIQUE в Postgres считает
     // NULL разными значениями, поэтому такие строки свободно копились, но
     // никогда не находились запросами `WHERE achievement_id = $1`. Удаляем
@@ -1332,7 +1339,13 @@ async function seedDatabase() {
         { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 50, icon: '💊', stats: { health: 30 } },
         { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 2 } },
         { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 3 } },
-        { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 15 } },
+        // Цены лечения выстроены по одной кривой «HP за монету», чтобы нельзя было
+    // купить заведомо худший предмет:
+    //   Бинт 0.50 -> Витамины 0.57 -> Аптечка/Спирт 0.60 -> Нано 0.63 -> Реаниматор 0.67
+    // Крупные лекарства выгоднее на HP, но требуют звёзд и места в инвентаре.
+    // Раньше было наоборот: Нано-аптечка стоила 800 монет за 50 HP (0.06 HP/монету),
+    // а Реаниматор 5000 за 100 HP — в 10-30 раз дороже бинта за ту же единицу HP.
+    { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 20 } },
         // Оружие: только то, что реально встречается в постапокалипсисе.
         // Никаких плазменных стволов и лазерных винтовок — прошлая версия
         // сида содержала «Плазменный пистолет» и «Лазерную винтовку», они
@@ -1399,10 +1412,10 @@ async function seedDatabase() {
         // иначе звёзды из достижений и заданий некуда тратить.
         { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 500, stars_price: 5, icon: '🧠', stats: { energy: 25 } },
         { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, stars_price: 6, icon: '💥', stats: { energy: 30 } },
-        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 800, stars_price: 8, icon: '🏥', stats: { health: 50 } },
+        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 80, stars_price: 8, icon: '🏥', stats: { health: 50 } },
         { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, stars_price: 10, icon: '🛡️', stats: { radiation_cure: 5 } },
         { name: 'Сыворотка мутанта', description: 'Мутантная сыворотка: энергия как у зверя', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬', stats: { energy: 50 } },
-        { name: 'Реаниматор', description: 'Полное восстановление здоровья из госзапаса', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 5000, stars_price: 50, icon: '💉', stats: { health: 100 } },
+        { name: 'Реаниматор', description: 'Полное восстановление здоровья из госзапаса', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 150, stars_price: 50, icon: '💉', stats: { health: 100 } },
         { name: 'Экзо-костюм', description: 'Тяжёлая броня из армейского склада', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, stars_price: 60, icon: '🤖' },
         { name: 'Броня стражей', description: 'Легендарная броня последнего убежища', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, stars_price: 200, icon: '👑' }
     ];

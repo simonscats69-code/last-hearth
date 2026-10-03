@@ -12,7 +12,7 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger } = require('../../utils/serverApi');
-const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask } = require('../../utils/game-helpers');
+const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask, applyAutoHeal } = require('../../utils/game-helpers');
 // Единый источник правды: тот же, что в world.js и items.js. Раньше лимит
 // не проверялся вовсе, и награда за босса могла сделать инвентарь больше 100.
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
@@ -191,6 +191,11 @@ async function applyBossCounterHit(client, playerId, boss, player, options = {})
         equipmentSlotsToWear({ counterAttack: true, usedWeapon: options.usedWeapon })
     );
 
+    // Автолечение срабатывает сразу после урона: игрок не должен в панике
+    // искать аптечку в инвентаре посреди боя. Функция сама выбирает самый
+    // экономный лечащий предмет.
+    const autoHealed = await applyAutoHeal(client, playerId, { ...player, health, inventory: player.inventory });
+
     await client.query(
         `UPDATE players
             SET health = $1,
@@ -199,7 +204,13 @@ async function applyBossCounterHit(client, playerId, boss, player, options = {})
         [health, JSON.stringify(equipment), playerId]
     );
 
-    return { damage, health, broken_slots: brokenSlots };
+    const finalHealth = autoHealed ? autoHealed.health : health;
+    return {
+        damage,
+        health: finalHealth,
+        broken_slots: brokenSlots,
+        auto_heal: autoHealed ? { used: autoHealed.used, heal: autoHealed.heal } : null
+    };
 }
 
 async function getBossById(client, bossId) {
