@@ -2919,18 +2919,31 @@ function updateHealPanel(player) {
         }
     }
 
-    // Настройки автолечения.
+    // Настройки автолечения. Порог в HP считаем тем же правилом, по которому
+    // лечит сервер (shared.getAutoHealThreshold): раньше лейбл округлял через
+    // Math.round, а сервер — вниз, и надпись обещала на 1 HP больше.
     const enabled = player.auto_heal_enabled !== false;
     const threshold = Number(player.auto_heal_threshold) || (shared ? shared.DEFAULT_AUTO_HEAL_THRESHOLD : 35);
     const toggle = document.getElementById('auto-heal-enabled');
     const range = document.getElementById('auto-heal-threshold');
     const label = document.getElementById('auto-heal-threshold-label');
+    const thresholdHp = shared
+        ? shared.getAutoHealThreshold(maxHealth, threshold)
+        : Math.floor((Math.max(1, maxHealth) * threshold) / 100);
 
     if (toggle) toggle.checked = enabled;
-    if (range) range.value = String(threshold);
+    if (range) {
+        // Границы ползунка — из общего файла правил: HTML-атрибуты min/max
+        // не должны расходиться с серверной валидацией после смены баланса.
+        if (shared) {
+            range.min = String(shared.AUTO_HEAL_THRESHOLD_MIN);
+            range.max = String(shared.AUTO_HEAL_THRESHOLD_MAX);
+        }
+        range.value = String(threshold);
+    }
     if (label) {
         label.textContent = enabled
-            ? `— сработает при ${Math.round((maxHealth * threshold) / 100)} HP`
+            ? `— сработает при ${thresholdHp} HP`
             : '— выключено';
     }
 }
@@ -3677,9 +3690,16 @@ function bindWorkshopActions() {
         autoHealRange.addEventListener('input', () => {
             const label = document.getElementById('auto-heal-threshold-label');
             const player = gameState.player;
+            const shared = window.EquipmentShared;
             if (label && player) {
                 const maxHealth = Math.max(1, Number(player.max_health) || 1);
-                label.textContent = `— сработает при ${Math.round((maxHealth * Number(autoHealRange.value)) / 100)} HP`;
+                const value = Number(autoHealRange.value);
+                // Тот же расчёт, что у сервера: иначе предпросмотр обещает
+                // порог, до которого автолечение не доберётся.
+                const thresholdHp = shared
+                    ? shared.getAutoHealThreshold(maxHealth, value)
+                    : Math.floor((maxHealth * value) / 100);
+                label.textContent = `— сработает при ${thresholdHp} HP`;
             }
         });
         autoHealRange.addEventListener('change', saveAutoHealSettings);

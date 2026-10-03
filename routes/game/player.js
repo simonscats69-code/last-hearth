@@ -394,11 +394,16 @@ router.post('/auto-heal', async (req, res) => {
             const nextEnabled = enabled === undefined
                 ? current.rows[0].auto_heal_enabled !== false
                 : Boolean(enabled);
+            // getAutoHealThreshold(100, x) возвращает процент напрямую:
+            // пустое значение (null/'' ) и мусор вроде 'abc' дают дефолт 35,
+            // число зажимается в 10..90. Раньше здесь стояла своя цепочка
+            // с Math.round(Number(...)): на нечисловом входе она давала
+            // NaN, и UPDATE падал пятисоткой вместо нормализации.
+            const currentThreshold = Number(current.rows[0].auto_heal_threshold)
+                || rules.DEFAULT_AUTO_HEAL_THRESHOLD;
             const nextThreshold = threshold === undefined
-                ? Number(current.rows[0].auto_heal_threshold) || rules.DEFAULT_AUTO_HEAL_THRESHOLD
-                : rules.getAutoHealThreshold(100, threshold) > 0
-                    ? Math.min(rules.AUTO_HEAL_THRESHOLD_MAX, Math.max(rules.AUTO_HEAL_THRESHOLD_MIN, Math.round(Number(threshold))))
-                    : Number(current.rows[0].auto_heal_threshold) || rules.DEFAULT_AUTO_HEAL_THRESHOLD;
+                ? currentThreshold
+                : rules.getAutoHealThreshold(100, threshold);
 
             await client.query(
                 'UPDATE players SET auto_heal_enabled = $1, auto_heal_threshold = $2 WHERE id = $3',

@@ -248,3 +248,31 @@ describe('Контракты маршрутов боя (порт verify-heal-fix
         expect(world).toMatch(/regenerateHealth\(client,\s*updatedPlayer\)/);
     });
 });
+
+/**
+ * Порог автолечения: серверная нормализация и клиентский лейбл должны
+ * использовать одно правило из shared/equipment.js — иначе игрок видит
+ * один порог, а сервер лечит по другому (регрессия класса P0-2).
+ */
+describe('Порог автолечения: сервер и клиент', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const readSource = (relativePath) => fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+
+    test('POST /auto-heal нормализует порог общим правилом', () => {
+        const route = readSource('routes/game/player.js');
+        // Своя цепочка Math.round(Number(threshold)) на мусорном входе давала
+        // NaN, и UPDATE падал 500-й. getAutoHealThreshold(100, x) зажимает
+        // 10..90 и решает NULL/'' как дефолтные 35.
+        expect(route).toMatch(/rules\.getAutoHealThreshold\(100,\s*threshold\)/);
+        expect(route).not.toMatch(/Math\.round\(Number\(threshold\)\)/);
+    });
+
+    test('клиент показывает порог в HP той же формулой, что сервер', () => {
+        const client = readSource('public/game.js');
+        // Math.round(maxHealth * % / 100) против серверного floor: надпись
+        // «сработает при X HP» обещала на 1 HP больше на дробных процентах.
+        expect(client).toMatch(/shared\.getAutoHealThreshold\(maxHealth/);
+        expect(client).not.toMatch(/Math\.round\(\(maxHealth \* /);
+    });
+});
