@@ -19,12 +19,14 @@ const { generateReferralCode } = require('../../utils/referralCode');
 // запросов (профиль, инвентарь, статус, локации) — и лимит исчерпан.
 //
 // Ключевая проблема — ключ по req.ip: в мобильных сетях (CGNAT) один адрес
-// делят десятки игроков, поэтому игроки блокировали друг друга.
+// делят десятки игроков, поэтому игроки блокировали друг друга. Ни один
+// игровой лимит больше не привязан к IP.
 //
-// Теперь:
+// Итоговая схема:
 //  1) антифлуд по IP — ДО авторизации, только чтобы прикрыть ботов без initData;
-//  2) лимиты конкретных действий (тоже по IP, игрока ещё нет) — крупные;
-//  3) общий лимит игрока — ПОСЛЕ validatePlayer, уже по id игрока.
+//  2) validatePlayer — проверка подписи Telegram, определяет req.player.id;
+//  3) ВСЕ игровые лимиты — ПОСЛЕ авторизации и по id игрока;
+//  4) общий лимит игрока — последний, тоже по id игрока.
 const ipFloodLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 120,
@@ -32,27 +34,35 @@ const ipFloodLimiter = rateLimit({
     keyGenerator: (req) => req.ip
 });
 
+// Ключ лимитов, которые живут ПОСЛЕ validatePlayer.
+// Строка приводится явно: player.id — число, а в БД он bigint, который
+// в JSON приходит как строка. Смешивать числа и строки в одном ключе нельзя —
+// иначе один и тот же игрок получил бы два независимых счётчика.
+const playerKey = (req) => String(req.player?.id ?? req.ip);
+
 const criticalActionLimiter = rateLimit({
     windowMs: 60 * 1000,
     // Удары по боссу и PvP. Энергия (1 за удар) остаётся главным ограничителем,
     // лимит — только страховка от спама кликом.
-    max: 30,
+    // Раньше было 30/мин по IP: на CGNAT три игрока с 10 атаками каждый
+    // исчерпывали общий лимит и получали 429. Теперь лимит персональный.
+    max: 60,
     message: { error: 'Слишком много атак. Отдохните минуту.', code: 'CRITICAL_ACTION_LIMIT' },
-    keyGenerator: (req) => req.ip
+    keyGenerator: playerKey
 });
 
 const generalActionLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 60,
     message: { error: 'Слишком много запросов.', code: 'ACTION_LIMIT' },
-    keyGenerator: (req) => req.ip
+    keyGenerator: playerKey
 });
 
 const purchaseLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 20,
     message: { error: 'Слишком много покупок.', code: 'PURCHASE_LIMIT' },
-    keyGenerator: (req) => req.ip
+    keyGenerator: playerKey
 });
 
 // Загрузка роутеров без шума в логах.
@@ -279,7 +289,16 @@ function touchPlayerActivity(playerId) {
 // поэтому лимит должен быть заметно выше игрового.
 router.use(ipFloodLimiter);
 
-// ====== 2. ЛИМИТЫ ОТДЕЛЬНЫХ ДЕЙСТВИЙ ======
+// ====== 2. ВАЛИДАЦИЯ ИГРОКА ======
+router.use(validatePlayer);
+
+// ====== 3. ЛИМИТЫ ОТДЕЛЬНЫХ ДЕЙСТВИЙ (уже по id игрока) ======
+//
+// Раньше этот блок стоял ДО validatePlayer и все лимиты были завязаны на
+// req.ip. На мобильном CGNAT один адрес делят десятки игроков, поэтому
+// игроки блокировали друг друга: трое соседей по сети исчерпывали общий
+// лимит атак, и все трое получали 429 в бою с боссом.
+// Теперь эти лимиты считаются по req.player.id — свой счётчик у каждого.
 router.use('/bosses/attack-boss', criticalActionLimiter);
 router.use('/bosses/attack-with-weapon', criticalActionLimiter);
 router.use(/^\/bosses\/raid\/\d+\/attack$/, criticalActionLimiter);
@@ -300,10 +319,7 @@ router.use('/inventory/buy', purchaseLimiter);
 router.use('/inventory/buy-stars', purchaseLimiter);
 router.use(generalActionLimiter);
 
-// ====== 3. ВАЛИДАЦИЯ ИГРОКА ======
-router.use(validatePlayer);
-
-// ====== 4. ОБЩИЙ ЛИМИТ ИГРОКА (уже по id, а не по IP) ======
+// ====== 4. ОБЩИЙ ЛИМИТ ИГРОКА (по id) ======
 // Раньше authLimiter (30/мин по IP) висел здесь и душил обычный геймплей:
 // пара десятков запросов (профиль, инвентарь, статус, локации, удар по
 // боссу) исчерпывали лимит, и игрок получал 429 «Слишком много попыток
@@ -313,7 +329,7 @@ const playerActionLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 120,
     message: { success: false, error: 'Слишком много запросов. Подождите минуту.', code: 'PLAYER_RATE_LIMIT' },
-    keyGenerator: (req) => String(req.player?.id || req.ip)
+    keyGenerator: playerKey
 });
 router.use(playerActionLimiter);
 
