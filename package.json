@@ -11,6 +11,7 @@
     "backup": "node scripts/backup.js",
     "prod": "node db/database.js && node index.js",
     "lint": "eslint .",
+    "test": "jest",
     "postinstall": "node -e \"console.log('Installation complete')\""
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
-    "eslint": "^8.57.0"
+    "eslint": "^8.57.0",
+    "jest": "^30.5.2"
   }
 }
