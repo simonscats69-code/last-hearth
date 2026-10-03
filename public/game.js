@@ -830,54 +830,22 @@ const gameState = {
 window.gameState = gameState;
 
 // ============================================================================
-// КОНСТАНТЫ
+// ПРАВИЛА ИЗ ОБЩЕГО ФАЙЛА
 // ============================================================================
 
-const CONSTANTS = {
-    // API
-    API_TIMEOUT: 8000,
-    API_RETRIES: 2,
-    
-    // Лимиты ввода
-    MAX_PRICE: 1000000000,
-    MAX_QUANTITY: 1000,
-    MAX_STARS_PRICE: 10000,
-    MIN_REFERRAL_LENGTH: 3,
-    MAX_REFERRAL_LENGTH: 20,
-    REFERRAL_REGEX: /^[A-Z0-9_]+$/i,
-    
-    // UI
-    NOTIFICATION_DURATION: 3000,
-    CONFIRM_THRESHOLD: 5000,
-    
-    // Интервалы
-    INTERVALS: {
-        ENERGY_UPDATE: window.EquipmentShared?.ENERGY_REGEN_INTERVAL_MS ?? 60000,
-        STATUS_CHECK: 600000
-    },
-    
-    // Цвета
-    COLORS: {
-        SUCCESS: '#00C851',
-        ERROR: '#ff4444',
-        INFO: '#33b5e5',
-        WARNING: '#ff8800'
-    },
-    
-    // Редкость
-    RARITY_ORDER: {
-        legendary: 5,
-        epic: 4,
-        rare: 3,
-        uncommon: 2,
-        common: 1
-    }
-};
-
-// Интервал регена энергии — общая константа из shared/equipment.js: тем же
-// значением считает сервер (utils/game-helpers.js recalcEnergy). Раньше
-// 60000 был зашит и здесь, и в getTimeToNextEnergy, и в CONSTANTS.
-const ENERGY_REGEN_INTERVAL_MS = CONSTANTS.INTERVALS.ENERGY_UPDATE;
+/**
+ * Интервал регена энергии — общая константа из shared/equipment.js, тем же
+ * значением считает сервер (utils/game-helpers.js recalcEnergy).
+ *
+ * Раньше здесь стоял объект CONSTANTS на 14 полей, из которых использовалось
+ * ровно одно — INTERVALS.ENERGY_UPDATE. Остальные были мёртвыми копиями:
+ * RARITY_ORDER повторял порядок редкостей из shared/equipment.js (и в другой
+ * форме: числа весов вместо массива), а лимиты ввода, таймауты и цвета не
+ * читались нигде. Объект удалён вместе с экспортом в window: ни index.html,
+ * ни sw.js по нему не обращались. Держим здесь только константу, значение
+ * которой сервер и клиент обязаны считать одинаково.
+ */
+const ENERGY_REGEN_INTERVAL_MS = window.EquipmentShared?.ENERGY_REGEN_INTERVAL_MS ?? 60000;
 
 /**
  * Лимит слотов инвентаря. Берётся из public/shared/equipment.js — того же
@@ -1426,7 +1394,6 @@ window.render = render;
 window.getEl = getEl;
 window.setHtml = setHtml;
 window.confirmAction = confirmAction;
-window.CONSTANTS = CONSTANTS;
 window.Loader = Loader;
 window.Templates = Templates;
 window.API = API;

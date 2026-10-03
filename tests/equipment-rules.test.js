@@ -223,5 +223,15 @@ describe('Синхронизация клиента и сервера (стат�
         expect(body).toContain('ENERGY_REGEN_INTERVAL_MS');
         expect(body).not.toContain('60000');
     });
+
+    test('клиент не заводит свои копии редкостей и дефолтных интервалов', () => {
+        // RARITY_ORDER в game.js был копией порядка редкостей из общего модуля
+        // (ещё и в другой форме — числа весов), и нигде не читался.
+        const source = read('public/game.js');
+        expect(source).not.toMatch(/RARITY_ORDER:\s*\{/);
+        expect(source).not.toMatch(/window\.CONSTANTS/);
+        // Порядок редкостей приходит из общего файла.
+        expect(source).toMatch(/EquipmentShared\?\.ENERGY_REGEN_INTERVAL_MS/);
+    });
 });
 
