@@ -236,6 +236,15 @@
         return total;
     }
 
+    /* ================= ЭНЕРГИЯ =================
+     *
+     * +1 энергия за ENERGY_REGEN_INTERVAL_MS. Раньше интервал был зашит
+     * четыре раза (сервер recalcEnergy, клиентские CONSTANTS,
+     * getTimeToNextEnergy и тик статуса) — смена баланса требовала помнить
+     * о каждой копии, а расхождение видно только по секундомеру игрока.
+     */
+    const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
+
     /* ================= ОЗДОРОВЛЕНИЕ И ЛЕЧЕНИЕ =================
      *
      * Раньше здоровье росло ТОЛЬКО от предметов: кончились аптечки — игрок
@@ -817,6 +826,7 @@ function resolveEquipmentSlot(item) {
         getExpForLevel,
         getTotalExpForLevel,
         HEALTH_REGEN_INTERVAL_MS,
+        ENERGY_REGEN_INTERVAL_MS,
         HEALTH_REGEN_CAP_RATIO,
         DEFAULT_AUTO_HEAL_THRESHOLD,
         AUTO_HEAL_THRESHOLD_MIN,

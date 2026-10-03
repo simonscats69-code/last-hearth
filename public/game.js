@@ -852,7 +852,7 @@ const CONSTANTS = {
     
     // Интервалы
     INTERVALS: {
-        ENERGY_UPDATE: 60000,
+        ENERGY_UPDATE: window.EquipmentShared?.ENERGY_REGEN_INTERVAL_MS ?? 60000,
         STATUS_CHECK: 600000
     },
     
@@ -873,6 +873,11 @@ const CONSTANTS = {
         common: 1
     }
 };
+
+// Интервал регена энергии — общая константа из shared/equipment.js: тем же
+// значением считает сервер (utils/game-helpers.js recalcEnergy). Раньше
+// 60000 был зашит и здесь, и в getTimeToNextEnergy, и в CONSTANTS.
+const ENERGY_REGEN_INTERVAL_MS = CONSTANTS.INTERVALS.ENERGY_UPDATE;
 
 /**
  * Лимит слотов инвентаря. Берётся из public/shared/equipment.js — того же
@@ -1437,8 +1442,7 @@ window.RenderCache = RenderCache;
  * @returns {object|null} объект с секундами и форматированным временем или null если энергия полная
  */
 function getTimeToNextEnergy(lastUpdate) {
-    // Восстановление: 1 энергия в минуту (60000 мс)
-    const ENERGY_REGEN_MS = 60000;
+    // Восстановление: 1 энергия за интервал из shared/equipment.js
     
     if (!lastUpdate) return null;
     
@@ -1446,12 +1450,12 @@ function getTimeToNextEnergy(lastUpdate) {
     const now = Date.now();
     const timePassed = now - lastUpdateTime;
     
-    // Если прошло больше минуты - энергия уже восстановилась
-    if (timePassed >= ENERGY_REGEN_MS) {
+    // Если прошёл полный интервал - энергия уже восстановилась
+    if (timePassed >= ENERGY_REGEN_INTERVAL_MS) {
         return null;
     }
     
-    const msUntilNext = ENERGY_REGEN_MS - timePassed;
+    const msUntilNext = ENERGY_REGEN_INTERVAL_MS - timePassed;
     const seconds = Math.ceil(msUntilNext / 1000);
     
     return {
@@ -2156,10 +2160,6 @@ async function loadProfile() {
         console.error('[loadProfile] Не удалось обновить профиль:', error);
     }
 }
-
-// Интервал регена энергии. Сервер считает его так же (utils/game-helpers.js:
-// Math.floor(elapsedSec / 60)), поэтому расхождение значений видно сразу:
-const ENERGY_REGEN_INTERVAL_MS = CONSTANTS?.INTERVALS?.ENERGY_UPDATE || 60000;
 
 function ensurePlayerStatus() {
     if (!gameState.player) {

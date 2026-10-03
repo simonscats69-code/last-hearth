@@ -173,6 +173,12 @@ describe('Тиры риска локаций', () => {
     });
 });
 
+describe('Интервал регена энергии', () => {
+    test('60 секунд — общая константа клиента и сервера', () => {
+        expect(rules.ENERGY_REGEN_INTERVAL_MS).toBe(60000);
+    });
+});
+
 /**
  * Карта расхождений «сервер ↔ клиент». Юнит-тесты модуля его не видят:
  * баг появляется, когда одна из сторон забывает общий файл правил и заводит
@@ -203,6 +209,19 @@ describe('Синхронизация клиента и сервера (стат�
         expect(source).toContain('sharedEquipment');
         expect(source).not.toMatch(/maxScore: Number\.POSITIVE_INFINITY/);
         expect(source).toMatch(/isPrepared: riskScore <= RISK_PREPARED_MAX_SCORE/);
+    });
+
+    test('сервер считает реген энергии по общему интервалу', () => {
+        const source = read('utils/game-helpers.js');
+        expect(source).toMatch(/equipmentRules\.ENERGY_REGEN_INTERVAL_MS/);
+        expect(source).not.toMatch(/Math\.floor\(elapsedSec \/ 60\)/);
+    });
+
+    test('клиент не хардкодит интервал регена', () => {
+        const body = between(read('public/game.js'),
+            'function getTimeToNextEnergy', 'function formatTimeMs');
+        expect(body).toContain('ENERGY_REGEN_INTERVAL_MS');
+        expect(body).not.toContain('60000');
     });
 });
 

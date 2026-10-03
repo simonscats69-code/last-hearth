@@ -308,8 +308,9 @@ async function recalcEnergy(client, player) {
     const last = new Date(player.last_energy_update).getTime();
     if (!Number.isFinite(last)) return player;
 
-    const elapsedSec = Math.max(0, Math.floor((now - last) / 1000));
-    const regen = Math.floor(elapsedSec / 60); // 1 энергия в минуту
+    const elapsedMs = Math.max(0, now - last);
+    // 1 энергия за интервал из общего файла правил (60 c)
+    const regen = Math.floor(elapsedMs / equipmentRules.ENERGY_REGEN_INTERVAL_MS);
     if (regen <= 0) return player;
 
     const currentEnergy = Number(player.energy || 0);
@@ -330,7 +331,7 @@ async function recalcEnergy(client, player) {
     }
 
     // Сдвигаем метку на фактически восстановленное время
-    const newLast = new Date(last + regen * 60000).toISOString();
+    const newLast = new Date(last + regen * equipmentRules.ENERGY_REGEN_INTERVAL_MS).toISOString();
     await client.query(
         `UPDATE players SET energy = $1, last_energy_update = $2 WHERE id = $3`,
         [newEnergy, newLast, player.id]
