@@ -143,3 +143,66 @@ describe('Слоты экипировки', () => {
     });
 });
 
+describe('Тиры риска локаций', () => {
+    test('границы тиров 1/4/7 — как считает сервер', () => {
+        expect(rules.getRiskTierByScore(0).key).toBe('safe');
+        expect(rules.getRiskTierByScore(1).key).toBe('safe');
+        expect(rules.getRiskTierByScore(2).key).toBe('warning');
+        expect(rules.getRiskTierByScore(4).key).toBe('warning');
+        expect(rules.getRiskTierByScore(5).key).toBe('danger');
+        expect(rules.getRiskTierByScore(7).key).toBe('danger');
+        expect(rules.getRiskTierByScore(8).key).toBe('deadly');
+        expect(rules.getRiskTierByScore(99).key).toBe('deadly');
+    });
+
+    test('нечисловой или отрицательный score не становится смертельным', () => {
+        expect(rules.getRiskTierByScore(NaN).key).toBe('safe');
+        expect(rules.getRiskTierByScore(undefined).key).toBe('safe');
+        expect(rules.getRiskTierByScore(-5).key).toBe('safe');
+    });
+
+    test('подписи и множители тиров на месте', () => {
+        expect(rules.RISK_TIERS.map((tier) => tier.label))
+            .toEqual(['Стабильно', 'Риск', 'Опасно', 'Смертельно']);
+        for (const tier of rules.RISK_TIERS) {
+            expect(tier.rewardMultiplier).toBeGreaterThanOrEqual(1);
+            expect(tier.expMultiplier).toBeGreaterThanOrEqual(1);
+        }
+        // Порог «освоено» — часть контракта: его читает gameConstants.
+        expect(rules.RISK_PREPARED_MAX_SCORE).toBe(2);
+    });
+});
+
+/**
+ * Карта расхождений «сервер ↔ клиент». Юнит-тесты модуля его не видят:
+ * баг появляется, когда одна из сторон забывает общий файл правил и заводит
+ * свою копию — так родились регрессии P0-2, P1-4 и пороги риска 2/5/8.
+ */
+describe('Синхронизация клиента и сервера (статические проверки)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const read = (relative) => fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
+    const between = (source, from, to) => {
+        const start = source.indexOf(from);
+        const end = source.indexOf(to, start);
+        expect(start).toBeGreaterThanOrEqual(0);
+        expect(end).toBeGreaterThan(start);
+        return source.slice(start, end);
+    };
+
+    test('клиент спрашивает тир риска у shared, а не считает пороги сам', () => {
+        const body = between(read('public/game.js'),
+            'function getCurrentZoneRiskProfile', 'function updateZonePreparationUI');
+        expect(body).toContain('getRiskTierByScore');
+        // Самодельные пороги клиента (2/5/8) не должны вернуться.
+        expect(body).not.toMatch(/score >= 9|score >= 6/);
+    });
+
+    test('сервер берёт таблицу тиров из shared', () => {
+        const source = read('utils/gameConstants.js');
+        expect(source).toContain('sharedEquipment');
+        expect(source).not.toMatch(/maxScore: Number\.POSITIVE_INFINITY/);
+        expect(source).toMatch(/isPrepared: riskScore <= RISK_PREPARED_MAX_SCORE/);
+    });
+});
+

@@ -135,6 +135,57 @@
         return Math.max(0, Math.ceil(Number(rawLevel || 0) / 10));
     }
 
+    // -------------------------------------------------------------------------
+    // ТИРЫ РИСКА ЛОКАЦИЙ — общие границы клиента и сервера
+    //
+    // Раньше таблица тиров жила только в utils/gameConstants.js, а клиент в
+    // getCurrentZoneRiskProfile() вёл собственные пороги (2/5/8 вместо 1/4/7).
+    // Игрок видел «Стабильно» ровно там, где сервер уже начислял множители
+    // риска за лут, опыт и шанс ключа. Теперь обе стороны берут границы отсюда.
+    // -------------------------------------------------------------------------
+
+    /** Давление угроз не выше этого значения — зона считается освоенной */
+    const RISK_PREPARED_MAX_SCORE = 2;
+
+    /**
+     * Тиры риска по сумме давления угроз (радиация + инфекции).
+     * maxScore — верхняя граница тира: первый подходящий тир и есть ответ.
+     * Множители применяет сервер, подписи показывает клиент — строки одни.
+     */
+    const RISK_TIERS = Object.freeze([
+        Object.freeze({
+            key: 'safe', label: 'Стабильно', maxScore: 1,
+            rewardMultiplier: 1, keyChanceMultiplier: 1, rarityLuckBonus: 0, expMultiplier: 1
+        }),
+        Object.freeze({
+            key: 'warning', label: 'Риск', maxScore: 4,
+            rewardMultiplier: 1.12, keyChanceMultiplier: 1.35, rarityLuckBonus: 6, expMultiplier: 1.18
+        }),
+        Object.freeze({
+            key: 'danger', label: 'Опасно', maxScore: 7,
+            rewardMultiplier: 1.28, keyChanceMultiplier: 1.75, rarityLuckBonus: 12, expMultiplier: 1.4
+        }),
+        Object.freeze({
+            key: 'deadly', label: 'Смертельно', maxScore: Infinity,
+            rewardMultiplier: 1.5, keyChanceMultiplier: 2.25, rarityLuckBonus: 18, expMultiplier: 1.7
+        })
+    ]);
+
+    /**
+     * Тир риска по сумме давления угроз.
+     *
+     * Нечисловой score считается нулевым: клиент спрашивает тир до загрузки
+     * статуса, и «Смертельно» из NaN было бы неверным сообщением игроку.
+     *
+     * @param {number} score давление угроз (радиация + инфекции)
+     * @returns {object} тир из RISK_TIERS
+     */
+    function getRiskTierByScore(score) {
+        const value = Number(score);
+        const safeScore = Number.isFinite(value) ? Math.max(0, value) : 0;
+        return RISK_TIERS.find((tier) => safeScore <= tier.maxScore) || RISK_TIERS[RISK_TIERS.length - 1];
+    }
+
     /**
      * Лимит слотов инвентаря.
      * Сервер отклоняет добычу при переполнении, клиент рисует полоску
@@ -760,6 +811,9 @@ function resolveEquipmentSlot(item) {
         DEFENSE_KEYS,
         LUCK_KEYS,
         MAX_INVENTORY_SLOTS,
+        RISK_TIERS,
+        RISK_PREPARED_MAX_SCORE,
+        getRiskTierByScore,
         getExpForLevel,
         getTotalExpForLevel,
         HEALTH_REGEN_INTERVAL_MS,

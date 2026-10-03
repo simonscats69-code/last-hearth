@@ -2636,32 +2636,27 @@ function getCurrentZoneRiskProfile(player) {
     const infectionPressure = Math.max(0, infectionThreat - preparation.infectionDefense);
     const score = radiationPressure + infectionPressure;
 
-    let tier = 'safe';
-    let label = 'Стабильно';
-    let hint = 'Зона безопасна для стабильного фарма.';
-
-    if (score >= 9) {
-        tier = 'deadly';
-        label = 'Смертельно';
-        hint = 'Очень высокий риск, но и самые выгодные находки для подготовки к сильным боссам.';
-    } else if (score >= 6) {
-        tier = 'danger';
-        label = 'Опасно';
-        hint = 'Шанс на лучший лут выше, но без подготовки дебаффы быстро накопятся.';
-    } else if (score >= 3) {
-        tier = 'warning';
-        label = 'Риск';
-        hint = 'Хорошая зона для рывка вперёд, если заранее подготовить защиту и расходники.';
-    }
+    // Тиры — из общего файла правил: собственные пороги клиента (2/5/8)
+    // расходились с серверными (1/4/7), и карта показывала «Стабильно»,
+    // пока сервер уже начислял множители риска за лут, опыт и шанс ключа.
+    // Подписи берём у тира, текст подсказки — UI-копия клиента.
+    const tier = shared.getRiskTierByScore(score);
+    const hints = {
+        safe: 'Зона безопасна для стабильного фарма.',
+        warning: 'Хорошая зона для рывка вперёд, если заранее подготовить защиту и расходники.',
+        danger: 'Шанс на лучший лут выше, но без подготовки дебаффы быстро накопятся.',
+        deadly: 'Очень высокий риск, но и самые выгодные находки для подготовки к сильным боссам.'
+    };
 
     return {
-        tier,
-        label,
-        hint,
+        tier: tier.key,
+        label: tier.label,
+        hint: hints[tier.key],
         score,
         radiationDefense: preparation.radiationDefense,
         infectionDefense: preparation.infectionDefense,
-        isPrepared: score <= 2
+        // Порог «освоено» — тот же, что в gameConstants.calculateLocationRiskProfile.
+        isPrepared: score <= (shared.RISK_PREPARED_MAX_SCORE ?? 2)
     };
 }
 

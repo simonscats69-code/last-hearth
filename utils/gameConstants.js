@@ -39,44 +39,11 @@ const GAME_CONFIG = {
     // УДАЛЕНО: константы крафта (BASE_CRAFT_SUCCESS, MAX_CRAFT_SUCCESS, RARITY_CRAFT_PENALTIES)
 };
 
-const RISK_TIERS = [
-    {
-        key: 'safe',
-        label: 'Стабильно',
-        maxScore: 1,
-        rewardMultiplier: 1,
-        keyChanceMultiplier: 1,
-        rarityLuckBonus: 0,
-        expMultiplier: 1
-    },
-    {
-        key: 'warning',
-        label: 'Риск',
-        maxScore: 4,
-        rewardMultiplier: 1.12,
-        keyChanceMultiplier: 1.35,
-        rarityLuckBonus: 6,
-        expMultiplier: 1.18
-    },
-    {
-        key: 'danger',
-        label: 'Опасно',
-        maxScore: 7,
-        rewardMultiplier: 1.28,
-        keyChanceMultiplier: 1.75,
-        rarityLuckBonus: 12,
-        expMultiplier: 1.4
-    },
-    {
-        key: 'deadly',
-        label: 'Смертельно',
-        maxScore: Number.POSITIVE_INFINITY,
-        rewardMultiplier: 1.5,
-        keyChanceMultiplier: 2.25,
-        rarityLuckBonus: 18,
-        expMultiplier: 1.7
-    }
-];
+// Тиры риска живут в public/shared/equipment.js — том же файле, что читает
+// браузер. Раньше здесь была своя таблица, а клиент вёл вторую с порогами
+// 2/5/8 (вместо 1/4/7): карта показывала «Стабильно», пока сервер уже
+// начислял множители риска за лут, опыт и шанс ключа.
+const { RISK_TIERS, RISK_PREPARED_MAX_SCORE, getRiskTierByScore } = sharedEquipment;
 
 /**
  * Рассчитать шанс дропа (монотонно растущий)
@@ -390,9 +357,8 @@ function calculateInfectionDefense(equipmentMap) {
     return sharedEquipment.calculateInfectionDefense(equipmentMap);
 }
 
-function getRiskTierByScore(score) {
-    return RISK_TIERS.find((tier) => score <= tier.maxScore) || RISK_TIERS[RISK_TIERS.length - 1];
-}
+// getRiskTierByScore переехал в shared/equipment.js и реэкспортируется
+// из деструктуризации выше — клиент обязан видеть те же границы.
 
 function calculateLocationRiskProfile(location = {}, equipment = {}) {
     const radiationThreat = sharedEquipment.normalizeThreatLevelToPoints(location.radiation);
@@ -419,7 +385,8 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
         keyChanceMultiplier: tier.keyChanceMultiplier,
         rarityLuckBonus: tier.rarityLuckBonus,
         expMultiplier: tier.expMultiplier,
-        isPrepared: riskScore <= 2
+        // Порог «освоено» — из общего файла правил, а не литерал 2.
+        isPrepared: riskScore <= RISK_PREPARED_MAX_SCORE
     };
 }
 
