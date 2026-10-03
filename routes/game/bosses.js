@@ -180,7 +180,7 @@ async function applyBossCounterHit(client, playerId, boss, player, options = {})
     const equipment = safeJsonParse(player.equipment, {});
     const damage = calculateBossCounterDamage(boss, player.max_health, equipment);
     if (damage <= 0) {
-        return { damage: 0, health: Number(player.health || 0), broken_slots: [] };
+        return { damage: 0, health: Number(player.health || 0), broken_slots: [], auto_heal: null };
     }
 
     const health = Math.max(0, Number(player.health || 0) - damage);
@@ -191,11 +191,12 @@ async function applyBossCounterHit(client, playerId, boss, player, options = {})
         equipmentSlotsToWear({ counterAttack: true, usedWeapon: options.usedWeapon })
     );
 
-    // Автолечение срабатывает сразу после урона: игрок не должен в панике
-    // искать аптечку в инвентаре посреди боя. Функция сама выбирает самый
-    // экономный лечащий предмет.
-    const autoHealed = await applyAutoHeal(client, playerId, { ...player, health, inventory: player.inventory });
-
+    // Порядок записи критичен: сначала ФИКСИРУЕМ урон и износ, и только
+    // ПОТОМ автолечение. Раньше было наоборот — applyAutoHeal писал
+    // восстановленный health, а следующий за ним UPDATE перезаписывал его
+    // значением ДО лечения. В БД оставался урон, но инвентарь уже был
+    // списан: игрок терял аптечку без восстановления HP, а в ответ уходило
+    // вылеченное значение — UI расходился с базой до перезагрузки профиля.
     await client.query(
         `UPDATE players
             SET health = $1,
@@ -203,6 +204,12 @@ async function applyBossCounterHit(client, playerId, boss, player, options = {})
           WHERE id = $3`,
         [health, JSON.stringify(equipment), playerId]
     );
+
+    // Автолечение срабатывает сразу после урона: игрок не должен в панике
+    // искать аптечку в инвентаре посреди боя. Функция сама выбирает самый
+    // экономный лечащий предмет. Её UPDATE — последний, поэтому
+    // восстановленное здоровье остаётся в базе.
+    const autoHealed = await applyAutoHeal(client, playerId, { ...player, health, inventory: player.inventory });
 
     const finalHealth = autoHealed ? autoHealed.health : health;
     return {
@@ -219,10 +226,15 @@ async function getBossById(client, bossId) {
 }
 
 async function getPlayerBaseState(client, playerId) {
+    // Настройки автолечения входят в SELECT намеренно: без них
+    // player.auto_heal_enabled приходил как undefined, проверка
+    // `=== false` его не ловила, и автолечение в бою с боссом
+    // срабатывало ВСЕГДА — даже когда игрок его выключил.
+    // Порог при этом молча откатывался к дефолтному 35%.
     const result = await client.query(
         `SELECT id, first_name, level, health, max_health, energy, max_energy, equipment,
                 inventory, active_boss_id, active_boss_started_at, active_boss_mode,
-                active_raid_id, buffs
+                active_raid_id, buffs, auto_heal_enabled, auto_heal_threshold
          FROM players
          WHERE id = $1
          FOR UPDATE`,
@@ -1027,6 +1039,12 @@ router.post('/attack-boss', async (req, res) => {
                 player_damage_taken: counterHit.damage,
                 player_health: counterHit.health,
                 broken_equipment: counterHit.broken_slots,
+                // Автолечение. Раньше поле считалось в applyBossCounterHit, но
+                // не попадало в ответ ни на верхний уровень, ни в data — клиент
+                // читал payload.auto_heal ?? payload.data.auto_heal и всегда
+                // получал undefined, поэтому строка «❤️ Автолечение» в логе боя
+                // не выводилась никогда.
+                auto_heal: counterHit.auto_heal,
                 data: {
                     boss: {
                         id: bossId,
@@ -1041,7 +1059,8 @@ router.post('/attack-boss', async (req, res) => {
                     last_energy_update: energyResult.rows[0].last_energy_update,
                     damage_taken: counterHit.damage,
                     health: counterHit.health,
-                    broken_equipment: counterHit.broken_slots
+                    broken_equipment: counterHit.broken_slots,
+                    auto_heal: counterHit.auto_heal
                 }
             });
         } catch (error) {
@@ -1201,12 +1220,16 @@ router.post('/attack-with-weapon', async (req, res) => {
                     damage_taken: counterHit.damage,
                     health: counterHit.health,
                     broken_equipment: counterHit.broken_slots,
+                    // Автолечение — см. комментарий в /attack-boss: без этих
+                    // полей клиент не показывал, какое лекарство было выпито.
+                    auto_heal: counterHit.auto_heal,
                     energy: energyResult.rows[0]?.energy || 0,
                     last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                     killed,
                     rewards,
                     mastery
-                }
+                },
+                auto_heal: counterHit.auto_heal
             });
 
         } catch (error) {
@@ -1713,12 +1736,15 @@ router.post('/raid/:id/attack', async (req, res) => {
                     damage_taken: counterHit.damage,
                     health: counterHit.health,
                     broken_equipment: counterHit.broken_slots,
+                    // Автолечение — см. комментарий в /attack-boss.
+                    auto_heal: counterHit.auto_heal,
                     player_energy: energyResult.rows[0]?.energy ?? player.energy,
                     last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                     your_total_damage: newTotalDamage,
                     killed,
                     rewards
-                }
+                },
+                auto_heal: counterHit.auto_heal
             });
         } catch (error) {
             await client.query('ROLLBACK');

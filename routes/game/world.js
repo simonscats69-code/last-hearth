@@ -282,9 +282,16 @@ router.post('/search', async (req, res) => {
         // total_actions обязателен: ниже считается comboBonus по (total_actions+1) % 10.
         // Раньше поле не выбиралось, updatedPlayer.total_actions был undefined,
         // (undefined + 1) % 10 === 0 всегда false — комбо-бонус не давался никогда.
+        //
+        // max_health и last_hp_regen обязательны для regenerateHealth().
+        // Без них max_health читался как undefined → максимум считался равным 1 →
+        // regenerable всегда 0, и хелпер уходил в ветку «на потолке», которая
+        // пишет last_hp_regen = NOW(). Поиск лута не только не лечил, но и
+        // ОБНУЛЯЛ накопленное время пассивного регена при каждом действии.
         const playerResult = await client.query(`
             SELECT id, energy, max_energy, current_location_id, radiation, inventory, 
-                   equipment, luck, health, level, experience, buffs, total_actions
+                   equipment, luck, health, max_health, last_hp_regen, level, experience,
+                   buffs, total_actions
             FROM players WHERE id = $1 FOR UPDATE
         `, [playerId]);
         

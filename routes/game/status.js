@@ -286,9 +286,21 @@ router.post('/heal', async (req, res) => {
                 }
                 
                     if (healed) {
-                     // Удаляем использованный предмет
+                     // Расходуем ОДНУ штуку, а не весь стек. Раньше здесь стоял
+                     // splice(itemIndex, 1), который удалял запись целиком:
+                     // бинтов было 10, использован 1 — в инвентаре осталось 0.
+                     // Тот же баг был исправлен в routes/game/items.js (/use),
+                     // здесь дублирующая логика осталась нетронутой.
                      const newInventory = [...inventory];
-                     newInventory.splice(resolvedItemIndex, 1);
+                     const currentQty = Math.max(1, Number(item.quantity || 1));
+                     const remainingQty = currentQty - 1;
+
+                     if (remainingQty > 0) {
+                         newInventory[resolvedItemIndex] = { ...item, quantity: remainingQty };
+                     } else {
+                         newInventory.splice(resolvedItemIndex, 1);
+                     }
+
                      await client.query(`
                          UPDATE players SET inventory = $1 WHERE id = $2
                      `, [JSON.stringify(newInventory), playerId]);
@@ -303,7 +315,8 @@ router.post('/heal', async (req, res) => {
                     return {
                         success: true,
                         message: message,
-                        item_used: item
+                        item_used: item,
+                        quantity_left: remainingQty
                     };
                 }
                 
