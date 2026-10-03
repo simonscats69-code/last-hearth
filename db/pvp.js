@@ -2,7 +2,7 @@
  * Модуль PvP системы — слой доступа к данным и чистые боевые формулы
  *
  * Функции доступа к БД используются продакшн-кодом (routes/game/pvp.js),
- * чистые формулы покрыты unit-тестами (game.test.js).
+ * чистые формулы покрыты тестами (tests/pvp-formulas.test.js).
  *
  * Удалены мёртвые функции: isRedZone, getPlayersInLocation, getPVPStats,
  * finishPVPMatch (использовала несуществующие колонки pvp_battles).
@@ -156,7 +156,12 @@ function calculatePVPDamage(attacker, defender) {
  * @returns {number} количество украденных монет (10%, максимум 10000)
  */
 function calculateCoinsToSteal(coins) {
-    const safeCoins = Math.max(0, Number(coins || 0));
+    // Number(x || 0) НЕ защищает от мусора: 'abc' истинно, поэтому
+    // Number('abc') === NaN, а Math.max(0, NaN) === NaN — и NaN уезжал в
+    // UPDATE coins = coins - $1. Проверяем результат преобразования, а не
+    // исходное значение.
+    const parsed = Number(coins);
+    const safeCoins = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     return Math.min(Math.floor(safeCoins * 0.1), 10000);
 }
 

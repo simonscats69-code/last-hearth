@@ -611,6 +611,10 @@ function resolveEquipmentSlot(item) {
      * минимум 1. Чистая по аргументам функция, но использует Math.random —
      * вызывается только на сервере в момент атаки.
      *
+     * Нулевой базовый урон даёт 0, а не 1: «минимум 1» — это страховка от
+     * нулевого РЕЗУЛЬТАТА удара, а не от отсутствия оружия. Раньше боец без
+     * оружия в PvP получал 29 урона вместо 28 — фантомный урон из ничего.
+     *
      * @param {number} baseDamage базовый урон
      * @param {number} variancePercent разброс в процентах (0 — без разброса)
      * @returns {number} фактический урон
@@ -618,7 +622,8 @@ function resolveEquipmentSlot(item) {
     function rollVarianceDamage(baseDamage, variancePercent) {
         const base = Math.max(0, Number(baseDamage) || 0);
         const variance = Math.max(0, Math.min(100, Number(variancePercent) || 0));
-        if (variance === 0 || base === 0) return Math.max(1, Math.round(base));
+        if (base === 0) return 0;
+        if (variance === 0) return Math.max(1, Math.round(base));
 
         const factor = 1 - variance / 100 + Math.random() * (2 * variance / 100);
         return Math.max(1, Math.floor(base * factor));
