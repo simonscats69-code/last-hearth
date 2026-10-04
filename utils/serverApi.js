@@ -3,8 +3,6 @@
  * Объединяет: валидацию, ответы API, транзакции, логирование, обработку ошибок, Telegram авторизацию
  */
 
-// Раньше здесь импортировался ещё и query — он нужен был только
-// logPlayerAction, который переехал в utils/log.js вместе с логированием.
 const { queryOne, transaction: tx } = require('../db/database');
 const crypto = require('crypto');
 const { randomUUID } = require('crypto');
@@ -163,12 +161,6 @@ function requestMiddleware(req, res, next) {
 }
 
 /**
- * Логирование ошибок и действий игрока, сериализация JSON для журнала и
- * обработчик ошибок логирования живут в utils/log.js — импортированы выше.
- * Определения удалены оттуда, чтобы не было двух реализаций.
- */
-
-/**
  * Проверка ID (целое число > 0)
  */
 function validateId(value, fieldName = 'ID') {
@@ -247,13 +239,6 @@ function notFound(res, message = 'Ресурс не найден', code = 'NOT_F
 function unauthorized(res, message = 'Требуется авторизация', code = 'UNAUTHORIZED') {
     return res.status(401).json({ success: false, error: message, code });
 }
-
-/**
- * Транзакции: единая реализация живёт в db/database.js (transaction).
- * Раньше здесь была копия withTransaction(client, fn), которая вдобавок
- * принимала ГОТОВЫЙ client из пула и делала по нему BEGIN — вызывать её
- * было нельзя без риска повесить чужое соединение, и никто не вызывал.
- */
 
 /**
  * Middleware-обёртка для catch ошибок в асинхронных обработчиках
@@ -563,11 +548,10 @@ module.exports = {
     // PlayerHelper для bosses.js и других модулей
     PlayerHelper: {
         async addExperience(playerId, exp, client = null) {
-            // Раньше эти три импорта были ленивыми (внутри функции) — так был
-            // разорван цикл db/players.js <-> utils/serverApi.js. Цикл устранён
-            // переносом логирования в utils/log.js, поэтому импорты можно
-            // поднять наверх: db/players.js больше не ссылается на serverApi,
-            // а gameConstants и database не ссылаются на этот файл.
+            // Импорты подняты наверх: цикл db/players.js <-> utils/serverApi.js разорван
+            // переносом логирования в utils/log.js. db/players.js больше не
+            // ссылается на serverApi, gameConstants и database — на этот файл
+            // тоже не ссылаются.
             const { addExperienceWithLevelUp } = require('../db/players');
             const { getExpForLevel } = require('./gameConstants');
             const { pool } = require('../db/database');

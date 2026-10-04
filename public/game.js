@@ -836,27 +836,16 @@ window.gameState = gameState;
 /**
  * Интервал регена энергии — общая константа из shared/equipment.js, тем же
  * значением считает сервер (utils/game-helpers.js recalcEnergy).
- *
- * Раньше здесь стоял объект CONSTANTS на 14 полей, из которых использовалось
- * ровно одно — INTERVALS.ENERGY_UPDATE. Остальные были мёртвыми копиями:
- * RARITY_ORDER повторял порядок редкостей из shared/equipment.js (и в другой
- * форме: числа весов вместо массива), а лимиты ввода, таймауты и цвета не
- * читались нигде. Объект удалён вместе с экспортом в window: ни index.html,
- * ни sw.js по нему не обращались. Держим здесь только константу, значение
- * которой сервер и клиент обязаны считать одинаково.
  */
 const ENERGY_REGEN_INTERVAL_MS = window.EquipmentShared?.ENERGY_REGEN_INTERVAL_MS ?? 60000;
 
 /**
  * Лимит слотов инвентаря. Берётся из public/shared/equipment.js — того же
- * файла, что использует routes/game/world.js. Раньше значение 100 было
- * продублировано в двух местах, и правка одного ломала второе.
+ * файла, что использует routes/game/world.js.
  *
- * Optional chaining + значение по умолчанию: раньше здесь стояло
- * window.EquipmentShared.MAX_INVENTORY_SLOTS, и если shared/equipment.js
- * не успел загрузиться (или отдался 404), выполнение файла падало с
- * TypeError на этой строке — то есть НЕ выполнялся весь последующий код.
- * Значение 100 совпадает с константой в shared/equipment.js и routes/game/items.js.
+ * Optional chaining + значение по умолчанию обязательны: при обращении без
+ * `?.` строка упала бы с TypeError, если shared/equipment.js не успел
+ * загрузиться (или отдался 404), и НЕ выполнился бы весь последующий код.
  */
 const INVENTORY_MAX_SLOTS = window.EquipmentShared?.MAX_INVENTORY_SLOTS ?? 100;
 
@@ -1836,9 +1825,9 @@ window.hideLoadingScreen = hideLoadingScreen;
  * Ожидание загрузки Telegram WebApp
  *
  * ВАЖНО: промис теперь ОТКЛОНЯЕТСЯ по таймауту, а не резолвится.
- * Раньше resolve() на 5-й секунде позволял продолжить инициализацию без
- * Telegram, а дальше срабатывал фиктивный ID/initData — приложение
- * работало без авторизации.
+ * resolve() на 5-й секунде продолжил бы инициализацию без Telegram,
+ * а дальше сработал бы фиктивный ID/initData — приложение работало бы
+ * без авторизации.
  *
  * @param {number} maxWait - сколько ждать, мс
  * @returns {Promise<void>}
@@ -2087,8 +2076,7 @@ async function loadProfile() {
     playerData.max_energy = playerData.status.max_energy;
 
     // Прогресс опыта по ОБЩЕЙ формуле (public/shared/equipment.js — тот же файл,
-// что читает сервер). Раньше формула была продублирована здесь второй
-// копией: любое изменение одной из двух копий делало полосу опыта врущей.
+    // что читает сервер): вторая копия здесь делала бы полосу опыта врущей.
     const sharedRules = window.EquipmentShared;
     const level = Math.max(1, Number(playerData.level || 1));
     const expNeeded = sharedRules && typeof sharedRules.getExpForLevel === 'function'
@@ -2521,13 +2509,10 @@ function updateMainRecommendationUI(player) {
 
 /**
  * Карточки целей: следующий босс и следующая зона.
- *
- * Раньше здесь читался `player.journey`, которого сервер НЕ отдаёт: в
- * профиле есть только `progress`. Поэтому обе карточки навсегда показывали
- * заглушки «Нет цели» и «Все зоны открыты» — то есть врали игроку и были
- * чистым шумом на экране. Теперь цели вычисляются из данных, которые
- * действительно есть: список боссов (refreshMainScreenInsights кладёт его в
- * mainInsights) и список локаций.
+ * Считаются из данных, которые сервер действительно отдаёт: списка боссов
+ * (refreshMainScreenInsights кладёт его в mainInsights) и списка локаций.
+ * Поле `player.journey` использовать нельзя: сервер его не отдаёт, и обе
+ * карточки навсегда показывали бы заглушки «Нет цели»/«Все зоны открыты».
  */
 function updateJourneyProgress(player) {
     const mainBossEl = document.getElementById('journey-main-boss');
@@ -2603,10 +2588,9 @@ function getCurrentZoneRiskProfile(player) {
     const infectionPressure = Math.max(0, infectionThreat - preparation.infectionDefense);
     const score = radiationPressure + infectionPressure;
 
-    // Тиры — из общего файла правил: собственные пороги клиента (2/5/8)
-    // расходились с серверными (1/4/7), и карта показывала «Стабильно»,
-    // пока сервер уже начислял множители риска за лут, опыт и шанс ключа.
-    // Подписи берём у тира, текст подсказки — UI-копия клиента.
+    // Тиры — из общего файла правил: подпись на экране обязана совпадать с
+    // порогами, по которым сервер начисляет множители за лут, опыт и ключ.
+    // Текст подсказки — UI-копия клиента.
     const tier = shared.getRiskTierByScore(score);
     const hints = {
         safe: 'Зона безопасна для стабильного фарма.',
@@ -4463,11 +4447,9 @@ function renderWeapons(weapons) {
 /**
  * Общая вступительная проверка атаки по боссу.
  *
- * Раньше она копировалась в attackBoss() и attackWithWeapon(): блокировка
- * двойного нажатия и проверка энергии. Различаться могло только одно —
- * сам `lockAction`, который здесь не используется осознанно: обе функции
- * работают с actionLocks.attackBoss и обязаны снимать её в own finally,
- * иначе блокировка залипала бы после неудачного запроса.
+ * `lockAction` здесь НЕ используется осознанно: и attackBoss(), и
+ * attackWithWeapon() работают с actionLocks.attackBoss и обязаны снимать
+ * её в own finally, иначе блокировка залипала бы после неудачного запроса.
  *
  * @returns {boolean} true — можно атаковать, false — атака отклонена
  */
@@ -4488,10 +4470,7 @@ function canStartBossAttack() {
 
 /**
  * Обновить полосу HP босса на экране боя.
- *
- * Раньше эти четыре строки дублировались в attackBoss() и attackWithWeapon():
- * правка (например, добавление анимации) гарантированно расходилась бы
- * между двумя путями атаки.
+ * Общая для обоих путей атаки: раздельные правки гарантированно разошлись бы.
  */
 function updateBossHealthUi(bossHp, bossMaxHp) {
     const hpPercent = Math.max(0, Math.min(100, (Number(bossHp) / Number(bossMaxHp)) * 100));
@@ -4763,6 +4742,8 @@ function appendCounterDamageToLog(payload) {
     log.scrollTop = log.scrollHeight;
 
     // Автолечение: сервер сам выпил лекарство, сообщаем что именно.
+    // Поле обязано быть и в payload, и в payload.data — клиент читает
+    // `payload.auto_heal ?? payload.data.auto_heal`.
     const autoHeal = payload?.auto_heal ?? payload?.data?.auto_heal;
     if (autoHeal?.used) {
         const healLine = document.createElement('p');
