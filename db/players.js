@@ -1,17 +1,9 @@
 /**
- * Объединённый модуль запросов к базе данных для игроков
- */
-
-/**
- * Обновление опыта с пересчётом уровня.
+ * Запросы к БД для игроков.
  *
- * Раньше это был модуль db/players.js на 444 строки, из которого во всём
- * проекте использовалась ОДНА функция — эта. Остальные (createPlayer,
- * getAllPlayers, updateInventory, setPlayerClan и ещё ~15) нигде не
- * вызывались: игроки создавались напрямую в webhook.js и routes/game/index.js,
- * а инвентарь и экипировка обновлялись своими UPDATE в роутах.
- * Держать 400 строк мёртвого кода ради одной функции — избыточно,
- * поэтому оставлено только то, что реально используется.
+ * В проекте используется только addExperienceWithLevelUp; остальные
+ * операции (создание игрока, обновление инвентаря и экипировки) делают
+ * роуты своими UPDATE.
  */
 const { query: defaultQuery } = require('./database');
 
@@ -19,8 +11,8 @@ const ERR_PLAYER_NOT_FOUND = 'Игрок не найден';
 
 function validateId(id, name = 'id') {
     const num = Number(id);
-    // P1: Number.isSafeInteger вместо Number.isInteger — защита от потери точности
-    // (особенно важно для больших telegramId)
+    // Number.isSafeInteger вместо Number.isInteger: защита от потери
+    // точности на больших telegramId
     if (!Number.isSafeInteger(num) || num <= 0) throw new Error(`Неверный ${name}`);
     return num;
 }
