@@ -1,0 +1,13 @@
+chore: удалён тестовый набор (jest)
+
+Тесты удалены: tests/ (5 файлов), jest.config.js, скрипт npm test,
+jest из devDependencies и override env: jest в .eslintrc.json. В README
+раздел «Тесты» заменён на указание прогонять линтер.
+
+Правки игровой логики, сделанные ранее, остаются: перенос правил в
+public/shared/equipment.js (тиры риска, интервал регена энергии, каталог
+магазина), исправления POST /auto-heal и rollVarianceDamage, legendary
+при высокой удаче, calculateCoinsToSteal.
+
+Проверено: eslint без замечаний, node --check на всех изменённых
+серверных и клиентских файлах, JSON-конфиги валидны.

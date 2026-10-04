@@ -108,6 +108,12 @@ last-hearth/
 
 ## Разработка
 
+Тестового набора в проекте нет. Перед коммитом прогоняй линтер:
+
+```bash
+npm run lint
+```
+
 ### Основные API Endpoints
 
 ```
@@ -138,12 +144,6 @@ GET  /api/game/items/shop
 POST /api/game/items/buy
 POST /api/game/purchase
 POST /api/verify-telegram
-```
-
-## Тесты
-
-```bash
-npm test
 ```
 
 ## Лицензия
