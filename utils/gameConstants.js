@@ -3,47 +3,25 @@
  * Централизованное хранилище игровой логики
  */
 
-// Правила экипировки живут в public/shared/equipment.js — этот файл читают
-// и сервер, и браузер, поэтому там не может быть require(). Здесь только
-// реэкспорт, чтобы существующий код и тесты продолжали работать.
+// Правила предметов и формула опыта живут в public/shared/equipment.js —
+// том же файле, что читает браузер, поэтому там не может быть require().
+// Здесь реэкспорт для существующего кода.
 // Имя НЕ equipment: в calculateLocationRiskProfile() есть параметр с таким
 // именем и он перекрывает модуль — обращение equipment.normalize... падало бы.
 const sharedEquipment = require('../public/shared/equipment.js');
 
-// Формулы опыта — не используются, фактический расчёт в getExpForLevel()
-/**
- * Расчёт опыта для уровня (долгосрочная игра)
- * P0-3: мягкая экспоненциальная кривая вместо линейной,
- * чтобы гринд оставался посильным на высоких уровнях.
- *   level*500*(1 + level/25):
- *   1→520, 10→700, 20→1100, 30→1650, 50→3000
- * @param {number} level - Уровень игрока
- * @returns {number} Опыт для следующего уровня
- */
-// Формула опыта живёт в public/shared/equipment.js — том же файле, что читает
-    // браузер. Раньше здесь была своя копия и вторая в public/game.js; любая
-    // правка одной из них рассинхронизировала начисление опыта с полосой.
-    const { getExpForLevel, getTotalExpForLevel } = require('../public/shared/equipment.js');
+// Тиры риска — тоже оттуда: клиент рисует подпись по этим границам, а
+// сервер по ним же начисляет множители за лут, опыт и шанс ключа.
+const { RISK_TIERS, RISK_PREPARED_MAX_SCORE, getRiskTierByScore } = sharedEquipment;
 
-/**
- * Расчёт общего опыта для уровня — тоже живёт в общем файле правил
- * (см. getTotalExpForLevel в public/shared/equipment.js). Функция ниже
- * удалена как дубликат.
- */
+const { getExpForLevel, getTotalExpForLevel } = sharedEquipment;
 
 const GAME_CONFIG = {
     // Базовые настройки
     BASE_DROP_CHANCE: 8,        // Базовый шанс дропа (%)
     MAX_DROP_CHANCE: 60,         // Максимальный шанс дропа (%)
     MAX_LUCK: 150,               // Максимальная удача игрока
-    // УДАЛЕНО: константы крафта (BASE_CRAFT_SUCCESS, MAX_CRAFT_SUCCESS, RARITY_CRAFT_PENALTIES)
 };
-
-// Тиры риска живут в public/shared/equipment.js — том же файле, что читает
-// браузер. Раньше здесь была своя таблица, а клиент вёл вторую с порогами
-// 2/5/8 (вместо 1/4/7): карта показывала «Стабильно», пока сервер уже
-// начислял множители риска за лут, опыт и шанс ключа.
-const { RISK_TIERS, RISK_PREPARED_MAX_SCORE, getRiskTierByScore } = sharedEquipment;
 
 /**
  * Рассчитать шанс дропа (монотонно растущий)
@@ -93,21 +71,16 @@ function rollItemRarity(locationId, luck = 1) {
     // Бонус удачи к редкости: каждый пункт удачи даёт +0.1% к редким предметам
     // max бонус = 15% (при luck = 150)
     const luckBonus = Math.min(15, luck * 0.1);
-    
-    // Модифицируем таблицу с учётом удачи
+
     const modifiedTable = { ...table };
-    
-    // Распределяем бонус удачи: чем выше редкость, тем больший бонус
-    //
-    // Регрессия: раньше бонус начислялся «в вакуум» — к четырём редкостям
-    // уходило 2.5 × luckBonus, а из common вычиталось всего 0.25 × luckBonus.
-    // Сумма таблицы уезжала за 100 (локация 5 при luck 150 — до 133.75), и
-    // кумулятивная сумма достигала 100 РАНЬШЕ legendary. Итог: чем выше
-    // удача, тем реже самый редкий дроп — при luck ≥ 80 legendary не
-    // выпадал вообще. Теперь бонус берётся из common, а если common не
-    // хватает — доли пропорционально урезаются, сумма всегда 100. При этом
-    // common не обнуляется полностью: иначе на сильной удаче обычные
-    // предметы не выпадали бы вообще (проверено: 0 из 4000 бросков).
+
+    // Распределяем бонус удачи: чем выше редкость, тем больший бонус.
+    // Инвариант: сумма таблицы всегда ровно 100, иначе кумулятивная сумма
+    // достигнет 100 раньше последней редкости — и legendary станет
+    // недостижимым (чем выше удача, тем реже самый редкий дроп).
+    // Поэтому бонус берётся из common, а если common не хватает — доли
+    // пропорционально урезаются. COMMON_FLOOR_PERCENT нужен, чтобы обычные
+    // предметы не исчезли совсем при максимальной удаче.
     if (luck > 10) {
         // Потолок бонуса для каждой редкости
         const BONUS_CAPS = { legendary: 25, epic: 40, rare: 50, uncommon: 50 };
@@ -167,20 +140,16 @@ function rollLootDrop(lootTable, luck, itemRarity) {
         return null;
     }
     
-    // Если lootTable - объект (таблица вероятностей), возвращаем null
-    // Предметы должны выбираться из БД отдельно
     if (!Array.isArray(lootTable)) {
         return null;
     }
     
-    // Фильтруем таблицу лута по редкости
     const filteredItems = lootTable.filter(item => item.rarity === itemRarity);
     
     if (filteredItems.length === 0) {
         return null;
     }
     
-    // Случайный предмет из отфильтрованных
     return filteredItems[Math.floor(Math.random() * filteredItems.length)];
 }
 
@@ -302,7 +271,6 @@ function getDebuffEffect(type) {
  * @returns {object} модификаторы (множители)
  */
 function calculateDebuffModifiers(player) {
-    // Парсим дебаффы (могут быть JSON строкой или объектом)
     let radiation = { level: 0 };
     let infections = [];
     
@@ -333,7 +301,6 @@ function calculateDebuffModifiers(player) {
     const radLevel = radiation.level || 0;
     const infLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
     
-    // Базовые множители (1.0 = без изменений)
     const modifiers = {
         damage: 1.0,
         luck: 1.0,
@@ -341,7 +308,6 @@ function calculateDebuffModifiers(player) {
         endurance: 1.0
     };
     
-    // Применяем влияние радиации
     if (radLevel > 0) {
         const effect = DEBUFF_EFFECTS.radiation;
         modifiers.damage += radLevel * effect.strength;
@@ -349,7 +315,6 @@ function calculateDebuffModifiers(player) {
         modifiers.dropChance += radLevel * effect.dropChance;
     }
     
-    // Применяем влияние инфекций
     if (infLevel > 0) {
         const effect = DEBUFF_EFFECTS.infection;
         modifiers.damage += infLevel * effect.strength;
@@ -357,7 +322,6 @@ function calculateDebuffModifiers(player) {
         modifiers.dropChance += infLevel * effect.dropChance;
     }
     
-    // Ограничиваем минимальные значения
     modifiers.damage = Math.max(0.1, modifiers.damage);
     modifiers.luck = Math.max(0.1, modifiers.luck);
     modifiers.dropChance = Math.max(0.01, modifiers.dropChance);
@@ -387,8 +351,7 @@ function calculateInfectionDefense(equipmentMap) {
     return sharedEquipment.calculateInfectionDefense(equipmentMap);
 }
 
-// getRiskTierByScore переехал в shared/equipment.js и реэкспортируется
-// из деструктуризации выше — клиент обязан видеть те же границы.
+// getRiskTierByScore берётся из общего файла правил выше.
 
 function calculateLocationRiskProfile(location = {}, equipment = {}) {
     const radiationThreat = sharedEquipment.normalizeThreatLevelToPoints(location.radiation);
@@ -415,7 +378,7 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
         keyChanceMultiplier: tier.keyChanceMultiplier,
         rarityLuckBonus: tier.rarityLuckBonus,
         expMultiplier: tier.expMultiplier,
-        // Порог «освоено» — из общего файла правил, а не литерал 2.
+        // Порог «освоено» — из общего файла правил.
         isPrepared: riskScore <= RISK_PREPARED_MAX_SCORE
     };
 }

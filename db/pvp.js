@@ -1,11 +1,6 @@
 /**
- * Модуль PvP системы — слой доступа к данным и чистые боевые формулы
- *
- * Функции доступа к БД используются продакшн-кодом (routes/game/pvp.js),
- * чистые формулы покрыты тестами (tests/pvp-formulas.test.js).
- *
- * Удалены мёртвые функции: isRedZone, getPlayersInLocation, getPVPStats,
- * finishPVPMatch (использовала несуществующие колонки pvp_battles).
+ * Модуль PvP системы — слой доступа к данным и чистые боевые формулы.
+ * Функции доступа к БД используются продакшн-кодом (routes/game/pvp.js).
  */
 
 const { query, queryOne } = require('./database');
@@ -53,7 +48,7 @@ async function getPVPCooldown(playerId) {
  * @param {object} client - Опциональный клиент БД для использования внутри транзакции
  */
 async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя', client = null) {
-    // Валидация minutes для предотвращения некорректных значений
+    // Валидация minutes (диапазон 1-10080)
     const validatedMinutes = parseInt(minutes);
     if (!Number.isInteger(validatedMinutes) || validatedMinutes <= 0 || validatedMinutes > 10080) {
         throw new Error('Недопустимое значение minutes (должно быть 1-10080)');
@@ -110,8 +105,6 @@ async function createPVPMatch(attackerId, defenderId, locationId, client = null)
  * уровень, снижение выносливостью защитника (soft cap 60%), затем защита
  * брони (applyDefenseReduction) — минимум 1 урон.
  *
- * Раньше броня вообще не участвовала: stats.defense игнорировался, а урон
- * оружия считался из сырого поля damage без учёта прочности и улучшений.
  * @param {object} attacker - атакующий ({ strength, agility, level, equipment, set_damage })
  * @param {object} defender - защищающийся ({ endurance, level, equipment })
  * @returns {{damage: number}} объект с итоговым уроном
@@ -157,9 +150,8 @@ function calculatePVPDamage(attacker, defender) {
  */
 function calculateCoinsToSteal(coins) {
     // Number(x || 0) НЕ защищает от мусора: 'abc' истинно, поэтому
-    // Number('abc') === NaN, а Math.max(0, NaN) === NaN — и NaN уезжал в
-    // UPDATE coins = coins - $1. Проверяем результат преобразования, а не
-    // исходное значение.
+    // Number('abc') === NaN, а Math.max(0, NaN) === NaN — и NaN уехал бы в
+    // UPDATE coins = coins - $1. Проверяем результат преобразования.
     const parsed = Number(coins);
     const safeCoins = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     return Math.min(Math.floor(safeCoins * 0.1), 10000);
