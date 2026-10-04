@@ -57,8 +57,7 @@ async function buildLootCache() {
 buildLootCache();
 
 // Лимит слотов инвентаря — из public/shared/equipment.js, того же файла,
-// который читает браузер. Раньше 100 было продублировано здесь и в
-// public/game.js, и правка одного места ломала второе.
+// который читает браузер.
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
 
 // =============================================================================
@@ -278,16 +277,13 @@ router.post('/search', async (req, res) => {
         
         await client.query('BEGIN');
         
-        // SELECT с явным списком полей вместо SELECT *
-        // total_actions обязателен: ниже считается comboBonus по (total_actions+1) % 10.
-        // Раньше поле не выбиралось, updatedPlayer.total_actions был undefined,
-        // (undefined + 1) % 10 === 0 всегда false — комбо-бонус не давался никогда.
-        //
-        // max_health и last_hp_regen обязательны для regenerateHealth().
-        // Без них max_health читался как undefined → максимум считался равным 1 →
-        // regenerable всегда 0, и хелпер уходил в ветку «на потолке», которая
-        // пишет last_hp_regen = NOW(). Поиск лута не только не лечил, но и
-        // ОБНУЛЯЛ накопленное время пассивного регена при каждом действии.
+        // SELECT с явным списком полей вместо SELECT *. Два поля обязательны:
+        // total_actions — для comboBonus по (total_actions+1) % 10, иначе
+        // комбо-бонус не даётся никогда;
+        // max_health и last_hp_regen — для regenerateHealth(): без максимума
+        // regenerable всегда 0, хелпер уходит в ветку «на потолке» и пишет
+        // last_hp_regen = NOW(), то есть поиск не лечит И обнуляет
+        // накопленное время регена.
         const playerResult = await client.query(`
             SELECT id, energy, max_energy, current_location_id, radiation, inventory, 
                    equipment, luck, health, max_health, last_hp_regen, level, experience,
@@ -409,8 +405,7 @@ router.post('/search', async (req, res) => {
         }
         
         const modifiers = calculateDebuffModifiers(updatedPlayer);
-        // Удача от экипировки (например, Сталкерского пояса) раньше игнорировалась:
-        // слот accessory был пустым и поле luck нигде не читалось.
+        // Удача от экипировки (например, Сталкерского пояса) слотом accessory.
         const equipmentLuckBonus = equipmentRules.calculateEquipmentLuckBonus(equipment);
         const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck + equipmentLuckBonus) * 10) / 10);
         const riskAdjustedLuck = Math.max(1, Math.round((effectiveLuck + riskProfile.rarityLuckBonus) * 10) / 10);
@@ -427,9 +422,9 @@ router.post('/search', async (req, res) => {
         
         if (rolled <= dropChance) {
             // Ключи боссов. Шансы берём из bosses.key_drop_chance (в процентах
-            // от дропа) — раньше здесь стояла зашитая таблица, а предмет
-            // находился джойном items -> bosses по required_key_id, который у
-            // всех боссов был NULL: энергия тратилась, лут не выпадал вообще.
+            // от дропа), а предмет — джойном items -> bosses по
+            // required_key_id: без этого джойна ключ не находится вовсе,
+            // энергия тратится, а лут не выпадает.
             //
             // Ключ НЕ попадает в инвентарь: он хранится в boss_keys (валюта
             // прогрессии), поэтому за него не тратится слот из 100.
@@ -479,8 +474,7 @@ router.post('/search', async (req, res) => {
                     await client.query('ROLLBACK');
                     return res.json({
                         success: false,
-                        // Раньше здесь было «Продайте лишнее», но функции продажи
-                        // в игре нет — игрока уводили в несуществующее действие.
+                        // Функции продажи в игре нет, поэтому предлагать её здесь нельзя.
                         error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
                         code: 'INVENTORY_FULL'
                     });
@@ -488,9 +482,8 @@ router.post('/search', async (req, res) => {
 
                 const newItem = buildInventoryItem(foundItem, itemRarity);
 
-                // Стакование: однотипные предметы складываются в один слот.
-                // Раньше каждый дроп занимал отдельный слот, поэтому 100 слотов
-                // забивались быстрее, чем игрок успевал их разбирать.
+                // Стакование: однотипные предметы складываются в один слот, иначе
+                // 100 слотов забиваются быстрее, чем игрок успевает их разбирать.
                 addItemToInventory(inventory, newItem, foundItem);
                 itemsCollected += 1;
 
@@ -578,9 +571,8 @@ router.post('/search', async (req, res) => {
         const newMaxEnergy = energyResult.rows[0].max_energy;
         const lastEnergyUpdate = energyResult.rows[0].last_energy_update;
 
-        // Счётчики прогресса. Раньше ни unique_items, ни daily_tasks.current_value
-        // не обновлялись: достижения «Коллекционер»/«Ежедневная победа» и
-        // ежедневные задания оставались на нуле при любых действиях.
+        // Счётчики прогресса: без них достижения «Коллекционер»/«Ежедневная
+        // победа» и ежедневные задания остаются на нуле при любых действиях.
         if (foundItem?.id) {
             await trackCollectedItems(client, playerId, [foundItem.id]);
         }

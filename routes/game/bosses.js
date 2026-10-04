@@ -13,15 +13,15 @@ const router = express.Router();
 const { pool } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger } = require('../../utils/serverApi');
 const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask, applyAutoHeal } = require('../../utils/game-helpers');
-// Единый источник правды: тот же, что в world.js и items.js. Раньше лимит
-// не проверялся вовсе, и награда за босса могла сделать инвентарь больше 100.
+// Единый источник правды: тот же, что в world.js и items.js. Без проверки
+// лимита награда за босса довела бы инвентарь больше 100 слотов.
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
 
 // Сколько ключей нужно, чтобы открыть бой со СЛЕДУЮЩИМ боссом.
 // Владелец ключа — текущий босс: чтобы начать бой с N, нужны keys_required
 // ключей от босса N-1 (этим же пользуется spendBossKeys).
-// Fallback = 1: раньше здесь стояло 3, при этом за убийство выдавался ровно
-// один ключ — все боссы со второго становились недостижимы навсегда.
+// Fallback = 1: за убийство выдаётся ровно один ключ, поэтому любое большее
+// значение делает боссов со второго недостижимыми навсегда.
 async function getKeysRequiredForBoss(client, bossId) {
     try {
         const result = await client.query(
@@ -192,11 +192,9 @@ async function applyBossCounterHit(client, playerId, boss, player, options = {})
     );
 
     // Порядок записи критичен: сначала ФИКСИРУЕМ урон и износ, и только
-    // ПОТОМ автолечение. Раньше было наоборот — applyAutoHeal писал
-    // восстановленный health, а следующий за ним UPDATE перезаписывал его
-    // значением ДО лечения. В БД оставался урон, но инвентарь уже был
-    // списан: игрок терял аптечку без восстановления HP, а в ответ уходило
-    // вылеченное значение — UI расходился с базой до перезагрузки профиля.
+    // ПОТОМ автолечение. Иначе UPDATE урона перезапишет восстановленный
+    // health значением ДО лечения: в БД останется урон, а инвентарь уже
+    // списан — игрок теряет аптечку без восстановления HP.
     await client.query(
         `UPDATE players
             SET health = $1,
@@ -424,11 +422,6 @@ async function spendBossKeys(client, playerId, previousBossId) {
  * согласована со spendBossKeys(): чтобы начать бой с N, нужны keys_required
  * ключей от босса N-1.
  *
- * Раньше здесь писался nextBossId = bossId + 1, то есть ключ от босса N
- * записывался как «ключ от N+1». Расход и выдача смотрели в разные строки,
- * поэтому после убийства первого босса открыть второй было невозможно
- * ни при каком keys_required.
- *
  * @returns {Promise<object|null>} описание выданного ключа или null
  */
 async function grantNextBossKey(client, playerId, bossId) {
@@ -516,10 +509,8 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
         // помещается в инвентарь, и разница просто не выдаётся.
         let actuallyGranted = 0;
 
-        // Раньше здесь был безусловный inventory.push(...) в цикле по
-        // grantedQuantity: ни стакования, ни проверки лимита. Награда за
-        // босса могла довести инвентарь до 200+ слотов, обходя лимит 100,
-        // который проверялся только в world.js и items.js.
+        // Итерация нужна ради стакования и проверки лимита: без них награда за
+        // босса довела бы инвентарь до 200+ слотов в обход лимита 100.
         for (let i = 0; i < grantedQuantity; i++) {
             if (inventory.length >= MAX_INVENTORY_SLOTS) break;
 
@@ -877,10 +868,8 @@ router.get('/', async (req, res) => {
         const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
 
         // Ключ выдаёт ПРЕДЫДУЩИЙ босс, поэтому требование к боссу N — это
-        // keys_required босса N-1. Раньше в required_keys отдавался
-        // keys_required самого босса (то есть сколько его ключей нужно
-        // выбить для следующего) — цифры в UI не сходились с серверной
-        // проверкой ключей при старте боя.
+        // keys_required босса N-1, а не самого N: иначе цифры в UI не
+        // совпадут с серверной проверкой ключей при старте боя.
         const keysRequiredByBoss = new Map(
             bossesResult.rows.map((boss) => [Number(boss.id), Math.max(1, Number(boss.keys_required) || 1)])
         );
@@ -990,10 +979,9 @@ router.post('/attack-boss', async (req, res) => {
             await progressDailyTask(client, playerId, 'boss_damage', damage);
 
             // Трата энергии НЕ двигает last_energy_update: реген идёт от
-            // реально прошедшего времени (то же правило, что в world.js:493
-            // и в recalcEnergy). Раньше здесь стояло last_energy_update = NOW(),
-            // и каждый удар обнулял накопленный реген — игрок, фармящий лут
-            // и атакующий босса, получал разное поведение от одного поля.
+            // реально прошедшего времени (то же правило, что в world.js и в
+            // recalcEnergy). Иначе каждый удар обнулял бы накопленный
+            // реген энергии.
             const energyResult = await client.query(
                 `UPDATE players
                  SET energy = GREATEST(0, energy - $1)
@@ -1035,15 +1023,13 @@ router.post('/attack-boss', async (req, res) => {
                 last_energy_update: energyResult.rows[0].last_energy_update,
                 mastery,
                 rewards,
-                // Ответный удар босса: раньше он не существовал вовсе.
+                // Ответный удар босса.
                 player_damage_taken: counterHit.damage,
                 player_health: counterHit.health,
                 broken_equipment: counterHit.broken_slots,
-                // Автолечение. Раньше поле считалось в applyBossCounterHit, но
-                // не попадало в ответ ни на верхний уровень, ни в data — клиент
-                // читал payload.auto_heal ?? payload.data.auto_heal и всегда
-                // получал undefined, поэтому строка «❤️ Автолечение» в логе боя
-                // не выводилась никогда.
+                // auto_heal обязателен и на верхнем уровне, и в data: клиент
+                // читает payload.auto_heal ?? payload.data.auto_heal, и без
+                // обоих полей строка «❤️ Автолечение» не выводится.
                 auto_heal: counterHit.auto_heal,
                 data: {
                     boss: {
@@ -1132,10 +1118,9 @@ router.post('/attack-with-weapon', async (req, res) => {
                 equipmentRules.getEffectiveStatValue(weapon, ['damage']) * getWeaponContextMultiplier(weapon, 'boss'));
             const weaponName = weapon.name;
 
-            // Сломанное оружие не бьёт. Раньше его нельзя было и сломать
-            // (прочность была мёртвой), а удачный удар просто СТИРАЛ оружие
-            // из инвентаря: бит (цена 45) за один удар 9 урона был строго
-            // хуже продажи — бой с оружием не имел смысла.
+            // Сломанное оружие не бьёт. Проверка обязательна: бит за один удар 9
+            // урона при цене 45 строго хуже продажи — бой с оружием должен
+            // становиться выгодным по мере его использования.
             const durabilityInfo = equipmentRules.getDurabilityInfo(weapon);
             if (durabilityInfo.isBroken) {
                 await client.query('ROLLBACK');
@@ -1490,11 +1475,10 @@ router.post('/raid/:id/join', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя присоединиться к массовому бою.', code: 'PLAYER_DEAD' });
             }
 
-            // Ключевая цепочка не должна обходиться через чужой рейд: раньше
-            // join не проверял ключи вообще, и игрок без единого ключа мог
-            // присоединиться к рейду на 10-го босса, бить его и получать
-            // долю наград. Ключи при входе НЕ тратятся (их платит лидер,
-            // который их и запустил) — требуется только наличие.
+            // Ключевая цепочка не должна обходиться через чужой рейд: игрок без
+            // единого ключа не должен попасть в рейд на 10-го босса и бить
+            // его за долю наград. Ключи при входе НЕ тратятся (их платит
+            // лидер, который их и запустил) — требуется только наличие.
             if (raid.boss_id > 1) {
                 const required = await getKeysRequiredForBoss(client, raid.boss_id - 1);
                 const owned = await getPlayerKeyCount(client, playerId, raid.boss_id - 1);

@@ -250,10 +250,8 @@ router.post('/buy-energy', async (req, res) => {
 
             await client.query(
                 // Энергия покупается, а не тратится, поэтому last_energy_update
-                // двигать нельзя. Раньше здесь стояло NOW(): игрок с пустой
-                // энергией, копивший реген, при покупке терял накопленное —
-                // сценарий energy=0, max=50, метка 40 мин назад: получал
-                // 20 энергии вместо 50, теряя 40.
+                // двигать нельзя: сценарий energy=0, max=50, метка 40 мин
+                // назад — игрок получил бы 20 энергии вместо 50, теряя 40.
                 'UPDATE players SET stars = GREATEST(0, stars - $1), energy = $2 WHERE id = $3',
                 [STARS_COST, newEnergy, playerId]
             );
@@ -395,10 +393,9 @@ router.post('/auto-heal', async (req, res) => {
                 ? current.rows[0].auto_heal_enabled !== false
                 : Boolean(enabled);
             // getAutoHealThreshold(100, x) возвращает процент напрямую:
-            // пустое значение (null/'' ) и мусор вроде 'abc' дают дефолт 35,
-            // число зажимается в 10..90. Раньше здесь стояла своя цепочка
-            // с Math.round(Number(...)): на нечисловом входе она давала
-            // NaN, и UPDATE падал пятисоткой вместо нормализации.
+            // пустое значение (null/'') и мусор вроде 'abc' дают дефолт 35,
+            // число зажимается в 10..90. Своя цепочка с Math.round(Number(...))
+            // на нечисловом входе давала NaN, и UPDATE падал пятисоткой.
             const currentThreshold = Number(current.rows[0].auto_heal_threshold)
                 || rules.DEFAULT_AUTO_HEAL_THRESHOLD;
             const nextThreshold = threshold === undefined
@@ -690,7 +687,7 @@ router.put('/referral/code', async (req, res) => {
     } catch (err) {
         // Проверка выше — это TOCTOU: между SELECT и UPDATE другой игрок
         // может занять тот же код. С UNIQUE-индексом такая гонка приходит
-        // как 23505, и раньше она превращалась в 500.
+        // как 23505, и её нужно превращать в 400, а не в 500.
         if (err?.code === '23505' && String(err?.constraint || '').includes('referral_code')) {
             return res.status(400).json({ error: 'Код уже занят' });
         }
