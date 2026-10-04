@@ -284,20 +284,18 @@ function getPlayerEmoji(level) {
 
 
 
-// Делаем функции глобальными для обратной совместимости
-window.getTelegramId = getTelegramId;
+// Функции, у которых нет внутренних вызовов, оставлены в глобальной
+// области: это единственный способ вызвать их из консоли Telegram Mini App
+// и из отладочных сценариев. Функции, вызываемые внутри файла, глобальными
+// становятся сами (объявление function верхнего уровня) и экспорта не имеют.
 // getInitData иниализируется вместе с Telegram WebApp (см. initGame)
 window.isColorDark = isColorDark;
 window.hapticImpact = hapticImpact;
 window.hapticNotification = hapticNotification;
 window.hapticSelection = hapticSelection;
-window.escapeHtml = escapeHtml;
-window.escapeAttribute = escapeAttribute;
-window.formatNumber = formatNumber;
 window.formatPercent = formatPercent;
 // showModal/hideModal/showScreen определены ниже, в секции анимаций боссов
 // и управлении экранами соответственно.
-window.getItemCategory = getItemCategory;
 window.getRarityColor = getRarityColor;
 window.getClanRoleEmoji = getClanRoleEmoji;
 window.getRarityClassByLevel = getRarityClassByLevel;
@@ -1375,12 +1373,6 @@ if ('serviceWorker' in navigator) {
 // ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
 // ============================================================================
 
-window.safeSetInterval = safeSetInterval;
-window.clearAllIntervals = clearAllIntervals;
-window.lockAction = lockAction;
-window.unlockAction = unlockAction;
-window.render = render;
-window.getEl = getEl;
 window.setHtml = setHtml;
 window.confirmAction = confirmAction;
 window.Loader = Loader;
@@ -1474,11 +1466,6 @@ function updateEnergyTimer() {
  * каждого ствола. Вместе с ними удалены обращения к /bosses/bonuses —
  * единственным потребителем был этот мёртвый предпросмотр.
  */
-
-// Экспорт новых функций
-window.getTimeToNextEnergy = getTimeToNextEnergy;
-window.formatTimeMs = formatTimeMs;
-window.updateEnergyTimer = updateEnergyTimer;
 
 // ============================================================================
 // УПРАВЛЕНИЕ ЭКРАНАМИ
@@ -1802,14 +1789,9 @@ function backToBosses() {
     showScreen('bosses');
 }
 
-// Экспортируем расширенную версию showScreen (перезаписывает базовую из game-utils)
-window.showScreen = showScreen;
-window.onScreenOpen = onScreenOpen;
-window.renderMain = renderMain;
 window.goToMain = goToMain;
 window.showBossFight = showBossFight;
 window.backToBosses = backToBosses;
-window.hideLoadingScreen = hideLoadingScreen;
 /**
  * Игровые системы
  * Основная логика игры: профиль, инвентарь, крафт, боссы, кланы, PvP, рынок, рефералы, база
@@ -4821,14 +4803,6 @@ function showDamageAnimation(damage) {
             setTimeout(() => damageText.remove(), 1000);
         }
     }
-    
-    // Создаём эффект частиц
-    if (window.createDamageParticles) {
-        const bossElement = document.querySelector('.boss-fight-container');
-        if (bossElement) {
-            window.createDamageParticles(bossElement);
-        }
-    }
 }
 
 // ============================================================================
@@ -5673,33 +5647,6 @@ function updateMapRiskPreview() {
 // АНИМАЦИИ И ЭФФЕКТЫ
 // ============================================================================
 
-// ============================================================================
-// ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
-// ============================================================================
-
-window.initGame = initGame;
-window.loadProfile = loadProfile;
-window.updateProfileUI = updateProfileUI;
-window.updateConditionsUI = updateConditionsUI;
-window.loadLocations = loadLocations;
-window.searchLoot = searchLoot;
-window.moveToLocation = moveToLocation;
-window.updateEnergyDisplay = updateEnergyDisplay;
-window.checkPlayerStatus = checkPlayerStatus;
-window.useItem = useItem;
-window.loadInventory = loadInventory;
-window.renderInventory = renderInventory;
-window.renderInventoryWithFilters = renderInventoryWithFilters;
-window.loadBosses = loadBosses;
-window.renderBosses = renderBosses;
-window.startBossFight = startBossFight;
-window.updateBossFightTimer = updateBossFightTimer;
-window.attackBoss = attackBoss;
-window.openWeaponSelect = openWeaponSelect;
-window.loadWeapons = loadWeapons;
-window.renderWeapons = renderWeapons;
-window.attackWithWeapon = attackWithWeapon;
-
 // =============================================================================
 // РЕЙДЫ БОССОВ (МУЛЬТИПЛЕЕР)
 // =============================================================================
@@ -5892,33 +5839,9 @@ function formatTimeRemaining(ms) {
 }
 
 // Экспорты
-window.loadRaids = loadRaids;
-window.renderRaids = renderRaids;
 window.startRaid = startRaid;
-window.joinRaid = joinRaid;
-window.attackRaid = attackRaid;
-window.formatTimeRemaining = formatTimeRemaining;
 
-window.loadClan = loadClan;
-window.renderClanScreen = renderClanScreen;
-window.renderNoClanScreen = renderNoClanScreen;
-window.createClan = createClan;
-window.loadClansList = loadClansList;
-window.renderClansList = renderClansList;
-window.joinClan = joinClan;
-window.leaveClan = leaveClan;
-window.loadClanMembers = loadClanMembers;
-window.showClanMembersModal = showClanMembersModal;
-window.showDonateDialog = showDonateDialog;
-window.donateToClan = donateToClan;
-window.showClanSettings = showClanSettings;
-window.loadClanChat = loadClanChat;
-window.renderClanChat = renderClanChat;
-window.sendClanMessage = sendClanMessage;
 window.restoreEnergy = restoreEnergy;
-window.loadRating = loadRating;
-window.renderRating = renderRating;
-window.healInfections = healInfections;
 /**
  * Интерфейс и обработчики событий
  * Обработчики DOM, фильтры, модальные окна, PvP, достижения, рефералы
@@ -6994,34 +6917,6 @@ document.addEventListener('click', (event) => {
     }
 });
 
-// ============================================================================
-// ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
-// ============================================================================
-
-// Removed window exports for currentInventoryFilter, etc. to avoid sync issues
-window.initInventoryControls = initInventoryControls;
-window.currentAchievementCategory = currentAchievementCategory;
-window.loadAchievements = loadAchievements;
-
-window.renderAchievementsCategories = renderAchievementsCategories;
-window.filterAchievements = filterAchievements;
-window.renderAchievementsList = renderAchievementsList;
-window.claimAchievement = claimAchievement;
-window.loadPVPGamePlayers = loadPVPGamePlayers;
-window.startPVPFight = startPVPFight;
-window.attackPVPTarget = attackPVPTarget;
-window.updatePVPHealth = updatePVPHealth;
-window.handlePVPBattleEnd = handlePVPBattleEnd;
-window.claimPVPRewards = claimPVPRewards;
-window.loadPVPStats = loadPVPStats;
-window.loadReferralCode = loadReferralCode;
-window.loadReferralStats = loadReferralStats;
-window.loadReferralsList = loadReferralsList;
-window.loadReferralScreen = loadReferralScreen;
-window.copyReferralCode = copyReferralCode;
-window.changeReferralCode = changeReferralCode;
-window.useReferralCode = useReferralCode;
-window.initReferralHandlers = initReferralHandlers;
 // ============================================================================
 // ГЕНЕРАЦИЯ ЭКРАНОВ (Screen Generator)
 // ============================================================================
@@ -8484,10 +8379,6 @@ async function buyCoinItem(itemId, triggerButton = null) {
     }
 }
 
-// Экспорт функции openShop в window для использования в других модулях
-window.openShop = openShop;
-window.loadCoinShop = loadCoinShop;
-window.buyCoinItem = buyCoinItem;
 /**
  * ============================================
  * ВИЗУАЛЬНЫЕ ЭФФЕКТЫ (Visual Effects)
@@ -9080,17 +8971,11 @@ function drawLocation(ctx, loc, pos, isHovered = false) {
 
 
 // Функции частиц
-window.showConfetti = showConfetti;
 window.showSparks = showSparks;
 window.particles = particles;
 
 // Функции карты
-window.renderLocations = renderLocations;
 window.redrawMap = redrawMap;
-window.calculateLocationPositions = calculateLocationPositions;
-window.drawCityBackground = drawCityBackground;
-window.drawRoads = drawRoads;
-window.drawLocation = drawLocation;
 /**
  * ============================================
  * АНИМАЦИИ (Animations)
@@ -9551,15 +9436,5 @@ function showLocationUnlockCelebration(locationName) {
 }
 
 // Экспорт функций для глобального доступа
-window.showBossDeathParticles = showBossDeathParticles;
-window.showVictoryFlash = showVictoryFlash;
-window.showKeyAnimation = showKeyAnimation;
-window.showRewardCelebration = showRewardCelebration;
-window.showBossVictorySummary = showBossVictorySummary;
 window.showKeyRewardCelebration = showKeyRewardCelebration;
-window.showLocationUnlockCelebration = showLocationUnlockCelebration;
-window.showLootAnimation = showLootAnimation;
 window.showDamageEffect = showDamageEffect;
-window.playSound = playSound;
-window.updateBalanceDisplay = updateBalanceDisplay;
-window.generateScreens = generateScreens;
