@@ -6512,7 +6512,7 @@ async function loadPVPStats() {
                     const diff = expiresAt - now;
                     if (diff <= 0) {
                         cooldownDiv.style.display = 'none';
-                if (window.pvpCooldownTimerId) {
+                        if (window.pvpCooldownTimerId) {
                             safeClearInterval(window.pvpCooldownTimerId);
                             window.pvpCooldownTimerId = null;
                         }

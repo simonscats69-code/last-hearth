@@ -521,7 +521,6 @@ module.exports = {
     serializeJSONField,
     safeStringify,
     safeJsonParse,
-    safeParse: safeJsonParse,
     getTelegramIdFromHeaders,
 
     // Транзакции с блокировкой

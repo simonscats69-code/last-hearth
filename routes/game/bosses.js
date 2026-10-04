@@ -381,8 +381,18 @@ async function getPlayerKeyCount(client, playerId, previousBossId, forUpdate = f
     return result.rows[0]?.quantity || 0;
 }
 
+/**
+ * Списать ключи за открытие боя с боссом.
+ *
+ * Возвращает ФАКТИЧЕСКИ списанное число. Раньше вызывающий код узнавал его
+ * повторным запросом к bosses.keys_required уже после COMMIT: значение могло
+ * разойтись со списанным, а сбой этого запроса приводил к ошибке уже после
+ * того, как бой начался и ключи списаны.
+ *
+ * @returns {Promise<number>} сколько ключей списано (0 — первый босс)
+ */
 async function spendBossKeys(client, playerId, previousBossId) {
-    if (previousBossId <= 0) return;
+    if (previousBossId <= 0) return 0;
 
     const keysRequired = await getKeysRequiredForBoss(client, previousBossId);
     // Блокируем строку ключей для предотвращения race condition
@@ -412,6 +422,8 @@ async function spendBossKeys(client, playerId, previousBossId) {
             keys_required: keysRequired
         };
     }
+
+    return keysRequired;
 }
 
 /**
@@ -758,9 +770,12 @@ router.post('/start', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя начать бой с боссом.', code: 'PLAYER_DEAD' });
             }
 
-            if (bossId > 1) {
-                await spendBossKeys(client, playerId, bossId - 1);
-            }
+            // Списанное число запоминаем ДО COMMIT: повторный запрос к БД
+            // после фиксации транзакции мог вернуть другое значение, а его
+            // сбой приводил бы к ошибке уже начатого боя со списанными ключами.
+            const keysSpent = bossId > 1
+                ? await spendBossKeys(client, playerId, bossId - 1)
+                : 0;
 
             await client.query(
                 `INSERT INTO player_boss_progress (player_id, boss_id, current_hp, max_hp, started_at, last_attack)
@@ -786,7 +801,7 @@ router.post('/start', async (req, res) => {
                 success: true,
                 data: {
                     mode: 'solo',
-                    keys_spent: bossId > 1 ? await getKeysRequiredForBoss(client, bossId - 1) : 0,
+                    keys_spent: keysSpent,
                     boss: {
                         id: boss.id,
                         name: boss.name,
@@ -1358,9 +1373,10 @@ router.post('/raid/start', async (req, res) => {
                 });
             }
 
-            if (bossId > 1) {
-                await spendBossKeys(client, playerId, bossId - 1);
-            }
+            // См. пояснение в POST /bosses/start: число запоминается до COMMIT.
+            const keysSpent = bossId > 1
+                ? await spendBossKeys(client, playerId, bossId - 1)
+                : 0;
 
             const expiresAt = new Date(Date.now() + MASS_FIGHT_DURATION_MS);
 
@@ -1410,7 +1426,7 @@ router.post('/raid/start', async (req, res) => {
                         hp: boss.max_health,
                         max_hp: boss.max_health
                     },
-                    keys_spent: bossId > 1 ? await getKeysRequiredForBoss(client, bossId - 1) : 0,
+                    keys_spent: keysSpent,
                     expires_at: expiresAt,
                     time_remaining_ms: MASS_FIGHT_DURATION_MS
                 }
