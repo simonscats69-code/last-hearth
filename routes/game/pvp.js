@@ -50,9 +50,9 @@ const handleError = (res, error, action, playerId) => {
         code = 'INSUFFICIENT_ENERGY';
         statusCode = 400;
     } else if (error.message.includes('уже завершён') || error.message.includes('уже закончен')) {
-        // Обычное игровое состояние, а не ошибка сервера: раньше уходило в
-        // INTERNAL_ERROR с HTTP 500, и клиент показывал «ошибка сервера»
-        // вместо понятного сообщения и не обновлял состояние боя.
+        // Обычное игровое состояние, а не ошибка сервера: INTERNAL_ERROR
+        // с HTTP 500 показывал бы клиенту «ошибка сервера» вместо понятного
+        // сообщения, и состояние боя не обновилось бы.
         code = 'BATTLE_FINISHED';
         statusCode = 409;
     } else if (error.message.includes('мертв')) {
@@ -447,8 +447,7 @@ router.post('/attack-hit', async (req, res) => {
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
             // Энергия: last_energy_update НЕ двигаем — реген идёт от реально
-            // прошедшего времени. Раньше здесь стояло NOW(), из-за чего удар
-            // обнулял накопленный реген (то же, что было с лутом в world.js).
+            // прошедшего времени, иначе удар обнулил бы накопленный реген.
             // Единое правило описано в utils/game-helpers.js (recalcEnergy).
             const energyResult = await client.query(
                 `UPDATE players
@@ -482,9 +481,8 @@ router.post('/attack-hit', async (req, res) => {
                     [battle_id]
                 );
 
-                // Уведомление противнику раньше отправлялось через WebSocket.
-                // Модуль utils/realtime.js удалён: клиент к WebSocket не подключался
-                // ни разу, поэтому уклонение защитник увидит на своём экране PvP.
+                // Уклонение защитник увидит только на своём экране PvP: активных
+                // push-уведомлений нет, бой подтягивается по /matches.
                 return {
                     dodged: true,
                     battleEnded: false,
@@ -504,7 +502,6 @@ router.post('/attack-hit', async (req, res) => {
             const newHealth = Math.max(0, defender.health - damage);
 
             // Износ снаряжения: оружие атакующего и броня защитника.
-            // Раньше PvP вообще ничего не изнашивал — прочность была мёртвой.
             const attackerBroken = wearEquipmentSlots(client, attackerId, attackerEq, ['weapon']);
             const defenderBroken = wearEquipmentSlots(client, defenderId, defenderEq,
                 ['body', 'head', 'hands', 'legs', 'boots', 'armor', 'helmet', 'accessory']);
@@ -580,22 +577,18 @@ router.post('/attack-hit', async (req, res) => {
 
                 if (Math.random() < 0.1) {
                     const [stolen] = pvp.getRandomItemsToSteal(defenderInventory, 1);
-                    // Украденный предмет должен поместиться: раньше шёл
-                    // прямой attackerInventory.push(stolen) — без проверки
-                    // лимита в 100 слотов и без стакования. При полном
-                    // инвентаре атакующий получал 101-й слот, и любая добыча
-                    // сразу упиралась в INVENTORY_FULL.
-                    // Снаряжение не стакуется, поэтому «втиснуть» его можно
-                    // только в пустой слот — если мест нет, предмет просто
-                    // не крадётся (у проигравшего он остаётся).
+                    // Украденный предмет должен поместиться: снаряжение не стакуется,
+                    // поэтому «втиснуть» его можно только в пустой слот —
+                    // если мест нет, предмет просто не крадётся (у проигравшего
+                    // он остаётся). Иначе атакующий получил бы 101-й слот и
+                    // любая добыча сразу упиралась бы в INVENTORY_FULL.
                     if (stolen && attackerInventory.length < MAX_INVENTORY_SLOTS) {
                         const stolenIndex = defenderInventory.indexOf(stolen);
                         const stackQuantity = Math.max(1, Number(stolen.quantity || 1));
                         const isEquipment = equipmentRules.isEquipmentItem(stolen);
 
-                        // Из стака крадётся ОДНА штука, а не весь стак: раньше
-                        // splice удалял запись целиком, и проигравший терял,
-                        // например, все 99 собранных консервов.
+                        // Из стака крадётся ОДНА штука, а не весь стак — иначе проигравший
+                        // терял бы, например, все 99 собранных консервов.
                         if (!isEquipment && stackQuantity > 1) {
                             defenderInventory[stolenIndex] = { ...stolen, quantity: stackQuantity - 1 };
                             addItemToInventory(attackerInventory, { ...stolen, quantity: 1 }, null);
@@ -706,9 +699,7 @@ await client.query(`
                     [attackerId, defenderId]
                 );
 
-                // Раньше здесь уходило уведомление противнику через WebSocket.
-                // WebSocket удалён вместе с utils/realtime.js: клиент к нему
-                // не подключался ни разу. Поражение противник увидит на своём
+                // Активных push-уведомлений нет: поражение противник увидит на своём
                 // экране PvP — там бой подтягивается по /api/game/pvp/matches.
 
                 // Логируем завершение боя

@@ -15,9 +15,8 @@ const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRa
  * Лимит слотов инвентаря.
  *
  * Берётся из public/shared/equipment.js — того же файла, что читает клиент.
- * Раньше значение 100 было продублировано здесь строкой и в world.js: любое
- * расхождение означало либо переполнение инвентаря, либо вечную блокировку
- * добычи.
+ * Расхождение значений означало бы либо переполнение инвентаря, либо
+ * вечную блокировку добычи.
  */
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
 
@@ -182,10 +181,9 @@ router.post('/buy', async (req, res) => {
 
         res.json(result);
     } catch (error) {
-        // Раньше здесь ловился только INSUFFICIENT_COINS, а ITEM_NOT_FOUND,
-        // PLAYER_NOT_FOUND и INVENTORY_FULL уходили в handleError -> 500
-        // с общим текстом: клиент показывал «ошибка сервера» вместо
-        // «недостаточно монет» или «инвентарь полон».
+        // Игровые коды ошибок ловим здесь и отдаём как 4xx. Всё остальное —
+        // в handleError -> 500 с общим текстом, и клиент показывает
+        // «ошибка сервера» вместо «недостаточно монет» или «инвентарь полон».
         if (['INSUFFICIENT_COINS', 'ITEM_NOT_FOUND', 'PLAYER_NOT_FOUND', 'INVENTORY_FULL'].includes(error.code)) {
             return res.status(error.statusCode || 400).json({
                 success: false,
@@ -228,11 +226,9 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
             if (equip) {
                 // Слот определяет единственный источник правил
-                // (public/shared/equipment.js). Раньше здесь стояло
-                // `item.slot || item.type || 'accessory'`: расходник без слота
-                // (еда, бинт) попадал в слот вроде «food», который не участвует
-                // ни в защите, ни в износе, — предмет исчезал из инвентаря
-                // и молча не давал бонусов.
+                // (public/shared/equipment.js). Слот типа item.type (например
+                // «food» у еды) не участвует ни в защите, ни в износе: предмет
+                // исчез бы из инвентаря и молча не дал бы бонусов.
                 const slot = equipmentRules.resolveEquipmentSlot(item);
                 if (!slot) {
                     throw {
@@ -298,9 +294,9 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 const curRad = playerRadiation.level;
                 const newRad = Math.max(0, curRad - cureAmount);
                 // radiation — JSONB-колонка ({ level, expires_at, applied_at }).
-                // Раньше сюда писалось голое число → Postgres отвечал
+                // Голое число сюда писать нельзя: Postgres ответит
                 // "column radiation is of type jsonb but expression is of type
-                // integer" и любое использование антирада падало с 500.
+                // integer" и любое использование антирада упадёт с 500.
                 const radPayload = JSON.stringify({
                     level: newRad,
                     expires_at: newRad > 0 ? playerRadiation.expires_at : null,
@@ -326,9 +322,8 @@ router.post(['/use', '/use-item'], async (req, res) => {
             }
 
             if (updates.length > 0) {
-                // Расходник может лежать стопкой (quantity > 1). Раньше здесь стоял
-                // inventory.splice(itemIndex, 1) — эффект применялся один раз,
-                // а удалялся ВЕСЬ стек: купил 10 яблок, использовал одно — потерял 9.
+                // Расходник может лежать стопкой (quantity > 1): эффект применяется один
+                // раз, а из стека уходит ровно одна штука.
                 const currentQty = Number(item.quantity || 1);
                 const remainingQty = currentQty - 1;
 
@@ -525,12 +520,9 @@ router.post('/drop', async (req, res) => {
                 ? Math.min(stackQuantity, requested)
                 : stackQuantity;
 
-            // Мест могло хватить не всем материалам. Раньше здесь стоял
-            // `inventory.pop()` с continue: предмет уже был удалён из
-            // инвентаря, а материал не выдавался — игрок терял вещь целиком.
-            // Теперь считаем, что нужно, ДО удаления предмета, и при нехватке
-            // мест откатываем всю операцию (ошибка пробрасывается наружу, а
-            // транзакция откатывается — игрок ничего не теряет).
+            // Мест может не хватить. Нужное считаем ДО удаления предмета, и при
+            // нехватке мест бросаем ошибку: транзакция откатывается, и игрок
+            // ничего не теряет.
             const scrapYield = equipmentRules.calculateScrapYield(item, 1);
             const materialNames = Object.keys(scrapYield);
             let materials = [];
@@ -549,10 +541,7 @@ router.post('/drop', async (req, res) => {
                 }
             }
 
-            // Мест может не хватить. Считаем это ДО удаления предмета: раньше
-            // здесь стоял `inventory.pop()` с continue, из-за чего игрок терял
-            // вещь целиком (предмет удалён, материал не выдан). Теперь при
-            // нехватке мест бросаем ошибку — транзакция откатывается.
+            // Мест может не хватить: считаем это ДО удаления предмета.
             if (materials.length > 0) {
                 const projected = inventory.slice();
                 for (const material of materials) {
