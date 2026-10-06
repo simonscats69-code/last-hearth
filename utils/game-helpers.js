@@ -906,6 +906,54 @@ async function getPlayerProgress(playerId) {
 }
 
 /**
+ * Начислить валюту (монеты и/или звёзды) игроку.
+ * Используется для наград за достижения, бонусы и т.д.
+ *
+ * @param {object} client - клиент БД (транзакция)
+ * @param {number} playerId - ID игрока
+ * @param {object} reward - объект награды { coins?: number, stars?: number }
+ * @param {boolean} touchUpdatedAt - обновлять ли updated_at (по умолчанию false)
+ * @returns {Promise<void>}
+ */
+async function grantCurrencyReward(client, playerId, reward, touchUpdatedAt = false) {
+    if (!reward || typeof reward !== 'object') {
+        return;
+    }
+    
+    const coins = Math.max(0, Math.floor(Number(reward.coins) || 0));
+    const stars = Math.max(0, Math.floor(Number(reward.stars) || 0));
+    
+    if (coins === 0 && stars === 0) {
+        return; // Нет наград — не делаем запрос
+    }
+    
+    const updates = [];
+    const params = [playerId];
+    let paramIdx = 2;
+    
+    if (coins > 0) {
+        updates.push(`coins = coins + $${paramIdx++}`);
+        params.push(coins);
+    }
+    
+    if (stars > 0) {
+        updates.push(`stars = stars + $${paramIdx++}`);
+        params.push(stars);
+    }
+    
+    if (touchUpdatedAt) {
+        updates.push('updated_at = NOW()');
+    }
+    
+    if (updates.length > 0) {
+        await client.query(
+            `UPDATE players SET ${updates.join(', ')} WHERE id = $1`,
+            params
+        );
+    }
+}
+
+/**
  * Инициализировать таблицу достижений.
  * P2-12: единый источник теперь schema.js (4 базовых ачивки).
  * Старый набор из 19 записей больше не вставляется, чтобы не дублировать
@@ -988,6 +1036,9 @@ module.exports = {
     trackCollectedItems,
     progressDailyTask,
     consumeInventoryItem,
+    
+    // Валюта
+    grantCurrencyReward,
     
     // Функции достижений (achievements.js)
     getAchievementCurrentValue,

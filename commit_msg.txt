@@ -1,7 +1,0 @@
-Fix boss key progression system
-
-- db/schema.js: seedBosses now uses progressive keys_required (1,2,3...12) instead of hardcoded 1
-- routes/game/world.js: getBossKeyChances rewritten to accept playerId and return ONLY the next sequential boss key (prevents skipping bosses)
-- routes/game/bosses.js: grantNextBossKey already correct - gives keys_required keys for defeated boss
-
-Now: Boss 1 drops 1 key for Boss 2, Boss 2 drops 2 keys for Boss 3, etc. Keys drop sequentially - player cannot get keys for Boss N+2 before unlocking N+1.

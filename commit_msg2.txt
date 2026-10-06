@@ -1,0 +1,7 @@
+Fix achievements claim 500 error - add missing grantCurrencyReward function
+
+- utils/game-helpers.js: add grantCurrencyReward function (was imported but not defined)
+- routes/api.js: achievements/claim now works correctly (was throwing ReferenceError)
+- Also fixed initAchievementsTable function that was accidentally removed
+
+Workshop repair 400: likely rate limit (purchaseLimiter) or slot validation - code appears correct, may need client-side debugging
