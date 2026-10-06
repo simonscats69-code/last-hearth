@@ -163,27 +163,31 @@ router.get('/daily-tasks', async (req, res) => {
 // одно задание (строка удаляется) остальные два не восстанавливались,
 // а список выглядел неполным весь день.
 const tasks = await transaction(async (client) => {
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1);
-    expiresAt.setHours(0, 0, 0, 0);
+            // Срок — полночь следующих суток. Порядок важен: сначала дата,
+            // потом часы. Наоборот (setHours до setDate) при входе после
+            // полуночи дал бы срок в ПРОШЛОМ (00:00 «сегодня»), и новое
+            // задание не попало бы в выборку `expires_at > NOW()`.
+            const expiresAt = new Date();
+            expiresAt.setDate(expiresAt.getDate() + 1);
+            expiresAt.setHours(0, 0, 0, 0);
 
-    for (const taskType of DAILY_TASK_TYPES) {
-        await client.query(
-            `INSERT INTO daily_tasks (player_id, task_type, target_value, reward, expires_at)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (player_id, task_type, expires_at) DO NOTHING`,
-            [player.id, taskType.type, taskType.target, JSON.stringify(taskType.reward), expiresAt]
-        );
-    }
+            for (const taskType of DAILY_TASK_TYPES) {
+                await client.query(
+                    `INSERT INTO daily_tasks (player_id, task_type, target_value, reward, expires_at)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (player_id, task_type, expires_at) DO NOTHING`,
+                    [player.id, taskType.type, taskType.target, JSON.stringify(taskType.reward), expiresAt]
+                );
+            }
 
-    const result = await client.query(
-        `SELECT * FROM daily_tasks
-          WHERE player_id = $1 AND expires_at > NOW()
-          ORDER BY task_type`,
-        [player.id]
-    );
-    return result.rows;
-});
+            const result = await client.query(
+                `SELECT * FROM daily_tasks
+                  WHERE player_id = $1 AND expires_at > NOW()
+                  ORDER BY task_type`,
+                [player.id]
+            );
+            return result.rows;
+        });
 
         res.json({
             tasks: tasks.map((task) => ({

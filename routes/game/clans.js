@@ -124,8 +124,17 @@ router.get('/clan', wrap(async (req, res) => {
 router.post('/clan/create', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
-    const { name, description = '', is_public = true } = req.body;
-    const inviteCode = generateClanInviteCode();
+    const { name, description = '', is_public: isPublicBody, is_open: isOpenBody } = req.body;
+    // Отдельный код приглашения на каждое создание. Генерация перенесена
+    // внутрь транзакции: код выдавался ДО проверок, и при откате (занятое
+    // имя, не хватило монет) он «сгорал» впустую — попытка создать клан
+    // после ошибки тратила ещё одну.
+    let inviteCode = null;
+
+    // is_open (приглашать по коду) и is_public (показывать в списке) —
+    // РАЗНЫЕ настройки.
+    const isPublic = isPublicBody === undefined ? true : Boolean(isPublicBody);
+    const isOpen = isOpenBody === undefined ? true : Boolean(isOpenBody);
     
     // Валидация имени клана
     const nameValidation = sanitizeName(name, 30);
@@ -164,11 +173,44 @@ router.post('/clan/create', wrap(async (req, res) => {
             throw { message: 'Клан с таким именем уже существует', code: 'CLAN_NAME_TAKEN', statusCode: 409 };
         }
 
-        const insertResult = await client.query(
-            `INSERT INTO clans (name, description, leader_id, created_at, is_open, is_public, invite_code) 
-             VALUES ($1, $2, $3, NOW(), $4, $5, $6) RETURNING id`,
-            [nameValidation.value, String(description).slice(0, 200), lockedPlayer.telegram_id, Boolean(is_public), Boolean(is_public), inviteCode]
-        );
+        // Код приглашения генерируем здесь: транзакция могла откатиться
+        // на проверке имени или монет, и код, выданный заранее, пропал бы.
+        // invite_code объявлен UNIQUE, поэтому коллизия (32^6 ≈ 10^9 вариантов,
+        // но при тысячах кланов исход уже не единичный) дала бы 500 с текстом
+        // PostgreSQL. Повторяем попытку до успеха.
+        const MAX_INVITE_ATTEMPTS = 5;
+        let insertResult = null;
+        let lastInviteError = null;
+
+        for (let attempt = 1; attempt <= MAX_INVITE_ATTEMPTS; attempt++) {
+            inviteCode = generateClanInviteCode();
+            try {
+                insertResult = await client.query(
+                    `INSERT INTO clans (name, description, leader_id, created_at, is_open, is_public, invite_code)
+                     VALUES ($1, $2, $3, NOW(), $4, $5, $6) RETURNING id`,
+                    // leader_id — ВНУТРЕННИЙ players.id, а не telegram_id.
+                    [nameValidation.value, String(description).slice(0, 200), playerId, isOpen, isPublic, inviteCode]
+                );
+                break;
+            } catch (insertError) {
+                // 23505 — нарушение UNIQUE. Если это не invite_code,
+                // повторять бессмысленно (например, конфликт по имени).
+                const isInviteCollision = insertError?.code === '23505'
+                    && String(insertError?.constraint || '').includes('invite_code');
+                if (!isInviteCollision) throw insertError;
+                lastInviteError = insertError;
+            }
+        }
+
+        if (!insertResult) {
+            logger.error('[clans] Не удалось сгенерировать свободный invite_code', {
+                playerId,
+                attempts: MAX_INVITE_ATTEMPTS,
+                error: lastInviteError?.message
+            });
+            throw { message: 'Не удалось создать клан: код приглашения занят. Попробуй ещё раз.', code: 'INVITE_CODE_CONFLICT', statusCode: 503 };
+        }
+
         const clanId = insertResult.rows[0].id;
         
         await client.query(
@@ -199,20 +241,24 @@ router.post('/clan/join', wrap(async (req, res) => {
     const playerId = player?.id;
     const { clan_id } = req.body;
     
-    // Валидация ID клана
+    // Валидация ID клана.
+    // Читаем .ok, а не .valid: serverApi.validateId возвращает { ok, ... },
+    // и .valid там не было — проверка отклоняла ЛЮБОЙ clan_id, включая
+    // корректный (вступить в клан было невозможно).
     const idValidation = validateId(clan_id, 'ID клана');
-    if (!idValidation.valid) {
+    if (!idValidation.ok) {
         return fail(res, idValidation.error, idValidation.code);
     }
+    const clanId = idValidation.value;
     
     if (player.clan_id) {
         return fail(res, 'Вы уже состоите в клане', 'ALREADY_IN_CLAN');
     }
     
     const clan = await queryOne(
-        `SELECT c.*, (SELECT COUNT(*) FROM players WHERE clan_id = c.id) AS members_count 
-         FROM clans c WHERE c.id = $1`, 
-        [clan_id]
+        `SELECT c.*, (SELECT COUNT(*) FROM players WHERE clan_id = c.id) AS members_count
+         FROM clans c WHERE c.id = $1`,
+        [clanId]
     );
     
     if (!clan) {
@@ -240,7 +286,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         // Проверяем количество участников
         const memberCountResult = await client.query(
             'SELECT COUNT(*) as count FROM players WHERE clan_id = $1',
-            [clan_id]
+            [clanId]
         );
         const memberCount = memberCountResult.rows[0];
 
@@ -254,7 +300,7 @@ router.post('/clan/join', wrap(async (req, res) => {
             WHERE id = $2
             AND clan_id IS NULL
             RETURNING id
-        `, [clan_id, playerId]);
+        `, [clanId, playerId]);
         
         if (!updateResult.rows.length) {
             // Гонка: игрок успел вступить в другой клан между проверкой и UPDATE
@@ -263,7 +309,7 @@ router.post('/clan/join', wrap(async (req, res) => {
 
         // Логируем вступление
         await logPlayerAction(playerId, 'clan_join', {
-            clan_id,
+            clan_id: clanId,
             clan_name: clan.name
         }, client);
 

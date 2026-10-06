@@ -4,11 +4,12 @@
 
 const express = require('express');
 const router = express.Router();
-const { transaction: tx } = require('../../db/database');
+const { transaction } = require('../../db/database');
 const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
+const { validateId } = require('../../utils/validate');
 const { DebuffAPI } = require('./debuffs');
-const { buildPlayerStatus, normalizeInventory } = require('../../utils/game-helpers');
+const { buildPlayerStatus, normalizeInventory, consumeInventoryItem } = require('../../utils/game-helpers');
 
 
 
@@ -92,26 +93,20 @@ async function runStatusCheck(client, playerId) {
 
 
 /**
- * Валидация ID
- */
-function validateId(id, name = 'ID') {
-    if (!Number.isInteger(id) || id <= 0) {
-        throw { 
-            message: `Некорректный ${name}`, 
-            code: 'INVALID_ID',
-            statusCode: 400 
-        };
-    }
-}
-
-/**
- * Валидация item_id
+ * Валидация item_id.
+ *
+ * Использует общий validateId из serverApi, который приводит
+ * значение к числу и возвращает результат. Форма ответа
+ * приведена к общей: { ok, value } | { ok: false, error, code }.
+ *
+ * @param {*} itemId проверяемый item_id
+ * @returns {{ok: true, value: number}|{ok: false, error: string, code: string}}
  */
 function validateItemId(itemId) {
-    if (itemId === undefined || itemId === null) {
-        throw { message: 'item_id обязателен', code: 'MISSING_ITEM_ID', statusCode: 400 };
+    if (itemId === undefined || itemId === null || itemId === '') {
+        return { ok: false, error: 'Требуется item_id', code: 'MISSING_ITEM_ID' };
     }
-    validateId(itemId, 'item_id');
+    return validateId(itemId, 'item_id');
 }
 
 /**
@@ -139,7 +134,7 @@ router.post('/check', async (req, res) => {
         const playerId = player.id;
         
         // Используем транзакцию с блокировкой строки
-        const result = await tx(async (client) => runStatusCheck(client, playerId));
+        const result = await transaction(async (client) => runStatusCheck(client, playerId));
         
         // Логируем действие
         await logPlayerAction(playerId, 'status_check', {
@@ -193,7 +188,14 @@ router.post('/heal', async (req, res) => {
         
         // Валидация item_id если передан
         if (item_id !== undefined) {
-            validateItemId(item_id);
+            const itemIdCheck = validateItemId(item_id);
+            if (!itemIdCheck.ok) {
+                return res.status(400).json({
+                    success: false,
+                    error: itemIdCheck.error,
+                    code: itemIdCheck.code
+                });
+            }
         }
         if (item_index !== undefined && !Number.isInteger(normalizedItemIndex)) {
             return res.status(400).json({
@@ -213,7 +215,7 @@ router.post('/heal', async (req, res) => {
         }
         
         // Используем транзакцию с блокировкой строки
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             // Блокируем строку игрока
             const lockResult = await client.query(
                 `SELECT inventory, health, max_health, radiation, infections
@@ -286,24 +288,13 @@ router.post('/heal', async (req, res) => {
                 }
                 
                     if (healed) {
-                     // Расходуем ОДНУ штуку, а не весь стек. Раньше здесь стоял
-                     // splice(itemIndex, 1), который удалял запись целиком:
-                     // бинтов было 10, использован 1 — в инвентаре осталось 0.
-                     // Тот же баг был исправлен в routes/game/items.js (/use),
-                     // здесь дублирующая логика осталась нетронутой.
-                     const newInventory = [...inventory];
-                     const currentQty = Math.max(1, Number(item.quantity || 1));
-                     const remainingQty = currentQty - 1;
+                     // Расходуем ОДНУ штуку, а не весь стек.
+                     const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, resolvedItemIndex);
 
-                     if (remainingQty > 0) {
-                         newInventory[resolvedItemIndex] = { ...item, quantity: remainingQty };
-                     } else {
-                         newInventory.splice(resolvedItemIndex, 1);
-                     }
-
-                     await client.query(`
-                         UPDATE players SET inventory = $1 WHERE id = $2
-                     `, [JSON.stringify(newInventory), playerId]);
+                     await client.query(
+                         `UPDATE players SET inventory = $1 WHERE id = $2`,
+                         [JSON.stringify(updatedInventory), playerId]
+                     );
                      
                      // Логируем действие
                      await logPlayerAction(playerId, 'status_heal', {
@@ -316,7 +307,7 @@ router.post('/heal', async (req, res) => {
                         success: true,
                         message: message,
                         item_used: item,
-                        quantity_left: remainingQty
+                        quantity_left: quantityLeft
                     };
                 }
                 

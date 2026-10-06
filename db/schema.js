@@ -5,9 +5,20 @@
 
 const { query } = require('./database');
 const pg = require('pg');
-// Нужен миграции уникальности реферального кода: дубликатам выдаются
-// новые коды тем же генератором, что и при регистрации.
-const { generateReferralCode } = require('../utils/referralCode');
+
+// utils/game-helpers подключается лениво и ОДИН раз на весь файл.
+// Нужен ровно в двух местах — mergeDuplicateInventoryStacks и
+// repairPlayerInventories, — и раньше каждое тянуло модуль своим
+// require. Ленивость здесь обязательна: game-helpers тянет db/database,
+// и верхнеуровневый импорт здесь создал бы цикл загрузки модулей.
+// Оборачиваем в функцию, чтобы взять оба значения одной строкой.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('../utils/game-helpers');
+    }
+    return gameHelpers;
+}
 
 /**
  * Безопасное экранирование идентификаторов PostgreSQL
@@ -83,10 +94,6 @@ async function createTables() {
             unique_items JSONB DEFAULT '[]',
             locations_visited JSONB DEFAULT '[]',
             clans_joined INTEGER DEFAULT 0,
-            referral_code VARCHAR(20),
-            referral_code_changed BOOLEAN DEFAULT false,
-            referred_by INTEGER,
-            referral_bonus_claimed BOOLEAN DEFAULT false,
             clan_donated INTEGER DEFAULT 0,
             active_boss_id INTEGER
         );
@@ -159,7 +166,7 @@ async function createTables() {
             stars_price INTEGER DEFAULT 0,
             icon VARCHAR(50),
             image_url VARCHAR(500),
-            UNIQUE(name, type)
+            UNIQUE(name, type, rarity)
         );
     `);
 
@@ -475,24 +482,6 @@ async function createTables() {
         );
     `);
 
-    // Таблица рефералов
-    await query(`
-        CREATE TABLE IF NOT EXISTS referrals (
-            id SERIAL PRIMARY KEY,
-            referrer_id INTEGER NOT NULL,
-            referred_id INTEGER NOT NULL,
-            bonus_claimed BOOLEAN DEFAULT false,
-            created_at TIMESTAMP DEFAULT NOW(),
-            level_5_bonus BOOLEAN DEFAULT false,
-            level_10_bonus BOOLEAN DEFAULT false,
-            level_20_bonus BOOLEAN DEFAULT false,
-            level_5_bonus_claimed_at TIMESTAMP,
-            level_10_bonus_claimed_at TIMESTAMP,
-            level_20_bonus_claimed_at TIMESTAMP,
-            UNIQUE(referred_id)
-        );
-    `);
-
     // Таблица PvP матчей — УДАЛЕНА: используется pvp_battles
     // Для обратной совместимости удаляем старую таблицу если существует
     await query(`DROP TABLE IF EXISTS pvp_matches CASCADE`);
@@ -551,8 +540,6 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_players_coins ON players(coins DESC)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_players_last_action ON players(last_action_time)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_players_daily_bonus ON players(last_daily_bonus)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_players_referral_code ON players(referral_code)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_players_referred_by ON players(referred_by)`);
 
     // Индексы для boss_keys
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_keys_player ON boss_keys(player_id)`);
@@ -596,44 +583,6 @@ async function createTables() {
     // Индексы для player_achievements
     await query(`CREATE INDEX IF NOT EXISTS idx_player_achievements_player ON player_achievements(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_player_achievements_achievement ON player_achievements(achievement_id)`);
-
-    // Индексы для referrals
-    await query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred ON referrals(referred_id)`);
-
-    // Foreign key для referrer_id
-    await query(`
-        DO $do$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'referrals' AND column_name = 'referrer_id' AND data_type = 'integer'
-            ) AND NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints 
-                WHERE constraint_name = 'fk_referrals_referrer'
-            ) THEN
-                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referrer
-                FOREIGN KEY (referrer_id) REFERENCES players(id) ON DELETE CASCADE;
-            END IF;
-        END $do$
-    `);
-
-    // Foreign key для referred_id
-    await query(`
-        DO $do$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'referrals' AND column_name = 'referred_id' AND data_type = 'integer'
-            ) AND NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints 
-                WHERE constraint_name = 'fk_referrals_referred'
-            ) THEN
-                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referred
-                FOREIGN KEY (referred_id) REFERENCES players(id) ON DELETE CASCADE;
-            END IF;
-        END $do$
-    `);
 
     // Индексы для raid_progress
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_progress_boss ON raid_progress(boss_id)`);
@@ -785,9 +734,6 @@ async function runMigrations() {
         END $do$
     `);
 
-    // Миграции для players - клановые поля
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS clan_donated INTEGER DEFAULT 0`);
-
     // Миграции для bosses - доводим старые инсталляции до актуальной схемы
     await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
     await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS max_health INTEGER DEFAULT 100`);
@@ -804,18 +750,7 @@ async function runMigrations() {
     await query(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)`);
 
     // Миграции для clans - поля уже используются API и фронтендом
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS experience INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS coins INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT true`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS is_open BOOLEAN DEFAULT true`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS invite_code VARCHAR(20)`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS total_members INTEGER DEFAULT 1`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS bosses_killed INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS loot_bonus INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS total_donated INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`);
-    await query(`ALTER TABLE clans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    // (в createTables уже есть: level, experience, coins, is_public, is_open, invite_code, total_members, bosses_killed, loot_bonus, total_donated, created_at, updated_at)
 
     // Миграция: добавить FK для boss_sessions.raid_id после создания raid_progress
     await query(`
@@ -834,81 +769,6 @@ async function runMigrations() {
             END IF;
         END $do$
     `);
-
-    // Миграции для players - метки времени
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
-
-    // Миграции для PvP
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_wins INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_losses INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_draws INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_streak INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_max_streak INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_rating INTEGER DEFAULT 1000`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_total_damage_dealt INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pvp_total_damage_taken INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS coins_stolen_from_me INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_stolen_from_me INTEGER DEFAULT 0`);
-
-    // Миграции для дебаффов
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS infections JSONB DEFAULT '[]'`);
-
-    // Миграция: достижения исследования
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS locations_visited JSONB DEFAULT '[]'`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS clans_joined INTEGER DEFAULT 0`);
-
-    // Миграции для рефералов
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_code VARCHAR(20)`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_code_changed BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referred_by INTEGER`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referral_bonus_claimed BOOLEAN DEFAULT false`);
-
-    // Миграция: уникальность реферального кода.
-    //
-    // Раньше UNIQUE не было, при этом:
-    //   - webhook.js ловил 23505 по referral_code, но constraint не мог
-    //     сработать (retry-цикл был мёртвым);
-    //   - POST /referral/use делает SELECT id ... WHERE referral_code = $1
-    //     и берёт rows[0], то есть при дублях бонус уходил наугад.
-    //
-    // Прежде чем добавить индекс, у дубликатов (кроме самой ранней записи,
-    // id = MIN, чей код мог уже быть роздан) выдаём новые коды — иначе
-    // CREATE UNIQUE INDEX упал бы и миграция не прошла бы.
-    const duplicates = await query(`
-        SELECT referral_code
-        FROM players
-        WHERE referral_code IS NOT NULL AND referral_code <> ''
-        GROUP BY referral_code
-        HAVING COUNT(*) > 1
-        ORDER BY MIN(id)
-    `);
-
-    for (const dup of duplicates.rows) {
-        const conflictRows = await query(
-            `SELECT id FROM players WHERE referral_code = $1 AND id <> (
-                SELECT MIN(id) FROM players WHERE referral_code = $1
-            )`,
-            [dup.referral_code]
-        );
-
-        for (const row of conflictRows.rows) {
-            let newCode = generateReferralCode();
-            let attempts = 0;
-            // Крайне маловероятно, но проверяем, что новый код тоже свободен
-            while (attempts < 10) {
-                const taken = await query('SELECT id FROM players WHERE referral_code = $1', [newCode]);
-                if (taken.rows.length === 0) break;
-                newCode = generateReferralCode();
-                attempts++;
-            }
-            await query('UPDATE players SET referral_code = $1 WHERE id = $2', [newCode, row.id]);
-        }
-
-        console.warn(`[migrate] Дубликаты реферального кода «${dup.referral_code}»: перевыдано кодов — ${conflictRows.rows.length}`);
-    }
-
-    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_players_referral_code_unique ON players(referral_code)`);
 
     // Миграции для магазина Stars
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS buffs JSONB DEFAULT '{}'`);
@@ -930,103 +790,17 @@ async function runMigrations() {
     // ALTER TABLE player_tasks ALTER COLUMN player_id TYPE BIGINT;
     // ALTER TABLE player_cooldowns ALTER COLUMN player_id TYPE BIGINT;
 
-    // Миграция: преобразование referred_by из BIGINT в INTEGER (для существующих данных)
-    await query(`
-        DO $do$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'players' AND column_name = 'referred_by' AND data_type = 'bigint'
-            ) THEN
-                ALTER TABLE players ALTER COLUMN referred_by TYPE INTEGER USING referred_by::integer;
-            END IF;
-        END $do$
-    `);
-
-    // Миграция: преобразование referred_id в referrals из BIGINT в INTEGER
-    await query(`
-        DO $do$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'referrals' AND column_name = 'referred_id' AND data_type = 'bigint'
-            ) THEN
-                ALTER TABLE referrals ALTER COLUMN referred_id TYPE INTEGER USING referred_id::integer;
-            END IF;
-        END $do$
-    `);
-
-    // Миграция: преобразование referrer_id в referrals из BIGINT в INTEGER
-    await query(`
-        DO $do$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'referrals' AND column_name = 'referrer_id' AND data_type = 'bigint'
-            ) THEN
-                ALTER TABLE referrals ALTER COLUMN referrer_id TYPE INTEGER USING referrer_id::integer;
-            END IF;
-        END $do$
-    `);
-
-    // Добавить FK для referred_by (ссылка на id того же игрока)
-    await query(`
-        DO $do$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints 
-                WHERE constraint_name = 'fk_players_referred_by'
-            ) THEN
-                ALTER TABLE players ADD CONSTRAINT fk_players_referred_by 
-                FOREIGN KEY (referred_by) REFERENCES players(id) ON DELETE SET NULL;
-            END IF;
-        END $do$
-    `);
-
-    // Добавить FK для referrer_id после нормализации типов
-    await query(`
-        DO $do$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'referrals' AND column_name = 'referrer_id' AND data_type = 'integer'
-            ) AND NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints
-                WHERE constraint_name = 'fk_referrals_referrer'
-            ) THEN
-                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referrer
-                FOREIGN KEY (referrer_id) REFERENCES players(id) ON DELETE CASCADE;
-            END IF;
-        END $do$
-    `);
-
-    // Добавить FK для referred_id после нормализации типов
-    await query(`
-        DO $do$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'referrals' AND column_name = 'referred_id' AND data_type = 'integer'
-            ) AND NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints
-                WHERE constraint_name = 'fk_referrals_referred'
-            ) THEN
-                ALTER TABLE referrals ADD CONSTRAINT fk_referrals_referred
-                FOREIGN KEY (referred_id) REFERENCES players(id) ON DELETE CASCADE;
-            END IF;
-        END $do$
-    `);
-
-    // Миграции для таблицы рефералов
-    await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_5_bonus BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_10_bonus BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_20_bonus BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_5_bonus_claimed_at TIMESTAMP`);
-    await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_10_bonus_claimed_at TIMESTAMP`);
-    await query(`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS level_20_bonus_claimed_at TIMESTAMP`);
-
     // Миграции для daily_tasks в таблице players
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_completed INTEGER DEFAULT 0`);
+
+    // Таблица ключей идемпотентности для защиты от повторных мутаций
+    await query(`
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            idempotency_key VARCHAR(200) PRIMARY KEY,
+            response_data JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `);
 
     // ==========================================
     // ИНДЕКСЫ ДЛЯ ПРОИЗВОДИТЕЛЬНОСТИ (H-10)
@@ -1042,21 +816,42 @@ async function runMigrations() {
         )
     `);
     
-await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs(player_id)`);
-     await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_created_at ON player_logs(created_at)`);
-     await query(`CREATE INDEX IF NOT EXISTS idx_clans_leader_id ON clans(leader_id)`);
-     // Индексы idx_players_telegram_id и idx_players_clan_id уже созданы в createTables()
-     await query(`CREATE INDEX IF NOT EXISTS idx_player_achievements_player_id ON player_achievements(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_player_id ON player_logs(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_logs_created_at ON player_logs(created_at)`);
+
+    // Таблица для rate limiting (замена in-memory rateLimitMap)
+    await query(`
+        CREATE TABLE IF NOT EXISTS rate_limits (
+            identifier VARCHAR(100) NOT NULL,
+            window_start TIMESTAMP NOT NULL DEFAULT NOW(),
+            request_count INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (identifier, window_start)
+        )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_rate_limits_expires ON rate_limits(window_start)`);
+
+    // Таблица состояния планировщика (для горизонтального масштабирования)
+    await query(`
+        CREATE TABLE IF NOT EXISTS scheduler_state (
+            task_name VARCHAR(50) PRIMARY KEY,
+            is_running BOOLEAN DEFAULT false,
+            last_run_at TIMESTAMP,
+            next_run_at TIMESTAMP,
+            retry_count INTEGER DEFAULT 0,
+            offset_value INTEGER DEFAULT 0,
+            metadata JSONB DEFAULT '{}',
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+    `);
+
+    await query(`CREATE INDEX IF NOT EXISTS idx_clans_leader_id ON clans(leader_id)`);
+    // Индексы idx_players_telegram_id и idx_players_clan_id уже созданы в createTables()
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_achievements_player_id ON player_achievements(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_mastery_player_id ON boss_mastery(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_id ON daily_tasks(player_id)`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
 
-    // Миграция для wheel в таблице players
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_wheel_spin TIMESTAMP`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS referrals INTEGER DEFAULT 0`);
     await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_collected INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT false`);
-    await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS ban_reason TEXT`);
 
     // Миграции для achievements
     await query(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);
@@ -1069,11 +864,7 @@ await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMESTAM
 await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_enabled BOOLEAN DEFAULT false`);
 await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_threshold SMALLINT DEFAULT 35`);
 
-// Достижения: строки без достижения (achievement_id IS NULL) — наследие
-    // старой схемы, где ключом был achievement_key. UNIQUE в Postgres считает
-    // NULL разными значениями, поэтому такие строки свободно копились, но
-    // никогда не находились запросами `WHERE achievement_id = $1`. Удаляем
-    // их и записи-сироты. Идемпотентно: повторный запуск ничего не делает.
+    // Удаление записей player_achievements с NULL achievement_id (ошибка старой схемы)
     await query(`
         DELETE FROM player_achievements pa
          WHERE pa.achievement_id IS NULL
@@ -1085,9 +876,31 @@ await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_threshold SM
     await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS reward_claimed BOOLEAN DEFAULT false`);
     await query(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP`);
 
-    // Тип боеприпасов оружия: none / ammo / rockets. Мастерская знает по нему,
-// что тратить на улучшение — патроны или реактивные гранаты.
+// Тип боеприпасов оружия: none / ammo / rockets. Мастерская знает по нему,
+    // что тратить на улучшение — патроны или реактивные гранаты.
     await query(`ALTER TABLE items ADD COLUMN IF NOT EXISTS ammo_type VARCHAR(20) DEFAULT 'none'`);
+
+    // Миграция: заменяем UNIQUE(name, type) на UNIQUE(name, type, rarity)
+    // чтобы разрешить одинаковые имена для разных редкостей.
+    await query(`
+        DO $do$
+        BEGIN
+            -- Удаляем старое ограничение, если существует
+            IF EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE table_name = 'items' AND constraint_name = 'items_name_type_key'
+            ) THEN
+                ALTER TABLE items DROP CONSTRAINT items_name_type_key;
+            END IF;
+            -- Добавляем новое ограничение, если не существует
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE table_name = 'items' AND constraint_name = 'items_name_type_rarity_key'
+            ) THEN
+                ALTER TABLE items ADD CONSTRAINT items_name_type_rarity_key UNIQUE (name, type, rarity);
+            END IF;
+        END $do$
+    `);
 
     // key_drop_chance переводим в проценты (0..100): сид задаёт 2.5% на ключ от
     // второго босса, а старое ограничение (0..1) такую запись отклоняло.
@@ -1244,9 +1057,7 @@ await query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_threshold SM
  * @returns {Promise<number>} сколько инвентарей реально изменилось
  */
 async function mergeDuplicateInventoryStacks() {
-    // Ленивый require: game-helpers тянет db/database, который к этому моменту
-    // уже загружен, поэтому цикла зависимостей не возникает.
-    const { addItemToInventory } = require('../utils/game-helpers');
+    const { addItemToInventory } = getGameHelpers();
 
     const metaResult = await query(
         'SELECT id, name, type, category, slot, stackable, max_stack FROM items');
@@ -1338,23 +1149,17 @@ async function seedDatabase() {
         { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 20, icon: '🩹', stats: { health: 10 } },
         { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 50, icon: '💊', stats: { health: 30 } },
         { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 2 } },
-        { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 3 } },
+{ name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 3 } },
         // Цены лечения выстроены по одной кривой «HP за монету», чтобы нельзя было
-    // купить заведомо худший предмет:
-    //   Бинт 0.50 -> Витамины 0.57 -> Аптечка/Спирт 0.60 -> Нано 0.63 -> Реаниматор 0.67
-    // Крупные лекарства выгоднее на HP, но требуют звёзд и места в инвентаре.
-    // Раньше было наоборот: Нано-аптечка стоила 800 монет за 50 HP (0.06 HP/монету),
-    // а Реаниматор 5000 за 100 HP — в 10-30 раз дороже бинта за ту же единицу HP.
-    { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 20 } },
+        // купить заведомо худший предмет:
+        //   Бинт 0.50 -> Витамины 0.57 -> Аптечка/Спирт 0.60 -> Нано 0.63 -> Реаниматор 0.67
+        // Крупные лекарства выгоднее на HP, но требуют звёзд и места в инвентаре.
+        { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 20 } },
         // Оружие: только то, что реально встречается в постапокалипсисе.
-        // Никаких плазменных стволов и лазерных винтовок — прошлая версия
-        // сида содержала «Плазменный пистолет» и «Лазерную винтовку», они
-        // переименованы в applyItemRenames() (см. конец файла).
         //
         // Два типа боя с разными ролями (stats.boss_bonus / stats.pvp_bonus):
         //   ближний бой  — +40% урона по боссам (подойти вплотную);
         //   дальний бой  — +25% урона в PvP.
-        // Раньше тип оружия ничего не значил: ближний бай был просто слабее.
         //
         // Экономика: цена за удар = price / durability, а урон за удар = stats.damage.
         // Энергия тратится на каждый удар, поэтому «дёшево за выстрел» важнее
@@ -1395,6 +1200,46 @@ async function seedDatabase() {
         // их выдают боссы 7-10 и рейды, поэтому пушка остаётся «козырной».
         { name: 'Патроны', description: 'Патроны для стрелкового оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '🔩' },
         { name: 'Реактивные гранаты', description: 'Реактивные гранаты для трубы', type: 'resource', category: 'ammo', rarity: 'rare', stackable: true, price: 120, icon: '🚀' },
+
+        // Материалы мастерской.
+        //
+        // ВАЖНО: эти восемь предметов — не украшение сида. Каждого из них
+        // требуют реальные механики из public/shared/equipment.js, и без
+        // строк в каталоге они падали в БД как MATERIAL_MISSING:
+        //   UPGRADE_MATERIAL_BY_RARITY — материал улучшения по редкости;
+        //   SCRAP_YIELD_BY_RARITY      — что даёт разбор предмета;
+        //   MODIFICATIONS.plating      — облицовка брони.
+        // То есть не работали разбор, улучшение и модификация вообще.
+        //
+        // Имя здесь — ключ: сервер резолвит его в id запросом
+        // `WHERE name = ANY($1::text[])` (workshop.js loadMaterials,
+        // items.js /drop). Переименование без правки equipment.js снова
+        // сломает мастерскую.
+        //
+        // Редкость и цена идут по восходящей: материал rare-класса нужен
+        // для улучшения rare-предметов, и BASE_PRICE_BY_RARITY в equipment.js
+        // растёт так же. Металлолом и Древесина намеренно почти бесплатны —
+        // иначе прокачка ножа (20 монет) обходилась бы дороже самого ножа,
+        // и апгрейд перестал бы быть достижимым.
+        { name: 'Металлолом', description: 'Куски металла: основа для ремонта и улучшения', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 4, icon: '⚙️' },
+        { name: 'Древесина', description: 'Доски и брёвна: ходовая часть ремонта брони', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 4, icon: '🪵' },
+        { name: 'Пластик', description: 'Обломки пластика: ходовой материал улучшения', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 12, icon: '🔧' },
+        { name: 'Ткань', description: 'Лоскуты ткани для облицовки брони', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 10, icon: '🧵' },
+        { name: 'Провода', description: 'Проводка: нужна для заточки и облицовки', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 35, icon: '🔌' },
+        { name: 'Электроника', description: 'Микросхемы и платы: редкий материал улучшения', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 40, icon: '💾' },
+        { name: 'Титан', description: 'Титановые сплавы: материал для лучшей брони и оружия', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 120, icon: '⛏️' },
+        { name: 'Кристалл силы', description: 'Кристалл из бункера: ключ к легендарному снаряжению', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 400, icon: '💎' },
+
+        // Лутовые ресурсы боссов.
+        //
+        // В отличие от материалов выше, мастерская их не требует: это просто
+        // добыча с двух самых дорогих боссов (Биологический ужас и Профессор
+        // безумия). Но они тоже были указаны в `loot:` сида боссов и
+        // отсутствовали в каталоге, а bosses.js loadItemTemplates молча
+        // пропускает ненайденные предметы — из четырёх наград эти боссы
+        // выдавали игроку две, и потери нигде не отображались.
+        { name: 'Химикаты', description: 'Лабораторная химия: редкий трофей мутантов', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 90, icon: '🧪' },
+        { name: 'Уран', description: 'Урановые стержни: трофей последнего бункера', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 350, icon: '⚛️' },
         // Ключи боссов. Имя предмета — «Ключ от <имя босса>», и именно
         // bosses.required_key_id ссылается на предмет с таким именем
         // (см. wireBossKeys ниже). Хранятся ключи в boss_keys, а не в
@@ -1561,10 +1406,6 @@ async function seedSets() {
  * находка окажется ключом от этого босса (routes/game/world.js).
  * keys_required — сколько ключей ЭТОГО босса нужно, чтобы открыть следующего.
  */
-// damage — процент от max_health игрока за ответный удар босса.
-// Кривая подобрана так, чтобы первый бой (500 HP, ~50 ударов ножом) проходил
-// с одной аптечкой, а финальный босс реально угрожал: броня срезает максимум
-// 60%, поэтому 12% у «Последнего стража» — это ~2-4 удара без защиты.
 async function seedBosses() {
     // key — имя предмета-ключа, который открывает бой с этим боссом.
     // Склеивать его из имени босса нельзя: ключи названы в родительном падеже
@@ -1582,18 +1423,26 @@ async function seedBosses() {
         { name: 'Последний страж', key: 'Ключ от Последнего стража', description: 'Последний защитник бункера', max_health: 250000, damage: 12, key_drop_chance: 0.0048828125, reward_experience: 25000, reward_coins: 12500, icon: '🛡️', loot: ['Кристалл силы', 'Реактивная пушка', 'Броня стражей', 'Реактивные гранаты'] }
     ];
 
-    for (const boss of bosses) {
+    for (const [bossIndex, boss] of bosses.entries()) {
         // reward_items хранит item_id, поэтому предметы должны уже существовать:
         // отсюда порядок вызовов в seedDatabase().
         const rewardItems = await resolveLootItemIds(boss.loot);
         const keyItemId = boss.key ? await resolveKeyItemId(boss.key) : null;
 
+        // Порядковый номер ступени. Колонка bosses.level была NOT NULL DEFAULT 1,
+        // но сид её не заполнял — у всех боссов было level = 1, и сортировка
+        // `ORDER BY level` (admin.js GET /bosses) выдавала случайный порядок.
+        // Номер также совпадает с id: он назначается по порядку вставки, а
+        // прогрессия ключей опирается именно на него (ключ босса N открывает N+1).
+        const bossLevel = bossIndex + 1;
+
         await query(`
-            INSERT INTO bosses (name, description, max_health, damage, key_drop_chance,
+            INSERT INTO bosses (name, description, level, max_health, damage, key_drop_chance,
                                 keys_required, required_key_id, reward_experience, reward_coins, reward_items, icon)
-            VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, $10, $11)
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
+                level = EXCLUDED.level,
                 max_health = EXCLUDED.max_health,
                 damage = EXCLUDED.damage,
                 key_drop_chance = EXCLUDED.key_drop_chance,
@@ -1604,7 +1453,7 @@ async function seedBosses() {
                 reward_items = EXCLUDED.reward_items,
                 icon = EXCLUDED.icon
         `, [
-            boss.name, boss.description, boss.max_health, boss.damage, boss.key_drop_chance,
+            boss.name, boss.description, bossLevel, boss.max_health, boss.damage, boss.key_drop_chance,
             keyItemId, boss.reward_experience, boss.reward_coins, JSON.stringify(rewardItems), boss.icon
         ]);
     }
@@ -1765,9 +1614,7 @@ async function applyItemRenames() {
  * @returns {Promise<number>} сколько игроков реально изменилось
  */
 async function repairPlayerInventories() {
-    // Ленивый require: game-helpers тянет db/database, который к этому моменту
-    // уже загружен, поэтому цикла зависимостей не возникает.
-    const { SELL_FLOOR_BY_RARITY } = require('../utils/game-helpers');
+    const { SELL_FLOOR_BY_RARITY } = getGameHelpers();
 
     const itemRows = await query(`
         SELECT id, name, type, category, rarity, icon, slot, set_id, price, stats,

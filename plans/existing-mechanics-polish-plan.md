@@ -50,7 +50,6 @@
 - cosmetics
 - items_collected
 - bosses_killed
-- referrals
 - total_actions
 - daily_streak
 

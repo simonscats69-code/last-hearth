@@ -202,41 +202,27 @@ function formatTime(seconds) {
  * @returns {string}
  */
 /**
- * Категория предмета для фильтров инвентаря.
+ * Категория предмета ДЛЯ ФИЛЬТРОВ ИНВЕНТАРЯ.
  *
  * Раньше здесь была жёсткая привязка к диапазонам ID (1-5 еда, 6-10 медицина,
  * 11-16 оружие...). Это ловушка: при добавлении предмета с id=30 он молча
- * попадал в 'unknown' и исчезал из инвентаря. Сервер от такого подхода
- * давно отказался (getInventoryItemCategory в utils/game-helpers.js) —
- * здесь должна быть ровно та же логика: читаем поле, а не угадываем по id.
- * @param {number|string} itemId - id предмета (не используется, оставлен
- *   для совместимости с window.getItemCategory)
+ * попадал в 'unknown' и исчезал из инвентаря.
+ *
+ * Вторая ошибка была противоположной: функция возвращала items.category
+ * ('melee', 'body', 'consumable', 'ammo'), а кнопки фильтра подписаны
+ * типами — ⚔️ weapon, 🍞 food, 💊 medicine, 🛡️ armor, 📦 resource.
+ * Сверка по category не срабатывала ни для одного фильтра, кроме лекарств.
+ *
+ * Поэтому ориентируемся на items.type — он и есть то, что стоит на кнопках,
+ * — а category оставляем запасным вариантом.
+ *
+ * @param {object} item предмет инвентаря
  * @returns {string} категория в нижнем регистре
  */
-function getItemCategory(itemId) {
-    // Категория всегда приходит с сервера (items.category, а createInventoryItem
-    // дополнительно подставляет type). Если её нет — честно отдаём misc,
-    // а не выдумываем по диапазону id.
-    if (itemId && typeof itemId === 'object') {
-        return String(itemId.category || itemId.type || 'misc').toLowerCase();
-    }
-    return 'misc';
-}
-
-/**
- * Получить цвет редкости предмета
- * @param {string} rarity - Редкость
- * @returns {string}
- */
-function getRarityColor(rarity) {
-    const colors = {
-        common: '#9e9e9e',
-        uncommon: '#4caf50',
-        rare: '#2196f3',
-        epic: '#9c27b0',
-        legendary: '#ff9800'
-    };
-    return colors[rarity] || colors.common;
+function getItemCategory(item) {
+    const type = String(item?.type || '').toLowerCase();
+    if (type) return type;
+    return String(item?.category || 'misc').toLowerCase();
 }
 
 /**
@@ -296,7 +282,12 @@ window.hapticSelection = hapticSelection;
 window.formatPercent = formatPercent;
 // showModal/hideModal/showScreen определены ниже, в секции анимаций боссов
 // и управлении экранами соответственно.
-window.getRarityColor = getRarityColor;
+// getRarityColor удалён: он нигде не вызывался, а его таблица цветов
+// разошлась с CSS (там было epic: #9c27b0 против #cc7ddb, и
+// common: #9e9e9e против #9a9080). Цвета редкости теперь берутся
+// из CSS-токенов --rarity-*, поэтому перейти на inline-цвет нельзя:
+// используются классы .rarity-common / .rarity-uncommon / .rarity-rare /
+// .rarity-epic / .rarity-legendary.
 window.getClanRoleEmoji = getClanRoleEmoji;
 window.getRarityClassByLevel = getRarityClassByLevel;
 window.getPlayerEmoji = getPlayerEmoji;
@@ -367,12 +358,6 @@ const endpoints = {
     // PvP
     pvpAttack: { endpoint: '/game/pvp/attack', method: 'POST' },
     
-    // Рефералы
-    // referralCode удалён: loadReferralCode() ходит напрямую на
-    // /api/game/player/referral/code, а путь в словаре был устаревшим
-    // (/game/player/referrals — такого маршрута на сервере нет).
-    referralUse: { endpoint: '/game/player/referral/use', method: 'POST' },
-
     // Рейдовые боссы
     clanBoss: { endpoint: '/game/bosses/raids', method: 'GET' },
     clanBossSpawn: { endpoint: '/game/bosses/raid/start', method: 'POST' }
@@ -398,7 +383,6 @@ const cacheInvalidationMap = {
     'clanJoin': ['clan', 'profile'],
     'clanLeave': ['clan', 'profile'],
     'pvpAttack': ['profile'],
-    'referralUse': ['profile'],
     'clanBossSpawn': ['clanBoss', 'profile']
 };
 
@@ -513,7 +497,10 @@ function getInitData() {
     // пройти инициализацию без Telegram вообще.
     if (DEV_FALLBACK_ENABLED) {
         console.warn('[getInitData] initData отсутствует, используется DEV-заглушка');
-        return 'user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=1234567890&hash=dummy';
+        // Используем недавнюю auth_date, чтобы сервер не отверг запрос
+        // из-за слишком старого токена (MAX_INIT_DATA_AGE_SECONDS=3600)
+        const recentAuthDate = Math.floor(Date.now() / 1000) - 60; // минута назад
+        return `user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=${recentAuthDate}&hash=dummy`;
     }
 
     console.warn('[getInitData] Telegram WebApp initData отсутствует');
@@ -727,6 +714,35 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
 // ГЕНЕРАЦИЯ API МЕТОДОВ
 // ============================================
 
+/**
+ * Текст ошибки для показа игроку.
+ *
+ * apiRequest кладёт в Error.message текст из тела ответа, а в Error.status —
+ * HTTP-код. Но почти все вызовы в этом файле показывали в catch свой
+ * обобщённый текст и молча выбрасывали message: игрок, которому сервер
+ * ответил «Недостаточно ключей от босса 4», видел «Не удалось начать бой
+ * с боссом» и не понимал, что делать.
+ *
+ * Правило:
+ *  - 4xx — детерминированная игровая ошибка, сервер уже объяснил причину.
+ *    Показываем его текст: он написан для игрока.
+ *  - 5xx, таймаут, обрыв сети — текст либо внутренний, либо его уже
+ *    показал тост в apiRequest. Возвращаем запасной вариант.
+ *  - без status (ошибка до запроса, например нет initData) — тоже
+ *    запасной вариант: message может быть техническим.
+ *
+ * @param {Error|object} error ошибка из apiRequest
+ * @param {string} fallback текст, если причину показать нельзя
+ * @returns {string} что показать игроку
+ */
+function clientErrorMessage(error, fallback) {
+    const status = Number(error?.status || 0);
+    if (status >= 400 && status < 500 && error?.message) {
+        return error.message;
+    }
+    return fallback;
+}
+
 /** Создаёт API метод на основе словаря эндпоинтов */
 function createApiMethod(name) {
     const config = endpoints[name];
@@ -918,7 +934,6 @@ const actionLocks = {
     buyEnergy: false,
     wheelSpin: false,
     sellItem: false,
-    referral: false,
     searchLoot: false,
     attackBoss: false,
     loadBosses: false
@@ -1329,16 +1344,136 @@ function bindClickOnce(element, key, handler) {
 // ============================================================================
 
 /**
- * Запрос подтверждения для дорогих операций
+ * Диалог подтверждения в стиле игры.
+ *
+ * Заменяет системный confirm()/prompt(): в Telegram Mini App они
+ * выглядят чужеродно (светлая тема браузера поверх тёмного интерфейса,
+ * другой шрифт и кнопки) и на части клиентов блокируются вовсе.
+ *
+ * Возвращает Promise<boolean>: true — подтверждено, false — отменено
+ * (крестик, клик вне окна или кнопка «Отмена»). Если элементов модального
+ * окна нет (экран ещё не построен), ведёт себя как обычный confirm().
+ *
+ * @param {string} message текст вопроса
+ * @param {object} [options]
+ * @param {string} [options.title='Подтверждение'] заголовок окна
+ * @param {string} [options.confirmLabel='Да'] подпись кнопки подтверждения
+ * @param {string} [options.cancelLabel='Отмена'] подпись кнопки отмены
+ * @param {'info'|'success'|'error'|'warning'} [options.type='info'] тип окна
+ * @returns {Promise<boolean>}
  */
-async function confirmAction(message, price = 0, threshold = 5000) {
+function showConfirmDialog(message, options = {}) {
+    const {
+        title = 'Подтверждение',
+        confirmLabel = 'Да',
+        cancelLabel = 'Отмена',
+        type = 'info'
+    } = options;
+
+    const modal = document.getElementById('modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalMessage = document.getElementById('modal-message');
+
+    if (!modal || !modalTitle || !modalMessage) {
+        // Экраны ещё не построены — откатываемся на системный диалог,
+        // чтобы действие не потерялось молча.
+        return Promise.resolve(window.confirm(message));
+    }
+
+    // Снимаем возможное предыдущее содержимое (например, форму пожертвования)
+    modalMessage.innerHTML = '';
+    modalTitle.textContent = title;
+
+    const textNode = document.createElement('div');
+    textNode.className = 'modal-confirm-text';
+    textNode.textContent = message;
+    modalMessage.appendChild(textNode);
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-confirm-actions';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn modal-confirm-yes';
+    confirmBtn.textContent = confirmLabel;
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn modal-confirm-no';
+    cancelBtn.textContent = cancelLabel;
+
+    actions.appendChild(confirmBtn);
+    actions.appendChild(cancelBtn);
+    modalMessage.appendChild(actions);
+
+    modal.className = 'modal';
+    modal.classList.add(`modal-${type}`);
+    openModalElement(modal);
+
+    return new Promise((resolve) => {
+        let settled = false;
+
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(result);
+        };
+
+        const onConfirm = () => {
+            hideModal();
+            finish(true);
+        };
+
+        const onCancel = () => {
+            hideModal();
+            finish(false);
+        };
+
+        // Крестик и клик мимо окна переназначаются openModalElement, поэтому
+        // подписываемся на отдельный обработчик закрытия: он срабатывает
+        // после hideModal() и гарантирует resolve(false) для всех путей
+        // выхода, включая те, о которых эта функция не знает.
+        const onModalClosed = () => finish(false);
+
+        function cleanup() {
+            confirmBtn.removeEventListener('click', onConfirm);
+            cancelBtn.removeEventListener('click', onCancel);
+            modal.removeEventListener('modal:closed', onModalClosed);
+        }
+
+        confirmBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+        modal.addEventListener('modal:closed', onModalClosed);
+
+        // Автофокус на кнопке подтверждения: на мобильных это позволяет
+        // завершить диалог кнопкой «Да» на экране, не наводя взгляд.
+        confirmBtn.focus();
+    });
+}
+
+/**
+ * Запрос подтверждения для дорогих операций.
+ *
+ * Раньше внутри стоял системный confirm(). Теперь используется диалог
+ * игры, но сигнатура и поведение прежние: порог цены, при котором
+ * добавляется предупреждение, не изменился.
+ *
+ * @param {string} message описание операции
+ * @param {number} [price=0] сумма в монетах
+ * @param {number} [threshold=5000] порог, выше которого показывается сумма
+ * @returns {Promise<boolean>}
+ */
+function confirmAction(message, price = 0, threshold = 5000) {
     if (price > threshold) {
-        return confirm(`⚠️ ${message}\nСумма: ${price} 🪙\nТочно продолжить?`);
+        return showConfirmDialog(`${message}\nСумма: ${formatNumber(price)} 🪙\nТочно продолжить?`, {
+            title: '⚠️ Подтвердите покупку',
+            confirmLabel: 'Продолжить',
+            type: 'warning'
+        });
     }
     if (message) {
-        return confirm(message);
+        return showConfirmDialog(message);
     }
-    return true;
+    return Promise.resolve(true);
 }
 
 // ============================================================================
@@ -1492,7 +1627,6 @@ const SCREENS = [
     'pvp-fight',      // PvP бой
     'pvp-stats',      // PvP статистика
     'achievements',   // Достижения
-    'referral'        // Рефералы
 ];
 
 /**
@@ -1631,10 +1765,6 @@ function onScreenOpen(screenName) {
 
         case 'wheel':
             safeAsync('wheel', loadWheelInfo());
-            break;
-
-        case 'referral':
-            safeAsync('referral', loadReferralScreen());
             break;
 
         case 'clan-chat':
@@ -2902,7 +3032,7 @@ async function saveAutoHealSettings() {
         }
         updateHealPanel(gameState.player);
     } catch (error) {
-        showNotification(error?.message || 'Не удалось сохранить настройку', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось сохранить настройку'), 'error');
     }
 }
 
@@ -2921,7 +3051,7 @@ async function healItem(itemIndex) {
             await loadInventory();
         }
     } catch (error) {
-        showNotification(error?.message || 'Не удалось применить лекарство', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось применить лекарство'), 'error');
     } finally {
         unlockAction('healItem');
     }
@@ -2957,7 +3087,7 @@ async function claimDailyBonus() {
         await loadProfile().catch(() => null);
         RenderCache.clear();
     } catch (error) {
-        showNotification(error?.message || 'Не удалось получить бонус', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось получить бонус'), 'error');
     } finally {
         unlockAction('dailyBonus');
     }
@@ -3081,8 +3211,18 @@ async function searchLoot() {
     if (actionLocks.searchLoot) return;
 
     const zoneRisk = getCurrentZoneRiskProfile(gameState.player || {});
+    // Предупреждение об опасной зоне. confirm() заменён диалогом игры:
+    // системный диалог в Telegram Mini App выглядит чужеродно.
     if (!zoneRisk.isPrepared && zoneRisk.score >= 3) {
-        const shouldProceed = confirm(`Текущая зона: ${zoneRisk.label}. Защита может быть недостаточной. Продолжить вылазку?`);
+        const shouldProceed = await showConfirmDialog(
+            `Текущая зона: ${zoneRisk.label}. Защита может быть недостаточной. Продолжить вылазку?`,
+            {
+                title: '⚠️ Опасная зона',
+                confirmLabel: 'Идти в вылазку',
+                cancelLabel: 'Остаться',
+                type: 'warning'
+            }
+        );
         if (!shouldProceed) {
             return;
         }
@@ -3191,7 +3331,7 @@ async function searchLoot() {
         
     } catch (error) {
         console.error('Search error:', error);
-        showModal('❌ Ошибка', 'Не удалось выполнить поиск');
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось выполнить поиск'));
     } finally {
         if (searchBtn) {
             searchBtn.classList.remove('shake');
@@ -3321,8 +3461,25 @@ function isEquippableInventoryItem(item) {
         return Boolean(window.EquipmentShared.resolveEquipmentSlot(item));
     }
 
-    const type = String(item.type || '').toLowerCase();
-    return type === 'weapon' || type === 'armor' || type === 'helmet';
+    // Запасной вариант на случай, если shared/equipment.js не загрузился
+    // (404 или обрыв): без него страница не запустилась бы с TypeError.
+    //
+    // Список слотов здесь продублирован НАМЕРЕННО и обязан совпадать с
+    // COMBAT_SLOTS из общего файла — иначе при аварии загрузки клиент
+    // вернётся ровно к тому багу, который этот общий файл и чинил.
+    // Предыдущий вариант смотрел только на item.type и относил к
+    // экипируемым лишь weapon/armor/helmet: предмет с category 'body' и,
+    // скажем, type 'gloves' он объявил бы неэкипируемым.
+    const FALLBACK_COMBAT_SLOTS = [
+        'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory', 'weapon'
+    ];
+
+    // Порядок полей тот же, что в resolveEquipmentSlot.
+    for (const candidate of [item.slot, item.category, item.type]) {
+        const slot = String(candidate || '').toLowerCase();
+        if (FALLBACK_COMBAT_SLOTS.includes(slot)) return true;
+    }
+    return false;
 }
 
 async function useItem(itemId, options = {}) {
@@ -3360,7 +3517,7 @@ async function useItem(itemId, options = {}) {
         }
     } catch (error) {
         console.error('Use item error:', error);
-        showModal('⚠️ Внимание', error?.message || 'Не удалось использовать предмет');
+        showModal('⚠️ Внимание', clientErrorMessage(error, 'Не удалось использовать предмет'));
     } finally {
         unlockAction('useItem');
     }
@@ -3397,7 +3554,7 @@ async function loadInventory() {
 
     } catch (error) {
         console.error('Inventory error:', error);
-        showNotification('Не удалось загрузить инвентарь', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось загрузить инвентарь'), 'error');
     }
 }
 
@@ -3532,7 +3689,7 @@ async function unequipSlot(slot) {
         await loadInventory();
         await loadProfile();
     } catch (error) {
-        showNotification(error?.message || 'Не удалось снять предмет', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось снять предмет'), 'error');
     } finally {
         unlockAction(`unequip-${slot}`);
     }
@@ -3671,7 +3828,7 @@ async function modifyEquipmentSlot(slot, modification) {
         await loadInventory();
         await renderWorkshopPanel();
     } catch (error) {
-        showNotification(error?.message || 'Не удалось установить модификацию', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось установить модификацию'), 'error');
     } finally {
         unlockAction('workshopModify');
     }
@@ -3690,7 +3847,7 @@ async function repairEquipmentSlot(slot) {
         await loadInventory();
         await renderWorkshopPanel();
     } catch (error) {
-        showNotification(error?.message || 'Не удалось отремонтировать', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось отремонтировать'), 'error');
     } finally {
         unlockAction('workshopRepair');
     }
@@ -3709,7 +3866,7 @@ async function upgradeEquipmentSlot(slot) {
         await loadInventory();
         await renderWorkshopPanel();
     } catch (error) {
-        showNotification(error?.message || 'Не удалось улучшить', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось улучшить'), 'error');
     } finally {
         unlockAction('workshopUpgrade');
     }
@@ -3769,7 +3926,7 @@ async function dropItem(itemIndex) {
         }
     } catch (error) {
         console.error('Drop item error:', error);
-        showNotification(error?.message || 'Не удалось разобрать предмет', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось разобрать предмет'), 'error');
 
         // Индекс мог протухнуть — перерисуем список.
         if (error?.code === 'ITEM_NOT_IN_INVENTORY' || error?.status === 400) {
@@ -3810,7 +3967,7 @@ async function sellItem(itemIndex, quantity = null) {
         }
     } catch (error) {
         console.error('Sell item error:', error);
-        showNotification(error?.message || 'Не удалось продать предмет', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось продать предмет'), 'error');
 
         // Индекс мог протухнуть (инвентарь изменился) — перерисуем список.
         if (error?.code === 'ITEM_NOT_IN_INVENTORY' || error?.status === 400) {
@@ -3874,7 +4031,8 @@ function renderInventory(items) {
         // Клик: в режиме продажи — продажа, иначе использование/экипировка.
         // Отдельный переключатель вместо long-press: long-press ненадёжен
         // в Telegram WebView и не discoverable.
-        const activate = () => {
+        // async: внутри ветки разбора await на диалог подтверждения.
+        const activate = async () => {
             if (currentInventoryMode === 'sell') {
                 if (!canSell) {
                     showNotification('Этот предмет нельзя продать', 'warning');
@@ -3891,7 +4049,17 @@ function renderInventory(items) {
                 return;
             }
             if (currentInventoryMode === 'drop') {
-                if (!confirm(`Разобрать «${name}»? Снаряжение даст материалы, остальное просто пропадёт.`)) {
+                // Разбор необратим: подтверждаем диалогом игры.
+                const confirmed = await showConfirmDialog(
+                    `Разобрать «${name}»? Снаряжение даст материалы, остальное просто пропадёт.`,
+                    {
+                        title: '♻️ Разобрать предмет',
+                        confirmLabel: 'Разобрать',
+                        cancelLabel: 'Оставить',
+                        type: 'warning'
+                    }
+                );
+                if (!confirmed) {
                     return;
                 }
                 dropItem(item.index);
@@ -3971,12 +4139,7 @@ function renderInventoryWithFilters(items) {
     let filteredItems = [...items];
     
     if (typeof currentInventoryFilter !== 'undefined' && currentInventoryFilter !== 'all') {
-        filteredItems = filteredItems.filter((item) => {
-            // Передаём весь предмет: категория берётся из поля, а не угадывается
-            // по диапазону id (см. getItemCategory).
-            const category = getItemCategory(item);
-            return category === currentInventoryFilter;
-        });
+        filteredItems = filteredItems.filter((item) => getItemCategory(item) === currentInventoryFilter);
     }
     
     // Сортировка предметов
@@ -4214,7 +4377,7 @@ async function startSoloBossFight(bossId) {
         }
     } catch (error) {
         console.error('Start solo boss fight error:', error);
-        showModal('❌ Ошибка', 'Не удалось начать бой с боссом');
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать бой с боссом'));
     }
 }
 
@@ -4233,7 +4396,7 @@ async function startMassBossFight(bossId) {
         }
     } catch (error) {
         console.error('Start mass boss fight error:', error);
-        showModal('❌ Ошибка', 'Не удалось начать массовый бой');
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать массовый бой'));
     }
 }
 
@@ -4370,7 +4533,7 @@ async function loadWeapons() {
         }
     } catch (error) {
         console.error('Load weapons error:', error);
-        showNotification('Ошибка загрузки оружия', 'error');
+        showNotification(clientErrorMessage(error, 'Ошибка загрузки оружия'), 'error');
     }
 }
 
@@ -4546,9 +4709,9 @@ async function attackWithWeapon(itemIndex) {
                     const wearText = document.createElement('p');
                     wearText.className = 'damage';
                     const tone = result.data.weapon_broken || left === 0
-                        ? ' <strong style="color:#ff595e">сломано — отремонтируй</strong>'
+                        ? ' <strong style="color:var(--color-danger-bright)">сломано — отремонтируй</strong>'
                         : left <= Math.ceil(maxDurability * 0.2)
-                            ? ' <strong style="color:#ffcc00">почти сломано</strong>'
+                            ? ' <strong style="color:var(--energy-color)">почти сломано</strong>'
                             : '';
                     wearText.innerHTML = `🔧 Прочность оружия: ${left}/${maxDurability}${tone}`;
                     log.appendChild(wearText);
@@ -4591,7 +4754,7 @@ async function attackWithWeapon(itemIndex) {
         
     } catch (error) {
         console.error('Attack with weapon error:', error);
-        showNotification('Ошибка атаки', 'error');
+        showNotification(clientErrorMessage(error, 'Ошибка атаки'), 'error');
     } finally {
         actionLocks.attackBoss = false;
     }
@@ -4790,7 +4953,7 @@ function showDamageAnimation(damage) {
         damageText.textContent = `-${damage}`;
         damageText.style.cssText = `
             position: absolute;
-            color: #ff4444;
+            color: var(--accent-red);
             font-size: 24px;
             font-weight: bold;
             animation: fadeUp 1s ease-out forwards;
@@ -5044,7 +5207,7 @@ async function createClan() {
         }
     } catch (error) {
         console.error('Create clan error:', error);
-        showModal('⚠️ Ошибка', 'Не удалось создать клан');
+        showModal('⚠️ Ошибка', clientErrorMessage(error, 'Не удалось создать клан'));
     } finally {
         unlockAction('clanCreate');
         if (createBtn) createBtn.disabled = false;
@@ -5119,7 +5282,7 @@ async function joinClan(clanId) {
         }
     } catch (error) {
         console.error('Join clan error:', error);
-        showModal('⚠️ Ошибка', 'Не удалось вступить в клан');
+        showModal('⚠️ Ошибка', clientErrorMessage(error, 'Не удалось вступить в клан'));
     } finally {
         unlockAction('clanJoin');
     }
@@ -5129,7 +5292,19 @@ async function joinClan(clanId) {
  * Выход из клана
  */
 async function leaveClan() {
-    if (!confirm('Ты уверен, что хочешь покинуть клан?')) return;
+    // Выход из клана необратим (лидерство передать нельзя — сервер
+    // отклоняет), поэтому подтверждаем явно. Системный confirm()
+    // в Mini App заменён диалогом игры.
+    const confirmed = await showConfirmDialog(
+        'Ты уверен, что хочешь покинуть клан?',
+        {
+            title: '🏰 Выход из клана',
+            confirmLabel: 'Покинуть клан',
+            cancelLabel: 'Остаться',
+            type: 'warning'
+        }
+    );
+    if (!confirmed) return;
     
     // Блокировка от двойного клика: повторный запрос вышел бы уже не из клана
     if (!lockAction('clanLeave')) return;
@@ -5150,7 +5325,7 @@ async function leaveClan() {
         }
     } catch (error) {
         console.error('Leave clan error:', error);
-        showModal('⚠️ Ошибка', 'Не удалось покинуть клан');
+        showModal('⚠️ Ошибка', clientErrorMessage(error, 'Не удалось покинуть клан'));
     } finally {
         unlockAction('clanLeave');
     }
@@ -5221,7 +5396,11 @@ function openModalElement(modal) {
 
     modal.classList.add('active');
     modal.style.display = 'flex';
-    modal.style.animation = 'fadeIn 0.3s ease-out';
+    // Имя анимации совпадает с @keyframes fade-in-up в styles.css.
+    // Раньше здесь было 'fadeIn' — такое же имя было объявлено в CSS
+    // дважды, и работало второе объявление, из-за чего первое выглядело
+    // как рабочее, хотя нет. Теперь в CSS одно определение на имя.
+    modal.style.animation = 'fade-in-up 0.3s ease-out';
 
     // Закрытие по клику вне окна и по крестику
     const modalClose = document.getElementById('modal-close');
@@ -5232,23 +5411,94 @@ function openModalElement(modal) {
 }
 
 /**
- * Показ диалога пожертвования
+ * Диалог пожертвования
+ *
+ * Раньше сумма вводилась через prompt() — системный диалог браузера.
+ * В Telegram Mini App он выглядит чужеродно (светлая тема поверх
+ * тёмного интерфейса, другой шрифт и кнопки) и на части клиентов
+ * Telegram вообще блокируется. Поэтому ввод перенесён в обычное
+ * модальное окно игры.
  */
 function showDonateDialog() {
-    const amount = prompt('Сколько монет пожертвовать в клан?');
-    if (!amount) return;
-    
-    const donateAmount = parseInt(amount);
-    if (isNaN(donateAmount) || donateAmount <= 0) {
+    const maxCoins = Number(gameState.player?.coins || 0);
+    const modal = document.getElementById('modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalMessage = document.getElementById('modal-message');
+    if (!modal || !modalTitle || !modalMessage) return;
+
+    modalTitle.textContent = '🏰 Пожертвование в клан';
+
+    // Сумма подставляется числом (Number выше гарантирует), но идёт
+    // через escapeAttribute для единообразия с остальной разметкой.
+    // Обёртка с white-space: normal обязательна: у #modal-message стоит
+    // pre-line (для текстовых сообщений), и без сброса отступы в шаблоне
+    // превратились бы в видимые пробелы.
+    modalMessage.innerHTML = `
+        <div style="white-space:normal">
+            <p style="text-align:center;margin-bottom:12px">Введи сумму в монетах</p>
+            <input
+                id="donate-amount-input"
+                type="number"
+                inputmode="numeric"
+                min="1"
+                max="${escapeAttribute(String(maxCoins))}"
+                step="1"
+                placeholder="Например, 100"
+                style="width:100%;padding:12px;border-radius:10px;background:rgba(0,0,0,.35);
+                       border:1px solid var(--border-color);color:var(--text-primary);
+                       font-size:16px;text-align:center">
+            <p style="margin-top:10px;font-size:13px;color:var(--text-secondary)">
+                Доступно: ${formatNumber(maxCoins)} 🪙
+            </p>
+        </div>
+    `;
+
+    modal.className = 'modal';
+    modal.classList.add('modal-info');
+    openModalElement(modal);
+
+    const input = document.getElementById('donate-amount-input');
+    if (input) {
+        input.focus();
+        input.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            submitDonation(input.value, maxCoins);
+        });
+    }
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn modal-donate-confirm';
+    confirmBtn.textContent = 'Пожертвовать';
+    confirmBtn.addEventListener('click', () => submitDonation(input?.value, maxCoins));
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn modal-donate-cancel';
+    cancelBtn.textContent = 'Отмена';
+    cancelBtn.addEventListener('click', () => hideModal());
+
+    modalMessage.appendChild(confirmBtn);
+    modalMessage.appendChild(cancelBtn);
+}
+
+/**
+ * Проверка суммы и отправка пожертвования
+ * @param {string|number} rawValue ввод из поля
+ * @param {number} maxCoins доступный баланс
+ */
+function submitDonation(rawValue, maxCoins) {
+    const donateAmount = parseInt(rawValue, 10);
+
+    if (!Number.isFinite(donateAmount) || donateAmount <= 0) {
         showModal('⚠️ Ошибка', 'Введи корректную сумму');
         return;
     }
-    
-    if (donateAmount > (gameState.player?.coins || 0)) {
-        showModal('⚠️ Ошибка', 'Недостаточно монет. У тебя: ' + (gameState.player?.coins || 0));
+
+    if (donateAmount > maxCoins) {
+        showModal('⚠️ Ошибка', `Недостаточно монет. У тебя: ${formatNumber(maxCoins)}`);
         return;
     }
-    
+
     donateToClan(donateAmount);
 }
 
@@ -5281,7 +5531,7 @@ async function donateToClan(amount) {
         }
     } catch (error) {
         console.error('Donate error:', error);
-        showModal('⚠️ Ошибка', 'Не удалось отправить пожертвование');
+        showModal('⚠️ Ошибка', clientErrorMessage(error, 'Не удалось отправить пожертвование'));
     } finally {
         unlockAction('clanDonate');
     }
@@ -5386,8 +5636,14 @@ async function sendClanMessage() {
  * Восстановление энергии за Stars
  */
 async function restoreEnergy() {
-    // Сервер: покупка энергии стоит 5 звёзд (даёт до +25 энергии)
-    const STARS_COST = 5;
+    // Цена и объём покупки — из общего файла правил, тем же файлом считает
+    // сервер (routes/game/player.js). Раньше число 5 было записано здесь
+    // отдельно: поднять цену на сервере, и клиент предлагал бы покупку,
+    // которую сервер отклоняет с INSUFFICIENT_STARS.
+    // Optional chaining + значение по умолчанию обязательны: при обращении
+    // без `?.` строка упала бы с TypeError, если shared/equipment.js не
+    // успел загрузиться (или отдался 404).
+    const STARS_COST = window.EquipmentShared?.ENERGY_PURCHASE_STARS_COST ?? 5;
 
     if (!gameState.player) {
         showModal('⚠️ Ошибка', 'Данные игрока не загружены');
@@ -5396,7 +5652,10 @@ async function restoreEnergy() {
 
     const playerStars = gameState.player.stars || 0;
     if (playerStars < STARS_COST) {
-        showModal('⚠️ Внимание', 'Недостаточно звёзд! Нужно 5 ⭐.');
+        // Число берётся из STARS_COST, а не пишется текстом: раньше здесь
+        // стояло «Нужно 5 ⭐», и при смене цены проверка считала бы по
+        // одной цифре, а игрок видел другую.
+        showModal('⚠️ Внимание', `Недостаточно звёзд! Нужно ${STARS_COST} ⭐.`);
         return;
     }
 
@@ -5428,7 +5687,7 @@ async function restoreEnergy() {
         }
     } catch (error) {
         console.error('Restore energy error:', error);
-        showModal('⚠️ Ошибка', 'Не удалось купить энергию');
+        showModal('⚠️ Ошибка', clientErrorMessage(error, 'Не удалось купить энергию'));
     } finally {
         unlockAction('buyEnergy');
     }
@@ -5486,11 +5745,17 @@ function renderRating(items, type) {
                 </div>
             `;
         } else {
+            // Раньше здесь читалось item.total_members, но сервер отдаёт
+            // members_count (см. GET /leaderboard/clans в minigames.js),
+            // и рейтинг кланов показывал «undefined участников».
+            // Берём members_count, с откатом на total_members для
+            // совместимости со старыми кэшами клиента.
+            const clanMembers = item.members_count ?? item.total_members ?? 0;
             rank.innerHTML = `
                 <span class="rank rank-${i + 1}">#${i + 1}</span>
                 <div class="info">
                     <div class="name">${escapeHtml(item.name)}</div>
-                    <div class="stats">Уровень ${item.level} | ${item.total_members} участников</div>
+                    <div class="stats">Уровень ${item.level} | ${clanMembers} участников</div>
                 </div>
             `;
         }
@@ -5751,7 +6016,7 @@ async function joinRaid(raidId) {
         return result;
     } catch (error) {
         console.error('Ошибка присоединения к рейду:', error);
-        showNotification('Ошибка при присоединении', 'error');
+        showNotification(clientErrorMessage(error, 'Ошибка при присоединении'), 'error');
     } finally {
         unlockAction('raidJoin');
     }
@@ -5817,7 +6082,7 @@ async function attackRaid(raidId) {
         return result;
     } catch (error) {
         console.error('Ошибка атаки в рейде:', error);
-        showNotification('Ошибка при атаке', 'error');
+        showNotification(clientErrorMessage(error, 'Ошибка при атаке'), 'error');
     } finally {
         unlockAction('attackBoss');
     }
@@ -6084,7 +6349,7 @@ async function claimAchievement(achievementId) {
         }
     } catch (error) {
         console.error('Ошибка получения награды:', error);
-        showModal('❌ Ошибка', 'Ошибка получения награды');
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Ошибка получения награды'));
     } finally {
         unlockAction('claimAchievement');
     }
@@ -6236,7 +6501,11 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
         
     } catch (error) {
         console.error('Ошибка начала PvP:', error);
-        showModal('❌ Ошибка', 'Не удалось начать бой');
+        // Текст из ответа показываем при 4xx: сервер уже объяснил причину
+        // («Недостаточно энергии», «Бой уже завершён», «Вы не участник»).
+        // Раньше тут стояло общее «Не удалось начать бой» — по нему игрок
+        // не мог понять, что делать.
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать бой'));
     } finally {
         unlockAction('pvpStart');
         // Разблокируем кнопки списка — боя уже нет, можно выбрать другую цель
@@ -6313,6 +6582,10 @@ async function attackPVPTarget() {
         
     } catch (error) {
         console.error('Ошибка атаки в PvP:', error);
+        // Раньше этот catch был пустым: игрок жал «АТАКОВАТЬ», получал отказ
+        // («Недостаточно энергии», «Бой уже завершён», «Вы не участник») и
+        // не видел ничего — кнопка просто оставалась на месте.
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось выполнить атаку'));
     } finally {
         if (attackBtn) {
             attackBtn.disabled = false;
@@ -6493,234 +6766,6 @@ async function loadPVPStats() {
 }
 
 // ============================================================================
-// РЕФЕРАЛЬНАЯ СИСТЕМА
-// ============================================================================
-
-/**
- * Загрузка реферального кода
- */
-async function loadReferralCode() {
-    try {
-        const result = await apiRequest('/api/game/player/referral/code');
-        
-        if (result.success) {
-            const codeEl = document.getElementById('referral-code');
-            if (codeEl) codeEl.textContent = result.code;
-            
-            const changeSection = document.getElementById('referral-change-section');
-            if (changeSection) {
-                changeSection.style.display = result.can_change ? 'block' : 'none';
-            }
-        }
-    } catch (error) {
-        console.error('Ошибка загрузки реферального кода:', error);
-    }
-}
-
-/**
- * Загрузка статистики рефералов
- */
-async function loadReferralStats() {
-    try {
-        const result = await apiRequest('/api/game/player/referral/stats');
-        
-        if (result.success) {
-            setElementText('total-referrals', result.stats.total_referrals);
-            setElementText('total-coins-earned', result.stats.total_coins_earned);
-            // total_stars_earned больше не выводится: Stars за рефералов
-            // не начисляются, карточка удалена из шаблона выше.
-        }
-    } catch (error) {
-        console.error('Ошибка загрузки статистики рефералов:', error);
-    }
-}
-
-/**
- * Загрузка списка рефералов
- */
-async function loadReferralsList() {
-    try {
-        const result = await apiRequest('/api/game/player/referral/list');
-        
-        const listContainer = document.getElementById('referrals-list');
-        
-        if (result.success && result.referrals.length > 0) {
-            listContainer.innerHTML = result.referrals.map(ref => {
-                const joinedDate = new Date(ref.joined_at).toLocaleDateString();
-
-                // Бонусы приходят с сервера двумя наборами: earned_* — уровень
-                // достигнут, level_* — выплачено. Раньше сервер отдавал
-                // level_10 и level_20 жёстко как false, поэтому звёзды ⭐⭐ и ⭐⭐⭐
-                // не могли появиться в принципе.
-                const b = ref.bonuses || {};
-                const bonusIcons = [];
-                const bonusTitles = [];
-
-                const addBonus = (earned, claimed, icon, level) => {
-                    if (!earned) return;
-                    bonusIcons.push(claimed ? icon : '☆');
-                    bonusTitles.push(claimed
-                        ? `Бонус за ${level} уровень — получен`
-                        : `Бонус за ${level} уровень — доступен к получению`);
-                };
-
-                addBonus(b.earned_5, b.level_5, '⭐', 5);
-                addBonus(b.earned_10, b.level_10, '⭐⭐', 10);
-                addBonus(b.earned_20, b.level_20, '⭐⭐⭐', 20);
-
-                const title = bonusTitles.length
-                    ? ` title="${escapeAttribute(bonusTitles.join('; '))}"`
-                    : '';
-
-                return `
-                    <div class="referral-item">
-                        <div class="referral-info">
-                            <div class="referral-name">${escapeHtml(ref.first_name || ref.username || 'Игрок')}</div>
-                            <div class="referral-level">Уровень ${escapeHtml(ref.level)}</div>
-                            <div class="referral-joined">Присоединился: ${joinedDate}</div>
-                        </div>
-                        <div class="referral-bonuses"${title}>${bonusIcons.join(' ') || '🕐'}</div>
-                    </div>
-                `;
-            }).join('');
-        } else if (listContainer) {
-            listContainer.innerHTML = '<div class="empty-message">У тебя пока нет рефералов. Пригласи друзей!</div>';
-        }
-    } catch (error) {
-        console.error('Ошибка загрузки списка рефералов:', error);
-    }
-}
-
-/**
- * Загрузка данных реферального экрана
- */
-async function loadReferralScreen() {
-    await Promise.all([
-        loadReferralCode(),
-        loadReferralStats(),
-        loadReferralsList()
-    ]);
-}
-
-/**
- * Копирование реферального кода
- */
-function copyReferralCode() {
-    const codeEl = document.getElementById('referral-code');
-    const code = codeEl?.textContent;
-    if (!code) return;
-    
-    navigator.clipboard.writeText(code).then(() => {
-        showModal('✅ Скопировано', 'Реферальный код скопирован в буфер обмена!');
-    }).catch(() => {
-        showModal('❌ Ошибка', 'Не удалось скопировать код');
-    });
-}
-
-/**
- * Изменение реферального кода
- */
-async function changeReferralCode() {
-    const newCodeInput = document.getElementById('new-referral-code');
-    const newCode = newCodeInput?.value.trim().toUpperCase();
-    
-    if (!newCode) {
-        showModal('❌ Ошибка', 'Введите новый код');
-        return;
-    }
-    if (newCode.length < 3 || newCode.length > 20) {
-        showModal('❌ Ошибка', 'Код должен быть от 3 до 20 символов');
-        return;
-    }
-    if (!/^[A-Z0-9_]+$/.test(newCode)) {
-        showModal('❌ Ошибка', 'Код должен содержать только латинские буквы, цифры и подчёркивания');
-        return;
-    }
-
-    if (!lockAction('referral')) return;
-    
-    try {
-        const result = await apiRequest('/api/game/player/referral/code', {
-            method: 'PUT',
-            body: { new_code: newCode }
-        });
-        const payload = result?.data || result;
-        
-        if (result.success) {
-            const codeEl = document.getElementById('referral-code');
-            const changeSection = document.getElementById('referral-change-section');
-            if (codeEl) codeEl.textContent = payload.code || newCode;
-            // Смена доступна один раз за аккаунт, поэтому секция скрывается
-            // навсегда. Сервер вернёт can_change: false — на случай, если
-            // раздел открыли повторно без перезагрузки экрана.
-            if (changeSection) changeSection.style.display = 'none';
-            if (newCodeInput) newCodeInput.value = '';
-            showModal('✅ Успех', 'Реферальный код изменён! Повторно изменить его уже нельзя.');
-        } else {
-            showModal('❌ Ошибка', result.error || 'Не удалось изменить код');
-        }
-    } catch (error) {
-        console.error('Ошибка изменения реферального кода:', error);
-        showModal('❌ Ошибка', 'Произошла ошибка');
-    } finally {
-        unlockAction('referral');
-    }
-}
-
-/**
- * Использование реферального кода
- */
-async function useReferralCode() {
-    const codeInput = document.getElementById('use-referral-code');
-    const code = codeInput?.value.trim().toUpperCase();
-    
-    if (!code) {
-        showModal('❌ Ошибка', 'Введите реферальный код');
-        return;
-    }
-    if (code.length < 3 || code.length > 20) {
-        showModal('❌ Ошибка', 'Код должен быть от 3 до 20 символов');
-        return;
-    }
-
-    if (!lockAction('referral')) return;
-    
-    try {
-        const result = await apiRequest('/api/game/player/referral/use', {
-            method: 'POST',
-            body: { code: code }
-        });
-        const payload = result?.data || result;
-        
-        if (result.success) {
-            const bonus = payload.bonus || {};
-            showModal(
-                '🎁 Бонус получен!',
-                `Ты получил: +${bonus.coins || 0} монет, +${bonus.energy || 0} Energy!`
-            );
-            if (codeInput) codeInput.value = '';
-            loadProfile();
-        } else {
-            showModal('❌ Ошибка', result.error || 'Не удалось использовать код');
-        }
-    } catch (error) {
-        console.error('Ошибка использования реферального кода:', error);
-        showModal('❌ Ошибка', 'Произошла ошибка');
-    } finally {
-        unlockAction('referral');
-    }
-}
-
-/**
- * Инициализация обработчиков реферальной системы
- */
-function initReferralHandlers() {
-    document.getElementById('copy-referral-code')?.addEventListener('click', copyReferralCode);
-    document.getElementById('change-referral-code-btn')?.addEventListener('click', changeReferralCode);
-    document.getElementById('use-referral-code-btn')?.addEventListener('click', useReferralCode);
-}
-
-// ============================================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================================
 
@@ -6763,7 +6808,6 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
         document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
         document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
-        document.getElementById('referral-btn')?.addEventListener('click', () => showScreen('referral'));
         
         // Лечение инфекций
         document.getElementById('heal-infections-btn')?.addEventListener('click', healInfections);
@@ -7062,7 +7106,6 @@ function generateScreens() {
                     <button class="extra-btn" id="rating-btn">🏆 Рейтинг</button>
                     <button class="extra-btn" id="pvp-btn">⚔️ PvP</button>
                     <button class="extra-btn" id="achievements-btn">🎖️ Достижения</button>
-                    <button class="extra-btn" id="referral-btn">📨 Рефералы</button>
                 </section>
 
                 <!-- Убраны три блока-дубли:
@@ -7506,47 +7549,6 @@ function generateScreens() {
             </div>
         </div>
 
-        <!-- Рефералы -->
-        <div class="screen" id="referral-screen">
-            <div class="screen-header">
-                <h2>📨 Рефералы</h2>
-            </div>
-            <div class="screen-content">
-                <div class="referral-code-box" id="referral-code-box">
-                    <div class="referral-code-section">
-                        <h3>Твой реферальный код</h3>
-                        <div class="referral-code-display">
-                            <span id="referral-code">ЗАГРУЗКА...</span>
-                            <button class="btn small" id="copy-referral-code">📋 Копировать</button>
-                        </div>
-                    </div>
-                    <div class="referral-change-section" id="referral-change-section" style="display:none">
-                        <h4>Изменить код</h4>
-                        <input type="text" id="new-referral-code" placeholder="Новый код" maxlength="20">
-                        <button class="btn small" id="change-referral-code-btn">Изменить</button>
-                    </div>
-                    <div class="referral-use-section">
-                        <h4>Использовать код друга</h4>
-                        <input type="text" id="use-referral-code" placeholder="Введи код друга">
-                        <button class="btn small" id="use-referral-code-btn">Активировать</button>
-                    </div>
-                </div>
-                <div class="referral-stats" id="referral-stats">
-                    <div class="stat-card">
-                        <span class="stat-value" id="total-referrals">0</span>
-                        <span class="stat-label">Рефералов</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="total-coins-earned">0</span>
-                        <span class="stat-label">Монет заработано</span>
-                    </div>
-                    <!-- Карточка «Stars заработано» удалена: Stars за рефералов
-                         не начисляются (см. player.js, GET /referral/stats),
-                         и карточка обещала награду, которой нет. -->
-                </div>
-                <div class="referral-list" id="referrals-list"></div>
-            </div>
-        </div>
     `;
 
     // Добавляем модальное окно и уведомления после экранов
@@ -7768,7 +7770,7 @@ async function buyShopItem(itemId, category) {
             showModal('❌ Ошибка', result.error || result.message || 'Не удалось совершить покупку');
         }
     } catch (error) {
-        showModal('❌ Ошибка', 'Не удалось совершить покупку');
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось совершить покупку'));
     } finally {
         unlockAction('purchase');
         document.querySelectorAll('.shop-buy-btn').forEach((button) => {
@@ -8000,7 +8002,11 @@ async function spinWheelFree() {
         
     } catch (error) {
         console.error('Ошибка вращения колеса:', error);
-        showModal('❌ Ошибка', 'Не удалось связаться с сервером', 'error');
+        // «Недостаточно Stars» и «следующее вращение через N мин» — обычные
+        // ответы сервера с кодом 200 и success:false, они разбираются выше.
+        // Здесь приходит отказ с кодом: раньше он всегда выглядел как
+        // «не удалось связаться с сервером», даже когда сервер отвечал.
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось связаться с сервером'), 'error');
         unlockAction('wheelSpin');
         loadWheelInfo().catch(() => {});
     }
@@ -8040,7 +8046,7 @@ async function spinWheelPaid() {
         
     } catch (error) {
         console.error('Ошибка вращения колеса:', error);
-        showModal('❌ Ошибка', 'Не удалось связаться с сервером', 'error');
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось связаться с сервером'), 'error');
         unlockAction('wheelSpin');
         loadWheelInfo().catch(() => {});
     }
@@ -8267,7 +8273,17 @@ async function buyStarItem(itemId, triggerButton = null) {
         return;
     }
 
-    if (!confirm(`Купить ${item.name} за ${formatNumber(price)} звёзд?`)) {
+    // Подтверждение покупки — диалогом игры (не системным confirm()).
+    const confirmedStars = await showConfirmDialog(
+        `Купить «${item.name}» за ${formatNumber(price)} звёзд?`,
+        {
+            title: '⭐ Покупка за звёзды',
+            confirmLabel: 'Купить',
+            cancelLabel: 'Отмена',
+            type: 'info'
+        }
+    );
+    if (!confirmedStars) {
         return;
     }
 
@@ -8299,7 +8315,7 @@ async function buyStarItem(itemId, triggerButton = null) {
         }
     } catch (error) {
         console.error('Buy with stars error:', error);
-        showNotification(error?.message || 'Не удалось купить за звёзды', 'error');
+        showNotification(clientErrorMessage(error, 'Не удалось купить за звёзды'), 'error');
     } finally {
         if (button) button.disabled = false;
         unlockAction('buyStarItem');
@@ -8318,7 +8334,17 @@ async function buyCoinItem(itemId, triggerButton = null) {
         return;
     }
     
-    if (!confirm(`Купить ${item.name} за ${formatNumber(price)} монет?`)) {
+    // Подтверждение покупки — диалогом игры (не системным confirm()).
+    const confirmedCoins = await showConfirmDialog(
+        `Купить «${item.name}» за ${formatNumber(price)} монет?`,
+        {
+            title: '🪙 Покупка за монеты',
+            confirmLabel: 'Купить',
+            cancelLabel: 'Отмена',
+            type: 'info'
+        }
+    );
+    if (!confirmedCoins) {
         return;
     }
     
@@ -8369,7 +8395,7 @@ async function buyCoinItem(itemId, triggerButton = null) {
         }
     } catch (error) {
         console.error('Ошибка покупки:', error);
-        showModal('❌ Ошибка', 'Не удалось купить предмет');
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось купить предмет'));
     } finally {
         unlockAction('buyCoinItem');
         // Восстанавливаем ТОЛЬКО свою кнопку. Если её уже заменили
@@ -8855,15 +8881,23 @@ function drawCityBackground(ctx, width, height) {
     }
 
     // Градиент неба
+    //
+    // Раньше здесь стояла старая синяя палитра (#1a1a2e / #16213e /
+    // #0f0f23) — та же, что была в инлайновых стилях загрузочного экрана.
+    // Она же тянулась из удалённых блоков тем, где --bg-card
+    // переопределялся серым. Пока интерфейс был тёплым коричневым, а фон
+    // под ним синим, это читалось как два разных приложения в одном.
+    // Теперь фон берёт те же тёплые тона, что и --bg-dark / --bg-secondary,
+    // а ночь осталась ночью: сверху темнее, у горизонта теплее.
     const skyGrad = ctx.createLinearGradient(0, 0, 0, height);
-    skyGrad.addColorStop(0, '#1a1a2e');
-    skyGrad.addColorStop(0.5, '#16213e');
-    skyGrad.addColorStop(1, '#0f0f23');
+    skyGrad.addColorStop(0, '#16130f');
+    skyGrad.addColorStop(0.5, '#241f19');
+    skyGrad.addColorStop(1, '#2f2820');
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, width, height);
 
     // Звёзды
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.fillStyle = 'rgba(255, 240, 214, 0.5)';
     window.cityBackgroundStars.forEach(star => {
         ctx.beginPath();
         ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
@@ -8871,24 +8905,25 @@ function drawCityBackground(ctx, width, height) {
     });
 
     // Контуры зданий (силуэты)
-    ctx.fillStyle = '#0a0a15';
+    ctx.fillStyle = '#100e0c';
     window.cityBackgroundBuildings.forEach(building => {
         ctx.fillRect(building.x, height - building.h, building.w, building.h);
     });
     
     // Земля
     const groundGrad = ctx.createLinearGradient(0, height - 80, 0, height);
-    groundGrad.addColorStop(0, '#1a1a1a');
-    groundGrad.addColorStop(1, '#0d0d0d');
+    groundGrad.addColorStop(0, '#241f19');
+    groundGrad.addColorStop(1, '#14120f');
     ctx.fillStyle = groundGrad;
     ctx.fillRect(0, height - 80, width, 80);
     
-    // Радиационное свечение от центра
+    // Радиационное свечение от центра. Зелёный совпадает с
+    // --radiation-color (#39ff14) — то же зелёное свечение, что и в UI.
     const centerX = width / 2;
     const centerY = height / 2;
     const radGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 200);
-    radGrad.addColorStop(0, 'rgba(0, 255, 0, 0.05)');
-    radGrad.addColorStop(1, 'rgba(0, 255, 0, 0)');
+    radGrad.addColorStop(0, 'rgba(57, 255, 20, 0.05)');
+    radGrad.addColorStop(1, 'rgba(57, 255, 20, 0)');
     ctx.fillStyle = radGrad;
     ctx.fillRect(0, 0, width, height);
 }
@@ -8933,7 +8968,9 @@ function drawLocation(ctx, loc, pos, isHovered = false) {
     
     // Радиационное свечение
     const radGrad = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, radius + 15);
-    const glowColor = loc.unlocked ? 'rgba(74, 144, 217, 0.4)' : 'rgba(100, 100, 100, 0.3)';
+    // Заблокированная локация — не серый, а тёмный металл палитры:
+    // серый #444/#666 на тёплом фоне выглядел как чужеродное пятно.
+    const glowColor = loc.unlocked ? 'rgba(122, 170, 214, 0.4)' : 'rgba(90, 83, 72, 0.35)';
     radGrad.addColorStop(0, glowColor);
     radGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = radGrad;
@@ -8946,17 +8983,18 @@ function drawLocation(ctx, loc, pos, isHovered = false) {
     ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
     
     if (loc.unlocked) {
+        // Сталь из палитры (--accent-blue #4a6b8a), осветлённая для читаемости
         const grad = ctx.createRadialGradient(pos.x - 10, pos.y - 10, 0, pos.x, pos.y, radius);
-        grad.addColorStop(0, '#4a90d9');
-        grad.addColorStop(1, '#2a5f9e');
+        grad.addColorStop(0, '#6b96bd');
+        grad.addColorStop(1, '#35566f');
         ctx.fillStyle = grad;
     } else {
-        ctx.fillStyle = '#444';
+        ctx.fillStyle = '#3a352e';
     }
     ctx.fill();
     
     // Рамка
-    ctx.strokeStyle = loc.unlocked ? '#6ab0ff' : '#666';
+    ctx.strokeStyle = loc.unlocked ? '#8fbde8' : '#5a5348';
     ctx.lineWidth = isHovered ? 3 : 2;
     ctx.stroke();
     
@@ -9042,6 +9080,10 @@ function hideModal() {
         modal.style.display = 'none';
         modal.classList.remove('active');
         modal.style.animation = '';
+        // Сигнал фактического закрытия. Его слушает showConfirmDialog:
+        // без него отмена через крестик или клик мимо окна оставила бы
+        // промис подтверждения неразрешённым навсегда.
+        modal.dispatchEvent(new CustomEvent('modal:closed'));
     }, 200);
 }
 
@@ -9056,27 +9098,18 @@ function showNotification(message, type = 'info', duration = 3000) {
     if (!container) {
         container = document.createElement('div');
         container.id = 'notification-container';
-        container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:10px;';
         document.body.appendChild(container);
     }
     
     const notification = document.createElement('div');
     notification.className = `notification notification-${type}`;
     notification.textContent = message;
-    notification.style.cssText = `
-        padding: 12px 20px;
-        border-radius: 8px;
-        background: ${type === 'success' ? '#4a9' : type === 'error' ? '#a44' : '#48a'};
-        color: white;
-        animation: slideIn 0.3s ease-out;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    `;
-    
+
     container.appendChild(notification);
     
-    // Удаляем после duration
+    // Удалить после duration
     setTimeout(() => {
-        notification.style.animation = 'fadeOut 0.3s ease-out';
+        notification.classList.add('notification-hiding');
         setTimeout(() => notification.remove(), 300);
     }, duration);
 }

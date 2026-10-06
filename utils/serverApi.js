@@ -3,9 +3,9 @@
  * Объединяет: валидацию, ответы API, транзакции, логирование, обработку ошибок, Telegram авторизацию
  */
 
-const { queryOne, transaction: tx } = require('../db/database');
+const { queryOne, transaction } = require('../db/database');
 const crypto = require('crypto');
-const { randomUUID } = require('crypto');
+const { randomUUID } = crypto;
 const { recordRequest } = require('./metrics');
 
 // Логирование вынесено в utils/log.js, чтобы разорвать цикл
@@ -18,6 +18,10 @@ const { recordRequest } = require('./metrics');
 // logPlayerAction/handleLogError из serverApi — реэкспорт для них обязателен,
 // пока все потребители не переведены на прямой импорт из utils/log.js.
 const { logger, logPlayerAction, logPlayerError, serializeJSONField } = require('./log');
+// Валидация ID живёт в отдельном файле: utils/validate.js не зависит
+// ни от чего, поэтому его можно импортировать и здесь, и из db/players.js
+// (serverApi нельзя — от него зависит players, получился бы цикл).
+const { validateId } = require('./validate');
 
 const ERROR_MESSAGES = Object.freeze({
     INSUFFICIENT_COINS: 'Недостаточно монет',
@@ -33,21 +37,95 @@ async function getPlayerByTelegramId(telegramId) {
     return await queryOne('SELECT * FROM players WHERE telegram_id = $1', [telegramId]);
 }
 
-const rateLimitMap = new Map();
-
-// Очистка устаревших записей каждые 60 секунд (не в тестах)
-if (process.env.NODE_ENV !== 'test') {
-    setInterval(() => {
-        const now = Date.now();
-        for (const [ip, timestamps] of rateLimitMap.entries()) {
-            const filtered = timestamps.filter(t => now - t < 60000);
-            if (filtered.length === 0) {
-                rateLimitMap.delete(ip);
+/**
+ * Проверить и увеличить лимит запросов для идентификатора (IP или playerId).
+ * Использует БД вместо in-memory Map для работы в кластере.
+ * 
+ * @param {string} identifier - IP или playerId
+ * @param {number} maxRequests - максимум запросов в окне
+ * @param {number} windowMs - окно в миллисекундах
+ * @returns {Promise<{allowed: boolean, remaining: number, resetAt: number}>}
+ */
+async function checkRateLimit(identifier, maxRequests = 1000, windowMs = 60000) {
+    try {
+        const { query, queryOne, transaction } = require('../db/database');
+        
+        const windowStart = new Date(Date.now() - windowMs);
+        
+        // Удаляем старые записи (cleanup)
+        await query(
+            `DELETE FROM rate_limits WHERE window_start < $1`,
+            [windowStart]
+        );
+        
+        // Получаем или создаём запись для текущего окна
+        const result = await transaction(async (client) => {
+            const existing = await client.query(
+                `SELECT request_count, window_start FROM rate_limits 
+                 WHERE identifier = $1 AND window_start >= $2
+                 ORDER BY window_start DESC LIMIT 1`,
+                [identifier, windowStart]
+            );
+            
+            if (existing.rows[0]) {
+                const newCount = existing.rows[0].request_count + 1;
+                await client.query(
+                    `UPDATE rate_limits SET request_count = $1 WHERE identifier = $2 AND window_start = $3`,
+                    [newCount, identifier, existing.rows[0].window_start]
+                );
+                return { count: newCount, windowStart: existing.rows[0].window_start };
             } else {
-                rateLimitMap.set(ip, filtered);
+                const insertResult = await client.query(
+                    `INSERT INTO rate_limits (identifier, window_start, request_count)
+                     VALUES ($1, NOW(), 1)
+                     RETURNING window_start`,
+                    [identifier]
+                );
+                return { count: 1, windowStart: insertResult.rows[0].window_start };
             }
+        });
+        
+        const allowed = result.count <= maxRequests;
+        const remaining = Math.max(0, maxRequests - result.count);
+        const resetAt = new Date(result.windowStart).getTime() + windowMs;
+        
+        return { allowed, remaining, resetAt };
+    } catch (err) {
+        // При ошибке БД разрешаем запрос (fail-open) но логируем
+        logger.warn('[rateLimit] check failed, allowing request', { error: err.message, identifier });
+        return { allowed: true, remaining: maxRequests, resetAt: Date.now() + windowMs };
+    }
+}
+
+/**
+ * Middleware для rate limiting на основе БД.
+ * Заменяет in-memory rateLimitMap для работы в кластере.
+ * 
+ * @param {Object} options - { maxRequests, windowMs, keyGenerator }
+ */
+function createRateLimitMiddleware(options = {}) {
+    const maxRequests = options.maxRequests || 1000;
+    const windowMs = options.windowMs || 60000;
+    const keyGenerator = options.keyGenerator || ((req) => req.ip);
+    
+    return async function rateLimitMiddleware(req, res, next) {
+        const identifier = keyGenerator(req);
+        const { allowed, remaining, resetAt } = await checkRateLimit(identifier, maxRequests, windowMs);
+        
+        res.set('X-RateLimit-Limit', maxRequests);
+        res.set('X-RateLimit-Remaining', remaining);
+        res.set('X-RateLimit-Reset', Math.ceil(resetAt / 1000));
+        
+        if (!allowed) {
+            return res.status(429).json({ 
+                error: 'Too many requests', 
+                code: 'RATE_LIMIT_EXCEEDED',
+                retryAfter: Math.ceil((resetAt - Date.now()) / 1000)
+            });
         }
-    }, 60000);
+        
+        next();
+    };
 }
 
 // Настройка логгера (директория логов, форматы, транспорты, обработчик
@@ -161,27 +239,11 @@ function requestMiddleware(req, res, next) {
 }
 
 /**
- * Проверка ID (целое число > 0)
+ * Валидация положительного целого ID приводится в utils/validate.js —
+ * отдельный файл нужен из-за порядка загрузки модулей: serverApi.js
+ * лениво (внутри функции) требует db/players.js, поэтому players.js
+ * импортировать serverApi не может — возник бы цикл.
  */
-function validateId(value, fieldName = 'ID') {
-    if (value === undefined || value === null) {
-        return { ok: false, error: `Требуется ${fieldName}`, code: 'MISSING_FIELD' };
-    }
-    if (!Number.isInteger(value) || value <= 0) {
-        return { ok: false, error: `${fieldName} должен быть целым числом > 0`, code: 'INVALID_ID' };
-    }
-    return { ok: true, value };
-}
-
-/**
- * Проверка, является ли пользователь админом
- */
-function isAdmin(userId, adminList) {
-    if (!adminList || !Array.isArray(adminList)) {
-        return false;
-    }
-    return adminList.includes(String(userId));
-}
 
 /**
  * Очистка имени (trim, удаление спецсимволов)
@@ -289,16 +351,20 @@ function safeJsonParse(str, defaultValue = null) {
  * @param {number} timeoutMs - Таймаут в миллисекундах (по умолчанию 10000мс)
  */
 async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
-    if (!Number.isInteger(playerId) || playerId <= 0) {
+    // Общая валидация ID: приводит к числу, поэтому playerId, пришедший
+    // строкой, тоже принимается.
+    const idCheck = validateId(playerId, 'ID игрока');
+    if (!idCheck.ok) {
         throw { message: 'Некорректный ID игрока', code: 'INVALID_PLAYER_ID', statusCode: 400 };
     }
+    const id = idCheck.value;
 
-    return await tx(async (client) => {
+    return await transaction(async (client) => {
         await client.query('SET LOCAL statement_timeout = $1', [timeoutMs]);
 
         const lockedPlayer = await client.query(
             'SELECT * FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
+            [id]
         );
 
         if (!lockedPlayer.rows[0]) {
@@ -378,11 +444,11 @@ function validateTelegramInitData(initData, botToken) {
         const now = Math.floor(Date.now() / 1000);
         const age = now - authDate;
         // initData — подписанный Telegram bearer-токен: кто им владеет, тот
-        // от имени игрока. 48 часов (старое значение по умолчанию) — слишком
-        // широкое окно для перехвата (ссылка, кэш браузера, прокси).
-        // Telegram выдаёт initData при каждом открытии Mini App, поэтому
-        // сутки достаточно: вернувшийся позже просто получит новый токен.
-        const MAX_AGE = parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '86400', 10);
+        // от имени игрока. 24 часа — слишком широкое окно для перехвата
+        // (ссылка, кэш браузера, прокси). Telegram выдаёт initData при
+        // каждом открытии Mini App, поэтому 1 час достаточно: вернувшийся
+        // позже просто получит новый токен.
+        const MAX_AGE = parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '3600', 10);
         if (age < -300 || age > MAX_AGE) {
             logger.warn('initData истёк или время не синхронизировано', { age, authDate, now, maxAge: MAX_AGE });
             return null;
@@ -447,24 +513,23 @@ function validateTelegramInitData(initData, botToken) {
 /**
  * Middleware для Express - проверяет Telegram initData
  */
-function telegramAuthMiddleware(req, res, next) {
+async function telegramAuthMiddleware(req, res, next) {
     try {
         const clientIP =
             req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
             req.ip ||
             req.connection?.remoteAddress;
-        const now = Date.now();
-        const windowMs = 60000;
-        const maxRequests = 10;
-
-        let requests = rateLimitMap.get(clientIP) || [];
-        requests = requests.filter(t => now - t < windowMs);
-        if (requests.length >= maxRequests) {
-            return res.status(429).json({ error: 'Too many requests' });
+        
+        // Rate limit для /auth endpoint (10 req/min per IP)
+        const { allowed, remaining, resetAt } = await checkRateLimit(clientIP, 10, 60000);
+        res.set('X-RateLimit-Limit', 10);
+        res.set('X-RateLimit-Remaining', remaining);
+        res.set('X-RateLimit-Reset', Math.ceil(resetAt / 1000));
+        
+        if (!allowed) {
+            return res.status(429).json({ error: 'Too many requests', code: 'RATE_LIMIT_EXCEEDED' });
         }
-        requests.push(now);
-        rateLimitMap.set(clientIP, requests);
-
+        
         const initData = req.headers['x-init-data'] || req.body?.initData;
         const botToken = process.env.TG_BOT_TOKEN;
 
@@ -495,12 +560,97 @@ function telegramAuthMiddleware(req, res, next) {
     }
 }
 
+/**
+ * Middleware для идемпотентности мутаций через заголовок Idempotency-Key.
+ * 
+ * Если клиент присылает Idempotency-Key, сервер сохраняет результат выполнения
+ * запроса на 24 часа. Повторный запрос с тем же ключом вернёт сохранённый
+ * ответ БЕЗ повторного выполнения логики.
+ * 
+ * Поддерживает только мутирующие методы (POST, PUT, PATCH, DELETE).
+ * 
+ * @param {Request} req
+ * @param {Response} res
+ * @param {Function} next
+ */
+async function idempotencyMiddleware(req, res, next) {
+    const method = req.method.toUpperCase();
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        return next(); // Только для мутаций
+    }
+
+    const idempotencyKey = req.headers['idempotency-key'];
+    if (!idempotencyKey) {
+        return next(); // Опционально: если ключа нет, пропускаем
+    }
+
+    // Нормализуем ключ: playerId + ключ клиента
+    const playerId = req.player?.id;
+    if (!playerId) {
+        return next(); // Если нет игрока (не должно быть для мутаций), пропускаем
+    }
+
+    const fullKey = `idem:${playerId}:${idempotencyKey}`;
+
+    try {
+        const { queryOne } = require('../db/database');
+        
+        // Проверяем, есть ли уже результат для этого ключа
+        const existing = await queryOne(
+            `SELECT response_data, created_at FROM idempotency_keys WHERE idempotency_key = $1`,
+            [fullKey]
+        );
+
+        if (existing) {
+            // Ключ найден — возвращаем сохранённый ответ
+            const age = Date.now() - new Date(existing.created_at).getTime();
+            if (age < 24 * 60 * 60 * 1000) { // 24 часа TTL
+                logger.info('[idempotency] returning cached response', { key: idempotencyKey, playerId });
+                return res.set('Idempotency-Replay', 'true').json(existing.response_data);
+            } else {
+                // Старый ключ — удаляем и продолжаем выполнение
+                await queryOne(`DELETE FROM idempotency_keys WHERE idempotency_key = $1`, [fullKey]);
+            }
+        }
+    } catch (err) {
+        // Ошибка БД — не блокируем запрос, логируем и продолжаем
+        logger.warn('[idempotency] check failed', { error: err.message });
+    }
+
+    // Перехватываем res.json чтобы сохранить ответ
+    const originalJson = res.json.bind(res);
+    res.json = function(data) {
+        // Сохраняем ответ асинхронно (не блокируем ответ клиенту)
+        if (idempotencyKey && res.statusCode >= 200 && res.statusCode < 400) {
+            const fullKey = `idem:${playerId}:${idempotencyKey}`;
+            setImmediate(async () => {
+                try {
+                    const { query } = require('../db/database');
+                    await query(
+                        `INSERT INTO idempotency_keys (idempotency_key, response_data, created_at)
+                         VALUES ($1, $2, NOW())
+                         ON CONFLICT (idempotency_key) DO UPDATE SET response_data = $2, created_at = NOW()`,
+                        [fullKey, data]
+                    );
+                } catch (err) {
+                    logger.warn('[idempotency] save failed', { error: err.message });
+                }
+            });
+        }
+        return originalJson(data);
+    };
+
+    next();
+}
+
 module.exports = {
-    // Логирование
+    // Логирование.
+    // sanitize здесь не экспортируется: он используется только внутри
+    // requestMiddleware для приведения тела запроса к безопасному виду,
+    // и наружу его никто не читал.
     logger,
     requestMiddleware,
     logPlayerError,
-    sanitize,
 
     // Валидация
     validateId,
@@ -541,8 +691,12 @@ module.exports = {
     validateTelegramInitData,
     telegramAuthMiddleware,
 
-    // Админ утилиты
-    isAdmin,
+    // Идемпотентность
+    idempotencyMiddleware,
+
+    // Rate limiting (БД-based)
+    checkRateLimit,
+    createRateLimitMiddleware,
 
     // PlayerHelper для bosses.js и других модулей
     PlayerHelper: {
@@ -553,24 +707,18 @@ module.exports = {
             // тоже не ссылаются.
             const { addExperienceWithLevelUp } = require('../db/players');
             const { getExpForLevel } = require('./gameConstants');
-            const { pool } = require('../db/database');
 
             if (client) {
                 return await addExperienceWithLevelUp(client, playerId, exp, getExpForLevel);
             }
 
-            const poolClient = await pool.connect();
-            try {
-                await poolClient.query('BEGIN');
-                const result = await addExperienceWithLevelUp(poolClient, playerId, exp, getExpForLevel);
-                await poolClient.query('COMMIT');
-                return result;
-            } catch (err) {
-                await poolClient.query('ROLLBACK');
-                throw err;
-            } finally {
-                poolClient.release();
-            }
+            // transaction — это тот же transaction() из db/database, импортированный
+            // наверху файла. Своего локального варианта BEGIN/COMMIT/ROLLBACK
+            // здесь не нужно: два места правят одну механику — и однажды
+            // разъезжаются.
+            return await transaction((poolClient) =>
+                addExperienceWithLevelUp(poolClient, playerId, exp, getExpForLevel)
+            );
         }
     }
 };

@@ -1,22 +1,14 @@
 /**
  * Мастерская: ремонт и улучшение снаряжения.
- *
- * До этого прочность и уровень улучшения были мёртвыми колонками items:
- * износ не происходил, а upgrade_level/max_upgrade_level/modifications никто
- * не читал. Теперь снаряжение изнашивается в бою (routes/game/bosses.js),
- * а здесь его можно починить и прокачать — это и даёт смысл материалам,
- * ради которых имеет смысл фармить лут.
- *
- * GET  /workshop          — состояние экипировки с ценами ремонта/улучшения
- *                         и списком доступных модификаций
- * POST /workshop/repair   — починить слот
- * POST /workshop/upgrade  — улучшить слот на 1 уровень
- * POST /workshop/modify   — установить модификацию (заточка/облицовка)
+ * 
+ * Прочность и уровень улучшения изнашиваются в бою (routes/game/bosses.js).
+ * Здесь: починить, улучшить, установить модификацию (заточка/облицовка).
+ * Это даёт смысл материалам, ради которых имеет смысл фармить лут.
  */
 
 const express = require('express');
 const router = express.Router();
-const { transaction: tx } = require('../../db/database');
+const { transaction } = require('../../db/database');
 const { handleError, logger } = require('../../utils/serverApi');
 const { equipmentRules, normalizeEquipment, normalizeInventory } = require('../../utils/game-helpers');
 
@@ -115,7 +107,7 @@ function summarizeMaterials(inventory) {
  */
 router.get('/', async (req, res) => {
     try {
-        const player = await tx(async (client) => {
+        const player = await transaction(async (client) => {
             const result = await client.query(
                 'SELECT coins, equipment, inventory FROM players WHERE id = $1',
                 [req.player.id]
@@ -155,7 +147,7 @@ router.post('/repair', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Укажите корректный слот', code: 'INVALID_SLOT' });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const playerResult = await client.query(
                 'SELECT coins, equipment FROM players WHERE id = $1 FOR UPDATE',
                 [req.player.id]
@@ -225,7 +217,7 @@ router.post('/upgrade', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Укажите корректный слот', code: 'INVALID_SLOT' });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const playerResult = await client.query(
                 'SELECT coins, equipment, inventory FROM players WHERE id = $1 FOR UPDATE',
                 [req.player.id]
@@ -363,7 +355,7 @@ router.post('/modify', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Неизвестная модификация', code: 'INVALID_MODIFICATION' });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const playerResult = await client.query(
                 'SELECT coins, equipment, inventory FROM players WHERE id = $1 FOR UPDATE',
                 [req.player.id]

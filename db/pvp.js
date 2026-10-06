@@ -51,7 +51,14 @@ async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = '
     // Валидация minutes (диапазон 1-10080)
     const validatedMinutes = parseInt(minutes);
     if (!Number.isInteger(validatedMinutes) || validatedMinutes <= 0 || validatedMinutes > 10080) {
-        throw new Error('Недопустимое значение minutes (должно быть 1-10080)');
+        // Явный код, а не текст «minutes»: handleError из serverApi читает
+        // code/statusCode из объекта. Раньше здесь был обычный Error, и
+        // неверный диапазон уезжал клиенту как INTERNAL_ERROR / 500.
+        throw {
+            message: 'Недопустимое значение minutes (должно быть 1-10080)',
+            code: 'INVALID_INPUT',
+            statusCode: 400
+        };
     }
 
     const executeQuery = client
@@ -191,7 +198,6 @@ module.exports = {
     // Доступ к данным
     isProtectedFromPVP,
     getPVPCooldown,
-    setPVPCooldown,
     createPVPMatch,
 
     // Чистые формулы

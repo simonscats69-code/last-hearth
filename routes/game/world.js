@@ -5,7 +5,11 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query, queryAll, describeError } = require('../../db/database');
+// Раньше обработчики поиска и перемещения сами брали соединение из пула
+// и вручную писали BEGIN/COMMIT/ROLLBACK. Теперь это делает
+// transaction() — он же и освобождает соединение в finally.
+// См. пояснение в POST /world/search.
+const { query, queryAll, describeError, transaction } = require('../../db/database');
 const {
     DEBUFF_CONFIG,
     calculateDropChance,
@@ -16,45 +20,8 @@ const {
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = require('../../utils/game-helpers');
 const { DebuffAPI } = require('./debuffs');
-
-// Кэш пула предметов по rarity:type для быстрого случайного выбора (P2-9)
-const lootPoolCache = {};
-let lootCacheReady = false;
-
-// Модуль загружается ДО initDatabase(), поэтому первая сборка кэша может
-// упасть (БД ещё не подключена). Повторяем с растущей задержкой, иначе
-// пул лута остаётся пустым на весь цикл работы сервера.
-const LOOT_CACHE_MAX_ATTEMPTS = 10;
-let lootCacheAttempts = 0;
-
-async function buildLootCache() {
-    try {
-        const rows = await queryAll(`SELECT id, rarity, type FROM items WHERE type != 'key'`);
-        for (const r of rows) {
-            const key = `${r.rarity}:${r.type}`;
-            if (!lootPoolCache[key]) lootPoolCache[key] = [];
-            lootPoolCache[key].push(r.id);
-        }
-        lootCacheReady = true;
-        lootCacheAttempts = 0;
-        logger.info('[world] loot pool cache built', { size: rows.length });
-    } catch (err) {
-        lootCacheAttempts++;
-        logger.error('[world] loot cache build failed', {
-            attempt: lootCacheAttempts,
-            error: describeError(err)
-        });
-        if (lootCacheAttempts < LOOT_CACHE_MAX_ATTEMPTS) {
-            const delay = Math.min(5000 * Math.pow(2, lootCacheAttempts - 1), 60000);
-            setTimeout(buildLootCache, delay);
-        } else {
-            logger.error('[world] loot cache: превышено число попыток, кэш лута пуст');
-        }
-    }
-}
-
-// Строим кэш при загрузке модуля
-buildLootCache();
+const { lootPoolCache, getLootCacheReady, buildLootCache, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
+const crypto = require('crypto');
 
 // Лимит слотов инвентаря — из public/shared/equipment.js, того же файла,
 // который читает браузер.
@@ -68,88 +35,41 @@ function validateLocationId(locationId) {
     return Number.isInteger(locationId) && locationId > 0;
 }
 
-function getLootTypePool(locationId) {
-    const normalizedLocationId = Number(locationId || 1);
-
-    if (normalizedLocationId <= 1) {
-        return ['food', 'medicine', 'resource', 'weapon'];
-    }
-
-    if (normalizedLocationId <= 3) {
-        return ['food', 'medicine', 'resource', 'weapon', 'armor'];
-    }
-
-    if (normalizedLocationId <= 5) {
-        return ['weapon', 'armor', 'medicine', 'resource', 'food'];
-    }
-
-    return ['weapon', 'armor', 'medicine', 'resource', 'food'];
-}
-
 async function getRandomLootItem(client, rarity, locationId) {
     // P2-9: используем кэш пула ID вместо ORDER BY random() на всей таблице
-    if (lootCacheReady) {
-        const preferredTypes = getLootTypePool(locationId);
-        const candidates = [];
-        for (const t of preferredTypes) {
-            const pool = lootPoolCache[`${rarity}:${t}`];
-            if (pool && pool.length) candidates.push(...pool);
-        }
-        const pool = candidates.length ? candidates : (lootPoolCache[`${rarity}:weapon`] || []);
-        if (pool.length) {
-            const randId = pool[Math.floor(Math.random() * pool.length)];
-            const res = await client.query(
+    if (getLootCacheReady()) {
+        const itemId = getRandomLootItemFromPool(rarity, locationId);
+        if (itemId) {
+            const result = await client.query(
                 `SELECT id, name, type, category, rarity, icon, slot, durability, stats,
                         COALESCE((stats->>'damage')::integer, 0) AS damage,
                         COALESCE((stats->>'defense')::integer, 0) AS defense
                  FROM items WHERE id = $1`,
-                [randId]
+                [itemId]
             );
-            return res.rows[0] || null;
+            if (result.rows[0]) {
+                return createInventoryItem(result.rows[0], { quantity: 1 });
+            }
         }
     }
-
-    // Fallback на случай, если кэш ещё не готов
-    const preferredTypes = getLootTypePool(locationId);
-    const baseSelect = `
-        SELECT
-            id,
-            name,
-            type,
-            category,
-            rarity,
-            icon,
-            slot,
-            durability,
-            stats,
-            COALESCE((stats->>'damage')::integer, 0) AS damage,
-            COALESCE((stats->>'defense')::integer, 0) AS defense
-        FROM items
-        WHERE rarity = $1
-          AND type != 'key'
-    `;
-
-    const preferredResult = await client.query(
-        `${baseSelect}
-          AND type = ANY($2::text[])
-        ORDER BY random()
-        LIMIT 1`,
-        [rarity, preferredTypes]
+    
+    // Fallback: прямой запрос если кэш не готов
+    const types = getLootTypePool(locationId);
+    const result = await client.query(
+        `SELECT id, name, type, category, rarity, icon, slot, durability, stats,
+                COALESCE((stats->>'damage')::integer, 0) AS damage,
+                COALESCE((stats->>'defense')::integer, 0) AS defense
+         FROM items 
+         WHERE rarity = $1 AND type = ANY($2::text[]) AND type != 'key'
+         ORDER BY random() LIMIT 1`,
+        [rarity, types]
     );
-
-    if (preferredResult.rows[0]) {
-        return preferredResult.rows[0];
+    if (result.rows[0]) {
+        return createInventoryItem(result.rows[0], { quantity: 1 });
     }
-
-    const fallbackResult = await client.query(
-        `${baseSelect}
-        ORDER BY random()
-        LIMIT 1`,
-        [rarity]
-    );
-
-    return fallbackResult.rows[0] || null;
+    return null;
 }
+
 
 function buildInventoryItem(item, rarity) {
     return createInventoryItem({
@@ -270,85 +190,98 @@ router.get('/locations', handleLocationsList);
  */
 router.post('/search', async (req, res) => {
     logger.info('[world] POST /search вызван', { playerId: req.player?.id, body: req.body, headers: Object.keys(req.headers) });
-    const client = await pool.connect();
-    
+    const playerId = req.player.id;
+
+    // Раньше здесь вручную бралось соединение, а ветки отказа («нет
+    // игрока», «нет здоровья», «нет энергии», «локация не найдена»,
+    // «инвентарь полон») каждая вызывала ROLLBACK и отвечала прямо из
+    // try. С transaction() тело возвращает результат, а HTTP-ответ
+    // отправляется один раз ПОСЛЕ завершения транзакции. Это чинит
+    // реальный дефект прежней записи: res.json стоял уже после COMMIT,
+    // и если он бросал исключение, catch выполнял ROLLBACK по закрытой
+    // транзакции.
     try {
-        const playerId = req.player.id;
-        
-        await client.query('BEGIN');
-        
-        // SELECT с явным списком полей вместо SELECT *. Два поля обязательны:
-        // total_actions — для comboBonus по (total_actions+1) % 10, иначе
-        // комбо-бонус не даётся никогда;
-        // max_health и last_hp_regen — для regenerateHealth(): без максимума
-        // regenerable всегда 0, хелпер уходит в ветку «на потолке» и пишет
-        // last_hp_regen = NOW(), то есть поиск не лечит И обнуляет
-        // накопленное время регена.
-        const playerResult = await client.query(`
-            SELECT id, energy, max_energy, current_location_id, radiation, inventory, 
-                   equipment, luck, health, max_health, last_hp_regen, level, experience,
-                   buffs, total_actions
-            FROM players WHERE id = $1 FOR UPDATE
-        `, [playerId]);
-        
-        const updatedPlayer = playerResult.rows[0];
-        
-        if (!updatedPlayer) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({
-                success: false,
-                error: 'Игрок не найден',
-                code: 'PLAYER_NOT_FOUND'
-            });
-        }
-        
-        // P0-2: запрет поиска при нулевом здоровье
-        if (Number(updatedPlayer.health || 0) <= 0) {
-            await client.query('ROLLBACK');
-            return res.json({
-                success: false,
-                error: 'Вы истощены. Сначала восстановите здоровье.',
-                code: 'NO_HEALTH',
-                health: 0,
-                max_health: updatedPlayer.max_health
-            });
-        }
+        const outcome = await transaction(async (client) => {
+            // SELECT с явным списком полей вместо SELECT *. Два поля обязательны:
+            // total_actions — для comboBonus по (total_actions+1) % 10, иначе
+            // комбо-бонус не даётся никогда;
+            // max_health и last_hp_regen — для regenerateHealth(): без максимума
+            // regenerable всегда 0, хелпер уходит в ветку «на потолке» и пишет
+            // last_hp_regen = NOW(), то есть поиск не лечит И обнуляет
+            // накопленное время регена.
+            const playerResult = await client.query(`
+                SELECT id, energy, max_energy, current_location_id, radiation, inventory,
+                       equipment, luck, health, max_health, last_hp_regen, level, experience,
+                       buffs, total_actions
+                FROM players WHERE id = $1 FOR UPDATE
+            `, [playerId]);
 
-        // P0-1: пересчитываем энергию по реальному времени (не сбрасывая таймер)
-        await recalcEnergy(client, updatedPlayer);
-        // То же для здоровья: медленный реген после боя. Без него игрок,
-        // израсходовавший все аптечки, оставался с 1 HP навсегда.
-        await regenerateHealth(client, updatedPlayer);
+            const updatedPlayer = playerResult.rows[0];
 
-        const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
-        const energyCost = activeBuffs.free_energy ? 0 : 1;
-        if (updatedPlayer.energy < energyCost) {
-            await client.query('ROLLBACK');
-            return res.json({
-                success: false,
-                error: 'Недостаточно энергии',
-                code: 'INSUFFICIENT_ENERGY',
-                energy: Math.max(0, updatedPlayer.energy),
-                max_energy: updatedPlayer.max_energy
-            });
-        }
-        
-        const location = await client.query(`
-            SELECT id, name, radiation, infection FROM locations WHERE id = $1
-        `, [updatedPlayer.current_location_id]);
-        
-        if (location.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({
-                success: false,
-                error: 'Локация не найдена',
-                code: 'LOCATION_NOT_FOUND'
-            });
-        }
-        
-        const locationData = location.rows[0];
-        const equipment = safeJsonParse(updatedPlayer.equipment, {});
-        const riskProfile = calculateLocationRiskProfile(locationData, equipment);
+            if (!updatedPlayer) {
+                return {
+                    status: 404,
+                    body: {
+                        success: false,
+                        error: 'Игрок не найден',
+                        code: 'PLAYER_NOT_FOUND'
+                    }
+                };
+            }
+
+            // P0-2: запрет поиска при нулевом здоровье
+            if (Number(updatedPlayer.health || 0) <= 0) {
+                return {
+                    status: 200,
+                    body: {
+                        success: false,
+                        error: 'Вы истощены. Сначала восстановите здоровье.',
+                        code: 'NO_HEALTH',
+                        health: 0,
+                        max_health: updatedPlayer.max_health
+                    }
+                };
+            }
+
+            // P0-1: пересчитываем энергию по реальному времени (не сбрасывая таймер)
+            await recalcEnergy(client, updatedPlayer);
+            // То же для здоровья: медленный реген после боя. Без него игрок,
+            // израсходовавший все аптечки, оставался с 1 HP навсегда.
+            await regenerateHealth(client, updatedPlayer);
+
+            const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
+            const energyCost = activeBuffs.free_energy ? 0 : 1;
+            if (updatedPlayer.energy < energyCost) {
+                return {
+                    status: 200,
+                    body: {
+                        success: false,
+                        error: 'Недостаточно энергии',
+                        code: 'INSUFFICIENT_ENERGY',
+                        energy: Math.max(0, updatedPlayer.energy),
+                        max_energy: updatedPlayer.max_energy
+                    }
+                };
+            }
+
+            const location = await client.query(`
+                SELECT id, name, radiation, infection FROM locations WHERE id = $1
+            `, [updatedPlayer.current_location_id]);
+
+            if (location.rows.length === 0) {
+                return {
+                    status: 404,
+                    body: {
+                        success: false,
+                        error: 'Локация не найдена',
+                        code: 'LOCATION_NOT_FOUND'
+                    }
+                };
+            }
+
+            const locationData = location.rows[0];
+            const equipment = safeJsonParse(updatedPlayer.equipment, {});
+            const riskProfile = calculateLocationRiskProfile(locationData, equipment);
         
         let radiationGain = 0;
         const radiationDefense = riskProfile.radiationDefense;
@@ -356,7 +289,7 @@ router.post('/search', async (req, res) => {
         
         if (locationData.radiation > 0 && !activeBuffs.no_radiation) {
             // P1-7: используем уже посчитанное давление радиации (с учётом защиты)
-            const randomFactor = 0.7 + Math.random() * 0.6;
+            const randomFactor = 0.7 + crypto.randomInt(600) / 1000;
             radiationGain = Math.max(0, Math.ceil(riskProfile.radiationPressure * randomFactor));
             
             if (radiationGain > 0) {
@@ -386,7 +319,7 @@ router.post('/search', async (req, res) => {
         
         if (locationData.infection && locationData.infection > 0) {
             const baseInfection = Math.ceil(locationData.infection / 10);
-            const randomFactor = 0.7 + Math.random() * 0.6;
+            const randomFactor = 0.7 + crypto.randomInt(600) / 1000;
             infectionGain = Math.max(0, Math.ceil((baseInfection - infectionDefense) * randomFactor));
             
             if (infectionGain > 0) {
@@ -411,7 +344,7 @@ router.post('/search', async (req, res) => {
         const riskAdjustedLuck = Math.max(1, Math.round((effectiveLuck + riskProfile.rarityLuckBonus) * 10) / 10);
         const baseDropChance = calculateDropChance(effectiveLuck);
         const dropChance = Math.min(95, Math.max(0.01, baseDropChance * modifiers.dropChance * riskProfile.rewardMultiplier));
-        const rolled = Math.random() * 100;
+        const rolled = crypto.randomInt(10000) / 100;
         
         let foundItem = null;
         let foundKeyInfo = null;
@@ -429,7 +362,7 @@ router.post('/search', async (req, res) => {
             // Ключ НЕ попадает в инвентарь: он хранится в boss_keys (валюта
             // прогрессии), поэтому за него не тратится слот из 100.
             const keyChanceRows = await getBossKeyChances(client);
-            const keyRoll = Math.random() * 100;
+            const keyRoll = crypto.randomInt(10000) / 100;
 
             let foundKey = null;
             let cumulativeKeyChance = 0;
@@ -471,13 +404,15 @@ router.post('/search', async (req, res) => {
 
                 // P2-10: лимит слотов инвентаря
                 if (inventory.length >= MAX_INVENTORY_SLOTS) {
-                    await client.query('ROLLBACK');
-                    return res.json({
-                        success: false,
-                        // Функции продажи в игре нет, поэтому предлагать её здесь нельзя.
-                        error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
-                        code: 'INVENTORY_FULL'
-                    });
+                    return {
+                        status: 200,
+                        body: {
+                            success: false,
+                            // Функции продажи в игре нет, поэтому предлагать её здесь нельзя.
+                            error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
+                            code: 'INVENTORY_FULL'
+                        }
+                    };
                 }
 
                 const newItem = buildInventoryItem(foundItem, itemRarity);
@@ -498,12 +433,14 @@ router.post('/search', async (req, res) => {
                 // нестакуемом предмете бафф x2 добавлял ещё два слота и
                 // инвентарь становился 101 — лимит 100 молча превышался.
                 if (inventory.length > MAX_INVENTORY_SLOTS) {
-                    await client.query('ROLLBACK');
-                    return res.json({
-                        success: false,
-                        error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
-                        code: 'INVENTORY_FULL'
-                    });
+                    return {
+                        status: 200,
+                        body: {
+                            success: false,
+                            error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
+                            code: 'INVENTORY_FULL'
+                        }
+                    };
                 }
 
                 inventoryUpdate = JSON.stringify(inventory);
@@ -581,72 +518,89 @@ router.post('/search', async (req, res) => {
             await progressDailyTask(client, playerId, 'collect_items', itemsCollected);
         }
 
-        await client.query('COMMIT');
-        
-        logger.info(`[world] Поиск лута`, {
-            playerId,
-            foundItem: foundItem?.name || null,
-            effectiveLuck,
-            dropChance,
-            locationId: locationData.id
-        });
-        
-        res.json({
-            success: true,
-            search_performed: true,
-            found_item: foundItem ? {
-                name: foundItem.name,
-                rarity: itemRarity,
-                type: foundItem.type,
-                icon: foundItem.icon,
-                stats: foundItem.damage ? { damage: foundItem.damage } : 
-                       foundItem.defense ? { defense: foundItem.defense } : null
-            } : null,
-            // Ключ босса в инвентарь не попадает (хранится в boss_keys),
-            // поэтому клиенту нужен отдельный сигнал, чтобы показать находку.
-            found_key: foundKeyInfo,
-            energy: {
-                current: newEnergy,
-                max: newMaxEnergy,
-                restored: 0,
-                last_update: lastEnergyUpdate
+        // Успешный исход: собираем тело ответа и отдаём его наружу, а
+        // транзакция коммитится сама. Ответ уходит из transaction()
+        // ниже — уже после COMMIT, как и раньше, но без ручного COMMIT.
+        return {
+            status: 200,
+            body: {
+                success: true,
+                search_performed: true,
+                found_item: foundItem ? {
+                    name: foundItem.name,
+                    rarity: itemRarity,
+                    type: foundItem.type,
+                    icon: foundItem.icon,
+                    stats: foundItem.damage ? { damage: foundItem.damage } :
+                           foundItem.defense ? { defense: foundItem.defense } : null
+                } : null,
+                // Ключ босса в инвентарь не попадает (хранится в boss_keys),
+                // поэтому клиенту нужен отдельный сигнал, чтобы показать находку.
+                found_key: foundKeyInfo,
+                energy: {
+                    current: newEnergy,
+                    max: newMaxEnergy,
+                    restored: 0,
+                    last_update: lastEnergyUpdate
+                },
+                radiation: {
+                    level: resultingRadiationLevel,
+                    gained: radiationGain,
+                    defense: radiationDefense,
+                    effect: radiationEffect
+                },
+                infection: {
+                    gained: infectionGain,
+                    defense: infectionDefense
+                },
+                risk_profile: {
+                    tier: riskProfile.tier,
+                    label: riskProfile.label,
+                    score: riskProfile.riskScore,
+                    reward_multiplier: riskProfile.rewardMultiplier,
+                    key_chance_multiplier: riskProfile.keyChanceMultiplier,
+                    rarity_luck_bonus: riskProfile.rarityLuckBonus,
+                    is_prepared: riskProfile.isPrepared
+                },
+                location: {
+                    name: locationData.name,
+                    radiation: locationData.radiation,
+                    infection: locationData.infection || 0
+                },
+                effective_luck: effectiveLuck,
+                risk_adjusted_luck: riskAdjustedLuck,
+                drop_chance: dropChance,
+                rolled: rolled.toFixed(2),
+                exp_gained: expGained
             },
-            radiation: {
-                level: resultingRadiationLevel,
-                gained: radiationGain,
-                defense: radiationDefense,
-                effect: radiationEffect
-            },
-            infection: {
-                gained: infectionGain,
-                defense: infectionDefense
-            },
-            risk_profile: {
-                tier: riskProfile.tier,
-                label: riskProfile.label,
-                score: riskProfile.riskScore,
-                reward_multiplier: riskProfile.rewardMultiplier,
-                key_chance_multiplier: riskProfile.keyChanceMultiplier,
-                rarity_luck_bonus: riskProfile.rarityLuckBonus,
-                is_prepared: riskProfile.isPrepared
-            },
-            location: {
-                name: locationData.name,
-                radiation: locationData.radiation,
-                infection: locationData.infection || 0
-            },
-            effective_luck: effectiveLuck,
-            risk_adjusted_luck: riskAdjustedLuck,
-            drop_chance: dropChance,
-            rolled: rolled.toFixed(2),
-            exp_gained: expGained
-        });
-        
+            // Данные для лога: нужны только при успешном поиске.
+            log: {
+                foundItemName: foundItem?.name || null,
+                effectiveLuck,
+                dropChance,
+                locationId: locationData.id
+            }
+        };
+    });
+
+        // Логируем только при выполненном поиске — в ветках отказа лота не было.
+        if (outcome.log) {
+            logger.info(`[world] Поиск лута`, {
+                playerId,
+                foundItem: outcome.log.foundItemName,
+                effectiveLuck: outcome.log.effectiveLuck,
+                dropChance: outcome.log.dropChance,
+                locationId: outcome.log.locationId
+            });
+        }
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        await client.query('ROLLBACK');
+        // ROLLBACK выполняет transaction(). Вручную он был нужен только
+        // из-за ручного же BEGIN, а теперь ещё и мешал: res.json стоял
+        // уже после COMMIT, и его исключение приводило к откату
+        // закрытой транзакции.
         handleError(res, error, 'location_search');
-    } finally {
-        client.release();
     }
 });
 
@@ -659,119 +613,133 @@ router.post('/search', async (req, res) => {
  * POST /world/move → POST /api/game/world/move
  */
 router.post('/move', async (req, res) => {
-    const client = await pool.connect();
-    
+    // Валидация выполняется ДО открытия транзакции, как и раньше: BEGIN
+    // в прежней записи стоял после этих проверок. Заодно уходит лишнее
+    // занятие соединения из пула на время валидации.
+    const { location_id } = req.body;
+    const playerId = req.player.id;
+
+    if (location_id === undefined || location_id === null) {
+        return res.status(400).json({
+            success: false,
+            error: 'Укажите ID локации',
+            code: 'MISSING_LOCATION_ID'
+        });
+    }
+
+    if (!validateLocationId(location_id)) {
+        return res.status(400).json({
+            success: false,
+            error: 'ID локации должен быть положительным целым числом',
+            code: 'INVALID_LOCATION_ID'
+        });
+    }
+
     try {
-        const { location_id } = req.body;
-        const playerId = req.player.id;
-        
-        if (location_id === undefined || location_id === null) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите ID локации',
-                code: 'MISSING_LOCATION_ID'
-            });
-        }
-        
-        if (!validateLocationId(location_id)) {
-            return res.status(400).json({
-                success: false,
-                error: 'ID локации должен быть положительным целым числом',
-                code: 'INVALID_LOCATION_ID'
-            });
-        }
-        
-        await client.query('BEGIN');
-        
-        // SELECT с явным списком полей вместо SELECT *
-        const playerResult = await client.query(`
-            SELECT id, level, current_location_id FROM players WHERE id = $1 FOR UPDATE
-        `, [playerId]);
-        
-        const player = playerResult.rows[0];
-        
-        // Проверяем существование игрока
-        if (!player) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({
-                success: false,
-                error: 'Игрок не найден',
-                code: 'PLAYER_NOT_FOUND'
-            });
-        }
-        
-        const targetLocation = await client.query(`
-            SELECT id, name, radiation, infection, description, min_level, danger_level, icon
-            FROM locations WHERE id = $1
-        `, [location_id]);
-        
-        if (targetLocation.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({
-                success: false,
-                error: 'Локация не найдена',
-                code: 'LOCATION_NOT_FOUND'
-            });
-        }
-        
-        const locationData = targetLocation.rows[0];
-        
-        const requiredLevel = locationData.min_level || 1;
-        if (player.level < requiredLevel) {
-            await client.query('ROLLBACK');
-            return res.json({
-                success: false,
-                error: `Нужен уровень ${requiredLevel}+`,
-                code: 'INSUFFICIENT_LEVEL',
-                required_level: requiredLevel,
-                current_level: player.level
-            });
-        }
-        
-        await client.query(`
-            UPDATE players
-               SET current_location_id = $1,
-                   -- locations_visited читает достижение «Путешественник»
-                   -- (3 локации) и «Искатель» (7), но поле никогда не менялось.
-                   locations_visited = (
-                       SELECT COALESCE(jsonb_agg(DISTINCT visited_id), '[]'::jsonb)
-                         FROM jsonb_array_elements_text(
-                             COALESCE(locations_visited, '[]'::jsonb)
-                             || jsonb_build_array($1::text)
-                         ) AS visited_id
-                   )
-             WHERE id = $2
-        `, [location_id, playerId]);
-        
-        await client.query('COMMIT');
-        
-        logger.info(`[world] Перемещение`, {
-            playerId,
-            fromLocationId: player.current_location_id,
-            toLocationId: location_id
-        });
-        
-        res.json({
-            success: true,
-            data: {
-                location: {
-                    id: locationData.id,
-                    name: locationData.name,
-                    icon: locationData.icon || '🏠',
-                    radiation: locationData.radiation,
-                    infection: locationData.infection || 0,
-                    danger_level: locationData.danger_level || 1,
-                    description: locationData.description
-                },
-                message: `Вы прибыли в ${locationData.name}`
+        // Как и в /search: тело транзакции возвращает результат, ответ
+        // уходит после COMMIT, ROLLBACK делает transaction().
+        const outcome = await transaction(async (client) => {
+            // SELECT с явным списком полей вместо SELECT *
+            const playerResult = await client.query(`
+                SELECT id, level, current_location_id FROM players WHERE id = $1 FOR UPDATE
+            `, [playerId]);
+
+            const player = playerResult.rows[0];
+
+            // Проверяем существование игрока
+            if (!player) {
+                return {
+                    status: 404,
+                    body: {
+                        success: false,
+                        error: 'Игрок не найден',
+                        code: 'PLAYER_NOT_FOUND'
+                    }
+                };
             }
+
+            const targetLocation = await client.query(`
+                SELECT id, name, radiation, infection, description, min_level, danger_level, icon
+                FROM locations WHERE id = $1
+            `, [location_id]);
+
+            if (targetLocation.rows.length === 0) {
+                return {
+                    status: 404,
+                    body: {
+                        success: false,
+                        error: 'Локация не найдена',
+                        code: 'LOCATION_NOT_FOUND'
+                    }
+                };
+            }
+
+            const locationData = targetLocation.rows[0];
+
+            const requiredLevel = locationData.min_level || 1;
+            if (player.level < requiredLevel) {
+                return {
+                    status: 200,
+                    body: {
+                        success: false,
+                        error: `Нужен уровень ${requiredLevel}+`,
+                        code: 'INSUFFICIENT_LEVEL',
+                        required_level: requiredLevel,
+                        current_level: player.level
+                    }
+                };
+            }
+
+            await client.query(`
+                UPDATE players
+                   SET current_location_id = $1,
+                       -- locations_visited читает достижение «Путешественник»
+                       -- (3 локации) и «Искатель» (7). Хранит объекты {id, name}.
+                       locations_visited = (
+                           SELECT COALESCE(jsonb_agg(DISTINCT visited_obj), '[]'::jsonb)
+                             FROM jsonb_array_elements(
+                                 COALESCE(locations_visited, '[]'::jsonb)
+                                 || jsonb_build_array(jsonb_build_object('id', $1, 'name', (SELECT name FROM locations WHERE id = $1)))
+                             ) AS visited_obj
+                       )
+                 WHERE id = $2
+            `, [location_id, playerId]);
+
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        location: {
+                            id: locationData.id,
+                            name: locationData.name,
+                            icon: locationData.icon || '🏠',
+                            radiation: locationData.radiation,
+                            infection: locationData.infection || 0,
+                            danger_level: locationData.danger_level || 1,
+                            description: locationData.description
+                        },
+                        message: `Вы прибыли в ${locationData.name}`
+                    }
+                },
+                log: {
+                    fromLocationId: player.current_location_id,
+                    toLocationId: location_id
+                }
+            };
         });
-        
+
+        if (outcome.log) {
+            logger.info(`[world] Перемещение`, {
+                playerId,
+                fromLocationId: outcome.log.fromLocationId,
+                toLocationId: outcome.log.toLocationId
+            });
+        }
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        await client.query('ROLLBACK');
         handleError(res, error, 'location_move');
-    } finally {
-        client.release();
     }
 });
 

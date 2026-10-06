@@ -8,7 +8,6 @@ const router = express.Router();
 const { query, queryOne, describeError } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger } = require('../../utils/serverApi');
-const { generateReferralCode } = require('../../utils/referralCode');
 
 // ====== ЛИМИТЫ ЗАПРОСОВ ======
 //
@@ -101,25 +100,10 @@ const workshopRouter = safeRequire('./workshop', 'workshop');
 const statusRouter = safeRequire('./status', 'status');
 const minigamesRouter = safeRequire('./minigames', 'minigames');
 
-const REFERRAL_COLLISION = '23505';
-
 async function upsertPlayerFromTelegramUser(user) {
     const telegramId = Number(user.id);
 
-    // Retry: с UNIQUE-индексом на referral_code коллизия кода бросает 23505,
-    // а ON CONFLICT ниже обрабатывает только конфликт по telegram_id.
-    // Вероятность ничтожна (32^8 вариантов), но одна неудачная попытка
-    // не должна приводить к 500 на регистрации.
-    const MAX_CODE_ATTEMPTS = 5;
-    for (let attempt = 1; ; attempt++) {
-        try {
-            return await upsertOnce(user, telegramId);
-        } catch (err) {
-            const isReferralCollision = err?.code === REFERRAL_COLLISION &&
-                String(err?.constraint || '').includes('referral_code');
-            if (!isReferralCollision || attempt >= MAX_CODE_ATTEMPTS) throw err;
-        }
-    }
+    return await upsertOnce(user, telegramId);
 }
 
 async function upsertOnce(user, telegramId) {
@@ -129,11 +113,10 @@ async function upsertOnce(user, telegramId) {
             username,
             first_name,
             last_name,
-            referral_code,
             created_at,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, NOW(), NOW())
         ON CONFLICT (telegram_id)
         DO UPDATE SET
             username = COALESCE(EXCLUDED.username, players.username),
@@ -145,9 +128,7 @@ async function upsertOnce(user, telegramId) {
         telegramId,
         user.username || null,
         user.first_name || 'Player',
-        user.last_name || null,
-        // Единый генератор: коды должны быть одного вида и непредсказуемыми.
-        generateReferralCode()
+        user.last_name || null
     ]);
 }
 

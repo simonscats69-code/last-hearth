@@ -6,7 +6,6 @@ const { Telegraf } = require('telegraf');
 const { query, queryOne } = require('./db/database');
 const { logger } = require('./utils/serverApi');
 const { MINI_APP_URL } = require('./utils/config');
-const { generateReferralCode } = require('./utils/referralCode');
 
 // Проверка наличия токена бота
 const BOT_TOKEN = process.env.TG_BOT_TOKEN;
@@ -58,41 +57,12 @@ async function setupWebhook(app) {
             );
 
             if (!player) {
-                // Создаём нового игрока с уникальным реферальным кодом
-                let referralCode;
-                let playerCreated = false;
-                let attempts = 0;
-                const maxAttempts = 5;
-                
-                while (attempts < maxAttempts && !playerCreated) {
-                    // Случайный код, не зависящий от telegramId.
-                    // Раньше тут был LH-<base36(telegramId)>-<случайные 4>:
-                    // обратимое преобразование позволяло вычислить чужие коды.
-                    referralCode = generateReferralCode();
-                    
-                    try {
-                        player = await queryOne(`
-                            INSERT INTO players (telegram_id, username, first_name, last_name, referral_code, created_at, updated_at)
-                            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-                            RETURNING *
-                        `, [telegramId, username, firstName, lastName, referralCode]);
-                        
-                        if (player) {
-                            playerCreated = true;
-                        }
-                    } catch (createError) {
-                        // Если код не уникален - пробуем снова
-                        if (createError.code === '23505' && createError.constraint?.includes('referral_code')) {
-                            attempts++;
-                            continue;
-                        }
-                        throw createError;
-                    }
-                }
-                
-                if (!playerCreated) {
-                    throw new Error('Не удалось создать игрока после нескольких попыток');
-                }
+                // Создаём нового игрока
+                player = await queryOne(`
+                    INSERT INTO players (telegram_id, username, first_name, last_name, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, NOW(), NOW())
+                    RETURNING *
+                `, [telegramId, username, firstName, lastName]);
 
                 // Стартовый инвентарь берём из каталога по ИМЕНИ, а не по захардкоженным
                 // id. Раньше здесь стояли {id: 1} и {id: 2} — таких id в

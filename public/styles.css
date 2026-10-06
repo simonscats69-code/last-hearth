@@ -2,12 +2,6 @@
  * Последний Очаг - Стили Mini App
  */
 
-/* Анимации */
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
-
 /* Переключатель режима боссов */
 .boss-mode-toggle {
     display: flex;
@@ -15,7 +9,7 @@
     justify-content: center;
     gap: 12px;
     padding: 16px;
-    background: var(--card-bg, #1a1a2e);
+    background: var(--card-bg, #2f2921);
     border-radius: 12px;
     margin: 12px;
 }
@@ -39,6 +33,9 @@
     height: 0;
 }
 
+/* Переключатель. «Выключено» — приглушённый металл, «включено» —
+   зелёный из палитры. Раньше выключенное было #3a3a5c, а включённое
+   #6366f1: индиго ни с чем в игре не совпадало. */
 .slider {
     position: absolute;
     cursor: pointer;
@@ -46,7 +43,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #3a3a5c;
+    background-color: var(--border-color);
     transition: 0.3s;
     border-radius: 28px;
 }
@@ -64,7 +61,7 @@
 }
 
 input:checked + .slider {
-    background-color: #6366f1;
+    background-color: var(--accent-green);
 }
 
 input:checked + .slider:before {
@@ -113,17 +110,6 @@ input:checked + .slider:before {
         opacity: 1;
         transform: translateX(0);
     }
-}
-
-@keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.05); }
-}
-
-@keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
-    20%, 40%, 60%, 80% { transform: translateX(5px); }
 }
 
 @keyframes bounce {
@@ -222,7 +208,10 @@ input:checked + .slider:before {
     color: var(--text-primary);
     padding: 10px 20px;
     border-radius: 3px;
-    font-family: 'Courier New', Courier, monospace;
+    /* Шрифт кнопок наследуется от документа. Раньше тут стоял
+     * 'Courier New', из-за чего кнопки были шире соседнего текста
+     * и выглядели другим интерфейсом. */
+    font-family: inherit;
     font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -245,22 +234,28 @@ input:checked + .slider:before {
         inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
+/* Зелёная кнопка. Раньше фон и рамка были захардкожены (#5a7c4a /
+   #4a7c3f) и разошлись с --accent-green, а светлый текст на них давал
+   2.4–3.9 контраста — надпись на главной кнопке читалась плохо.
+   Теперь цвет фона — тот же токен, а текст тёмный: 4.9–7.8 на обоих
+   концах градиента. */
 .btn-primary {
-    background: linear-gradient(180deg, #5a7c4a 0%, #3a5c2a 100%);
-    border-color: #4a7c3f;
+    background: linear-gradient(180deg, #7dbb6b 0%, #5c944f 100%);
+    border-color: var(--accent-green);
+    color: var(--bg-dark);
     box-shadow: 
-        0 3px 10px rgba(74, 124, 63, 0.3),
+        0 3px 10px rgba(106, 168, 90, 0.3),
         inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 .btn-primary:hover {
-    background: linear-gradient(180deg, #6a8c5a 0%, #4a6c3a 100%);
-    border-color: #5a8c4f;
+    background: linear-gradient(180deg, #8cc97a 0%, #6aa85a 100%);
+    border-color: var(--accent-green);
 }
 
 .btn-primary:active {
     box-shadow: 
-        0 1px 4px rgba(74, 124, 63, 0.4),
+        0 1px 4px rgba(106, 168, 90, 0.4),
         inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
@@ -283,17 +278,32 @@ input:checked + .slider:before {
     --bg-rust: #3d2914;           /* Ржавчина */
     
     --text-primary: #c4b998;       /* Состаренный пергамент */
-    --text-secondary: #8a8070;     /* Выцветший текст */
+    --text-secondary: #9a9080;     /* Выцветший текст */
     --text-rust: #d4a574;         /* Ржавый текст */
     
-    /* Акцентные цвета */
-    --accent-green: #4a7c3f;      /* Оксид меди (неон Fallout) */
-    --accent-rust: #8b4513;        /* Ржавчина */
-    --accent-orange: #cc5500;       /* Предупреждение ржавчина */
-    --accent-red: #8b0000;         /* Кровь/опасность */
-    --accent-yellow: #b8860b;      /* Радиация */
-    --accent-blue: #4a6b8a;        /* Сталь */
-    --accent-radiation: #39ff14;   /* Неон радиация */
+    /* Акцентные цвета
+     *
+     * Значения осветлены относительно первых версий (#8b0000, #4a7c3f,
+     * #7a5aa6, #cc5500), потому что эти токены работают как цвет ТЕКСТА,
+     * а не только как заливка и рамка. Тёмный оттенок, красивый сам по
+     * себе, на фоне #1a1814 давал 1.4–3.6 контраста — игрок физически не
+     * мог прочитать, сколько урона он нанёс в бою, сколько энергии
+     * списано и какие награды потеряны.
+     *
+     * Теперь каждый из них даёт >= 4.5 (AA) на всех четырёх фонах игры:
+     * фон #1a1814, карточка #2a2520, карточка #2f2921, вставка #241f19.
+     * Проверено расчётом относительной яркости по WCAG 2.x.
+     *
+     * Оттенки сохранены: кровь осталась красной, оксид — зелёным,
+     * эпический — фиолетовым. Светлота добавлена, hue не сдвинут. */
+    --accent-green: #6aa85a;      /* Оксид меди (неон Fallout) */
+    --accent-rust: #8b4513;        /* Ржавчина: только рамки и заливки */
+    --accent-orange: #e07a2f;       /* Предупреждение ржавчина */
+    --accent-red: #e07a6e;         /* Кровь/опасность */
+    --accent-yellow: #c29412;      /* Радиация */
+    --accent-blue: #4a6b8a;        /* Сталь: только рамки (3.17 — проходит 3:1) */
+    /* --accent-radiation удалён: дублировал --radiation-color (#39ff14),
+       который и используется для отображения радиации. */
     
     /* Состояния карточек (в т.ч. для .item-card, .boss-card, .shop-item-card) */
     --card-bg: #2f2921;          /* Альтернативный фон карточек */
@@ -302,54 +312,93 @@ input:checked + .slider:before {
     --border-color: #4a4235;     /* Базовая рамка карточек и полей */
 
     /* Дополнительные акценты (Кланы / PvP / Достижения / легендарки) */
-    --accent-purple: #7a5aa6;    /* Эпический фиолетовый */
+    --accent-purple: #a97fd6;    /* Эпический фиолетовый */
     --accent-gold: #c9a227;      /* Золото: легендарное, достижения */
 
-    /* Редкость предметов (совпадает с getRarityColor в game.js) */
-    --rarity-common: #8a8070;
+    /* Редкость предметов (совпадает с getRarityColor в game.js)
+     *
+     * rarity-common намеренно равен --text-secondary: предмет обычной
+     * редкости не должен подсвечиваться, но и не должен выпадать из
+     * текста. Раньше оба были #8a8070 — когда --text-secondary
+     * посветлел для читаемости, rarity-common остался бы темнее и
+     * подпись «обычное» выглядела бы грязнее соседнего текста. */
+    --rarity-common: #9a9080;
     --rarity-uncommon: #4caf50;
     --rarity-rare: #2196f3;
-    --rarity-epic: #9c27b0;
+    --rarity-epic: #cc7ddb;
     --rarity-legendary: #ff9800;
 
     /* Цвета состояний */
     --health-color: #cc3333;       /* Красный */
     --energy-color: #ffcc00;       /* Жёлтый */
-    --hunger-color: #cc6600;       /* Оранжевый */
-    --thirst-color: #3399cc;      /* Голубой */
     --radiation-color: #39ff14;    /* Радиоактивный неон */
+    /* --hunger-color / --thirst-color удалены: механик голода и жажды
+       в игре нет (см. buildPlayerStatus — fatigue всегда 0), а переменные
+       не читались ни одним правилом. */
+
+    /* ---------- Токены интерфейса ----------
+       Добавлены, потому что эти цвета повторялись в десятках правил
+       литералами: #2e7d32 (8 раз), #b3402e (5), #e74c3c (5), #b3762e (3).
+       Правка темы требовала менять их в каждом месте по отдельности,
+       и они расходились (например, «зелёная» кнопка была то #4a7c3f,
+       то #2e7d33). Теперь один источник правды. */
+    --color-success: #2e7d32;      /* Успех, подтверждение, зелёная кнопка */
+    --color-danger: #b3402e;       /* Ошибка, опасное действие */
+    --color-danger-bright: #e74c3c;/* Светлая половина красного градиента */
+    --color-warning: #b3762e;      /* Предупреждение */
+    --color-info: #3498db;         /* Информационное окно */
+    --color-info-deep: #2e5a8f;    /* Фон информационных уведомлений */
+    --color-success-soft: #4caf50; /* Мягкий зелёный (редкость uncommon) */
+    --color-gold-bright: #ffc107;  /* Золото/награда, акцент на звёздах */
+
+    /* Фон полос прокрутки и «тёмные вставки» (логи PvP, поля ввода).
+     *
+     * Раньше здесь стояли нейтрально-серые #1a1a1a / #2a2a2a — они
+     * пришли из блока [data-theme="dark"], который перекрашивал --bg-card
+     * в серый. Блок удалён, а эти два токена остались и продолжали
+     * красить серым поля ввода клана, чат и списки PvP, пока всё
+     * остальное было тёплым коричневым. Оттенок серого и коричневого
+     * различим глазом, даже когда яркость почти совпадает
+     * (контраст #2a2a2a к #2a2520 — 1.06).
+     *
+     * Теперь обе поверхности взяты из палитры: «утопленная» совпадает с
+     * фоном игры, «вдавленная» — с фоном второго уровня. Один стиль. */
+    --surface-sunken: #1a1814;
+    --surface-inset: #241f19;
     
     /* Текстуры */
     --texture-noise: url('data:image/svg+xml,<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><filter id="noise"><feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(%23noise)" opacity="0.1"/></svg>');
+
+    /* Моноширинный шрифт — только для приборных данных: лог боя, код
+     * приглашения, числовые характеристики. Раньше он был базовым для
+     * всего документа; теперь это осознанный акцент, а не стиль по
+     * умолчанию. */
+    --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
 }
 
-/* Telegram темная тема */
-[data-theme="dark"] {
-    --bg-dark: #0d0d0d;
-    --bg-card: #1a1a1a;
-    --bg-header: #121212;
-    --bg-rust: #2a1a10;
-    
-    --text-primary: #e0e0e0;
-    --text-secondary: #9e9e9e;
-    --text-rust: #d4a574;
-}
-
-/* Telegram светлая тема */
-html[data-theme="light"] {
-    --bg-dark: #f5f0e6;
-    --bg-card: #ebe5d8;
-    --bg-header: #e8e0d0;
-    --bg-rust: #4a3520;
-    
-    --text-primary: #3a3025;
-    --text-secondary: #6a6050;
-    --text-rust: #8b5a2b;
-}
+/* Тем было две — тёмная и светлая, обе через data-theme. Удалены:
+ * атрибут не устанавливался нигде (ни в game.js, ни в index.js), так
+ * что оба блока никогда не применялись и только вводили в заблуждение:
+ *  - «светлая тема» переопределяла 8 токенов из ~40, оставляя
+ *    акценты и редкости тёмными — даже включённая, она выглядела бы
+ *    сломанной;
+ *  - «тёмная тема» подменяла --bg-card на серый, из чего и вырос
+ *    разнобой поверхностей, описанный выше;
+ *  - @media (prefers-color-scheme: dark) ниже дублировал уже
+ *    имеющееся правило .modal-content.
+ *
+ * Игра одна и тёплая. Переключать нечего. */
 
 html, body {
     height: 100%;
-    font-family: 'Courier New', Courier, monospace; /* Рубленый военный шрифт */
+    /* Раньше здесь стоял 'Courier New' для всего документа. Он перебивал
+     * системный шрифт из инлайновых стилей index.html (тот грузился раньше
+     * и просто проигрывал), то есть интерфейс целиком был напечатан на
+     * моноширинном «машинописном» шрифте. При шрифтах 8–11px это
+     * нечитаемо, а кнопки с одинаковым текстом получались разной ширины.
+     * Теперь базовый шрифт один и системный; моноширинный остался только
+     * там, где показываются приборные данные (--font-mono ниже). */
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: 
         linear-gradient(135deg, rgba(26, 24, 20, 0.95) 0%, rgba(45, 37, 20, 0.9) 100%),
         var(--texture-noise),
@@ -386,8 +435,13 @@ html, body {
     flex-direction: column;
     height: 100%;
     overflow-y: auto;
-    padding-bottom: 80px;
-    animation: fadeIn 0.2s ease-out;
+    /* Запас под нижнюю навигацию плюс вырез под системную панель.
+       env() вне @supports (-webkit-touch-callout: none): раньше запас
+       учитывался только на iOS, и на Android с жестовой навигацией
+       контент уходил под полосу. Там, где выреза нет, env() = 0 и
+       значение остаётся прежними 80px. */
+    padding-bottom: calc(80px + env(safe-area-inset-bottom));
+    animation: fade-in-up 0.2s ease-out;
 }
 
 .screen.active {
@@ -395,11 +449,14 @@ html, body {
     animation: slideUp 0.3s ease-out;
 }
 
-/* Экран загрузки */
+/* Экран загрузки (дублирует инлайновый стиль в index.html, но нужен
+   здесь, потому что styles.css грузится позже и перебивает его).
+   Тёплый градиент — раньше второй конец был серым #2d2d2d, и загрузка
+   начиналась в одном цвете, а игра открывалась в другом. */
 #loading-screen {
     justify-content: center;
     align-items: center;
-    background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+    background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-secondary) 100%);
 }
 
 .loader {
@@ -408,7 +465,7 @@ html, body {
 
 .loader-icon {
     font-size: 64px;
-    animation: pulse 1.5s ease-in-out infinite;
+    animation: pulse-glow 1.5s ease-in-out infinite;
 }
 
 @keyframes pulse {
@@ -475,11 +532,11 @@ html, body {
 }
 
 .currency-badge.coins {
-    color: #ffd166;
+    color: var(--color-gold-bright);
 }
 
 .currency-badge.stars {
-    color: #d6b3ff;
+    color: var(--accent-purple);
 }
 
 .player-level {
@@ -520,7 +577,7 @@ html, body {
 }
 
 .main-guidance-card {
-    background: linear-gradient(145deg, rgba(74, 124, 63, 0.22), rgba(42, 37, 32, 0.96));
+    background: linear-gradient(145deg, rgba(106, 168, 90, 0.22), rgba(42, 37, 32, 0.96));
     border: 1px solid rgba(122, 199, 90, 0.35);
     border-radius: 18px;
     padding: 16px;
@@ -528,12 +585,12 @@ html, body {
 }
 
 .main-guidance-card[data-tone="warning"] {
-    background: linear-gradient(145deg, rgba(204, 85, 0, 0.22), rgba(42, 37, 32, 0.96));
-    border-color: rgba(204, 85, 0, 0.45);
+    background: linear-gradient(145deg, rgba(224, 122, 47, 0.22), rgba(42, 37, 32, 0.96));
+    border-color: rgba(224, 122, 47, 0.45);
 }
 
 .main-guidance-card[data-tone="danger"] {
-    background: linear-gradient(145deg, rgba(139, 0, 0, 0.24), rgba(42, 37, 32, 0.96));
+    background: linear-gradient(145deg, rgba(224, 122, 110, 0.24), rgba(42, 37, 32, 0.96));
     border-color: rgba(255, 89, 94, 0.45);
 }
 
@@ -666,8 +723,11 @@ html, body {
     background: linear-gradient(90deg, var(--energy-color), #ffd93d);
 }
 
+/* Полоса опыта. Раньше градиент шёл из хардкода #9b59b6 в
+   --color-danger-bright, то есть фиолетовый переходил в красный —
+   два разных цвета на одной шкале. Теперь оба конца из палитры. */
 .exp-bar {
-    background: linear-gradient(90deg, #9b59b6, #e74c3c);
+    background: linear-gradient(90deg, var(--accent-purple), var(--rarity-epic));
 }
 
 .bar-text {
@@ -811,7 +871,7 @@ html, body {
 .search-btn {
     /* Главное действие экрана: кнопка «Искать» осталась единственной в
        блоке действий, поэтому занимает всю ширину и читается как основная. */
-    background: linear-gradient(135deg, var(--accent-green), #2E7D32);
+    background: linear-gradient(135deg, var(--accent-green), var(--color-success));
     flex: 1;
     box-shadow: 0 6px 20px rgba(76, 175, 80, 0.25);
 }
@@ -859,8 +919,8 @@ html, body {
     gap: 6px;
     padding: 8px 10px;
     border-radius: 999px;
-    background: rgba(74, 124, 63, 0.18);
-    border: 1px solid rgba(74, 124, 63, 0.35);
+    background: rgba(106, 168, 90, 0.18);
+    border: 1px solid rgba(106, 168, 90, 0.35);
     font-size: 12px;
     color: var(--text-primary);
 }
@@ -996,7 +1056,7 @@ html, body {
 .heal-btn {
     flex: 1;
     padding: 14px 10px;
-    border: 1px solid #4caf50;
+    border: 1px solid var(--color-success-soft);
     border-radius: 12px;
     background: rgba(76, 175, 80, 0.15);
     color: #81c784;
@@ -1095,7 +1155,7 @@ html, body {
 }
 
 .nav-btn .nav-label {
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.02em;
     text-transform: uppercase;
 }
@@ -1172,12 +1232,17 @@ html, body {
     /* На невысоких экранах карта сжимается, но пропорции сохраняются,
        поэтому блоки под ней не выталкиваются за пределы экрана. */
     max-height: 46vh;
+    /* dvh учитывает скрывающуюся адресную строку: vh занижает карту,
+     * когда панель браузера убрана, и она наезжает на блоки под собой */
+    max-height: 46dvh;
     border-radius: 16px;
     box-shadow: 0 0 30px rgba(0, 0, 0, 0.6),
-                0 0 60px rgba(74, 144, 217, 0.1),
+                0 0 60px rgba(106, 150, 189, 0.1),
                 inset 0 0 80px rgba(0, 0, 0, 0.4);
     cursor: pointer;
-    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    /* Фон карты повторяет градиент неба из drawCityBackground (game.js),
+       иначе канвас и рамка карты были разного цвета */
+    background: linear-gradient(180deg, #16130f 0%, #241f19 100%);
     /* Отключаем «оттягивание» при касании: карта — целая картинка,
        жест должен работать как тап, а не как перетаскивание. */
     touch-action: manipulation;
@@ -1209,7 +1274,7 @@ html, body {
 
 .map-location-info {
     font-size: 12px;
-    color: #888;
+    color: var(--text-secondary);
     margin-top: 0;
     /* Строка деталей всегда занимает место, даже когда локация не выбрана. */
     min-height: 16px;
@@ -1233,7 +1298,7 @@ html, body {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 15px;
-    color: #999;
+    color: var(--text-secondary);
     cursor: pointer;
     transition: all 0.2s ease;
 }
@@ -1245,7 +1310,7 @@ html, body {
 }
 
 .filter-btn.active {
-    background: linear-gradient(135deg, var(--accent-blue), #2a5f9e);
+    background: linear-gradient(135deg, var(--accent-blue), #35566f);
     border-color: var(--accent-blue);
     color: #fff;
     box-shadow: 0 0 12px rgba(74, 144, 217, 0.4);
@@ -1273,8 +1338,8 @@ html, body {
 }
 
 #sort-select option {
-    background: #1a1a2e;
-    color: #fff;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
 }
 
 .inventory-grid {
@@ -1304,7 +1369,7 @@ html, body {
 }
 .inv-capacity-label,
 .inv-sort-label {
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-secondary);
@@ -1327,7 +1392,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: bold;
     color: #fff;
     background: var(--accent-green);
@@ -1370,8 +1435,14 @@ html, body {
     flex-shrink: 0;
 }
 
+/* Размеры текста инвенталя и навигации подняты с 8–10px до 9–11px.
+   Слот ограничен aspect-ratio: 1, а название — -webkit-line-clamp: 2,
+   поэтому лишняя строка обрезается, а не ломает сетку. Раньше этими
+   же крошечными шрифтами (8px на редкости, 9px на названии) читать
+   приходилось впритык, а масштабирование было заблокировано во
+   viewport. Теперь увеличить можно, и текст стал крупнее. */
 .inventory-slot .item-name {
-    font-size: 9px;
+    font-size: 10px;
     line-height: 1.15;
     color: var(--text-primary);
     text-align: center;
@@ -1384,7 +1455,7 @@ html, body {
 }
 
 .inventory-slot .item-rarity-label {
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--slot-rarity, var(--text-secondary));
@@ -1395,7 +1466,7 @@ html, body {
     position: absolute;
     bottom: 4px;
     right: 4px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: bold;
     background: rgba(0,0,0,0.7);
     padding: 2px 6px;
@@ -1411,7 +1482,7 @@ html, body {
     border-radius: 8px 8px 0 0;
 }
 
-.rarity-common { background: #808080; }
+.rarity-common { background: var(--rarity-common); }
 .rarity-uncommon { background: var(--accent-green); }
 .rarity-rare { background: var(--accent-blue); }
 .rarity-epic { background: var(--accent-purple); }
@@ -1457,7 +1528,7 @@ html, body {
 
 /* Цена продажи в режиме «Продать» */
 .inventory-slot .item-sell-price {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: bold;
     color: var(--accent-yellow);
     text-align: center;
@@ -1467,7 +1538,7 @@ html, body {
     opacity: 0.5;
 }
 .inventory-slot.is-sell-mode {
-    border-color: rgba(204, 85, 0, 0.55);
+    border-color: rgba(224, 122, 47, 0.55);
 }
 
 /* Панель снаряжения */
@@ -1527,7 +1598,7 @@ html, body {
     white-space: nowrap;
 }
 .equip-slot-label {
-    font-size: 9px;
+    font-size: 10px;
     color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1548,12 +1619,12 @@ html, body {
 }
 
 .equip-slot-upgrade {
-    color: var(--rarity-epic, #9c27b0);
+    color: var(--rarity-epic, #cc7ddb);
     font-weight: 700;
 }
 
 .equip-slot-durability {
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary, #9a9080);
 }
 
 .equip-slot-durability.is-broken {
@@ -1573,7 +1644,7 @@ html, body {
 }
 
 .inv-workshop-slot {
-    background: var(--bg-card, #1e1e1e);
+    background: var(--bg-card, #2a2520);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 10px;
     padding: 10px 12px;
@@ -1591,7 +1662,7 @@ html, body {
 }
 
 .inv-workshop-dur {
-    color: var(--text-secondary, #999);
+    color: var(--text-secondary, #9a9080);
     font-size: 12px;
 }
 
@@ -1625,7 +1696,7 @@ html, body {
 
 .inv-workshop-materials {
     font-size: 11px;
-    color: var(--text-secondary, #999);
+    color: var(--text-secondary, #9a9080);
     line-height: 1.5;
 }
 
@@ -1650,7 +1721,7 @@ html, body {
 /* Прочность оружия в окне выбора */
 .weapon-durability {
     font-size: 11px;
-    color: var(--text-secondary, #999);
+    color: var(--text-secondary, #9a9080);
 }
 
 .weapon-item.is-broken,
@@ -1718,7 +1789,7 @@ html, body {
 }
 
 .inv-workshop-mod-mats {
-    color: var(--text-secondary, #999);
+    color: var(--text-secondary, #9a9080);
     font-size: 11px;
 }
 
@@ -1734,16 +1805,16 @@ html, body {
 }
 
 .weapon-tag.melee {
-    color: #ff8a65;
+    color: var(--accent-orange);
 }
 
 .weapon-tag.ranged {
-    color: #64b5f6;
+    color: #6b96bd;
 }
 
 /* Товары за звёзды в магазине */
 .shop-item-stars {
-    color: #ffc107;
+    color: var(--color-gold-bright);
     font-weight: 700;
 }
 
@@ -1848,6 +1919,8 @@ html, body {
     height: 150px;
     background: var(--bg-card);
     border-radius: 12px;
+    /* Лог боя — приборный вывод, моноширинный шрифт здесь к лицу */
+    font-family: var(--font-mono);
     padding: 12px;
     overflow-y: auto;
     font-size: 14px;
@@ -1863,18 +1936,24 @@ html, body {
 }
 
 
+/* Базовое оформление кнопки атаки — в общем блоке .attack-btn ниже
+   (раздел «Боссы»). Здесь только ширина: старые правила задавали
+   красный градиент, который перебивался зелёным из второго блока,
+   из-за чего кнопка «Атаковать» выглядела как обычная зелёная кнопка. */
 .attack-btn {
-    background: linear-gradient(135deg, var(--accent-red), #c62828);
     max-width: 300px;
     width: 100%;
 }
 
-
-
+/* Кнопка оружия. Градиент был сине-фиолетовым (#4a4a8a → #6a6aba) —
+   единственное, что осталось от прежней холодной темы в самом игровом
+   экране. Тот же приём, что и у .btn-join: сталь из палитры. Белый
+   текст на новых концах даёт 5.6 и 7.7 (было 4.8 и 8.0), то есть
+   читаемость не ухудшилась. */
 .weapon-btn {
-    background: linear-gradient(135deg, #4a4a8a, #6a6aba);
+    background: linear-gradient(135deg, #4a6b8a, #35566f);
     color: white;
-    border: 2px solid #7a7ada;
+    border: 2px solid #6b96bd;
     border-radius: 12px;
     padding: 12px 20px;
     font-size: 14px;
@@ -1887,7 +1966,7 @@ html, body {
 }
 
 .weapon-btn:hover {
-    background: linear-gradient(135deg, #5a5a9a, #7a7aca);
+    background: linear-gradient(135deg, #5c7f9e, #40637e);
 }
 
 .weapon-btn .btn-icon {
@@ -1969,11 +2048,16 @@ html, body {
     background: var(--rarity-uncommon);
 }
 
-.weapon-rarity.common { background: #808080; }
-.weapon-rarity.uncommon { background: #1eff00; color: black; }
-.weapon-rarity.rare { background: #0070dd; }
-.weapon-rarity.epic { background: #a335ee; }
-.weapon-rarity.legendary { background: #ff8000; }
+/* Плашка редкости на оружии. Раньше здесь стояла своя палитра
+   (#1eff00, #0070dd, #a335ee, #ff8000, #808080), не совпадавшая с
+   --rarity-*, и белый текст поверх — он давал 2.2–3.2 контраста,
+   то есть названия редкости почти не читались. Теперь цвет берётся из
+   общего токена, а текст тёмный: на всех пяти плашках это 5.6–8.2. */
+.weapon-rarity.common { background: var(--rarity-common); color: var(--bg-dark); }
+.weapon-rarity.uncommon { background: var(--rarity-uncommon); color: var(--bg-dark); }
+.weapon-rarity.rare { background: var(--rarity-rare); color: var(--bg-dark); }
+.weapon-rarity.epic { background: var(--rarity-epic); color: var(--bg-dark); }
+.weapon-rarity.legendary { background: var(--rarity-legendary); color: var(--bg-dark); }
 
 /* Прогресс-бар для множественной атаки */
 .attack-progress-container {
@@ -2128,7 +2212,7 @@ html, body {
 
 .shop-item-desc {
     font-size: 11px;
-    color: #888;
+    color: var(--text-secondary);
 }
 
 .shop-item-price {
@@ -2262,7 +2346,7 @@ html, body {
     padding: 20px;
     background: rgba(5, 8, 14, 0.72);
     backdrop-filter: blur(6px);
-    animation: fadeIn 0.25s ease-out;
+    animation: fade-in-up 0.25s ease-out;
 }
 
 .reward-celebration-overlay.fade-out {
@@ -2333,7 +2417,7 @@ html, body {
     padding: 12px 16px;
     font-weight: bold;
     cursor: pointer;
-    background: linear-gradient(135deg, var(--accent-green), #2E7D32);
+    background: linear-gradient(135deg, var(--accent-green), var(--color-success));
     color: white;
 }
 
@@ -2354,10 +2438,10 @@ html, body {
     height: 100%;
     border-radius: 50%;
     background: conic-gradient(
-        #e74c3c 0deg 60deg,
+        var(--color-danger-bright) 0deg 60deg,
         #f39c12 60deg 120deg,
         #2ecc71 120deg 180deg,
-        #3498db 180deg 240deg,
+        var(--color-info) 180deg 240deg,
         #9b59b6 240deg 300deg,
         #e91e63 300deg 360deg
     );
@@ -2458,10 +2542,18 @@ html, body {
     max-width: 420px;
     width: 100%;
     max-height: 85vh;
+    /* Модалка не должна уходить под нижний край, когда адресная строка
+     * мобильного браузера прячется: vh считает высоту без учёта панели */
+    max-height: 85dvh;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     text-align: center;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    /* Полоска-индикатор типа окна. Раньше она была объявлена вторым
+       блоком .modal-content ниже по файлу — правило дублировало
+       position и полагалось на каскад, из-за чего цвет верхней полосы
+       зависел от порядка стилей. Цвета по типам — см. .modal-* ниже. */
+    border-top: 3px solid var(--accent-green);
 }
 
 .modal-content h3 {
@@ -2508,7 +2600,10 @@ html, body {
     padding: 20px 30px;
     border-radius: 16px;
     text-align: center;
-    z-index: 1000;
+    /* Выше модального окна (z-index 1000): выпадение добычи показывается
+       поверх открытой карточки награды. Раньше у обоих было 1000, и
+       порядок определялся только тем, что попало в DOM раньше. */
+    z-index: 1200;
     pointer-events: none;
 }
 
@@ -2524,6 +2619,23 @@ html, body {
 }
 
 /* Анимации */
+
+/* Имена переименованы, потому что раньше fadeIn и pulse были объявлены
+   в файле дважды, и второе объявление молча перебивало первое. Старое
+   fadeIn обещало простое появление, а работало появление с подъездом
+   снизу — при чтении стилей это выглядело как ошибка. */
+@keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.1); opacity: 0.8; }
+}
+
+/* Тряска: раньше тоже было объявлено дважды — пять колебаний здесь и
+   одно грубое ниже по файлу; работало второе, первое было мёртвым. */
 @keyframes shake {
     0%, 100% { transform: translateX(0); }
     25% { transform: translateX(-5px); }
@@ -2532,11 +2644,6 @@ html, body {
 
 .shake {
     animation: shake 0.3s ease-in-out;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
 }
 
 /* Скроллбар */
@@ -2593,24 +2700,11 @@ html, body {
     h3 { font-size: 16px; }
 }
 
-/* Поддержка темной темы для модальных окон */
-@media (prefers-color-scheme: dark) {
-    .modal-content {
-        background: var(--bg-card);
-    }
-}
-
-/* Улучшенная навигация для iOS */
-@supports (-webkit-touch-callout: none) {
-    .bottom-nav {
-        padding-bottom: env(safe-area-inset-bottom);
-    }
-
-    /* Высота навигации выросла (иконка + подпись, min-height 52px),
-       поэтому 60px уже не хватало — контент уходил под неё. */
-    .screen {
-        padding-bottom: calc(80px + env(safe-area-inset-bottom));
-    }
+/* Безопасные зоны: см. .screen — env(safe-area-inset-bottom) вынесен из
+   @supports (-webkit-touch-callout: none), который раньше ограничивал
+   учёт выреза только iOS. Для самой навигации правило остаётся здесь. */
+.bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom);
 }
 
 /* Оптимизация для устройств с высокой плотностью пикселей */
@@ -2626,7 +2720,8 @@ html, body {
 
 
 .clan-card {
-    background: linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%);
+    /* Было #2a2a4a → #1a1a3a: холодный синий градиент в тёплом интерфейсе */
+    background: linear-gradient(135deg, #2a2520 0%, #1a1814 100%);
     border-radius: 16px;
     padding: 20px;
     margin-bottom: 16px;
@@ -2694,7 +2789,7 @@ html, body {
 
 /* Карточка "нет клана" */
 .no-clan-card {
-    background: linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%);
+    background: linear-gradient(135deg, #2a2520 0%, #1a1814 100%);
     border-radius: 16px;
     padding: 40px 20px;
     text-align: center;
@@ -2830,7 +2925,7 @@ html, body {
 .form-group textarea {
     width: 100%;
     padding: 12px;
-    background: #2a2a2a;
+    background: var(--surface-inset);
     border: 2px solid #444;
     border-radius: 8px;
     color: #fff;
@@ -2870,13 +2965,13 @@ html, body {
     display: flex;
     gap: 8px;
     padding: 16px;
-    background: #1a1a1a;
+    background: var(--surface-sunken);
 }
 
 .clans-list-search input {
     flex: 1;
     padding: 12px;
-    background: #2a2a2a;
+    background: var(--surface-inset);
     border: 2px solid #444;
     border-radius: 8px;
     color: #fff;
@@ -2906,7 +3001,7 @@ html, body {
     align-items: center;
     gap: 12px;
     padding: 16px;
-    background: #2a2a2a;
+    background: var(--surface-inset);
     border-radius: 12px;
     border: 2px solid #444;
 }
@@ -2947,6 +3042,7 @@ html, body {
 /* Экран чата клана */
 .clan-chat-messages {
     height: calc(100vh - 200px);
+    height: calc(100dvh - 200px);
     overflow-y: auto;
     padding: 16px;
     padding-bottom: 80px;
@@ -2956,7 +3052,7 @@ html, body {
 }
 
 .chat-message {
-    background: #2a2a2a;
+    background: var(--surface-inset);
     border-radius: 12px;
     padding: 12px;
     border-left: 3px solid var(--accent-purple);
@@ -2998,14 +3094,14 @@ html, body {
     display: flex;
     gap: 8px;
     padding: 12px 16px;
-    background: #1a1a1a;
+    background: var(--surface-sunken);
     border-top: 1px solid #333;
 }
 
 .clan-chat-input input {
     flex: 1;
     padding: 12px;
-    background: #2a2a2a;
+    background: var(--surface-inset);
     border: 2px solid #444;
     border-radius: 8px;
     color: #fff;
@@ -3123,7 +3219,7 @@ html, body {
 }
 
 .pvp-player-item {
-    background: #2a2a2a;
+    background: var(--surface-inset);
     border-radius: 12px;
     padding: 16px;
     display: flex;
@@ -3196,25 +3292,21 @@ html, body {
     gap: 16px;
 }
 
-.pvp-combatant {
-    flex: 1;
-    text-align: center;
-}
-
-.pvp-vs {
-    font-size: 28px;
-    font-weight: bold;
-    color: var(--accent-red);
-    text-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
-}
+/* Полное оформление бойцов и разделителя — в разделе «PvP: бой и
+   статистика» ниже. Здесь остались только старые огрызки правил, которые
+   дублировали их: .pvp-combatant переопределялся ниже (flex, фон, рамка),
+   а .pvp-vs — другим размером и цветом, из-за чего «VS» выглядел
+   иначе в зависимости от того, какое правило выиграло в каскаде. */
 
 /* Лог боя PvP */
 .pvp-battle-log {
-    background: #1a1a1a;
+    background: var(--surface-sunken);
     border-radius: 12px;
     padding: 16px;
     height: 150px;
     overflow-y: auto;
+    /* Как и лог боя — построчный приборный вывод */
+    font-family: var(--font-mono);
     font-size: 14px;
     line-height: 1.6;
 }
@@ -3264,13 +3356,13 @@ html, body {
     cursor: pointer;
 }
 .modal-close:active { color: var(--text-primary); }
-.modal-content {
-    position: relative;
-    border-top: 3px solid var(--accent-green);
-}
-.modal-error .modal-content { border-top-color: #e74c3c; }
-.modal-info .modal-content { border-top-color: #3498db; }
-.modal-success .modal-content { border-top-color: #4caf50; }
+/* Цвет верхней полосы по типу окна. Базовое .modal-content (с border-top)
+   объявлено выше — здесь только переопределение цвета. */
+.modal-error .modal-content { border-top-color: var(--color-danger-bright); }
+.modal-info .modal-content { border-top-color: var(--color-info); }
+.modal-success .modal-content { border-top-color: var(--color-success-soft); }
+/* warning используется диалогами подтверждения необратимых действий */
+.modal-warning .modal-content { border-top-color: var(--color-warning); }
 #modal-message {
     white-space: pre-line;
     word-break: break-word;
@@ -3297,8 +3389,8 @@ html, body {
 .loader-spinner {
     width: 44px;
     height: 44px;
-    border: 3px solid #2a2a4a;
-    border-top-color: var(--accent-green, #4a7c3f);
+    border: 3px solid var(--bg-card);
+    border-top-color: var(--accent-green);
     border-radius: 50%;
     animation: spin 0.9s linear infinite;
 }
@@ -3307,19 +3399,48 @@ html, body {
     color: var(--text-secondary);
 }
 
-/* ---------- Toast-уведомления (Templates.notification) ---------- */
+/* ---------- Toast-уведомления (showNotification) ---------- */
+/* Разметка и оформление живут здесь, а не в style.cssText в JS: раньше
+   showNotification задавал цвета инлайном (#4a9/#a44/#48a) и перебивал
+   эти правила, из-за чего уведомления выглядели не как остальной интерфейс
+   и не подхватывали новую тему. */
+#notification-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+    max-width: min(90vw, 340px);
+}
+/* Базовый фон уведомления. Раньше был #4a90a4 — холодный сине-бирюзовый,
+   в тёплом интерфейсе он выглядел чужеродно, и белый текст на нём давал
+   3.61. Теперь это обычная карточка: белый читается с контрастом 15.2,
+   а цвет уведомления задаёт один из типов ниже. */
 .notification {
     padding: 12px 16px;
     border-radius: 10px;
-    margin-bottom: 8px;
-    background: #4a90a4;
+    margin-bottom: 0;
+    background: var(--bg-card);
     color: #fff;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    animation: slideInLeft 0.3s ease-out;
+    transition: opacity 0.3s ease-out, transform 0.3s ease-out;
 }
-.notification-success { background: #2e7d32; }
-.notification-error { background: #b3402e; }
-.notification-warning { background: #b3762e; }
-.notification-info { background: #2e5a8f; }
+/* Цвета типов подобраны так, чтобы белый текст давал >= 4.5 на каждом:
+   success 5.13, error 5.69, warning 5.84 (было #b3762e — 3.79),
+   info 7.06. */
+.notification-success { background: var(--color-success); }
+.notification-error { background: var(--color-danger); }
+.notification-warning { background: #8c5a1c; }
+.notification-info { background: var(--color-info-deep); }
+.notification-hiding {
+    opacity: 0;
+    transform: translateX(16px);
+    animation: none;
+}
 
 /* ---------- Общие карточки статистики (PvP-статы и др.) ---------- */
 .stat-card {
@@ -3451,7 +3572,7 @@ html, body {
 }
 .boss-hp-fill {
     height: 100%;
-    background: linear-gradient(90deg, #b3402e, #e74c3c);
+    background: linear-gradient(90deg, var(--color-danger), var(--color-danger-bright));
     transition: width 0.3s ease;
     border-radius: 9px;
 }
@@ -3470,13 +3591,16 @@ html, body {
     background: rgba(255, 255, 255, 0.05);
     font-size: 14px;
 }
-.boss-damage { color: #ff8a80; font-weight: bold; }
+/* Урон по боссу: тот же красный, что и в логе боя. Раньше стоял
+   #ff8a80 — розовый, которого не было ни в палитре, ни где-либо ещё. */
+.boss-damage { color: var(--accent-red); font-weight: bold; }
 .attack-btn {
     width: 100%;
     padding: 16px;
     border: none;
     border-radius: 14px;
-    background: linear-gradient(135deg, var(--accent-green, #4a7c3f), #2e7d32);
+    /* Тот же тёмный зелёный, что у .btn-attack: под белый текст */
+    background: linear-gradient(135deg, #4d7c41, #2e7d32);
     color: #fff;
     font-size: 16px;
     font-weight: bold;
@@ -3485,7 +3609,7 @@ html, body {
 .attack-btn:active { transform: scale(0.98); }
 .attack-btn:disabled, .attack-btn.disabled { opacity: 0.5; pointer-events: none; }
 .mass-btn{
-    background: linear-gradient(135deg, #b3762e, #8d5a1e);
+    background: linear-gradient(135deg, var(--color-warning), #8d5a1e);
 }
 .start-solo-btn {
     background: linear-gradient(135deg, #3e6b8f, #2a4a66);
@@ -3555,7 +3679,7 @@ html, body {
 }
 .raid-hp-fill {
     height: 100%;
-    background: linear-gradient(90deg, #b3402e, #e74c3c);
+    background: linear-gradient(90deg, var(--color-danger), var(--color-danger-bright));
     transition: width 0.3s ease;
 }
 .raid-hp-text { font-size: 12px; color: var(--text-secondary); }
@@ -3571,8 +3695,13 @@ html, body {
     color: #fff;
     cursor: pointer;
 }
-.btn-join { background: linear-gradient(135deg, #3e6b8f, #2a4a66); }
-.btn-attack { background: linear-gradient(135deg, var(--accent-green, #4a7c3f), #2e7d32); }
+/* Вступление в рейд — та же сталь из палитры (было #3e6b8f → #2a4a66).
+   Белый текст: 5.7 и 9.3. */
+.btn-join { background: linear-gradient(135deg, #4a6b8a, #2a4a66); }
+/* Атака. Градиент взят темнее прежнего: --accent-green в палитре стал
+   светлее (#6aa85a) ради читаемости обычного текста, а с белым текстом
+   он давал всего 2.85. Здесь нужен тёмный конец градиента: 4.9 и 5.1. */
+.btn-attack { background: linear-gradient(135deg, #4d7c41, #2e7d32); }
 .btn-join:active, .btn-attack:active { transform: scale(0.98); }
 
 /* ---------- PvP: бой и статистика ---------- */
@@ -3594,7 +3723,7 @@ html, body {
     gap: 8px;
     text-align: center;
 }
-.pvp-combatant.attacker { border-color: rgba(74, 124, 63, 0.5); }
+.pvp-combatant.attacker { border-color: rgba(106, 168, 90, 0.5); }
 .pvp-combatant.defender { border-color: rgba(179, 64, 46, 0.5); }
 .pvp-combatant-name { font-size: 15px; font-weight: bold; }
 .pvp-combatant-level { font-size: 12px; color: var(--text-secondary); }
@@ -3606,7 +3735,7 @@ html, body {
 }
 .pvp-health-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--health-color, #b3402e), #ff6b6b);
+    background: linear-gradient(90deg, var(--health-color, var(--color-danger)), #ff6b6b);
     transition: width 0.3s ease;
 }
 .pvp-health-text { font-size: 12px; color: var(--text-secondary); }
@@ -3616,7 +3745,13 @@ html, body {
     flex-direction: column;
     gap: 8px;
 }
-.pvp-vs { align-self: center; font-size: 22px; }
+.pvp-vs {
+    align-self: center;
+    font-size: 28px;
+    font-weight: bold;
+    color: var(--accent-red);
+    text-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+}
 
 /* ---------- Разное: недостающие контейнеры и алиасы ---------- */
 .inventory-balance {
@@ -3625,14 +3760,90 @@ html, body {
     margin-top: 6px;
 }
 .energy-timer { display: none; }
-.coins-display { display: none; } /* баланс показывается в currency-badge */
-
-.referral-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 12px;
+/* Кнопки диалога пожертвования (showDonateDialog). Раньше ввод суммы шёл
+   через prompt() — системный диалог, визуально чужеродный в Mini App. */
+.modal-donate-confirm,
+.modal-donate-cancel {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+    padding: 12px 16px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+    /* Тёмный конец зелёного: --accent-green (#6aa85a) рассчитан на
+       светлый текст поверх, а здесь текст белый — на нём он давал 2.85.
+       Эти два конца дают белому 4.9 и 5.1. */
+    background: linear-gradient(135deg, #4d7c41, #2e7d32);
 }
+/* Не дубль, а переопределение: у «Отмены» свой вид */
+.modal-donate-cancel {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+/* ---------- Диалог подтверждения (showConfirmDialog) ---------- */
+/* Заменил системный confirm(): тот в Telegram Mini App показывал
+   светлое окно браузера поверх тёмного интерфейса, с другим шрифтом
+   и кнопками — выглядело как ошибка в игре. */
+.modal-confirm-text {
+    color: var(--text-secondary);
+    text-align: left;
+    /* #modal-message имеет white-space: pre-line, чтобы текстовые
+       сообщения showModal сохраняли переносы строк. Здесь переносы
+       не нужны, иначе отступы в шаблоне стали бы видимыми пробелами. */
+    white-space: pre-line;
+    margin-bottom: 16px;
+}
+.modal-confirm-actions {
+    display: flex;
+    gap: 10px;
+}
+.modal-confirm-actions .modal-confirm-yes,
+.modal-confirm-actions .modal-confirm-no {
+    flex: 1;
+    padding: 12px 16px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+    transition: filter 0.2s ease, transform 0.1s ease;
+}
+.modal-confirm-actions .modal-confirm-yes {
+    /* Как и кнопки диалога пожертвования: тёмный зелёный под белый текст */
+    background: linear-gradient(135deg, #4d7c41, #2e7d32);
+}
+.modal-confirm-actions .modal-confirm-no {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+.modal-confirm-actions .modal-confirm-yes:hover,
+.modal-confirm-actions .modal-confirm-no:hover {
+    filter: brightness(1.15);
+}
+.modal-confirm-actions .modal-confirm-yes:active,
+.modal-confirm-actions .modal-confirm-no:active {
+    transform: scale(0.98);
+}
+/* Опасные действия (разбор, выход из клана) — красная кнопка подтверждения,
+   чтобы её нельзя было нажать не подумав. */
+.modal-warning .modal-confirm-yes {
+    background: linear-gradient(135deg, var(--color-danger), #8b2a1c);
+}
+
+/* Баланс монет показывается в .currency-badge (см. шапки экранов),
+   поэтому отдельный .coins-display в разметке не выводится. Правило
+   `display: none` для него оставлено как страховка: updateBalanceDisplay
+   ищет элементы по этому классу, и без него старый блок с балансом
+   мигал бы поверх бейджа. */
+.coins-display { display: none; }
 
 .shop-items-list { margin-top: 12px; }
 
@@ -3817,11 +4028,11 @@ html, body {
     font-size: 12px;
 }
 
-.achievement-card .rarity-common { border-color: #9e9e9e; }
-.achievement-card .rarity-uncommon { border-color: #4caf50; }
-.achievement-card .rarity-rare { border-color: #2196f3; }
-.achievement-card .rarity-epic { border-color: #9c27b0; }
-.achievement-card .rarity-legendary { border-color: #ff9800; }
+.achievement-card .rarity-common { border-color: var(--rarity-common); }
+.achievement-card .rarity-uncommon { border-color: var(--color-success-soft); }
+.achievement-card .rarity-rare { border-color: var(--rarity-rare); }
+.achievement-card .rarity-epic { border-color: var(--rarity-epic); }
+.achievement-card .rarity-legendary { border-color: var(--rarity-legendary); }
 
 /* Кулдаун PvP */
 .pvp-cooldown {
@@ -3841,7 +4052,7 @@ html, body {
     align-items: center;
     gap: 12px;
     padding: 12px;
-    background: #2a2a2a;
+    background: var(--surface-inset);
     border-radius: 8px;
     margin-bottom: 8px;
     border-left: 3px solid #444;
@@ -3900,7 +4111,6 @@ html, body {
 }
 
 /* Блок с кодом */
-.referral-code-box {
     background: var(--bg-card);
     border-radius: 12px;
     padding: 16px;
@@ -3908,15 +4118,13 @@ html, body {
     border: 2px solid var(--accent-purple);
 }
 
-.referral-code-display {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 12px;
 }
 
-#referral-code {
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 20px;
     font-weight: bold;
     color: var(--accent-yellow);
@@ -3924,7 +4132,6 @@ html, body {
 }
 
 /* Секция изменения кода */
-.referral-change-section {
     margin-top: 16px;
     padding-top: 16px;
     border-top: 1px solid var(--border-color);
@@ -3936,20 +4143,17 @@ html, body {
 
 
 /* Секция ввода кода */
-.referral-use-section {
     padding: 16px;
     background: linear-gradient(135deg, rgba(72, 187, 120, 0.1), rgba(56, 178, 172, 0.1));
     border-bottom: 1px solid var(--border-color);
 }
 
-.referral-use-section h3 {
     margin: 0 0 8px 0;
     color: var(--text-primary);
     font-size: 18px;
 }
 
 
-.referral-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -3959,28 +4163,23 @@ html, body {
     border: 1px solid var(--border-color);
 }
 
-.referral-info {
     flex: 1;
 }
 
-.referral-name {
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 4px;
 }
 
-.referral-level {
     font-size: 14px;
     color: var(--accent-purple);
     margin-bottom: 2px;
 }
 
-.referral-joined {
     font-size: 12px;
     color: var(--text-secondary);
 }
 
-.referral-bonuses {
     font-size: 20px;
 }
 
@@ -4001,7 +4200,7 @@ html, body {
 }
 
 .action-btn.primary {
-    background: linear-gradient(135deg, var(--accent-green), #2E7D32);
+    background: linear-gradient(135deg, var(--accent-green), var(--color-success));
     border: 1px solid rgba(255, 255, 255, 0.15);
     color: #fff;
 }
@@ -4011,12 +4210,12 @@ html, body {
 }
 
 .action-btn.danger {
-    background: rgba(139, 0, 0, 0.35);
+    background: rgba(224, 122, 110, 0.35);
     border: 1px solid var(--accent-red);
     color: #ff8a8a;
 }
 .action-btn.danger:active {
-    background: rgba(139, 0, 0, 0.55);
+    background: rgba(224, 122, 110, 0.55);
 }
 
 /* Кнопки внутри .action-btn по умолчанию имеют flex:1 — в вертикальных
@@ -4075,32 +4274,25 @@ html, body {
 }
 
 /* ---------- Экран рефералов: секции и сетка статистики ---------- */
-.referral-code-section {
     margin-bottom: 16px;
 }
-.referral-code-section h3 {
     font-size: 14px;
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 10px;
 }
-.referral-stats {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
     margin: 12px 0 16px;
 }
 @media (max-width: 400px) {
-    .referral-stats {
         grid-template-columns: 1fr;
     }
 }
-.referral-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
+   flex/gap без отступа — дубль правила, из-за которого правка в одном
+   месте не применялась к другому. */
 
 /* ---------- Карточки из Templates (используются в модальных окнах) ---------- */
 .item-card {
@@ -4160,6 +4352,7 @@ html, body {
     white-space: pre-line;
     word-break: break-word;
     max-height: 60vh;
+    max-height: 60dvh;
     overflow-y: auto;
 }
 
@@ -4171,4 +4364,43 @@ html, body {
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
+/* ---------- Уважение к системной настройке движения ---------- */
+/* В игре 26 @keyframes, из них три бесконечные: pulse-glow у иконки
+   загрузки, boss-pulse у портрета босса и pulse-red у элемента с
+   красным свечением. Для людей с вестибулярными расстройствами
+   постоянное движение — проблема, поэтому оно выключается целиком.
+   Сами элементы остаются на месте: у бесконечных анимаций конечное
+   состояние совпадает с начальным, так что ничего не «прыгает». */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* ---------- Видимый фокус с клавиатуры ---------- */
+/* Раньше :focus-visible был только у .inventory-slot, поэтому в браузере
+   (Mini App открывается и обычной вкладкой) Tab'ить по кнопкам было
+   нечем — фокус не показывался. Теперь общая рамка для всех
+   интерактивных элементов. */
+:focus-visible {
+    outline: 2px solid var(--accent-yellow);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Модальное окно: снимаем подсветку рамки у самого контейнера, чтобы
+   она не рисовалась вокруг всего окна. */
+.modal:focus-visible {
+    outline: none;
+}
+.modal:focus-visible .modal-content {
+    outline: 2px solid var(--accent-yellow);
+    outline-offset: -2px;
+}
+
 

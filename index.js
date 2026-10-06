@@ -21,7 +21,7 @@ const DEV_MODE = process.env.DEV_MODE === 'true';
 // читается напрямую в utils/serverApi.js (validateTelegramInitData) —
 // дубль константы здесь был мёртвым кодом и удалён.
 
-const { logger, requestMiddleware, telegramAuthMiddleware } = require('./utils/serverApi');
+const { logger, requestMiddleware, telegramAuthMiddleware, idempotencyMiddleware } = require('./utils/serverApi');
 
 let server;
 let isShuttingDown = false;
@@ -87,7 +87,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 
-const { startScheduler } = require('./utils/scheduler');
+// startScheduler запускает задачи по расписанию, stopScheduler — гасит их
+// перед выходом из процесса: см. его вызов в shutdown() ниже.
+// getSchedulerMetrics отдаётся в GET /metrics.
+const { startScheduler, stopScheduler, getSchedulerMetrics } = require('./utils/scheduler');
 const { initAchievementsTable } = require('./utils/game-helpers');
 const { getMetrics } = require('./utils/metrics');
 const { query, closePool, setLogger, describeError } = require('./db/database');
@@ -386,9 +389,9 @@ logger.info('[index] gameRouter загружен:', gameRouter ? 'OK' : 'NULL');
 if (gameRouter?.stack) {
     logger.info('[index] gameRouter routes:', gameRouter.stack.filter(l => l.route).map(l => l.route?.path));
 }
-app.use('/api/game', requireDatabaseReady, gameRouter);
+app.use('/api/game', requireDatabaseReady, idempotencyMiddleware, gameRouter);
 app.use('/api/admin', requireDatabaseReady, adminRouter);
-app.use('/api/leaderboard', requireDatabaseReady, (req, res, next) => {
+app.use('/api/leaderboard', requireDatabaseReady, idempotencyMiddleware, (req, res, next) => {
     req.url = '/minigames' + req.url;
     gameRouter(req, res, next);
 });
@@ -440,8 +443,19 @@ app.get('/metrics', telegramAuthMiddleware, (req, res) => {
         return res.status(403).json({ error: 'Доступ запрещён' });
     }
     
+    // Метрики HTTP-слоя плюс метрики планировщика.
+    //
+    // Счётчики задач планировщика (сколько раз отработала регенерация
+    // энергии, сколько раз падал cleanup, сколько длилась последняя
+    // задача) накапливались в памяти, но наружу не отдавались: по
+    // /metrics было видно только состояние HTTP-запросов. Теперь видно,
+    // работают ли фоновые задачи — иначе их поломку можно заметить
+    // лишь по косвенным признакам в логах.
     const metrics = getMetrics();
-    res.json(metrics);
+    res.json({
+        ...metrics,
+        scheduler: getSchedulerMetrics()
+    });
 });
 
 // 404: для браузерных переходов по сайту отдаём index.html (SPA-fallback),
@@ -479,7 +493,22 @@ function shutdown(signal) {
         return;
     }
     isShuttingDown = true;
-    
+
+    // Планировщик останавливаем СРАЗУ и ДО закрытия пула.
+    //
+    // Раньше этого вызова не было: stopScheduler() экспортировался, но
+    // его никто не звал. Задачи по расписанию проверяют schedulerEnabled
+    // перед каждым запуском, и без вызова новая задача могла стартовать
+    // уже после server.close() и уйти в закрывающийся пул — в лог
+    // падала бы ошибка закрытия соединения.
+    //
+    // stopScheduler не прерывает задачу, которая уже выполняется, —
+    // она завершится на текущем пуле. Но новых запусков не будет.
+    try {
+        stopScheduler();
+    } catch (err) {
+        logger.warn('Ошибка остановки планировщика:', err.message);
+    }
 
     try {
         if (bot && typeof bot.stop === 'function') {
@@ -558,6 +587,16 @@ async function startServer() {
             await initDatabase();
             logger.info('База данных инициализирована');
             databaseInitialized = true;
+            
+            // Инициализируем кэш лута после успешного подключения к БД
+            try {
+                const { init: initLootCache } = require('./utils/lootCache');
+                await initLootCache();
+                logger.info('Кэш лута инициализирован');
+            } catch (lootError) {
+                logger.error(`Ошибка инициализации кэша лута (продолжаем): ${describeError(lootError)}`);
+            }
+            
             break;
         } catch (dbError) {
             logger.error(`Ошибка инициализации БД (попытка ${attempt}/${DB_INIT_ATTEMPTS}), продолжаем без БД: ${describeError(dbError)}`);

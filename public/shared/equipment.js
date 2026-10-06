@@ -1,5 +1,12 @@
 /**
- * Общие правила экипировки — единый источник для клиента и сервера.
+ * Общие правила предметов, энергии и здоровья — единый источник для
+ * клиента и сервера.
+ *
+ * Имя файла осталось прежним (equipment.js), хотя правил стало больше:
+ * здесь уже лежат интервалы регена энергии и здоровья, пороги
+ * автолечения, цена покупки энергии. Переименование сломало бы
+ * window.EquipmentShared в разметке и require() в 20+ местах сервера —
+ * имя менять только вместе с обоими.
  *
  * Файл живёт в public/, потому что его читают обе стороны:
  *  - сервер:  require('../public/shared/equipment.js')
@@ -225,6 +232,42 @@
 
     /** +1 энергия за столько миллисекунд. Тот же интервал у сервера (recalcEnergy). */
     const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
+
+    /* ================= ПОКУПКА ЭНЕРГИИ =================
+     *
+     * Раньше цена и объём были записаны дважды: `const STARS_COST = 5`
+     * в public/game.js и `const STARS_COST = 5` + ENERGY_PER_PURCHASE в
+     * routes/game/player.js. Клиент по своей копии решал, хватает ли
+     * звёзд, и показывал «Нужно 5 ⭐», а сервер по своей списывал.
+     * Поднять цену на сервере — и клиент продолжал бы предлагать покупку,
+     * которую сервер отклоняет с INSUFFICIENT_STARS.
+     *
+     * Теперь обе стороны берут числа отсюда.
+     */
+
+    /** Сколько звёзд стоит одна покупка энергии */
+    const ENERGY_PURCHASE_STARS_COST = 5;
+
+    /** Сколько энергии даёт одна покупка (обрезается по max_energy) */
+    const ENERGY_PER_PURCHASE = 25;
+
+    /* ================= ШАНС ДРОПА =================
+     *
+     * Единая формула для клиента и сервера.
+     * luck 1 → 10.4%, 30 → 22%, 60 → 34%, 100 → 50%, 125+ → 60%
+     */
+
+    const GAME_CONFIG = Object.freeze({
+        BASE_DROP_CHANCE: 8,
+        MAX_DROP_CHANCE: 60,
+        MAX_LUCK: 150
+    });
+
+    function calculateDropChance(luck) {
+        if (luck <= 0) return 5;
+        const chance = 10 + (luck * 0.4);
+        return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
+    }
 
     /* ================= ОЗДОРОВЛЕНИЕ И ЛЕЧЕНИЕ =================
      *
@@ -849,6 +892,8 @@ function resolveEquipmentSlot(item) {
         getTotalExpForLevel,
         HEALTH_REGEN_INTERVAL_MS,
         ENERGY_REGEN_INTERVAL_MS,
+        ENERGY_PURCHASE_STARS_COST,
+        ENERGY_PER_PURCHASE,
         HEALTH_REGEN_CAP_RATIO,
         DEFAULT_AUTO_HEAL_THRESHOLD,
         AUTO_HEAL_THRESHOLD_MIN,
@@ -868,6 +913,8 @@ function resolveEquipmentSlot(item) {
         MODIFICATIONS,
         MODIFICATION_BY_STAT,
         MAX_MODIFICATION_LEVEL,
+        GAME_CONFIG,
+        calculateDropChance,
         getEquipmentStatValue,
         sumEquipmentResistance,
         normalizeResistanceToThreatPoints,

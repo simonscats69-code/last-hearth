@@ -10,8 +10,12 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool, query } = require('../../db/database');
-const { logger, handleError, safeJsonParse } = require('../../utils/serverApi');
+// transaction() вместо ручного pool.connect()/BEGIN/COMMIT/ROLLBACK:
+// в прежней записи catch выполнял ROLLBACK даже если транзакция уже
+// была закоммичена (например, если res.json бросил исключение после
+// COMMIT) — лишний запрос на закрытой транзакции.
+const { query, transaction } = require('../../db/database');
+const { logger, handleError, safeJsonParse, unauthorized } = require('../../utils/serverApi');
 
 // ==========================================
 // КОЛЕСО УДАЧИ (из wheel.js)
@@ -57,7 +61,7 @@ router.get(['/wheel', '/'], async (req, res) => {
 
     if (!playerId) {
         logger.warn('[minigames/wheel] Нет playerId');
-        return res.status(401).json({ success: false, error: 'Не авторизован' });
+        return unauthorized(res, 'Не авторизован');
     }
 
     try {
@@ -117,67 +121,69 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
     const is_paid = req.body?.is_paid === true || req.body?.is_paid === 'true';
     
     if (!playerId) {
-        return res.status(401).json({ success: false, error: 'Не авторизован' });
+        return unauthorized(res, 'Не авторизован');
     }
     
-    const client = await pool.connect();
-    
+    // Раньше здесь вручную бралось соединение, а ветки «игрок не найден»,
+    // «не хватает Stars» и «кулдаун» вызывали ROLLBACK и отвечали прямо
+    // из try. С transaction() тело возвращает результат, а HTTP-ответ
+    // отправляется один раз после завершения транзакции — заодно чинится
+    // случай, когда ROLLBACK выполнялся уже после успешного COMMIT.
     try {
-        await client.query('BEGIN');
-        
-        // Получаем игрока
-        const playerResult = await client.query(
-            'SELECT id, coins, stars, energy, max_energy, last_wheel_spin FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
-        );
-        
-        const player = playerResult.rows[0];
-        
-        if (!player) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, error: 'Игрок не найден' });
-        }
-        
-        // Проверяем возможность вращения
-        const now = Date.now();
-        const lastSpin = player.last_wheel_spin;
-        
-        let canSpinFree = false;
-        if (!lastSpin) {
-            canSpinFree = true;
-        } else {
-            const timeSinceLastSpin = now - new Date(lastSpin).getTime();
-            canSpinFree = timeSinceLastSpin >= FREE_SPIN_COOLDOWN_MS;
-        }
-        
-        // Проверка платного вращения
-        if (is_paid) {
-            if ((player.stars || 0) < 1) {
-                await client.query('ROLLBACK');
-                return res.json({ success: false, error: 'Недостаточно Stars', code: 'NO_STARS' });
-            }
-            // Списываем Stars (без изменения last_wheel_spin для платных вращений).
-            // GREATEST(0, ...): колонка под CHECK (stars >= 0), поэтому простое
-            // "stars - 1" при гонке двух платных вращений дало бы 500 с
-            // нарушением constraint вместо понятной бизнес-ошибки.
-            await client.query(
-                'UPDATE players SET stars = GREATEST(0, stars - 1) WHERE id = $1',
+        const outcome = await transaction(async (client) => {
+            // Получаем игрока
+            const playerResult = await client.query(
+                'SELECT id, coins, stars, energy, max_energy, last_wheel_spin FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
             );
-        } else {
-            // Бесплатное вращение - проверяем кулдаун
-            if (!canSpinFree) {
-                const nextSpinTime = new Date(lastSpin).getTime() + FREE_SPIN_COOLDOWN_MS;
-                const timeLeft = Math.ceil((nextSpinTime - now) / 1000 / 60);
-                await client.query('ROLLBACK');
-                return res.json({ 
-                    success: false, 
-                    error: `Следующее бесплатное вращение через ${timeLeft} мин.`,
-                    code: 'COOLDOWN',
-                    next_free_spin: nextSpinTime - now
-                });
+
+            const player = playerResult.rows[0];
+
+            if (!player) {
+                return { status: 404, body: { success: false, error: 'Игрок не найден' } };
             }
-        }
+
+            // Проверяем возможность вращения
+            const now = Date.now();
+            const lastSpin = player.last_wheel_spin;
+
+            let canSpinFree = false;
+            if (!lastSpin) {
+                canSpinFree = true;
+            } else {
+                const timeSinceLastSpin = now - new Date(lastSpin).getTime();
+                canSpinFree = timeSinceLastSpin >= FREE_SPIN_COOLDOWN_MS;
+            }
+
+            // Проверка платного вращения
+            if (is_paid) {
+                if ((player.stars || 0) < 1) {
+                    return { status: 200, body: { success: false, error: 'Недостаточно Stars', code: 'NO_STARS' } };
+                }
+                // Списываем Stars (без изменения last_wheel_spin для платных вращений).
+                // GREATEST(0, ...): колонка под CHECK (stars >= 0), поэтому простое
+                // "stars - 1" при гонке двух платных вращений дало бы 500 с
+                // нарушением constraint вместо понятной бизнес-ошибки.
+                await client.query(
+                    'UPDATE players SET stars = GREATEST(0, stars - 1) WHERE id = $1',
+                    [playerId]
+                );
+            } else {
+                // Бесплатное вращение - проверяем кулдаун
+                if (!canSpinFree) {
+                    const nextSpinTime = new Date(lastSpin).getTime() + FREE_SPIN_COOLDOWN_MS;
+                    const timeLeft = Math.ceil((nextSpinTime - now) / 1000 / 60);
+                    return {
+                        status: 200,
+                        body: {
+                            success: false,
+                            error: `Следующее бесплатное вращение через ${timeLeft} мин.`,
+                            code: 'COOLDOWN',
+                            next_free_spin: nextSpinTime - now
+                        }
+                    };
+                }
+            }
         
         // Выбираем приз на сервере
         const prize = selectPrize();
@@ -228,24 +234,34 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
                 );
             }
             // При is_paid и отсутствии бонуса ничего не делаем
-        }
-        
-        await client.query('COMMIT');
-        
-        logger.info('wheel_spin', { playerId, prize: prize.type, value: prize.value, is_paid });
-        
-        res.json({
-            success: true,
-            data: {
-                prize: prize,
-                is_paid: is_paid || false
             }
+
+            // Успешный путь: результат возвращаем, транзакция закоммитится
+            // сама. Ответ уходит ниже, уже после COMMIT.
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        prize: prize,
+                        is_paid: is_paid || false
+                    }
+                }
+            };
         });
+
+        // Логируем только при выданном призе, как и раньше: в ветках с
+        // отказом (нет Stars, кулдаун) приз не выбирался.
+        if (outcome.body.success) {
+            const prize = outcome.body.data.prize;
+            logger.info('wheel_spin', { playerId, prize: prize.type, value: prize.value, is_paid });
+        }
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        await client.query('ROLLBACK');
+        // ROLLBACK выполняет transaction() — вручную он не нужен и раньше
+        // мог сработать уже после успешного COMMIT.
         return handleError(res, error, 'wheel_spin');
-    } finally {
-        client.release();
     }
 });
 
@@ -328,81 +344,86 @@ router.post(['/purchase', '/'], async (req, res) => {
     }
     
     const price = itemConfig.price;
-    const client = await pool.connect();
-    
+
+    // Как и в колесе: transaction() вместо ручного соединения, ответ
+    // отправляется один раз после завершения транзакции.
     try {
-        await client.query('BEGIN');
-        
-        // Получаем игрока со всеми необходимыми данными одним запросом
-        const playerResult = await client.query(
-            'SELECT stars, buffs, cosmetics FROM players WHERE id = $1 FOR UPDATE',
-            [playerId]
-        );
-        
-        const player = playerResult.rows[0];
-        const playerStars = player?.stars || 0;
-        
-        if (playerStars < price) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({
-                success: false,
-                error: 'Недостаточно Stars',
-                code: 'INSUFFICIENT_STARS',
-                stars: playerStars,
-                required: price
-            });
-        }
-        
-        // Списываем Stars. GREATEST(0, ...) по той же причине, что и в колесе:
-        // колонка под CHECK (stars >= 0). Проверка playerStars < price выше
-        // защищает при одиночном запросе, GREATEST — страховка от гонки.
-        await client.query(
-            'UPDATE players SET stars = GREATEST(0, stars - $1) WHERE id = $2',
-            [price, playerId]
-        );
-        
-        // Парсим существующие buffs и cosmetics
-        const existingBuffs = parseJsonField(player?.buffs, {});
-        const existingCosmetics = parseJsonField(player?.cosmetics, []);
-        
-        let reward = null;
-        
-        if (itemConfig.category === 'buffs') {
-            const expiresAt = new Date(Date.now() + itemConfig.duration * 1000);
-            await grantPlayerBuff(client, playerId, itemConfig.effect, expiresAt.toISOString(), existingBuffs);
-            reward = {
-                type: 'buff',
-                effect: itemConfig.effect,
-                expires_at: expiresAt.toISOString()
+        const outcome = await transaction(async (client) => {
+            // Получаем игрока со всеми необходимыми данными одним запросом
+            const playerResult = await client.query(
+                'SELECT stars, buffs, cosmetics FROM players WHERE id = $1 FOR UPDATE',
+                [playerId]
+            );
+
+            const player = playerResult.rows[0];
+            const playerStars = player?.stars || 0;
+
+            if (playerStars < price) {
+                return {
+                    status: 400,
+                    body: {
+                        success: false,
+                        error: 'Недостаточно Stars',
+                        code: 'INSUFFICIENT_STARS',
+                        stars: playerStars,
+                        required: price
+                    }
+                };
+            }
+
+            // Списываем Stars. GREATEST(0, ...) по той же причине, что и в колесе:
+            // колонка под CHECK (stars >= 0). Проверка playerStars < price выше
+            // защищает при одиночном запросе, GREATEST — страховка от гонки.
+            await client.query(
+                'UPDATE players SET stars = GREATEST(0, stars - $1) WHERE id = $2',
+                [price, playerId]
+            );
+
+            // Парсим существующие buffs и cosmetics
+            const existingBuffs = parseJsonField(player?.buffs, {});
+            const existingCosmetics = parseJsonField(player?.cosmetics, []);
+
+            let reward = null;
+
+            if (itemConfig.category === 'buffs') {
+                const expiresAt = new Date(Date.now() + itemConfig.duration * 1000);
+                await grantPlayerBuff(client, playerId, itemConfig.effect, expiresAt.toISOString(), existingBuffs);
+                reward = {
+                    type: 'buff',
+                    effect: itemConfig.effect,
+                    expires_at: expiresAt.toISOString()
+                };
+            } else if (itemConfig.category === 'cosmetics') {
+                await grantPlayerCosmetic(client, playerId, itemConfig.effect, existingCosmetics);
+                reward = {
+                    type: 'cosmetic',
+                    effect: itemConfig.effect
+                };
+            }
+
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    message: `Куплено: ${itemConfig.name}`,
+                    purchased_item: {
+                        id: item_id,
+                        name: itemConfig.name,
+                        reward: reward
+                    },
+                    new_stars: playerStars - price,
+                    balance: playerStars - price
+                }
             };
-        } else if (itemConfig.category === 'cosmetics') {
-            await grantPlayerCosmetic(client, playerId, itemConfig.effect, existingCosmetics);
-            reward = {
-                type: 'cosmetic',
-                effect: itemConfig.effect
-            };
-        }
-        
-        await client.query('COMMIT');
-        
-        logger.info(`[purchase] Игрок ${playerId} купил ${item_id} за ${price} Stars`);
-        
-        res.json({
-            success: true,
-            message: `Куплено: ${itemConfig.name}`,
-            purchased_item: {
-                id: item_id,
-                name: itemConfig.name,
-                reward: reward
-            },
-            new_stars: playerStars - price,
-            balance: playerStars - price
         });
+
+        if (outcome.body.success) {
+            logger.info(`[purchase] Игрок ${playerId} купил ${item_id} за ${price} Stars`);
+        }
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        await client.query('ROLLBACK');
         return handleError(res, error, 'purchase');
-    } finally {
-        client.release();
     }
 });
 
@@ -545,7 +566,7 @@ router.get('/leaderboard/my-position/:telegramId?', async (req, res) => {
         const telegramId = req.player?.telegram_id;
 
         if (!telegramId) {
-            return res.status(401).json({ success: false, error: 'Требуется авторизация' });
+            return unauthorized(res, 'Требуется авторизация');
         }
 
         // Сначала получаем статы целевого игрока одним запросом

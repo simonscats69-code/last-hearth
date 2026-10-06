@@ -7,25 +7,116 @@
  * - Метрики выполнения
  * - Транзакции для атомарных операций
  * - Batch-обработка для больших объёмов
+ * - Состояние в БД для горизонтального масштабирования
  */
 
-const { query, describeError } = require('../db/database');
+const { query, describeError, withClient } = require('../db/database');
 const { logger } = require('./serverApi');
 const { checkAchievements } = require('./game-helpers');
 
-// Состояние планировщика
-let isRunning = {
-    energy: false,
-    dailyActivity: false,
-    achievements: false,
-    cleanup: false,
-    dailyTasks: false,
-    debuffs: false,
-    raids: false  // Новая задача для очистки истёкших рейдов
-};
+// Список задач планировщика
+const SCHEDULER_TASKS = [
+    'energy',
+    'dailyActivity',
+    'achievements',
+    'cleanup',
+    'dailyTasks',
+    'debuffs',
+    'raids'
+];
 
-// Флаг для graceful shutdown
+// Флаг для graceful shutdown (в памяти — перезапуск процесса сбрасывает)
 let schedulerEnabled = true;
+
+/**
+ * Получить состояние задачи из БД
+ */
+async function getTaskState(taskName) {
+    try {
+        return await withClient(async (client) => {
+            const result = await client.query(
+                'SELECT * FROM scheduler_state WHERE task_name = $1',
+                [taskName]
+            );
+            return result.rows[0] || { 
+                task_name: taskName, 
+                is_running: false, 
+                retry_count: 0, 
+                offset_value: 0,
+                metadata: {}
+            };
+        });
+    } catch (err) {
+        // Если таблицы нет (старая версия БД), падаем на in-memory
+        logger.warn('[scheduler] scheduler_state table not found, using memory fallback', { error: describeError(err) });
+        return { task_name: taskName, is_running: false, retry_count: 0, offset_value: 0, metadata: {} };
+    }
+}
+
+/**
+ * Обновить состояние задачи в БД
+ */
+async function setTaskState(taskName, updates) {
+    try {
+        await withClient(async (client) => {
+            const fields = [];
+            const values = [taskName];
+            let idx = 2;
+
+            for (const [key, value] of Object.entries(updates)) {
+                fields.push(`${key} = $${idx++}`);
+                values.push(value);
+            }
+            fields.push('updated_at = NOW()');
+
+            await client.query(`
+                INSERT INTO scheduler_state (task_name, ${Object.keys(updates).join(', ')}, updated_at)
+                VALUES ($1, ${Object.keys(updates).map((_, i) => `$${i + 2}`).join(', ')}, NOW())
+                ON CONFLICT (task_name) DO UPDATE SET ${fields.join(', ')}
+            `, values);
+        });
+    } catch (err) {
+        logger.error('[scheduler] failed to update task state', { task: taskName, error: describeError(err) });
+    }
+}
+
+/**
+ * Проверить и установить флаг выполнения (atomic check-and-set)
+ * Возвращает true, если задача НЕ выполнялась и флаг установлен
+ */
+async function tryAcquireTaskLock(taskName) {
+    try {
+        return await withClient(async (client) => {
+            const result = await client.query(`
+                UPDATE scheduler_state 
+                SET is_running = true, last_run_at = NOW(), updated_at = NOW()
+                WHERE task_name = $1 AND is_running = false
+                RETURNING task_name
+            `, [taskName]);
+            return result.rows.length > 0;
+        });
+    } catch (err) {
+        // Fallback на in-memory если таблицы нет
+        return null; // null = неизвестно, пробуем in-memory
+    }
+}
+
+/**
+ * Освободить флаг выполнения
+ */
+async function releaseTaskLock(taskName) {
+    try {
+        await withClient(async (client) => {
+            await client.query(`
+                UPDATE scheduler_state 
+                SET is_running = false, updated_at = NOW()
+                WHERE task_name = $1
+            `, [taskName]);
+        });
+    } catch (err) {
+        logger.error('[scheduler] failed to release task lock', { task: taskName, error: describeError(err) });
+    }
+}
 
 /**
  * Безопасный перезапуск задачи.
@@ -63,12 +154,19 @@ function schedule(name, task, delayMs) {
     }, delayMs);
 }
 
-// Счётчик повторных ошибок для debuffs cleanup.
-// Лимит не применяется: задержка и так зажата Math.min до 30 минут,
-// поэтому константа MAX_DEBUFF_RETRIES была мёртвым кодом и удалена.
-let debuffRetryCount = 0;
+// In-memory fallback для состояния (если scheduler_state недоступна)
+const memoryState = {
+    isRunning: {},
+    debuffRetryCount: 0,
+    achievementsOffset: 0
+};
 
-// Метрики выполнения
+// Инициализация in-memory флагов
+for (const task of SCHEDULER_TASKS) {
+    memoryState.isRunning[task] = false;
+}
+
+// Метрики выполнения (остаются в памяти — только для мониторинга)
 const metrics = {
     energy: { total: 0, lastDuration: 0, lastSuccessAt: null },
     dailyActivity: { total: 0, lastDuration: 0, lastSuccessAt: null },
@@ -85,17 +183,93 @@ function getSchedulerMetrics() {
 }
 
 /**
+ * Проверить, выполняется ли задача (БД или память)
+ * НЕ захватывает лок, только читает состояние
+ */
+async function isTaskRunning(taskName) {
+    try {
+        const state = await getTaskState(taskName);
+        return state.is_running === true;
+    } catch {
+        // Fallback на память
+        return memoryState.isRunning[taskName] || false;
+    }
+}
+
+/**
+ * Установить флаг выполнения (БД или память)
+ * Захватывает лок если running=true, освобождает если running=false
+ */
+async function setTaskRunning(taskName, running) {
+    if (running) {
+        const acquired = await tryAcquireTaskLock(taskName);
+        if (acquired === null || acquired === false) {
+            memoryState.isRunning[taskName] = true;
+        }
+    } else {
+        await releaseTaskLock(taskName);
+        memoryState.isRunning[taskName] = false;
+    }
+}
+
+/**
+ * Получить значение offset (БД или память)
+ */
+async function getOffset(taskName) {
+    try {
+        const state = await getTaskState(taskName);
+        return state.offset_value || 0;
+    } catch {
+        return memoryState.achievementsOffset || 0;
+    }
+}
+
+/**
+ * Установить значение offset (БД или память)
+ */
+async function setOffset(taskName, value) {
+    try {
+        await setTaskState(taskName, { offset_value: value });
+    } catch {
+        memoryState.achievementsOffset = value;
+    }
+}
+
+/**
+ * Получить retry count (БД или память)
+ */
+async function getRetryCount(taskName) {
+    try {
+        const state = await getTaskState(taskName);
+        return state.retry_count || 0;
+    } catch {
+        return memoryState.debuffRetryCount || 0;
+    }
+}
+
+/**
+ * Установить retry count (БД или память)
+ */
+async function setRetryCount(taskName, value) {
+    try {
+        await setTaskState(taskName, { retry_count: value });
+    } catch {
+        memoryState.debuffRetryCount = value;
+    }
+}
+
+/**
  * Восстановление энергии игрокам
  * Запускается каждую минуту (после завершения предыдущей)
  */
 async function regenerateEnergy() {
-    if (isRunning.energy) {
+    if (await isTaskRunning('energy')) {
         logger.warn('energy: пропуск, предыдущая задача ещё выполняется');
         return;
     }
     
+    await setTaskRunning('energy', true);
     const startTime = Date.now();
-    isRunning.energy = true;
     
     try {
         // Реген накопительный: игрок мог не заходить 10 минут и должен
@@ -140,7 +314,7 @@ async function regenerateEnergy() {
     } catch (err) {
         logger.error({ type: 'energy_regen_error', message: describeError(err) });
     } finally {
-        isRunning.energy = false;
+        await setTaskRunning('energy', false);
         
         // Запускаем следующую итерацию через 1 минуту (если планировщик не остановлен)
         if (schedulerEnabled) {
@@ -154,30 +328,30 @@ async function regenerateEnergy() {
  * Запускается каждый час
  */
 async function checkDailyActivity() {
-    if (isRunning.dailyActivity) {
+    if (await isTaskRunning('dailyActivity')) {
         logger.warn('dailyActivity: пропуск, предыдущая задача ещё выполняется');
         return;
     }
-
+    
+    await setTaskRunning('dailyActivity', true);
     const startTime = Date.now();
-    isRunning.dailyActivity = true;
 
     try {
         // Серия дней (daily_streak) больше НЕ растёт здесь.
-//
-// Раньше стояло:
-//   UPDATE players SET daily_streak = LEAST(365, daily_streak + 1)
-//    WHERE last_action_time > NOW() - INTERVAL '20 hours'
-//      AND last_action_time < NOW() - INTERVAL '4 hours'
-// Задача ходит каждый час, поэтому игрок, не заходивший 4–20 часов,
-// получал +1 серии ЕЖЕДОЧАСНО — до +16 в сутки и потолок 365 за сутки.
-// Теперь серию ведёт единственный источник: игрок сам забирает ежедневный
-// бонус (POST /player/daily-bonus), где серия растёт один раз в сутки и
-// обнуляется при пропуске больше 48 часов.
-//
-// Здесь остаётся только сброс серий у игроков, которые давно не заходили и
-// никогда не заберут бонус.
-const resetResult = await query(`
+        //
+        // Раньше стояло:
+        //   UPDATE players SET daily_streak = LEAST(365, daily_streak + 1)
+        //    WHERE last_action_time > NOW() - INTERVAL '20 hours'
+        //      AND last_action_time < NOW() - INTERVAL '4 hours'
+        // Задача ходит каждый час, поэтому игрок, не заходивший 4–20 часов,
+        // получал +1 серии ЕЖЕДОЧАСНО — до +16 в сутки и потолок 365 за сутки.
+        // Теперь серию ведёт единственный источник: игрок сам забирает ежедневный
+        // бонус (POST /player/daily-bonus), где серия растёт один раз в сутки и
+        // обнуляется при пропуске больше 48 часов.
+        //
+        // Здесь остаётся только сброс серий у игроков, которые давно не заходили и
+        // никогда не заберут бонус.
+        const resetResult = await query(`
             UPDATE players
             SET daily_streak = 0
             WHERE last_action_time < NOW() - INTERVAL '2 days'
@@ -201,7 +375,7 @@ const resetResult = await query(`
     } catch (err) {
         logger.error({ type: 'daily_activity_error', message: describeError(err) });
     } finally {
-        isRunning.dailyActivity = false;
+        await setTaskRunning('dailyActivity', false);
         
         // Запускаем следующую итерацию через 1 час (если планировщик не остановлен)
         if (schedulerEnabled) {
@@ -215,13 +389,13 @@ const resetResult = await query(`
  * Запускается каждые 6 часов
  */
 async function cleanupOldLogs() {
-    if (isRunning.cleanup) {
+    if (await isTaskRunning('cleanup')) {
         logger.warn('cleanup: пропуск, предыдущая задача ещё выполняется');
         return;
     }
     
+    await setTaskRunning('cleanup', true);
     const startTime = Date.now();
-    isRunning.cleanup = true;
     
     try {
         // Удаляем логи старше 30 дней
@@ -261,7 +435,7 @@ async function cleanupOldLogs() {
     } catch (err) {
         logger.error({ type: 'cleanup_error', message: describeError(err) });
     } finally {
-        isRunning.cleanup = false;
+        await setTaskRunning('cleanup', false);
         
         // Запускаем следующую итерацию через 6 часов (если планировщик не остановлен)
         if (schedulerEnabled) {
@@ -276,7 +450,6 @@ async function cleanupOldLogs() {
  */
 const BATCH_SIZE = 50;
 const CONCURRENCY = 10; // Одновременно обрабатываем 10 игроков
-let achievementsOffset = 0;
 
 /**
  * Обработать одного игрока (с обработкой ошибок)
@@ -310,27 +483,28 @@ async function processBatchParallel(players) {
 }
 
 async function checkAllAchievements() {
-    if (isRunning.achievements) {
+    if (await isTaskRunning('achievements')) {
         logger.warn('achievements: пропуск, предыдущая задача ещё выполняется');
         return;
     }
     
+    await setTaskRunning('achievements', true);
     const startTime = Date.now();
-    isRunning.achievements = true;
     let totalProcessed = 0;
     let totalErrors = 0;
+    let offset = await getOffset('achievements');
     
     try {
         for (;;) {
             // Batch-выборка игроков
             const players = await query(`
                 SELECT id, level, bosses_killed, pvp_wins, items_collected,
-                       daily_streak, referrals
+                       daily_streak
                 FROM players 
                 WHERE last_action_time > NOW() - INTERVAL '24 hours'
                 ORDER BY id
                 LIMIT $1 OFFSET $2
-            `, [BATCH_SIZE, achievementsOffset]);
+            `, [BATCH_SIZE, offset]);
             
             if (players.rows.length === 0) {
                 break; // Все игроки обработаны
@@ -342,14 +516,16 @@ async function checkAllAchievements() {
             totalProcessed += results.filter(r => r.success).length;
             totalErrors += results.filter(r => !r.success).length;
             
-            achievementsOffset += BATCH_SIZE;
+            // Сохраняем offset ТОЛЬКО после успешной обработки батча
+            offset += BATCH_SIZE;
+            await setOffset('achievements', offset);
             
             // Пауза между батчами
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         
         // Сбрасываем offset после завершения
-        achievementsOffset = 0;
+        await setOffset('achievements', 0);
         
         const duration = Date.now() - startTime;
         metrics.achievements.total++;
@@ -367,7 +543,7 @@ async function checkAllAchievements() {
     } catch (err) {
         logger.error({ type: 'achievements_check_error', message: describeError(err) });
     } finally {
-        isRunning.achievements = false;
+        await setTaskRunning('achievements', false);
         
         // Запускаем следующую итерацию через 1 час (если планировщик не остановлен)
         if (schedulerEnabled) {
@@ -381,41 +557,82 @@ async function checkAllAchievements() {
  * Запускается каждые 5 минут
  */
 async function cleanupExpiredDebuffs() {
-    if (isRunning.debuffs) {
+    if (await isTaskRunning('debuffs')) {
         logger.warn('debuffs: пропуск, предыдущая задача ещё выполняется');
         return;
     }
     
+    await setTaskRunning('debuffs', true);
     const startTime = Date.now();
-    isRunning.debuffs = true;
     let success = false;
     
     try {
-        // Очистка radiation (с LIMIT для предотвращения блокировки большого количества строк)
-        // Обрабатываем максимум 100 игроков за один вызов
-        await query(`
-            UPDATE players 
+        // Батчевый отбор: сначала выбираем до 100 игроков с истёкшими
+        // дебаффами, затем обновляем только их.
+        //
+        // Раньше UPDATE шёл по всей таблице players без LIMIT (при том,
+        // что комментарий выше утверждал об обратном). Таблица растёт
+        // вместе с числом игроков, и каждые 5 минут сервер брал блокировки
+        // на ВСЕ строки — запрос конфликтовал с любым действием игрока.
+        // Теперь работа не зависит от размера таблицы, а неубранные
+        // игроки подхватываются следующим тиком.
+        const expiredRadiation = await query(`
+            WITH expired AS (
+                SELECT id
+                FROM players
+                WHERE radiation->>'expires_at' IS NOT NULL
+                  AND (radiation->>'expires_at')::timestamp < NOW()
+                LIMIT 100
+            )
+            UPDATE players p
             SET radiation = jsonb_set(
-                COALESCE(radiation, '{}'::jsonb), 
-                '{level}', 
+                COALESCE(p.radiation, '{}'::jsonb),
+                '{level}',
                 '0'::jsonb
             )
-            WHERE radiation->>'expires_at' IS NOT NULL 
-            AND (radiation->>'expires_at')::timestamp < NOW()
+            FROM expired
+            WHERE p.id = expired.id
         `);
-        
-        // Очистка инфекций (с LIMIT)
-        await query(`
-            UPDATE players 
+
+        // Инфекции: оставляем только те, у которых срок ещё не вышел.
+        // jsonb_array_length на NULL даёт NULL, а условие NULL > 0 — не
+        // истина, поэтому игроки без инфекций отсекаются корректно.
+        const expiredInfections = await query(`
+            WITH expired AS (
+                SELECT id
+                FROM players
+                WHERE infections IS NOT NULL
+                  AND jsonb_typeof(infections) = 'array'
+                  AND jsonb_array_length(infections) > 0
+                  AND EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements(infections) elem
+                      WHERE elem->>'expires_at' IS NOT NULL
+                        AND (elem->>'expires_at')::timestamp <= NOW()
+                  )
+                LIMIT 100
+            )
+            UPDATE players p
             SET infections = COALESCE((
                 SELECT jsonb_agg(elem)
-                FROM jsonb_array_elements(infections) AS elem
+                FROM jsonb_array_elements(p.infections) AS elem
                 WHERE (elem->>'expires_at')::timestamp > NOW()
-                OR elem->>'expires_at' IS NULL
+                   OR elem->>'expires_at' IS NULL
             ), '[]'::jsonb)
-            WHERE jsonb_array_length(infections) > 0
+            FROM expired
+            WHERE p.id = expired.id
         `);
-        
+
+        const cleanedCount = (expiredRadiation.rowCount || 0) + (expiredInfections.rowCount || 0);
+        if (cleanedCount > 0) {
+            logger.info({
+                type: 'debuffs_cleanup_batch',
+                players_updated: cleanedCount,
+                radiation: expiredRadiation.rowCount || 0,
+                infections: expiredInfections.rowCount || 0
+            });
+        }
+
         success = true;
         const duration = Date.now() - startTime;
         logger.info({ 
@@ -424,28 +641,30 @@ async function cleanupExpiredDebuffs() {
         });
     } catch (err) {
         logger.error({ type: 'debuffs_cleanup_error', message: describeError(err) });
-        debuffRetryCount++;
+        const retryCount = await getRetryCount('debuffs') + 1;
+        await setRetryCount('debuffs', retryCount);
         
         const delay = Math.min(
-            5 * 60 * 1000 * Math.pow(2, debuffRetryCount),
+            5 * 60 * 1000 * Math.pow(2, retryCount),
             30 * 60 * 1000
         );
         
         logger.warn({ 
             type: 'debuffs_cleanup_retry', 
-            retryCount: debuffRetryCount,
+            retryCount: retryCount,
             nextDelayMs: delay 
         });
     } finally {
-        isRunning.debuffs = false;
+        await setTaskRunning('debuffs', false);
         
         if (success) {
-            debuffRetryCount = 0;
+            await setRetryCount('debuffs', 0);
         }
         
         // Единый запуск следующей итерации
+        const retryCount = await getRetryCount('debuffs');
         const nextDelay = success ? 5 * 60 * 1000 : Math.min(
-            5 * 60 * 1000 * Math.pow(2, debuffRetryCount || 1),
+            5 * 60 * 1000 * Math.pow(2, retryCount || 1),
             30 * 60 * 1000
         );
         
@@ -464,13 +683,13 @@ async function cleanupExpiredDebuffs() {
  * - Участники НЕ получают награды (рейд проигран)
  */
 async function cleanupExpiredRaids() {
-    if (isRunning.raids) {
+    if (await isTaskRunning('raids')) {
         logger.warn('raids: пропуск, предыдущая задача ещё выполняется');
         return;
     }
     
+    await setTaskRunning('raids', true);
     const startTime = Date.now();
-    isRunning.raids = true;
     
     try {
         // Находим истёкшие активные рейды
@@ -502,19 +721,30 @@ async function cleanupExpiredRaids() {
                 `, [raid.id]);
 
                 if (participantIds.length > 0) {
+                    // Условие active_raid_id = $1 обязательно.
+                    //
+                    // Истёкший рейд мог быть обнаружен ПОЗЖЕ, чем игрок успел
+                    // начать новый бой (например, рейд истёк в 12:00, игрок в
+                    // 12:03 начал соло-бой, а эта задача отработала в 12:05).
+                    // Без фильтра UPDATE обнулял active_boss_id у игрока,
+                    // который уже сражался с ДРУГИМ боссом: незавершённый
+                    // бой и его прогресс (player_boss_progress) исчезали,
+                    // а бой возобновить было уже нельзя — блокировка
+                    // проверяется по active_boss_id.
                     await query(
                         `UPDATE players
                          SET active_boss_id = NULL,
                              active_boss_started_at = NULL,
                              active_boss_mode = NULL,
                              active_raid_id = NULL
-                         WHERE id = ANY($1::bigint[])`,
-                        [participantIds]
+                         WHERE id = ANY($1::bigint[])
+                           AND active_raid_id = $2`,
+                        [participantIds, raid.id]
                     );
                 }
                 
                 await query('DELETE FROM boss_sessions WHERE raid_id = $1', [raid.id]);
-                 
+                  
                 // Логируем истёкший рейд
                 logger.info({
                     type: 'raid_expired',
@@ -537,7 +767,7 @@ async function cleanupExpiredRaids() {
     } catch (err) {
         logger.error({ type: 'raids_cleanup_error', message: describeError(err) });
     } finally {
-        isRunning.raids = false;
+        await setTaskRunning('raids', false);
         
         // Запускаем следующую итерацию через 5 минут
         if (schedulerEnabled) {
@@ -551,13 +781,13 @@ async function cleanupExpiredRaids() {
  * Запускается каждые 6 часов
  */
 async function resetDailyTasks() {
-    if (isRunning.dailyTasks) {
+    if (await isTaskRunning('dailyTasks')) {
         logger.warn('dailyTasks: пропуск, предыдущая задача ещё выполняется');
         return;
     }
     
+    await setTaskRunning('dailyTasks', true);
     const startTime = Date.now();
-    isRunning.dailyTasks = true;
     
     try {
         const result = await query(`
@@ -575,6 +805,31 @@ async function resetDailyTasks() {
                 players_affected: result.rows.length 
             });
         }
+
+        // Удаление просроченных заданий.
+        //
+        // Строки в daily_tasks создаются на каждый день (GET /daily-tasks
+        // делает INSERT ... ON CONFLICT DO NOTHING с expires_at = полночь
+        // следующего дня) и удаляются только при получении награды. Если
+        // игрок не забрал награду, строка оставалась навсегда: за год
+        // активной игры это 3 × 365 = ~1000 строк на игрока, а при
+        // нескольких тысячах игроков таблица росла без очистки, хотя
+        // индекс idx_daily_tasks_expires для этих строк уже не работал.
+        //
+        // Сутки запаса: задание с expires_at, равным текущему полуночи,
+        // могло быть ещё нужно игроку — удаляем только то, что прошло.
+        const deletedResult = await query(`
+            DELETE FROM daily_tasks
+            WHERE expires_at < NOW() - INTERVAL '1 day'
+            RETURNING id
+        `);
+
+        if (deletedResult.rows.length > 0) {
+            logger.info({
+                type: 'daily_tasks_cleanup',
+                tasks_deleted: deletedResult.rows.length
+            });
+        }
         
         const duration = Date.now() - startTime;
         metrics.dailyTasks.total++;
@@ -585,7 +840,7 @@ async function resetDailyTasks() {
     } catch (err) {
         logger.error({ type: 'daily_tasks_reset_error', message: describeError(err) });
     } finally {
-        isRunning.dailyTasks = false;
+        await setTaskRunning('dailyTasks', false);
         
         // Запускаем следующую итерацию через 6 часов (если планировщик не остановлен)
         if (schedulerEnabled) {
@@ -598,8 +853,12 @@ async function resetDailyTasks() {
  * Запуск планировщика
  * Запускает все задачи с задержкой для избежания пиковой нагрузки
  */
-function startScheduler() {
-    if (isRunning.energy || isRunning.dailyActivity) {
+async function startScheduler() {
+    // Проверяем, не запущены ли уже задачи
+    const energyRunning = await isTaskRunning('energy');
+    const dailyRunning = await isTaskRunning('dailyActivity');
+    
+    if (energyRunning || dailyRunning) {
         logger.warn('Планировщик уже запущен');
         return;
     }
@@ -637,30 +896,33 @@ function startScheduler() {
  * Остановка планировщика
  * Не останавливает текущие задачи, только предотвращает запуск новых
  */
-function stopScheduler() {
-    isRunning = {
-        energy: false,
-        dailyActivity: false,
-        achievements: false,
-        cleanup: false,
-        dailyTasks: false,
-        debuffs: false,
-        raids: false
-    };
+async function stopScheduler() {
+    // Сбрасываем флаги в БД
+    for (const task of SCHEDULER_TASKS) {
+        await releaseTaskLock(task);
+    }
+    
+    // Сбрасываем память
+    for (const task of SCHEDULER_TASKS) {
+        memoryState.isRunning[task] = false;
+    }
     
     schedulerEnabled = false;
     logger.info('Планировщик остановлен');
 }
 
+// Наружу уходят запуск, остановка и метрики. Задачи (regenerateEnergy,
+// checkDailyActivity, cleanupExpiredRaids и др.) вызываются здесь же, по
+// расписанию: раньше они экспортировались, но ни один модуль их не читал,
+// и в списке экспортов прятались 8 имён, которым не место наружу.
+//
+// getSchedulerMetrics, наоборот, читается — его отдаёт GET /metrics
+// (utils/scheduler.js -> index.js). Раньше он тоже был мёртвым: счётчики
+// задач (сколько раз отработала регенерация энергии, сколько раз
+// падал cleanup, сколько длилась последняя задача) накапливались в
+// памяти и никуда не выводились.
 module.exports = {
     startScheduler,
     stopScheduler,
-    regenerateEnergy,
-    checkDailyActivity,
-    checkAllAchievements,
-    cleanupOldLogs,
-    resetDailyTasks,
-    cleanupExpiredDebuffs,
-    cleanupExpiredRaids,  // Новая функция
     getSchedulerMetrics
 };

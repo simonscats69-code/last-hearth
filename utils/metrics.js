@@ -112,20 +112,7 @@ function getMetrics() {
     };
 }
 
-/**
- * Сбросить метрики
- */
-function resetMetrics() {
-    metrics.requests.total = 0;
-    metrics.requests.success = 0;
-    metrics.requests.errors = 0;
-    metrics.requests.byEndpoint = {};
-    metrics.responseTimes = [];
-    metrics.startTime = Date.now();
-}
-
 module.exports = {
     recordRequest,
-    getMetrics,
-    resetMetrics
+    getMetrics
 };

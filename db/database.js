@@ -1,4 +1,36 @@
 /**
+ * Похоже ли это на ошибку ПОДКЛЮЧЕНИЯ к БД, а не на сбой запроса.
+ *
+ * Нужна, чтобы отличать «база недоступна» от «запрос упал». Раньше это
+ * различалось вручную: несколько маршрутов брали соединение отдельным
+ * try и отдавали 502 «Ошибка подключения к базе данных». После перевода
+ * маршрутов на transaction() такого try не осталось, и недоступность
+ * базы стала выглядеть как обычная внутренняя ошибка 500 — по логам
+ * нельзя было понять, что дело не в коде.
+ *
+ * Коды покрывают и сетевые ошибки Node, и SQLSTATE от pg.
+ *
+ * @param {*} err ошибка
+ * @returns {boolean} true, если это похоже на проблему с соединением
+ */
+function isConnectionError(err) {
+    if (!err || typeof err.code !== 'string') return false;
+    return [
+        // Сетевые ошибки Node
+        'ECONNREFUSED',
+        'ECONNRESET',
+        'ETIMEDOUT',
+        'EHOSTUNREACH',
+        'ENETUNREACH',
+        'ENOTFOUND',
+        'EPIPE',
+        // SQLSTATE: класс 08 — connection exception
+        '08000', '08001', '08003', '08004', '08006', '08007',
+        '08P01'
+    ].includes(err.code);
+}
+
+/**
  * Модуль подключения к PostgreSQL
  */
 
@@ -172,6 +204,21 @@ async function transaction(fn) {
 }
 
 /**
+ * Выполнить функцию с клиентом БД БЕЗ транзакции (BEGIN/COMMIT).
+ * Полезно для чтения нескольких таблиц подряд, когда не нужна
+ * атомарность записи, но удобно переиспользовать одно соединение.
+ * Автоматически освобождает клиент в finally.
+ */
+async function withClient(fn) {
+    const client = await pool.connect();
+    try {
+        return await fn(client);
+    } finally {
+        client.release();
+    }
+}
+
+/**
  * initDatabase вынесен в db/init.js.
  *
  * Причина: отсюда требовался ./schema, а он импортирует query из этого же
@@ -194,8 +241,10 @@ module.exports = {
     queryOne,
     queryAll,
     transaction,
+    withClient,
     closePool,
     setLogger,
     describeError,
-    describeDbTarget
+    describeDbTarget,
+    isConnectionError
 };

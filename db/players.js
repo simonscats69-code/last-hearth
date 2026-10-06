@@ -6,16 +6,13 @@
  * роуты своими UPDATE.
  */
 const { query: defaultQuery } = require('./database');
+// Общая валидация ID. Импортируется из utils/validate.js, а НЕ из
+// serverApi: тот лениво требует этот же файл (require внутри
+// PlayerHelper.addExperience), и верхнеуровневый импорт дал бы цикл.
+// utils/validate.js зависимостей не имеет, поэтому цикла не будет.
+const { requireId } = require('../utils/validate');
 
 const ERR_PLAYER_NOT_FOUND = 'Игрок не найден';
-
-function validateId(id, name = 'id') {
-    const num = Number(id);
-    // Number.isSafeInteger вместо Number.isInteger: защита от потери
-    // точности на больших telegramId
-    if (!Number.isSafeInteger(num) || num <= 0) throw new Error(`Неверный ${name}`);
-    return num;
-}
 
 function getExecutor(client) {
     return client ? client.query.bind(client) : defaultQuery;
@@ -35,7 +32,7 @@ const { logPlayerAction } = require('../utils/log');
 
 async function updatePlayerExperience(playerId, exp, options = {}) {
     const { client = null, updateTimestamp = true } = options;
-    playerId = validateId(playerId, 'playerId');
+    playerId = requireId(playerId, 'playerId');
     const exec = getExecutor(client);
     const result = await exec(
         `UPDATE players SET experience = experience + $1 ${updateTimestamp ? ', updated_at = NOW()' : ''} WHERE id = $2 RETURNING level, experience, max_energy, max_health`,
@@ -46,7 +43,7 @@ async function updatePlayerExperience(playerId, exp, options = {}) {
 }
 
 async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience = 0) {
-    playerId = validateId(playerId, 'playerId');
+    playerId = requireId(playerId, 'playerId');
     const exec = getExecutor(client);
     
     // Формула прокачки удачи: каждый уровень даёт +1 к удаче
@@ -70,14 +67,14 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
 
 async function lockPlayer(playerId, client) {
     if (!client) throw new Error('lockPlayer требует client');
-    playerId = validateId(playerId, 'playerId');
+    playerId = requireId(playerId, 'playerId');
     const result = await client.query('SELECT * FROM players WHERE id = $1 FOR UPDATE', [playerId]);
     return result.rows[0];
 }
 
 async function addExperienceWithLevelUp(client, playerId, exp, getExpForLevel) {
     if (!client) throw new Error('addExperienceWithLevelUp требует client');
-    playerId = validateId(playerId, 'playerId');
+    playerId = requireId(playerId, 'playerId');
     validateExperience(exp);
     
     const lockedPlayer = await lockPlayer(playerId, client);

@@ -7,9 +7,9 @@
 
 const express = require('express');
 const router = express.Router();
-const { queryOne, queryAll, transaction: tx } = require('../../db/database');
+const { queryOne, queryAll, transaction } = require('../../db/database');
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory, equipmentRules, getSetBonuses, trackCollectedItems } = require('../../utils/game-helpers');
+const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory, equipmentRules, getSetBonuses, trackCollectedItems, consumeInventoryItem } = require('../../utils/game-helpers');
 
 /**
  * Лимит слотов инвентаря.
@@ -107,7 +107,7 @@ router.post('/buy', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const item = await client.query(
                 'SELECT * FROM items WHERE id = $1 AND price > 0',
                 [itemId]
@@ -208,7 +208,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
             return res.status(400).json({ success: false, error: 'Укажите корректный индекс предмета', code: 'INVALID_INDEX' });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const player = await client.query(
                 'SELECT inventory, equipment, health, max_health, radiation, infections FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
@@ -324,18 +324,11 @@ router.post(['/use', '/use-item'], async (req, res) => {
             if (updates.length > 0) {
                 // Расходник может лежать стопкой (quantity > 1): эффект применяется один
                 // раз, а из стека уходит ровно одна штука.
-                const currentQty = Number(item.quantity || 1);
-                const remainingQty = currentQty - 1;
-
-                if (remainingQty > 0) {
-                    inventory[itemIndex] = { ...item, quantity: remainingQty };
-                } else {
-                    inventory.splice(itemIndex, 1);
-                }
+                const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, itemIndex);
 
                 await client.query(
                     `UPDATE players SET ${updates.join(', ')}, inventory = $${params.length + 1} WHERE id = $1`,
-                    [...params, JSON.stringify(inventory)]
+                    [...params, JSON.stringify(updatedInventory)]
                 );
 
                 await logPlayerAction(playerId, 'item_use', { item_id: item.id, item_name: item.name }, client);
@@ -344,7 +337,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
                     success: true,
                     message: 'Предмет использован',
                     item: { id: item.id, name: item.name },
-                    quantity_left: remainingQty
+                    quantity_left: quantityLeft
                 };
             }
 
@@ -387,7 +380,7 @@ router.post('/sell', async (req, res) => {
             });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const playerResult = await client.query(
                 'SELECT inventory, coins FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
@@ -499,7 +492,7 @@ router.post('/drop', async (req, res) => {
             });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const playerResult = await client.query(
                 'SELECT inventory FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
@@ -631,7 +624,7 @@ router.post('/unequip', async (req, res) => {
         const playerId = req.player.id;
         const slot = String(req.body?.slot || '');
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const playerResult = await client.query(
                 'SELECT equipment, inventory FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
@@ -709,7 +702,7 @@ router.post('/buy-stars', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
         }
 
-        const result = await tx(async (client) => {
+        const result = await transaction(async (client) => {
             const shopItem = await client.query(
                 'SELECT * FROM items WHERE id = $1 AND stars_price > 0',
                 [itemId]

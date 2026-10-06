@@ -10,12 +10,16 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../../db/database');
-const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger } = require('../../utils/serverApi');
+// transaction() вместо ручного pool.connect()/BEGIN/COMMIT/ROLLBACK в
+// маршрутах с записью: см. пояснение в POST /bosses/start. withClient()
+// для чтений, которым транзакция не нужна — удобнее ручного pool.connect().
+const { transaction, withClient, isConnectionError } = require('../../db/database');
+const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger, unauthorized } = require('../../utils/serverApi');
 const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask, applyAutoHeal } = require('../../utils/game-helpers');
 // Единый источник правды: тот же, что в world.js и items.js. Без проверки
 // лимита награда за босса довела бы инвентарь больше 100 слотов.
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
+const crypto = require('crypto');
 
 // Сколько ключей нужно, чтобы открыть бой со СЛЕДУЮЩИМ боссом.
 // Владелец ключа — текущий босс: чтобы начать бой с N, нужны keys_required
@@ -66,11 +70,10 @@ function calculateDamageBonus(bossId, masteries) {
 
 /**
  * Спецбонус оружия по ситуации (stats.boss_bonus / stats.pvp_bonus).
- *
- * Ближний бой (нож, бита, топор) даёт +40% урона по боссам: подойти вплотную
- * к мутанту дешевле, чем искать патроны. Дальний бой даёт +25% урона в PvP.
- * До этого тип оружия не значил ничего — ближний бой был просто слабее.
- *
+ * 
+ * Ближний бой (нож, бита, топор) даёт +40% урона по боссам.
+ * Дальний бой даёт +25% урона в PvP.
+ * 
  * @param {object} item оружие из инвентаря
  * @param {'boss'|'pvp'} context где применяется
  * @returns {number} множитель, например 1.4 или 1 (без бонуса)
@@ -113,12 +116,10 @@ function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
 
 /**
  * Урон, который босс наносит игроку в ответ на удар.
- *
+ * 
  * bosses.damage — процент от max_health игрока за удар (3% у первого босса,
- * 15% у финального). Снижается защитой брони (мягкий предел 60%), поэтому
- * экипировка впервые влияет на выживание, а не только на цифры в профиле.
- * Колонка damage была мёртвой: бой с боссом не стоил ничего.
- *
+ * 15% у финального). Снижается защитой брони (мягкий предел 60%).
+ * 
  * @param {object} boss строка bosses
  * @param {number} maxHealth максимум здоровья игрока
  * @param {object} equipment экипировка игрока
@@ -147,7 +148,7 @@ function calculateGrantedQuantity(totalQuantity, multiplier = 1) {
     const guaranteedQuantity = Math.floor(expectedQuantity);
     const fractionalPart = expectedQuantity - guaranteedQuantity;
 
-    return guaranteedQuantity + (Math.random() < fractionalPart ? 1 : 0);
+    return guaranteedQuantity + (crypto.randomInt(10000) / 10000 < fractionalPart ? 1 : 0);
 }
 
 /**
@@ -713,66 +714,96 @@ function buildAlreadyInFightResponse(activeBattle) {
     };
 }
 
+/**
+ * Ответ на ошибку ПОДКЛЮЧЕНИЯ к базе (502), а не сбой запроса (500).
+ *
+ * Раньше каждый маршрут брал соединение из пула отдельным try и сам
+ * отдавал 502 «Ошибка подключения к базе данных». После перевода на
+ * transaction() этих try не осталось, и недоступность базы стала
+ * выглядеть как обычная внутренняя ошибка.
+ *
+ * @param {object} res ответ express
+ * @param {*} error ошибка
+ * @returns {boolean} true, если ответ отправлен (ошибка — про соединение)
+ */
+function handleConnectionError(res, error) {
+    if (!isConnectionError(error)) return false;
+
+    logger.error('[bosses] Ошибка подключения к БД', error);
+    res.status(502).json({ success: false, error: 'Ошибка подключения к базе данных' });
+    return true;
+}
+
 router.post('/start', async (req, res) => {
     logger.info('[bosses/start] Начало запроса', { playerId: req.player?.id, body: req.body });
-    let client;
-    try {
-        client = await pool.connect();
-        logger.info('[bosses/start] Подключение к БД успешно');
-    } catch (dbError) {
-        logger.error('[bosses/start] Ошибка подключения к БД', dbError);
-        return res.status(502).json({ success: false, error: 'Ошибка подключения к базе данных' });
+
+    // Валидация вынесена ДО открытия транзакции. Раньше соединение бралось
+    // из пула первым делом, и при отказе на проверках оно всё равно
+    // освобождалось в finally — но занималось на время проверок впустую.
+    if (!req.player || !req.player.id) {
+        return unauthorized(res, 'Не авторизован');
+    }
+    const bossId = Number(req.body?.boss_id);
+    const playerId = req.player.id;
+    logger.info('[bosses/start] Валидация данных', { bossId, playerId });
+
+    if (!validateBossId(bossId)) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
     }
 
     try {
-        if (!req.player || !req.player.id) {
-            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
-        }
-        const bossId = Number(req.body?.boss_id);
-        const playerId = req.player.id;
-        logger.info('[bosses/start] Валидация данных', { bossId, playerId });
-
-        if (!validateBossId(bossId)) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-        }
-
-        await client.query('BEGIN');
-
-        try {
+        // Раньше здесь был вложенный try с собственным ROLLBACK. Из-за него
+        // ошибка spendBossKeys доходила до внешнего catch и превращалась в
+        // 500 вместо 400 с кодом INSUFFICIENT_KEYS. Теперь тело транзакции
+        // просто бросает исходную ошибку, а разбор кодов один — в catch.
+        const outcome = await transaction(async (client) => {
             const activeBattle = await resolveActiveBattle(client, playerId);
             if (activeBattle) {
                 if (activeBattle.type === 'solo' && activeBattle.boss_id === bossId) {
-                    await client.query('COMMIT');
-                    return res.json({
-                        success: true,
-                        data: {
-                            mode: 'solo',
-                            resumed: true,
-                            boss: activeBattle.boss,
-                            time_remaining_ms: activeBattle.time_remaining_ms
+                    // Прежний код делал здесь COMMIT, а не ROLLBACK: в ветке
+                    // ничего не записывалось, но выход с COMMIT сохраняем,
+                    // чтобы поведение не изменилось незаметно.
+                    return {
+                        status: 200,
+                        body: {
+                            success: true,
+                            data: {
+                                mode: 'solo',
+                                resumed: true,
+                                boss: activeBattle.boss,
+                                time_remaining_ms: activeBattle.time_remaining_ms
+                            }
                         }
-                    });
+                    };
                 }
 
-                await client.query('ROLLBACK');
-                return res.status(400).json(buildAlreadyInFightResponse(activeBattle));
+                return {
+                    status: 400,
+                    body: buildAlreadyInFightResponse(activeBattle)
+                };
             }
 
             const boss = await getBossById(client, bossId);
             if (!boss) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({ success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' });
+                return {
+                    status: 404,
+                    body: { success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' }
+                };
             }
 
             const player = await getPlayerBaseState(client, playerId);
             if (!player || player.health <= 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя начать бой с боссом.', code: 'PLAYER_DEAD' });
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Вы мертвы. Нельзя начать бой с боссом.', code: 'PLAYER_DEAD' }
+                };
             }
 
-            // Списанное число запоминаем ДО COMMIT: повторный запрос к БД
-            // после фиксации транзакции мог вернуть другое значение, а его
-            // сбой приводил бы к ошибке уже начатого боя со списанными ключами.
+            // Списанное число запоминаем ВНУТРИ транзакции: повторный
+            // запрос к БД после COMMIT мог вернуть другое значение, а его
+            // сбой приводил бы к ошибке уже начатого боя со списанными
+            // ключами. transaction() возвращает это число наружу вместе с
+            // остальным результатом — перечитывать базу не нужно.
             const keysSpent = bossId > 1
                 ? await spendBossKeys(client, playerId, bossId - 1)
                 : 0;
@@ -795,187 +826,184 @@ router.post('/start', async (req, res) => {
                 [bossId, playerId]
             );
 
-            await client.query('COMMIT');
-
-            return res.json({
-                success: true,
-                data: {
-                    mode: 'solo',
-                    keys_spent: keysSpent,
-                    boss: {
-                        id: boss.id,
-                        name: boss.name,
-                        icon: boss.icon,
-                        hp: boss.max_health,
-                        max_hp: boss.max_health
-                    },
-                    time_remaining_ms: SOLO_FIGHT_DURATION_MS
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        mode: 'solo',
+                        keys_spent: keysSpent,
+                        boss: {
+                            id: boss.id,
+                            name: boss.name,
+                            icon: boss.icon,
+                            hp: boss.max_health,
+                            max_hp: boss.max_health
+                        },
+                        time_remaining_ms: SOLO_FIGHT_DURATION_MS
+                    }
                 }
-            });
-        } catch (error) {
-            await client.query('ROLLBACK');
-            if (error.code === 'INSUFFICIENT_KEYS') {
-                return res.status(400).json(error);
-            }
-            throw error;
-        }
+            };
+        });
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
+        // spendBossKeys сообщает о нехватке ключей самой фикцией кода:
+        // раньше её перехватывал вложенный catch и отдавал 400 с полями
+        // keys_owned/keys_required. Без той проверки игрок получил бы 500
+        // вместо понятного «не хватает ключей».
+        if (error.code === 'INSUFFICIENT_KEYS') {
+            return res.status(400).json(error);
+        }
+        if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'solo_start');
-    } finally {
-        if (client) client.release();
     }
 });
 
 router.get('/bonuses', async (req, res) => {
-    const client = await pool.connect();
-
     try {
-        const playerId = req.player.id;
-        const player = await getPlayerBaseState(client, playerId);
-        const masteries = await getBossMasteries(client, playerId);
-        const masteryMap = {};
-        for (const m of masteries) masteryMap[m.boss_id] = m.kills;
-        const bossesResult = await client.query('SELECT id, name FROM bosses ORDER BY id');
-        const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+        const outcome = await withClient(async (client) => {
+            const playerId = req.player.id;
+            const player = await getPlayerBaseState(client, playerId);
+            const masteries = await getBossMasteries(client, playerId);
+            const masteryMap = {};
+            for (const m of masteries) masteryMap[m.boss_id] = m.kills;
+            const bossesResult = await client.query('SELECT id, name FROM bosses ORDER BY id');
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
 
-        res.json({
-            success: true,
-            data: {
-                player_level: player.level,
-                set_bonuses: setBonuses,
-                bonuses: bossesResult.rows.map((boss) => ({
-                    boss_id: boss.id,
-                    boss_name: boss.name,
-                    defeated_count: masteryMap[boss.id] || 0,
-                    current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
-                    mastery_bonus: calculateDamageBonus(boss.id, masteries)
-                }))
-            }
+            return {
+                success: true,
+                data: {
+                    player_level: player.level,
+                    set_bonuses: setBonuses,
+                    bonuses: bossesResult.rows.map((boss) => ({
+                        boss_id: boss.id,
+                        boss_name: boss.name,
+                        defeated_count: masteryMap[boss.id] || 0,
+                        current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
+                        mastery_bonus: calculateDamageBonus(boss.id, masteries)
+                    }))
+                }
+            };
         });
+        res.json(outcome);
     } catch (error) {
         return handleError(res, error, 'bonuses');
-    } finally {
-        client.release();
     }
 });
 
 router.get('/', async (req, res) => {
     logger.info('[bosses/get] Начало запроса', { playerId: req.player?.id });
-    let client;
     try {
-        client = await pool.connect();
-        logger.info('[bosses/get] Подключение к БД успешно');
-    } catch (dbError) {
-        logger.error('[bosses/get] Ошибка подключения к БД', dbError);
-        return res.status(502).json({ success: false, error: 'Ошибка подключения к базе данных' });
-    }
+        const outcome = await withClient(async (client) => {
+            const playerId = req.player.id;
+            logger.info('[bosses/get] Получение данных игрока', { playerId });
+            const player = await getPlayerBaseState(client, playerId);
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            const masteries = await getBossMasteries(client, playerId);
+            const masteryMap = {};
+            for (const m of masteries) masteryMap[m.boss_id] = m.kills;
 
-    try {
-        const playerId = req.player.id;
-        logger.info('[bosses/get] Получение данных игрока', { playerId });
-        const player = await getPlayerBaseState(client, playerId);
-        const activeBattle = await resolveActiveBattle(client, playerId);
-        const masteries = await getBossMasteries(client, playerId);
-        const masteryMap = {};
-        for (const m of masteries) masteryMap[m.boss_id] = m.kills;
+            const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
 
-        const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
-        const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+            // Ключ выдаёт ПРЕДЫДУЩИЙ босс, поэтому требование к боссу N — это
+            // keys_required босса N-1, а не самого N: иначе цифры в UI не
+            // совпадут с серверной проверкой ключей при старте боя.
+            const keysRequiredByBoss = new Map(
+                bossesResult.rows.map((boss) => [Number(boss.id), Math.max(1, Number(boss.keys_required) || 1)])
+            );
 
-        // Ключ выдаёт ПРЕДЫДУЩИЙ босс, поэтому требование к боссу N — это
-        // keys_required босса N-1, а не самого N: иначе цифры в UI не
-        // совпадут с серверной проверкой ключей при старте боя.
-        const keysRequiredByBoss = new Map(
-            bossesResult.rows.map((boss) => [Number(boss.id), Math.max(1, Number(boss.keys_required) || 1)])
-        );
+            // Получаем все ключи боссов одним запросом для устранения N+1
+            const keysResult = await client.query(
+                'SELECT boss_id, quantity FROM boss_keys WHERE player_id = $1',
+                [playerId]
+            );
+            const keysMap = {};
+            for (const r of keysResult.rows) keysMap[String(r.boss_id)] = r.quantity;
 
-        // Получаем все ключи боссов одним запросом для устранения N+1
-        const keysResult = await client.query(
-            'SELECT boss_id, quantity FROM boss_keys WHERE player_id = $1',
-            [playerId]
-        );
-        const keysMap = {};
-        for (const r of keysResult.rows) keysMap[String(r.boss_id)] = r.quantity;
+            const bossList = [];
+            for (const boss of bossesResult.rows) {
+                const keysRequired = boss.id === 1 ? 0 : (keysRequiredByBoss.get(Number(boss.id) - 1) || 1);
+                const ownedKeys = boss.id === 1 ? 0 : (keysMap[String(boss.id - 1)] || 0);
+                const isUnlocked = boss.id === 1 || ownedKeys >= keysRequired;
+                const soloProgress = activeBattle?.type === 'solo' && activeBattle.boss_id === boss.id
+                    ? activeBattle.boss.hp
+                    : boss.max_health;
 
-        const bossList = [];
-        for (const boss of bossesResult.rows) {
-            const keysRequired = boss.id === 1 ? 0 : (keysRequiredByBoss.get(Number(boss.id) - 1) || 1);
-            const ownedKeys = boss.id === 1 ? 0 : (keysMap[String(boss.id - 1)] || 0);
-            const isUnlocked = boss.id === 1 || ownedKeys >= keysRequired;
-            const soloProgress = activeBattle?.type === 'solo' && activeBattle.boss_id === boss.id
-                ? activeBattle.boss.hp
-                : boss.max_health;
-
-            bossList.push({
-                id: boss.id,
-                name: boss.name,
-                description: boss.description,
-                icon: boss.icon,
-                hp: soloProgress,
-                max_hp: boss.max_health,
-                reward_coins: boss.reward_coins,
-                reward_experience: boss.reward_experience,
-                // Ответный урон босса в процентах от здоровья игрока —
-                // UI показывает его в карточке боя.
-                damage_percent: boss.damage,
-                required_keys: keysRequired,
-                owned_keys: ownedKeys,
-                is_unlocked: isUnlocked,
-                defeated_count: masteryMap[boss.id] || 0,
-                mastery: masteryMap[boss.id] || 0,
-                current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
-                can_start_solo: isUnlocked && !activeBattle,
-                can_start_mass: isUnlocked && !activeBattle
-            });
-        }
-
-        const raids = await getActiveRaids(client, playerId);
-
-        res.json({
-            success: true,
-            data: {
-                bosses: bossList,
-                raids: raids.raids,
-                participating_raid_ids: raids.participatingIds,
-                participating_boss_ids: raids.participatingBossIds,
-                player_energy: player.energy,
-                player_max_energy: player.max_energy,
-                player_level: player.level,
-                active_battle: activeBattle,
-                fight_duration_ms: SOLO_FIGHT_DURATION_MS,
-                raid_duration_ms: MASS_FIGHT_DURATION_MS,
-                info: {
-                    solo: 'Соло-бой: старт через кнопку, 1 удар = 1 энергия, бой длится 8 часов.',
-                    mastery: 'Каждая победа над боссом увеличивает урон по нему и частично усиливает урон по следующим боссам.',
-                    raids: 'Массовый бой — отдельный режим на 8 часов. Награды и предметы делятся пропорционально урону, ключ получает только лидер.'
-                }
+                bossList.push({
+                    id: boss.id,
+                    name: boss.name,
+                    description: boss.description,
+                    icon: boss.icon,
+                    hp: soloProgress,
+                    max_hp: boss.max_health,
+                    reward_coins: boss.reward_coins,
+                    reward_experience: boss.reward_experience,
+                    // Ответный урон босса в процентах от здоровья игрока —
+                    // UI показывает его в карточке боя.
+                    damage_percent: boss.damage,
+                    required_keys: keysRequired,
+                    owned_keys: ownedKeys,
+                    is_unlocked: isUnlocked,
+                    defeated_count: masteryMap[boss.id] || 0,
+                    mastery: masteryMap[boss.id] || 0,
+                    current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
+                    can_start_solo: isUnlocked && !activeBattle,
+                    can_start_mass: isUnlocked && !activeBattle
+                });
             }
+
+            const raids = await getActiveRaids(client, playerId);
+
+            return {
+                success: true,
+                data: {
+                    bosses: bossList,
+                    raids: raids.raids,
+                    participating_raid_ids: raids.participatingIds,
+                    participating_boss_ids: raids.participatingBossIds,
+                    player_energy: player.energy,
+                    player_max_energy: player.max_energy,
+                    player_level: player.level,
+                    active_battle: activeBattle,
+                    fight_duration_ms: SOLO_FIGHT_DURATION_MS,
+                    raid_duration_ms: MASS_FIGHT_DURATION_MS,
+                    info: {
+                        solo: 'Соло-бой: старт через кнопку, 1 удар = 1 энергия, бой длится 8 часов.',
+                        mastery: 'Каждая победа над боссом увеличивает урон по нему и частично усиливает урон по следующим боссам.',
+                        raids: 'Массовый бой — отдельный режим на 8 часов. Награды и предметы делятся пропорционально урону, ключ получает только лидер.'
+                    }
+                }
+            };
         });
+        res.json(outcome);
     } catch (error) {
+        if (handleConnectionError(res, error)) return;
         return handleError(res, error, 'boss_list');
-    } finally {
-        if (client) client.release();
     }
 });
 
 router.post('/attack-boss', async (req, res) => {
-    const client = await pool.connect();
+    // Валидация до открытия транзакции — как в остальных маршрутах боссов.
+    const bossId = Number(req.body?.boss_id);
+    const playerId = req.player.id;
+
+    if (!validateBossId(bossId)) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
+    }
 
     try {
-        const bossId = Number(req.body?.boss_id);
-        const playerId = req.player.id;
-
-        if (!validateBossId(bossId)) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-        }
-
-        await client.query('BEGIN');
-
-        try {
+        const outcome = await transaction(async (client) => {
             const validation = await validateSoloAttack(client, playerId, bossId);
             if (validation.error) {
-                await client.query('ROLLBACK');
-                return res.status(validation.status).json(validation.error);
+                // Статус и тело приходят из validateSoloAttack: там разные
+                // отказы (нет боя, мёртв, мало энергии), и их коды нельзя
+                // сваливать в одну ошибку.
+                return {
+                    status: validation.status,
+                    body: validation.error
+                };
             }
 
             const { activeBattle, player, activeBuffs, masteries } = validation;
@@ -1023,55 +1051,54 @@ router.post('/attack-boss', async (req, res) => {
                 mastery = killResult.mastery;
             }
 
-            await client.query('COMMIT');
-
-            return res.json({
-                success: true,
-                boss_hp: newHp,
-                boss_max_hp: activeBattle.boss.max_hp,
-                damage_dealt: damage,
-                boss_defeated: killed,
-                player_energy: energyResult.rows[0].energy,
-                player_max_energy: energyResult.rows[0].max_energy,
-                // Клиент строит регенерацию энергии от этой метки. Без неё
-                // он продолжит считать от устаревшей метки и покажет лишнюю.
-                last_energy_update: energyResult.rows[0].last_energy_update,
-                mastery,
-                rewards,
-                // Ответный удар босса.
-                player_damage_taken: counterHit.damage,
-                player_health: counterHit.health,
-                broken_equipment: counterHit.broken_slots,
-                // auto_heal обязателен и на верхнем уровне, и в data: клиент
-                // читает payload.auto_heal ?? payload.data.auto_heal, и без
-                // обоих полей строка «❤️ Автолечение» не выводится.
-                auto_heal: counterHit.auto_heal,
-                data: {
-                    boss: {
-                        id: bossId,
-                        hp: newHp,
-                        max_hp: activeBattle.boss.max_hp
-                    },
-                    damage,
-                    killed,
-                    rewards,
-                    mastery,
-                    energy_left: energyResult.rows[0].energy,
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    boss_hp: newHp,
+                    boss_max_hp: activeBattle.boss.max_hp,
+                    damage_dealt: damage,
+                    boss_defeated: killed,
+                    player_energy: energyResult.rows[0].energy,
+                    player_max_energy: energyResult.rows[0].max_energy,
+                    // Клиент строит регенерацию энергии от этой метки. Без неё
+                    // он продолжит считать от устаревшей метки и покажет лишнюю.
                     last_energy_update: energyResult.rows[0].last_energy_update,
-                    damage_taken: counterHit.damage,
-                    health: counterHit.health,
+                    mastery,
+                    rewards,
+                    // Ответный удар босса.
+                    player_damage_taken: counterHit.damage,
+                    player_health: counterHit.health,
                     broken_equipment: counterHit.broken_slots,
-                    auto_heal: counterHit.auto_heal
+                    // auto_heal обязателен и на верхнем уровне, и в data: клиент
+                    // читает payload.auto_heal ?? payload.data.auto_heal, и без
+                    // обоих полей строка «❤️ Автолечение» не выводится.
+                    auto_heal: counterHit.auto_heal,
+                    data: {
+                        boss: {
+                            id: bossId,
+                            hp: newHp,
+                            max_hp: activeBattle.boss.max_hp
+                        },
+                        damage,
+                        killed,
+                        rewards,
+                        mastery,
+                        energy_left: energyResult.rows[0].energy,
+                        last_energy_update: energyResult.rows[0].last_energy_update,
+                        damage_taken: counterHit.damage,
+                        health: counterHit.health,
+                        broken_equipment: counterHit.broken_slots,
+                        auto_heal: counterHit.auto_heal
+                    }
                 }
-            });
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        }
+            };
+        });
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
+        if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'solo_attack');
-    } finally {
-        client.release();
     }
 });
 
@@ -1081,52 +1108,54 @@ router.post('/attack-boss', async (req, res) => {
  * POST /bosses/attack-with-weapon
  */
 router.post('/attack-with-weapon', async (req, res) => {
-    const client = await pool.connect();
+    // Валидация до открытия транзакции — как в остальных маршрутах боссов.
+    const bossId = Number(req.body?.boss_id);
+    const itemIndex = Number(req.body?.item_index);
+    const playerId = req.player.id;
+
+    if (!validateBossId(bossId)) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
+    }
+
+    if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный индекс предмета', code: 'INVALID_ITEM_INDEX' });
+    }
 
     try {
-        const bossId = Number(req.body?.boss_id);
-        const itemIndex = Number(req.body?.item_index);
-        const playerId = req.player.id;
-
-        if (!validateBossId(bossId)) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-        }
-
-        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный индекс предмета', code: 'INVALID_ITEM_INDEX' });
-        }
-
-        await client.query('BEGIN');
-
-        try {
+        const outcome = await transaction(async (client) => {
             const validation = await validateSoloAttack(client, playerId, bossId);
             if (validation.error) {
-                await client.query('ROLLBACK');
-                return res.status(validation.status).json(validation.error);
+                // Статус и тело приходят из validateSoloAttack: там разные
+                // отказы (нет боя, мёртв, мало энергии).
+                return { status: validation.status, body: validation.error };
             }
 
             const { activeBattle, player, activeBuffs, masteries } = validation;
 
             const inventory = normalizeInventory(player.inventory);
-            
+
             if (itemIndex >= inventory.length) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Предмет не найден в инвентаре',
-                    code: 'ITEM_NOT_FOUND'
-                });
+                return {
+                    status: 400,
+                    body: {
+                        success: false,
+                        error: 'Предмет не найден в инвентаре',
+                        code: 'ITEM_NOT_FOUND'
+                    }
+                };
             }
 
             const weapon = inventory[itemIndex];
-            
+
             if (weapon.type !== 'weapon') {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Это не оружие',
-                    code: 'NOT_WEAPON'
-                });
+                return {
+                    status: 400,
+                    body: {
+                        success: false,
+                        error: 'Это не оружие',
+                        code: 'NOT_WEAPON'
+                    }
+                };
             }
 
             const weaponDamage = applyWeaponVariance(weapon,
@@ -1138,14 +1167,16 @@ router.post('/attack-with-weapon', async (req, res) => {
             // становиться выгодным по мере его использования.
             const durabilityInfo = equipmentRules.getDurabilityInfo(weapon);
             if (durabilityInfo.isBroken) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Оружие сломано — отремонтируйте его',
-                    code: 'WEAPON_BROKEN',
-                    durability: durabilityInfo.current,
-                    max_durability: durabilityInfo.max
-                });
+                return {
+                    status: 400,
+                    body: {
+                        success: false,
+                        error: 'Оружие сломано — отремонтируйте его',
+                        code: 'WEAPON_BROKEN',
+                        durability: durabilityInfo.current,
+                        max_durability: durabilityInfo.max
+                    }
+                };
             }
 
             // Износ: −1 прочности вместо удаления предмета.
@@ -1192,54 +1223,53 @@ router.post('/attack-with-weapon', async (req, res) => {
                 mastery = killResult.mastery;
             }
 
-            await client.query('COMMIT');
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        boss_hp: newHp,
+                        boss_max_hp: activeBattle.boss.max_hp,
+                        damage: damage,
+                        weapon_used: weaponName,
+                        weapon_damage: weaponDamage,
+                        weapon_durability: wornWeapon.durability,
+                        weapon_max_durability: wornWeapon.max_durability,
+                        // Сломан ли ствол после удара: клиент выводит предупреждение
+                        // в лог боя, иначе прочность просто исчезала из ответа.
+                        weapon_broken: Number(wornWeapon.durability) <= 0,
+                        damage_taken: counterHit.damage,
+                        health: counterHit.health,
+                        broken_equipment: counterHit.broken_slots,
+                        // Автолечение — см. комментарий в /attack-boss: без этих
+                        // полей клиент не показывал, какое лекарство было выпито.
+                        auto_heal: counterHit.auto_heal,
+                        energy: energyResult.rows[0]?.energy || 0,
+                        last_energy_update: energyResult.rows[0]?.last_energy_update || null,
+                        killed,
+                        rewards,
+                        mastery
+                    },
+                    auto_heal: counterHit.auto_heal
+                },
+                // Логирование вынесено наружу транзакции: раньше оно стояло
+                // между COMMIT и res.json, и его сбой приводил к откату уже
+                // закрытой транзакции.
+                log: { bossId, weaponName, weaponDamage, damage, newHp, killed }
+            };
+        });
 
+        if (outcome.log) {
             logger.info(`[bosses] Атака с оружием`, {
                 playerId,
-                bossId,
-                weaponName,
-                weaponDamage,
-                damage,
-                newHp,
-                killed
+                ...outcome.log
             });
-
-            res.json({
-                success: true,
-                data: {
-                    boss_hp: newHp,
-                    boss_max_hp: activeBattle.boss.max_hp,
-                    damage: damage,
-                    weapon_used: weaponName,
-                    weapon_damage: weaponDamage,
-                    weapon_durability: wornWeapon.durability,
-                    weapon_max_durability: wornWeapon.max_durability,
-                    // Сломан ли ствол после удара: клиент выводит предупреждение
-                    // в лог боя, иначе прочность просто исчезала из ответа.
-                    weapon_broken: Number(wornWeapon.durability) <= 0,
-                    damage_taken: counterHit.damage,
-                    health: counterHit.health,
-                    broken_equipment: counterHit.broken_slots,
-                    // Автолечение — см. комментарий в /attack-boss: без этих
-                    // полей клиент не показывал, какое лекарство было выпито.
-                    auto_heal: counterHit.auto_heal,
-                    energy: energyResult.rows[0]?.energy || 0,
-                    last_energy_update: energyResult.rows[0]?.last_energy_update || null,
-                    killed,
-                    rewards,
-                    mastery
-                },
-                auto_heal: counterHit.auto_heal
-            });
-
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
         }
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
+        if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'attack_with_weapon');
-    } finally {
-        client.release();
     }
 });
 
@@ -1248,105 +1278,105 @@ router.post('/attack-with-weapon', async (req, res) => {
  * GET /bosses/weapons
  */
 router.get('/weapons', async (req, res) => {
-    const client = await pool.connect();
-    
     try {
-        const playerId = req.player.id;
-        
-        const playerResult = await client.query(
-            'SELECT inventory FROM players WHERE id = $1',
-            [playerId]
-        );
-        
-        const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
-        
-        // Мощная атака доступна только с целым оружием: сломанное не бьёт,
-        // а стоило бы ровно столько же, сколько сейчас отображается.
-        const weapons = inventory
-            .map((item, index) => {
-                if (item.type !== 'weapon') return null;
+        const outcome = await withClient(async (client) => {
+            const playerId = req.player.id;
 
-                const durability = equipmentRules.getDurabilityInfo(item);
-                const weaponDamage = equipmentRules.getEffectiveStatValue(item, ['damage']);
-                return {
-                    index,
-                    id: item.id,
-                    name: item.name,
-                    category: item.category || item.type || null,
-                    damage: weaponDamage,
-                    rarity: item.rarity || 'common',
-                    icon: item.icon || '🔪',
-                    durability: durability.current,
-                    max_durability: durability.max,
-                    is_broken: durability.isBroken
-                };
-            })
-            .filter(Boolean);
+            const playerResult = await client.query(
+                'SELECT inventory FROM players WHERE id = $1',
+                [playerId]
+            );
 
-        res.json({
-            success: true,
-            weapons,
-            count: weapons.filter((weapon) => !weapon.is_broken).length
+            const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
+
+            // Мощная атака доступна только с целым оружием: сломанное не бьёт,
+            // а стоило бы ровно столько же, сколько сейчас отображается.
+            const weapons = inventory
+                .map((item, index) => {
+                    if (item.type !== 'weapon') return null;
+
+                    const durability = equipmentRules.getDurabilityInfo(item);
+                    const weaponDamage = equipmentRules.getEffectiveStatValue(item, ['damage']);
+                    return {
+                        index,
+                        id: item.id,
+                        name: item.name,
+                        category: item.category || item.type || null,
+                        damage: weaponDamage,
+                        rarity: item.rarity || 'common',
+                        icon: item.icon || '🔪',
+                        durability: durability.current,
+                        max_durability: durability.max,
+                        is_broken: durability.isBroken
+                    };
+                })
+                .filter(Boolean);
+
+            return {
+                success: true,
+                weapons,
+                count: weapons.filter((weapon) => !weapon.is_broken).length
+            };
         });
-
+        res.json(outcome);
     } catch (error) {
         return handleError(res, error, 'list_weapons');
-    } finally {
-        client.release();
     }
 });
 
 router.get('/raids', async (req, res) => {
-    const client = await pool.connect();
-
     try {
-        const raids = await getActiveRaids(client, req.player.id);
-        res.json({
-            success: true,
-            data: {
-                raids: raids.raids,
-                participating_raid_ids: raids.participatingIds,
-                participating_boss_ids: raids.participatingBossIds
-            }
+        const outcome = await withClient(async (client) => {
+            const raids = await getActiveRaids(client, req.player.id);
+            return {
+                success: true,
+                data: {
+                    raids: raids.raids,
+                    participating_raid_ids: raids.participatingIds,
+                    participating_boss_ids: raids.participatingBossIds
+                }
+            };
         });
+        res.json(outcome);
     } catch (error) {
         return handleError(res, error, 'raids');
-    } finally {
-        client.release();
     }
 });
 
 router.post('/raid/start', async (req, res) => {
-    const client = await pool.connect();
+    // Валидация до открытия транзакции — как в POST /bosses/start.
+    const bossId = Number(req.body?.boss_id);
+    const playerId = req.player.id;
+    const playerName = req.player.first_name || 'Игрок';
+
+    if (!validateBossId(bossId)) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
+    }
 
     try {
-        const bossId = Number(req.body?.boss_id);
-        const playerId = req.player.id;
-        const playerName = req.player.first_name || 'Игрок';
-
-        if (!validateBossId(bossId)) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-        }
-
-        await client.query('BEGIN');
-
-        try {
+        const outcome = await transaction(async (client) => {
             const activeBattle = await resolveActiveBattle(client, playerId);
             if (activeBattle) {
-                await client.query('ROLLBACK');
-                return res.status(400).json(buildAlreadyInFightResponse(activeBattle));
+                return {
+                    status: 400,
+                    body: buildAlreadyInFightResponse(activeBattle)
+                };
             }
 
             const boss = await getBossById(client, bossId);
             if (!boss) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({ success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' });
+                return {
+                    status: 404,
+                    body: { success: false, error: 'Босс не найден', code: 'BOSS_NOT_FOUND' }
+                };
             }
 
             const player = await getPlayerBaseState(client, playerId);
             if (!player || player.health <= 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя начать массовый бой.', code: 'PLAYER_DEAD' });
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Вы мертвы. Нельзя начать массовый бой.', code: 'PLAYER_DEAD' }
+                };
             }
 
             await client.query(
@@ -1364,16 +1394,20 @@ router.post('/raid/start', async (req, res) => {
             );
 
             if (existingRaid.rows.length > 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Массовый бой на этого босса уже идёт',
-                    code: 'RAID_ALREADY_ACTIVE',
-                    raid_id: existingRaid.rows[0].id
-                });
+                return {
+                    status: 400,
+                    body: {
+                        success: false,
+                        error: 'Массовый бой на этого босса уже идёт',
+                        code: 'RAID_ALREADY_ACTIVE',
+                        raid_id: existingRaid.rows[0].id
+                    }
+                };
             }
 
-            // См. пояснение в POST /bosses/start: число запоминается до COMMIT.
+            // См. пояснение в POST /bosses/start: число списанных ключей
+            // получается внутри транзакции и уходит в ответе вместе с ним,
+            // перечитывать базу после COMMIT не нужно.
             const keysSpent = bossId > 1
                 ? await spendBossKeys(client, playerId, bossId - 1)
                 : 0;
@@ -1412,62 +1446,64 @@ router.post('/raid/start', async (req, res) => {
                 [bossId, raidId, playerId]
             );
 
-            await client.query('COMMIT');
-
-            return res.json({
-                success: true,
-                data: {
-                    raid_id: raidId,
-                    mode: 'mass',
-                    boss: {
-                        id: boss.id,
-                        name: boss.name,
-                        icon: boss.icon,
-                        hp: boss.max_health,
-                        max_hp: boss.max_health
-                    },
-                    keys_spent: keysSpent,
-                    expires_at: expiresAt,
-                    time_remaining_ms: MASS_FIGHT_DURATION_MS
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        raid_id: raidId,
+                        mode: 'mass',
+                        boss: {
+                            id: boss.id,
+                            name: boss.name,
+                            icon: boss.icon,
+                            hp: boss.max_health,
+                            max_hp: boss.max_health
+                        },
+                        keys_spent: keysSpent,
+                        expires_at: expiresAt,
+                        time_remaining_ms: MASS_FIGHT_DURATION_MS
+                    }
                 }
-            });
-        } catch (error) {
-            await client.query('ROLLBACK');
-            if (error.code === 'INSUFFICIENT_KEYS') {
-                return res.status(400).json(error);
-            }
-            throw error;
-        }
+            };
+        });
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
+        // Как в POST /bosses/start: нехватка ключей — бизнес-ошибка с 400
+        // и полями keys_owned/keys_required, а не 500.
+        if (error.code === 'INSUFFICIENT_KEYS') {
+            return res.status(400).json(error);
+        }
+        if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'mass_start');
-    } finally {
-        client.release();
     }
 });
 
 router.post('/raid/:id/join', async (req, res) => {
-    const client = await pool.connect();
+    // Валидация до открытия транзакции — как в остальных маршрутах боссов.
+    const raidId = Number(req.params.id);
+    const playerId = req.player.id;
+
+    if (!raidId || raidId <= 0) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
+    }
 
     try {
-        const raidId = Number(req.params.id);
-        const playerId = req.player.id;
-
-        if (!raidId || raidId <= 0) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
-        }
-
-        await client.query('BEGIN');
-
-        try {
+        const outcome = await transaction(async (client) => {
             const activeBattle = await resolveActiveBattle(client, playerId);
             if (activeBattle) {
                 if (activeBattle.type === 'mass' && activeBattle.raid_id === raidId) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({ success: false, error: 'Вы уже участвуете в этом массовом бою', code: 'ALREADY_PARTICIPATING' });
+                    return {
+                        status: 400,
+                        body: { success: false, error: 'Вы уже участвуете в этом массовом бою', code: 'ALREADY_PARTICIPATING' }
+                    };
                 }
 
-                await client.query('ROLLBACK');
-                return res.status(400).json(buildAlreadyInFightResponse(activeBattle));
+                return {
+                    status: 400,
+                    body: buildAlreadyInFightResponse(activeBattle)
+                };
             }
 
             const raidResult = await client.query(
@@ -1481,14 +1517,18 @@ router.post('/raid/:id/join', async (req, res) => {
 
             const raid = raidResult.rows[0];
             if (!raid) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({ success: false, error: 'Массовый бой не найден', code: 'RAID_NOT_FOUND' });
+                return {
+                    status: 404,
+                    body: { success: false, error: 'Массовый бой не найден', code: 'RAID_NOT_FOUND' }
+                };
             }
 
             const player = await getPlayerBaseState(client, playerId);
             if (!player || player.health <= 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя присоединиться к массовому бою.', code: 'PLAYER_DEAD' });
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Вы мертвы. Нельзя присоединиться к массовому бою.', code: 'PLAYER_DEAD' }
+                };
             }
 
             // Ключевая цепочка не должна обходиться через чужой рейд: игрок без
@@ -1499,14 +1539,16 @@ router.post('/raid/:id/join', async (req, res) => {
                 const required = await getKeysRequiredForBoss(client, raid.boss_id - 1);
                 const owned = await getPlayerKeyCount(client, playerId, raid.boss_id - 1);
                 if (owned < required) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        error: `Нужно ${required} ключей от босса ${raid.boss_id - 1}, у вас ${owned}`,
-                        code: 'INSUFFICIENT_KEYS',
-                        keys_owned: owned,
-                        keys_required: required
-                    });
+                    return {
+                        status: 400,
+                        body: {
+                            success: false,
+                            error: `Нужно ${required} ключей от босса ${raid.boss_id - 1}, у вас ${owned}`,
+                            code: 'INSUFFICIENT_KEYS',
+                            keys_owned: owned,
+                            keys_required: required
+                        }
+                    };
                 }
             }
 
@@ -1532,52 +1574,50 @@ router.post('/raid/:id/join', async (req, res) => {
                 [raid.boss_id, raidId, playerId]
             );
 
-            await client.query('COMMIT');
-
-            return res.json({
-                success: true,
-                data: {
-                    raid_id: raidId,
-                    mode: 'mass',
-                    boss: {
-                        id: raid.boss_id,
-                        name: raid.boss_name,
-                        icon: raid.icon,
-                        hp: raid.current_health,
-                        max_hp: raid.max_health
-                    },
-                    expires_at: raid.expires_at
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        raid_id: raidId,
+                        mode: 'mass',
+                        boss: {
+                            id: raid.boss_id,
+                            name: raid.boss_name,
+                            icon: raid.icon,
+                            hp: raid.current_health,
+                            max_hp: raid.max_health
+                        },
+                        expires_at: raid.expires_at
+                    }
                 }
-            });
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        }
+            };
+        });
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
+        if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'mass_join');
-    } finally {
-        client.release();
     }
 });
 
 router.post('/raid/:id/attack', async (req, res) => {
-    const client = await pool.connect();
+    // Валидация до открытия транзакции — как в остальных маршрутах боссов.
+    const raidId = Number(req.params.id);
+    const playerId = req.player.id;
+
+    if (!raidId || raidId <= 0) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
+    }
 
     try {
-        const raidId = Number(req.params.id);
-        const playerId = req.player.id;
-
-        if (!raidId || raidId <= 0) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
-        }
-
-        await client.query('BEGIN');
-
-        try {
+        const outcome = await transaction(async (client) => {
             const activeBattle = await resolveActiveBattle(client, playerId);
             if (!activeBattle || activeBattle.type !== 'mass' || activeBattle.raid_id !== raidId) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' });
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' }
+                };
             }
 
             const raidResult = await client.query(
@@ -1592,8 +1632,10 @@ router.post('/raid/:id/attack', async (req, res) => {
 
             const raid = raidResult.rows[0];
             if (!raid) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({ success: false, error: 'Массовый бой не найден', code: 'RAID_NOT_FOUND' });
+                return {
+                    status: 404,
+                    body: { success: false, error: 'Массовый бой не найден', code: 'RAID_NOT_FOUND' }
+                };
             }
 
             const sessionResult = await client.query(
@@ -1603,20 +1645,26 @@ router.post('/raid/:id/attack', async (req, res) => {
 
             const session = sessionResult.rows[0];
             if (!session) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' });
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' }
+                };
             }
 
             const player = await getPlayerBaseState(client, playerId);
             const activeBuffs = getActiveBuffs(player.buffs);
             if (!activeBuffs.free_energy && player.energy < 1) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, error: 'Недостаточно энергии', code: 'INSUFFICIENT_ENERGY' });
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Недостаточно энергии', code: 'INSUFFICIENT_ENERGY' }
+                };
             }
 
             if (player.health <= 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, error: 'Вы мертвы. Нельзя атаковать рейдового босса.', code: 'PLAYER_DEAD' });
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Вы мертвы. Нельзя атаковать рейдового босса.', code: 'PLAYER_DEAD' }
+                };
             }
 
             const masteries = await getBossMasteries(client, playerId);
@@ -1662,11 +1710,17 @@ router.post('/raid/:id/attack', async (req, res) => {
                 );
 
                 const allParticipants = participantsResult.rows;
+                // КРИТИЧНО: boss_sessions.player_id — BIGINT, pg отдаёт его
+                // строкой ('42'), а playerId — число. Без Number() условие
+                // participant.player_id === playerId всегда false, и добившему
+                // босса рейда ответ возвращался без наград (rewards = null),
+                // хотя монеты/опыт/предметы ему начислялись.
                 const rewardParticipants = allParticipants.filter((row) => Number(row.damage_dealt || 0) > 0);
                 const totalDamage = rewardParticipants.reduce((sum, row) => sum + Number(row.damage_dealt || 0), 0) || 1;
                 const participantIds = allParticipants.map((row) => row.player_id);
 
                 for (const participant of rewardParticipants) {
+                    const participantId = Number(participant.player_id);
                     const share = Number(participant.damage_dealt || 0) / totalDamage;
                     const coinsReward = Math.floor((raid.reward_coins || 0) * share);
                     const participantBuffs = getActiveBuffs(participant.buffs);
@@ -1675,16 +1729,16 @@ router.post('/raid/:id/attack', async (req, res) => {
                     const lootMultiplier = participantBuffs.loot_x2 ? 2 : 1;
 
                     if (coinsReward > 0) {
-                        await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [coinsReward, participant.player_id]);
+                        await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [coinsReward, participantId]);
                     }
 
                     if (experienceReward > 0) {
-                        await playerHelper.addExperience(participant.player_id, experienceReward, client);
+                        await playerHelper.addExperience(participantId, experienceReward, client);
                     }
 
-                    const grantedItems = await grantRewardItems(client, participant.player_id, raid.reward_items, share * lootMultiplier);
+                    const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, share * lootMultiplier);
 
-                    if (participant.player_id === playerId) {
+                    if (participantId === playerId) {
                         rewards = {
                             coins: coinsReward,
                             experience: experienceReward,
@@ -1697,17 +1751,19 @@ router.post('/raid/:id/attack', async (req, res) => {
                          VALUES ($1, $2, 1, NOW())
                          ON CONFLICT (player_id, boss_id)
                          DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
-                        [participant.player_id, raid.boss_id]
+                        [participantId, raid.boss_id]
                     );
 
                     await client.query(
-                    'UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1',
-                    [participant.player_id]
-                );
+                        'UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1',
+                        [participantId]
+                    );
                 }
 
-                const leaderKey = await grantNextBossKey(client, raid.leader_id, raid.boss_id);
-                if (playerId === raid.leader_id && leaderKey) {
+                // leader_id — INTEGER, pg отдаёт его числом, но raid_progress
+                // читается в разных местах; Number() здесь страхует от строки.
+                const leaderKey = await grantNextBossKey(client, Number(raid.leader_id), raid.boss_id);
+                if (playerId === Number(raid.leader_id) && leaderKey) {
                     rewards = rewards || { coins: 0, experience: 0, items: [] };
                     rewards.key = leaderKey;
                 }
@@ -1721,59 +1777,57 @@ router.post('/raid/:id/attack', async (req, res) => {
                 await client.query('DELETE FROM raid_progress WHERE id = $1', [raidId]);
             }
 
-            await client.query('COMMIT');
-
-            return res.json({
-                success: true,
-                data: {
-                    raid: {
-                        id: raidId,
-                        hp: newHp,
-                        max_hp: raid.max_health,
-                        hp_percent: raid.max_health > 0 ? Math.round((newHp / raid.max_health) * 100) : 0
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        raid: {
+                            id: raidId,
+                            hp: newHp,
+                            max_hp: raid.max_health,
+                            hp_percent: raid.max_health > 0 ? Math.round((newHp / raid.max_health) * 100) : 0
+                        },
+                        damage,
+                        damage_taken: counterHit.damage,
+                        health: counterHit.health,
+                        broken_equipment: counterHit.broken_slots,
+                        // Автолечение — см. комментарий в /attack-boss.
+                        auto_heal: counterHit.auto_heal,
+                        player_energy: energyResult.rows[0]?.energy ?? player.energy,
+                        last_energy_update: energyResult.rows[0]?.last_energy_update || null,
+                        your_total_damage: newTotalDamage,
+                        killed,
+                        rewards
                     },
-                    damage,
-                    damage_taken: counterHit.damage,
-                    health: counterHit.health,
-                    broken_equipment: counterHit.broken_slots,
-                    // Автолечение — см. комментарий в /attack-boss.
-                    auto_heal: counterHit.auto_heal,
-                    player_energy: energyResult.rows[0]?.energy ?? player.energy,
-                    last_energy_update: energyResult.rows[0]?.last_energy_update || null,
-                    your_total_damage: newTotalDamage,
-                    killed,
-                    rewards
-                },
-                auto_heal: counterHit.auto_heal
-            });
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        }
+                    auto_heal: counterHit.auto_heal
+                }
+            };
+        });
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
+        if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'mass_attack');
-    } finally {
-        client.release();
     }
 });
 
 router.get('/active', async (req, res) => {
-    const client = await pool.connect();
-
     try {
-        const activeBattle = await resolveActiveBattle(client, req.player.id);
+        const outcome = await withClient(async (client) => {
+            const activeBattle = await resolveActiveBattle(client, req.player.id);
 
-        res.json({
-            success: true,
-            data: {
-                has_active_boss: Boolean(activeBattle),
-                active_boss: activeBattle
-            }
+            return {
+                success: true,
+                data: {
+                    has_active_boss: Boolean(activeBattle),
+                    active_boss: activeBattle
+                }
+            };
         });
+        res.json(outcome);
     } catch (error) {
         return handleError(res, error, 'active');
-    } finally {
-        client.release();
     }
 });
 

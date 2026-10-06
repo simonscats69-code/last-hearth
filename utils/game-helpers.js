@@ -7,18 +7,21 @@
  * - achievements.js (система достижений)
  */
 
-const { query, transaction: tx } = require('../db/database');
-const { logger } = require('./serverApi');
+const { query, transaction } = require('../db/database');
+// Один импорт вместо двух: и logger, и safeParseJson берутся из того же
+// модуля. Два отдельных require одного файла выглядят мелкой безобидной
+// правдой, пока однажды не появится третья строка, взятая не оттуда.
+const { logger, safeJsonParse } = require('./serverApi');
 
 // ==========================================
 // ФУНКЦИИ СОСТОЯНИЯ ИГРОКА (из playerState.js)
 // ==========================================
 
 /**
- * Безопасный парсинг JSON с fallback значением
- * Импортируется из serverApi для единообразия
+ * Безопасный парсинг JSON с fallback значением.
+ * Псевдоним сохранён: в файле сотни вызовов safeParseJson.
  */
-const safeParseJson = require('./serverApi').safeJsonParse;
+const safeParseJson = safeJsonParse;
 
 /**
  * Нормализация инвентаря
@@ -556,17 +559,6 @@ function wearEquipmentSlots(client, playerId, equipment, slots) {
 }
 
 /**
- * Записать износ экипировки в БД (обязательно внутри транзакции).
- * @returns {Promise<void>}
- */
-async function saveEquipment(client, playerId, equipment) {
-    await client.query(
-        'UPDATE players SET equipment = $1::jsonb WHERE id = $2',
-        [JSON.stringify(equipment), playerId]
-    );
-}
-
-/**
  * Пополнить unique_items новыми id предметов.
  *
  * Поле читают достижения «Коллекционер»/«Хранитель» (10 и 25 уникальных
@@ -661,9 +653,6 @@ function getAchievementCurrentValue(condition, player, runtimeContext) {
             return player.items_collected || 0;
         case 'streak':
             return player.daily_streak || 0;
-        case 'referral':
-        case 'referrals':
-            return player.referrals || 0;
         default:
             return 0;
     }
@@ -736,7 +725,7 @@ async function checkAchievements(playerId, client = null) {
         // Получаем данные игрока
         const playerResult = await fn(
             `SELECT level, bosses_killed, pvp_wins, items_collected,
-                    daily_streak, referrals, unique_items, locations_visited,
+                    daily_streak, unique_items, locations_visited,
                     clan_id, clan_role, clans_joined
              FROM players WHERE id = $1`,
             [playerId]
@@ -759,10 +748,10 @@ async function checkAchievements(playerId, client = null) {
             const targetValue = getAchievementTargetValue(condition, runtimeContext);
 
             if (currentValue >= targetValue) {
-                // Выдаём достижение — используем переданный client или tx()
+                // Выдаём достижение — используем переданный client или transaction()
                 const wasInserted = client
                     ? await insertAchievement(client, playerId, ach, currentValue)
-                    : await tx(async (txClient) => {
+                    : await transaction(async (txClient) => {
                         return await insertAchievement(txClient, playerId, ach, currentValue);
                     });
 
@@ -861,7 +850,7 @@ async function getPlayerProgress(playerId) {
     try {
         const playerResult = await query(
             `SELECT level, bosses_killed, pvp_wins, items_collected,
-                    daily_streak, referrals
+                    daily_streak
              FROM players WHERE id = $1`,
             [playerId]
         );
@@ -876,8 +865,7 @@ async function getPlayerProgress(playerId) {
             boss: { current: runtimeContext.totalBossesKilled || p.bosses_killed || 0, achievements: [] },
             pvp: { current: p.pvp_wins || 0, achievements: [] },
             loot: { current: p.items_collected || 0, achievements: [] },
-            streak: { current: p.daily_streak || 0, achievements: [] },
-            referral: { current: p.referrals || 0, achievements: [] }
+            streak: { current: p.daily_streak || 0, achievements: [] }
         };
 
         // Заполняем прогресс по каждому типу
@@ -896,7 +884,6 @@ async function getPlayerProgress(playerId) {
             else if (type === 'pvp_wins') progressType = 'pvp';
             else if (type === 'loot' || type === 'items_collected') progressType = 'loot';
             else if (type === 'streak') progressType = 'streak';
-            else if (type === 'referral' || type === 'referrals') progressType = 'referral';
             else if (category && progress[category]) progressType = category;
 
             if (progressType && progress[progressType]) {
@@ -938,15 +925,52 @@ async function initAchievementsTable() {
 // ЭКСПОРТ
 // ==========================================
 
+/**
+ * Уменьшить количество предмета в инвентаре на 1 (с учётом стаков).
+ * Используется вместо ручного splice/quantity-- во всех местах.
+ *
+ * @param {Array} inventory - массив предметов инвентаря (уже нормализованный)
+ * @param {number} itemIndex - индекс предмета в массиве
+ * @returns {Object} { updatedInventory, item, quantityLeft }
+ *   - updatedInventory: новый массив инвентаря (копия, не мутирует оригинал)
+ *   - item: предмет, который был потреблён
+ *   - quantityLeft: количество предметов, оставшихся после потребления
+ */
+function consumeInventoryItem(inventory, itemIndex) {
+    const item = inventory[itemIndex];
+    if (!item) {
+        return { updatedInventory: inventory, item: null, quantityLeft: 0 };
+    }
+    
+    const currentQty = Math.max(1, Number(item.quantity || 1));
+    const remainingQty = currentQty - 1;
+    
+    // Создаём копию инвентаря (иммутабельно)
+    const updatedInventory = [...inventory];
+    
+    if (remainingQty > 0) {
+        updatedInventory[itemIndex] = { ...item, quantity: remainingQty };
+    } else {
+        updatedInventory.splice(itemIndex, 1);
+    }
+    
+    return { updatedInventory, item, quantityLeft: remainingQty };
+}
+
 module.exports = {
-    // Функции состояния игрока
+    // Функции состояния игрока.
+    //
+    // normalizeItemStats, normalizePlayerBuffs и SELL_RATE здесь не
+    // экспортируются: они используются только внутри файла, а раньше
+    // уходили наружу вместе с остальными. Список экспортов должен
+    // отвечать на вопрос «что зовут другие модули» — иначе мёртвые имена
+    // маскируют настоящие дубли (см. историю ITEM_CATEGORIES в
+    // gameConstants.js).
     safeParseJson,
     normalizeInventory,
-    normalizeItemStats,
     createInventoryItem,
     normalizeRadiation,
     normalizeInfections,
-    normalizePlayerBuffs,
     getActiveBuffs,
     buildPlayerStatus,
     recalcEnergy,
@@ -955,16 +979,15 @@ module.exports = {
     normalizeEquipment,
     calculateSellPrice,
     addItemToInventory,
-    SELL_RATE,
     SELL_FLOOR_BY_RARITY,
 
     // Правила предметов и счётчики прогресса
     equipmentRules,
     getSetBonuses,
     wearEquipmentSlots,
-    saveEquipment,
     trackCollectedItems,
     progressDailyTask,
+    consumeInventoryItem,
     
     // Функции достижений (achievements.js)
     getAchievementCurrentValue,

@@ -15,6 +15,10 @@
  *          ├─ manifest.json  — сколько строк в каждой таблице
  *          └─ <table>.json    — данные каждой таблицы
  *
+ * Хранятся только последние MAX_BACKUPS копий (BACKUP_RETENTION env),
+ * старые удаляются: бэкап на каждый запуск накапливался бы бесконечно,
+ * а каждый каталог — это полный дамп всех таблиц.
+ *
  * ВНИМАНИЕ: скрипт только читает базу и пишет файлы на диск.
  */
 
@@ -29,6 +33,32 @@ const path = require('path');
 const { pool, closePool } = require('../db/database');
 
 const BACKUP_DIR = path.join(__dirname, '..', 'backups');
+
+/**
+ * Сколько последних копий хранить. По умолчанию 5.
+ * Переопределяется переменной окружения BACKUP_RETENTION.
+ */
+const MAX_BACKUPS = Math.max(1, parseInt(process.env.BACKUP_RETENTION || '5', 10) || 5);
+
+/** Удалить старые каталоги бэкапов, оставив последние keep штук (по времени). */
+function pruneOldBackups() {
+    if (!fs.existsSync(BACKUP_DIR)) return;
+
+    const dirs = fs.readdirSync(BACKUP_DIR, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith('backup-'))
+        .map((entry) => ({
+            name: entry.name,
+            mtime: fs.statSync(path.join(BACKUP_DIR, entry.name)).mtimeMs
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+
+    if (dirs.length <= MAX_BACKUPS) return;
+
+    for (const old of dirs.slice(MAX_BACKUPS)) {
+        fs.rmSync(path.join(BACKUP_DIR, old.name), { recursive: true, force: true });
+        console.log(`[backup] Удалён старый бэкап: ${old.name}`);
+    }
+}
 
 /** Таблицы, которые не нужно сохранять: временные и внутренние счётчики. */
 const SKIP_TABLES = new Set(['schema_migrations']);
@@ -57,6 +87,10 @@ async function main() {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace(/\.\d{3}Z$/, 'Z');
         const targetDir = path.join(BACKUP_DIR, `backup-${stamp}`);
         fs.mkdirSync(targetDir, { recursive: true });
+
+        // Старые копии удаляем только ПОСЛЕ того, как новый каталог создан:
+        // если дамп упадёт на середине, предыдущий бэкап останется целым.
+        pruneOldBackups();
 
         console.log(`[backup] Найдено таблиц: ${tables.length}`);
         console.log(`[backup] Каталог: ${targetDir}`);

@@ -12,9 +12,15 @@ const sharedEquipment = require('../public/shared/equipment.js');
 
 // Тиры риска — тоже оттуда: клиент рисует подпись по этим границам, а
 // сервер по ним же начисляет множители за лут, опыт и шанс ключа.
-const { RISK_TIERS, RISK_PREPARED_MAX_SCORE, getRiskTierByScore } = sharedEquipment;
+// Сам RISK_TIERS не нужен здесь: используется только getRiskTierByScore.
+const { RISK_PREPARED_MAX_SCORE, getRiskTierByScore } = sharedEquipment;
 
-const { getExpForLevel, getTotalExpForLevel } = sharedEquipment;
+// Формула опыта (getTotalExpForLevel) читается только клиентом —
+// на сервере никогда не понадобилась.
+const { getExpForLevel } = sharedEquipment;
+
+// Шанс дропа — тоже из общего файла.
+const { calculateDropChance } = sharedEquipment;
 
 const GAME_CONFIG = {
     // Базовые настройки
@@ -22,21 +28,6 @@ const GAME_CONFIG = {
     MAX_DROP_CHANCE: 60,         // Максимальный шанс дропа (%)
     MAX_LUCK: 150,               // Максимальная удача игрока
 };
-
-/**
- * Рассчитать шанс дропа (монотонно растущий)
- * @param {number} luck - Удача игрока
- * @returns {number} Шанс дропа в процентах
- */
-function calculateDropChance(luck) {
-    // Защита от отрицательной или нулевой удачи
-    if (luck <= 0) return 5;
-
-    // Единая формула поиска: только удача игрока влияет на шанс находки.
-    // luck 1 → 10.4%, 30 → 22%, 60 → 34%, 100 → 50%, 125+ → 60%
-    const chance = 10 + (luck * 0.4);
-    return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
-}
 
 // Таблицы лута по локациям
 const LOOT_TABLES = {
@@ -125,61 +116,17 @@ function rollItemRarity(locationId, luck = 1) {
     return 'common';
 }
 
-/**
- * Определить, выпал ли предмет
- * @param {Array|Object} lootTable - Таблица лута для локации (массив предметов или объект вероятностей)
- * @param {number} luck - Удача игрока
- * @param {string} itemRarity - Редкость предмета
- * @returns {Object|null} Найденный предмет или null
- */
-function rollLootDrop(lootTable, luck, itemRarity) {
-    const dropChance = calculateDropChance(luck);
-    const roll = Math.random() * 100;
-    
-    if (roll > dropChance) {
-        return null;
-    }
-    
-    if (!Array.isArray(lootTable)) {
-        return null;
-    }
-    
-    const filteredItems = lootTable.filter(item => item.rarity === itemRarity);
-    
-    if (filteredItems.length === 0) {
-        return null;
-    }
-    
-    return filteredItems[Math.floor(Math.random() * filteredItems.length)];
-}
-
-// Категории предметов
-const ITEM_CATEGORIES = {
-    food: { min: 1, max: 5, name: 'Еда' },
-    medicine: { min: 6, max: 10, name: 'Медикаменты' },
-    weapon: { min: 11, max: 16, name: 'Оружие' },
-    armor: { min: 17, max: 20, name: 'Броня' },
-    resource: { min: 21, max: 28, name: 'Ресурсы' },
-    key: { min: 29, max: 29, name: 'Ключи' }
-};
-
-/**
- * Получить категорию предмета
- * @param {number|string} itemId - ID предмета
- * @returns {string}
- */
-function getItemCategory(itemId) {
-    const id = parseInt(itemId);
-    
-    for (const [category, range] of Object.entries(ITEM_CATEGORIES)) {
-        if (id >= range.min && id <= range.max) {
-            return category;
-        }
-    }
-    return 'unknown';
-}
-
-
+// Удалены rollLootDrop и getItemCategory/ITEM_CATEGORIES.
+// getItemCategory определяла категорию ПО ДИАПАЗОНАМ ID (1-5 еда, 6-10
+// медицина, 11-16 оружие...). Этот подход уже удалён с клиента:
+// стоило добавить предмет с id=103 — и он молча попадал в 'unknown' и
+// исчезал из фильтра инвентаря. Оставлять такую же копию на сервере
+// опасно: любой, кто возьмёт функцию из общего файла, снова получит
+// предметы, которые «не существуют».
+//
+// rollLootDrop выбирала предмет из переданного массива. Такого массива
+// в проекте нет: лут берётся из кэша пула в routes/game/world.js
+// (getRandomLootItem), где учитываются тип локации и риск.
 
 // Типы дебаффов
 const DEBUFF_TYPES = {
@@ -250,20 +197,6 @@ const DEBUFF_CURES = {
         name: 'Укол'
     }
 };
-
-/**
- * Получить влияние дебаффа на характеристики
- * @param {string} type - тип дебаффа
- * @returns {object} влияние на статы
- */
-function getDebuffEffect(type) {
-    return DEBUFF_EFFECTS[type] || {
-        strength: 0,
-        luck: 0,
-        dropChance: 0,
-        endurance: 0
-    };
-}
 
 /**
  * Рассчитать модификаторы от дебаффов
@@ -383,29 +316,28 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
     };
 }
 
+/**
+ * Что уходит наружу.
+ *
+ * Правило: наружу выходит то, что зовут другие модули. Внутренние
+ * таблицы (LOOT_TABLES, DEBUFF_EFFECTS) и обёртки над
+ * public/shared/equipment.js остаются здесь как реализация.
+ */
 module.exports = {
-    GAME_CONFIG,
-    RISK_TIERS,
-    LOOT_TABLES,
-    ITEM_CATEGORIES,
-    // Дебаффы
+    // Дебаффы — читают debuffs.js, status.js, world.js
     DEBUFF_TYPES,
     DEBUFF_CONFIG,
-    DEBUFF_EFFECTS,
     DEBUFF_CURES,
-    // Экспорт функций
-    getExpForLevel,
-    getTotalExpForLevel,
-    calculateDropChance,
-    getLootTable,
-    rollItemRarity,
-    rollLootDrop,
-    getItemCategory,
-    // Дебаффы
-    getDebuffEffect,
     getDebuffTier,
     calculateDebuffModifiers,
-    calculateRadiationDefense,
-    calculateInfectionDefense,
+
+    // Опыт — читает utils/serverApi.js (PlayerHelper.addExperience)
+    getExpForLevel,
+
+    // Лут — читает routes/game/world.js
+    calculateDropChance,
+    rollItemRarity,
+
+    // Риск локации — читает routes/game/world.js
     calculateLocationRiskProfile
 };

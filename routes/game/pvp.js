@@ -13,113 +13,117 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, queryAll, transaction } = require('../../db/database');
+const { queryOne, queryAll, transaction } = require('../../db/database');
 const pvp = require('../../db/pvp');
-const { logger, logPlayerError, safeStringify, PlayerHelper: playerHelper } = require('../../utils/serverApi');
+const crypto = require('crypto');
+const {
+    logger,
+    logPlayerAction,
+    logPlayerError,
+    handleError: apiHandleError,
+    // Сериализация инвентаря при краже предметов в бою.
+    safeStringify,
+    PlayerHelper: playerHelper
+} = require('../../utils/serverApi');
 const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory, applyAutoHeal } = require('../../utils/game-helpers');
-// Лимит слотов инвентаря — из общего файла правил, иначе кража предмета
-// могла выдать 101-й слот и заблокировать добычу.
-const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
-// Тот же файл правил отвечает и за «снаряжение ли это» — от этого зависит,
-// крадут ли предмет целиком или одну штуку из стака.
+// Валидация ID — общая, см. utils/validate.js.
+const { validateId } = require('../../utils/validate');
+// Файл правил предметов импортируется один раз: брать его и по имени
+// модуля, и по пути в двух местах не нужно — при втором импорте легко
+// получить другой набор констант, чем ожидал автор.
+// MAX_INVENTORY_SLOTS — иначе кража предмета могла выдать 101-й слот
+// инвентаря и заблокировать добычу. equipmentRules отвечает и за «снаряжение
+// ли это» — от этого зависит, крадут ли предмет целиком или одну штуку.
 const equipmentRules = require('../../public/shared/equipment.js');
-
-
+const MAX_INVENTORY_SLOTS = equipmentRules.MAX_INVENTORY_SLOTS;
 
 /**
- * Валидация ID (Number.isInteger и > 0)
+ * Ошибки PvP.
+ * 
+ * Каждое правило бросает объект с явными code и statusCode.
+ * handleError из serverApi читает их напрямую.
  */
-const isValidId = (id) => Number.isInteger(id) && id > 0;
+const PvpError = {
+    PLAYER_NOT_FOUND:  { message: 'Игрок не найден',              code: 'PLAYER_NOT_FOUND',  statusCode: 404 },
+    NOT_RED_ZONE:      { message: 'PvP доступно только на красных зонах', code: 'NOT_RED_ZONE',      statusCode: 400 },
+    NOT_SAME_LOCATION: { message: 'Игрок не на этой локации',       code: 'NOT_SAME_LOCATION', statusCode: 400 },
+    TARGET_DEAD:       { message: 'Противник уже мертв',           code: 'PLAYER_DEAD',       statusCode: 400 },
+    SELF_DEAD:         { message: 'Вы мертвы и не можете атаковать', code: 'PLAYER_DEAD',      statusCode: 400 },
+    LEVEL_TOO_LOW:     { message: 'Игроки ниже 5 уровня не могут участвовать в PvP', code: 'PVP_LEVEL_TOO_LOW', statusCode: 400 },
+    TARGET_PROTECTED:  { message: 'Цель защищена от PvP до 5 уровня', code: 'TARGET_PROTECTED', statusCode: 400 },
+    COOLDOWN:          { message: 'Подождите перед следующим PvP боем', code: 'ATTACK_COOLDOWN', statusCode: 429 },
+    TARGET_COOLDOWN:   { message: 'Противник временно защищён от PvP', code: 'TARGET_COOLDOWN',   statusCode: 429 },
+    RATE_LIMIT:        { message: 'Нельзя атаковать эту цель слишком часто', code: 'ATTACK_COOLDOWN', statusCode: 429 },
+    ALREADY_IN_BATTLE: { message: 'Один из игроков уже находится в активном PvP бою', code: 'ALREADY_IN_BATTLE', statusCode: 409 },
+    INSUFFICIENT_ENERGY: { message: 'Недостаточно энергии для атаки', code: 'INSUFFICIENT_ENERGY', statusCode: 400 },
+    INSUFFICIENT_ENERGY_HIT: { message: 'Недостаточно энергии для удара', code: 'INSUFFICIENT_ENERGY', statusCode: 400 },
+    BATTLE_NOT_FOUND:  { message: 'Бой не найден',                   code: 'BATTLE_NOT_FOUND',   statusCode: 404 },
+    BATTLE_FINISHED:   { message: 'Бой уже завершён',                code: 'BATTLE_FINISHED',    statusCode: 409 },
+    NOT_PARTICIPANT:   { message: 'Вы не участник этого боя',       code: 'NOT_PARTICIPANT',    statusCode: 403 },
+    INVALID_INPUT:     { message: 'Некорректные данные запроса',    code: 'VALIDATION_ERROR',   statusCode: 400 }
+};
 
 /**
- * Централизованный обработчик ошибок
+ * Бросить игровую ошибку PvP с явным кодом.
+ * @param {object} spec элемент PvpError
+ * @throws {object} { message, code, statusCode }
+ */
+function throwPvpError(spec) {
+    throw { message: spec.message, code: spec.code, statusCode: spec.statusCode };
+}
+
+/**
+ * Ответ об ошибке PvP.
+ *
+ * Обработка кодов и статусов теперь общая (handleError из serverApi):
+ * он берёт code и statusCode из выброшенного объекта. Локальная копия
+ * разбирала текст сообщения по подстрокам, из-за чего обычное игровое
+ * ограничение («Игроки ниже 5 уровня...») уходило клиенту как
+ * INTERNAL_ERROR с HTTP 500 и текстом «Внутренняя ошибка сервера».
+ *
+ * Сохранена только та часть, которой нет в общем обработчике: запись
+ * ошибки в лог конкретного игрока.
+ *
+ * @param {object} res ответ express
+ * @param {Error|object} error ошибка
+ * @param {string} action имя операции для логов
+ * @param {number} [playerId] ID игрока
  */
 const handleError = (res, error, action, playerId) => {
     if (playerId) {
         logPlayerError(playerId, error, { action });
     } else {
-        logger.error(`[PVP] ${action}: ${error.message}`, {
-            stack: error.stack
-        });
+        logger.error(`[PVP] ${action}: ${error.message}`, { stack: error.stack });
     }
 
-    let code = 'INTERNAL_ERROR';
-    let statusCode = 500;
-
-    if (error.message.includes('энергия') || error.message.includes('ENERGY')) {
-        code = 'INSUFFICIENT_ENERGY';
-        statusCode = 400;
-    } else if (error.message.includes('уже завершён') || error.message.includes('уже закончен')) {
-        // Обычное игровое состояние, а не ошибка сервера: INTERNAL_ERROR
-        // с HTTP 500 показывал бы клиенту «ошибка сервера» вместо понятного
-        // сообщения, и состояние боя не обновилось бы.
-        code = 'BATTLE_FINISHED';
-        statusCode = 409;
-    } else if (error.message.includes('мертв')) {
-        code = 'PLAYER_DEAD';
-        statusCode = 400;
-    } else if (error.message.includes('не найден') || error.message.includes('локации')) {
-        code = 'NOT_FOUND';
-        statusCode = 404;
-    } else if (error.message.includes('красной зоне') || error.message.includes('RED_ZONE')) {
-        code = 'NOT_RED_ZONE';
-        statusCode = 400;
-    } else if (error.message.includes('не участник') || error.message.includes('участник')) {
-        code = 'NOT_PARTICIPANT';
-        statusCode = 403;
-    } else if (error.message.includes('слишком быстро') || error.message.includes('COOLDOWN')) {
-        code = 'ATTACK_COOLDOWN';
-        statusCode = 429;
-    } else if (error.message.includes('валидация') || error.message.includes('ID')) {
-        code = 'VALIDATION_ERROR';
-        statusCode = 400;
-    }
-
-    return res.status(statusCode).json({
-        success: false,
-        error: error.message,
-        code
-    });
+    return apiHandleError(res, error, action);
 };
 
 /**
- * Унифицированный формат успешного ответа
+ * Успешный ответ PvP.
+ *
+ * Формат здесь плоский — { success: true, ...данные }, а не общий
+ * { success: true, data }. Клиент читает оба: `result?.data || result`.
+ * Оставлено как есть, чтобы ответы PvP не поехали вместе с общим
+ * изменением — это отдельная задача на весь проект, где у endpoints
+ * разные формы (см. также ok() в db и маршруты).
+ *
+ * @param {object} res ответ express
+ * @param {object} [data] данные ответа
  */
 const ok = (res, data = {}) => res.json({ success: true, ...data });
 
 /**
- * Унифицированный формат ошибки
+ * Ошибка клиентского запроса PvP (4xx).
+ * Форма ответа совпадает с общей fail() из serverApi.
+ *
+ * @param {object} res ответ express
+ * @param {string} message текст ошибки
+ * @param {string} [code] код ошибки
+ * @param {number} [statusCode] HTTP-статус
  */
-const fail = (res, message, code = 'ERROR', statusCode = 400) => 
+const fail = (res, message, code = 'ERROR', statusCode = 400) =>
     res.status(statusCode).json({ success: false, error: message, code });
-
-/**
- * Логирование действия в player_logs
- * @param {number} playerId - ID игрока
- * @param {string} action - Название действия
- * @param {object} metadata - Дополнительные данные
- * @param {object} client - Опциональный клиент БД для использования внутри транзакции
- */
-const logPlayerAction = async (playerId, action, metadata = {}, client = null) => {
-    try {
-        // Используем переданный client или глобальную функцию query
-        const executeQuery = client 
-            ? (sql, params) => client.query(sql, params)
-            : query;
-        
-        await executeQuery(
-            `INSERT INTO player_logs (player_id, action, metadata, created_at) 
-             VALUES ($1, $2, $3, NOW())`,
-            [playerId, action, safeStringify(metadata)]
-        );
-    } catch (error) {
-        logger.warn('Не удалось залогировать действие игрока', {
-            playerId,
-            action,
-            error: error.message
-        });
-    }
-};
 
 
 
@@ -212,20 +216,26 @@ router.post('/attack', async (req, res) => {
         // Валидация входных данных
         const { target_id } = req.body;
         
-        if (!isValidId(target_id)) {
+        // Общая валидация ID (utils/validate.js). Возвращает нормализованное
+        // число, поэтому id, пришедший строкой из JSON, тоже валиден.
+        const targetIdCheck = validateId(target_id, 'ID цели');
+        if (!targetIdCheck.ok) {
             return fail(res, 'Укажите корректный ID цели (число > 0)', 'INVALID_TARGET_ID');
         }
+        const targetId = targetIdCheck.value;
 
-        if (target_id === playerId) {
+        if (targetId === playerId) {
             return fail(res, 'Нельзя атаковать самого себя', 'SELF_TARGET');
         }
 
         // Выполняем атаку в транзакции с блокировкой обоих игроков
         const result = await transaction(async (client) => {
             // Блокируем обоих игроков в порядке возрастания ID для предотвращения deadlock
-            const [firstId, secondId] = playerId < target_id
-                ? [playerId, target_id]
-                : [target_id, playerId];
+            // Сравниваются нормализованные числа (targetId), а не строки из
+            // тела запроса: порядок нужен для единого порядка блокировок.
+            const [firstId, secondId] = playerId < targetId
+                ? [playerId, targetId]
+                : [targetId, playerId];
             
             const firstResult = await client.query(
                 `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
@@ -237,11 +247,11 @@ router.post('/attack', async (req, res) => {
             );
             
             if (!firstResult.rows[0] || !secondResult.rows[0]) {
-                throw new Error('Игрок не найден');
+                throwPvpError(PvpError.PLAYER_NOT_FOUND);
             }
             
             const lockedPlayer = firstId === playerId ? firstResult.rows[0] : secondResult.rows[0];
-            const targetPlayer = firstId === target_id ? firstResult.rows[0] : secondResult.rows[0];
+            const targetPlayer = firstId === targetId ? firstResult.rows[0] : secondResult.rows[0];
 
             // Проверяем красную зону
             const location = await client.query(`
@@ -249,25 +259,25 @@ router.post('/attack', async (req, res) => {
             `, [lockedPlayer.current_location_id]);
 
             if (!location.rows[0] || Number(location.rows[0].danger_level || 0) < 6) {
-                throw new Error('PvP доступно только на красных зонах');
+                throwPvpError(PvpError.NOT_RED_ZONE);
             }
 
             if (targetPlayer.current_location_id !== lockedPlayer.current_location_id) {
-                throw new Error('Игрок не на этой локации');
+                throwPvpError(PvpError.NOT_SAME_LOCATION);
             }
 
             if (Number(targetPlayer.health || 0) <= 0) {
-                throw new Error('Противник уже мертв');
+                throwPvpError(PvpError.TARGET_DEAD);
             }
 
             const attackerProtected = await pvp.isProtectedFromPVP(playerId, client);
             if (attackerProtected) {
-                throw new Error('Игроки ниже 5 уровня не могут участвовать в PvP');
+                throwPvpError(PvpError.LEVEL_TOO_LOW);
             }
 
-            const targetProtected = await pvp.isProtectedFromPVP(target_id, client);
+            const targetProtected = await pvp.isProtectedFromPVP(targetId, client);
             if (targetProtected) {
-                throw new Error('Цель защищена от PvP до 5 уровня');
+                throwPvpError(PvpError.TARGET_PROTECTED);
             }
 
             const attackerCooldownResult = await client.query(
@@ -280,7 +290,7 @@ router.post('/attack', async (req, res) => {
             );
 
             if (attackerCooldownResult.rows[0]) {
-                throw new Error('COOLDOWN: Подождите перед следующим PvP боем');
+                throwPvpError(PvpError.COOLDOWN);
             }
 
             const targetCooldownResult = await client.query(
@@ -289,11 +299,11 @@ router.post('/attack', async (req, res) => {
                  WHERE player_id = $1 AND cooldown_type = 'pvp_battle' AND expires_at > NOW()
                  ORDER BY expires_at DESC
                  LIMIT 1`,
-                [target_id]
+                [targetId]
             );
 
             if (targetCooldownResult.rows[0]) {
-                throw new Error('COOLDOWN: Противник временно защищён от PvP');
+                throwPvpError(PvpError.TARGET_COOLDOWN);
             }
 
             // P1-5: защита от фарма одной цели (короткий кулдаун на пару)
@@ -301,10 +311,10 @@ router.post('/attack', async (req, res) => {
                 `SELECT expires_at FROM pvp_cooldowns
                  WHERE player_id = $1 AND cooldown_type = $2 AND expires_at > NOW()
                  LIMIT 1`,
-                [playerId, `pvp_target_${target_id}`]
+                [playerId, `pvp_target_${targetId}`]
             );
             if (targetFarmCooldown.rows[0]) {
-                throw new Error('COOLDOWN: Нельзя атаковать эту цель слишком часто');
+                throwPvpError(PvpError.RATE_LIMIT);
             }
 
             const existingBattleResult = await client.query(
@@ -313,26 +323,26 @@ router.post('/attack', async (req, res) => {
                  WHERE status = 'active'
                    AND (attacker_id = $1 OR defender_id = $1 OR attacker_id = $2 OR defender_id = $2)
                  LIMIT 1`,
-                [playerId, target_id]
+                [playerId, targetId]
             );
 
             if (existingBattleResult.rows[0]) {
-                throw new Error('Один из игроков уже находится в активном PvP бою');
+                throwPvpError(PvpError.ALREADY_IN_BATTLE);
             }
 
             const startBuffs = getActiveBuffs(lockedPlayer.buffs);
 
             // Проверяем наличие энергии ДО списания
             if (!lockedPlayer || (!startBuffs.free_energy && Number(lockedPlayer.energy || 0) < 1)) {
-                throw new Error('Нужна энергия для атаки');
+                throwPvpError(PvpError.INSUFFICIENT_ENERGY);
             }
 
             // Создаём сессию боя с передачей client для работы внутри транзакции
-            const battle = await pvp.createPVPMatch(playerId, target_id, lockedPlayer.current_location_id, client);
+            const battle = await pvp.createPVPMatch(playerId, targetId, lockedPlayer.current_location_id, client);
 
             // Логируем начало боя
             await logPlayerAction(playerId, 'pvp_attack_start', {
-                target_id,
+                target_id: targetId,
                 target_name: targetPlayer.username || targetPlayer.first_name || 'Unknown',
                 location_id: lockedPlayer.current_location_id,
                 battle_id: battle.id
@@ -376,35 +386,47 @@ router.post('/attack-hit', async (req, res) => {
         // Валидация
         const { battle_id } = req.body;
         
-        if (!isValidId(battle_id)) {
+        const battleIdCheck = validateId(battle_id, 'ID боя');
+        if (!battleIdCheck.ok) {
             return fail(res, 'Укажите корректный ID боя (число > 0)', 'INVALID_BATTLE_ID');
         }
+        const battleId = battleIdCheck.value;
 
         // Выполняем удар в транзакции
         const battleResult = await transaction(async (client) => {
             // Получаем бой
             const battle = await client.query(`
                 SELECT * FROM pvp_battles WHERE id = $1 FOR UPDATE
-            `, [battle_id]);
+            `, [battleId]);
 
             if (!battle.rows[0]) {
-                throw new Error('Бой не найден');
+                throwPvpError(PvpError.BATTLE_NOT_FOUND);
             }
 
             const battleData = battle.rows[0];
 
             if (battleData.status !== 'active') {
-                throw new Error('Бой уже завершён');
+                throwPvpError(PvpError.BATTLE_FINISHED);
             }
 
-            if (battleData.attacker_id !== playerId && battleData.defender_id !== playerId) {
-                throw new Error('Вы не участник этого боя');
+            // КРИТИЧНО: attacker_id/defender_id — BIGINT, а pg отдаёт int8
+            // СТРОКОЙ ('42'), тогда как req.player.id — число (buildRequestPlayer
+            // делает Number(dbPlayer.id)). Строгое сравнение строки с числом
+            // всегда даёт false, поэтому проверка участника срабатывала
+            // ошибочно: удар в PvP отклонялся с «Вы не участник этого боя»
+            // ЛИБО проходил для защитника, который тут же становился
+            // «атакующим» (isAttacker = false). Приводим к Number явно.
+            const attackerIdRaw = Number(battleData.attacker_id);
+            const defenderIdRaw = Number(battleData.defender_id);
+
+            if (attackerIdRaw !== playerId && defenderIdRaw !== playerId) {
+                throwPvpError(PvpError.NOT_PARTICIPANT);
             }
 
             // Определяем атакующего и защитника
-            const isAttacker = battleData.attacker_id === playerId;
-            const attackerId = isAttacker ? battleData.attacker_id : battleData.defender_id;
-            const defenderId = isAttacker ? battleData.defender_id : battleData.attacker_id;
+            const isAttacker = attackerIdRaw === playerId;
+            const attackerId = isAttacker ? attackerIdRaw : defenderIdRaw;
+            const defenderId = isAttacker ? defenderIdRaw : attackerIdRaw;
 
             // Блокируем обоих игроков в определённом порядке для предотвращения deadlock
             const [firstId, secondId] = attackerId < defenderId
@@ -426,22 +448,22 @@ router.post('/attack-hit', async (req, res) => {
             const defender = defenderId === firstId ? firstPlayer : secondPlayer;
 
             if (!attacker || !defender) {
-                throw new Error('Игрок не найден');
+                throwPvpError(PvpError.PLAYER_NOT_FOUND);
             }
 
             // Проверяем, что игрок жив перед атакой
             if (attacker.health <= 0) {
-                throw new Error('Вы мертвы и не можете атаковать');
+                throwPvpError(PvpError.SELF_DEAD);
             }
             if (defender.health <= 0) {
-                throw new Error('Противник уже мертв');
+                throwPvpError(PvpError.TARGET_DEAD);
             }
 
             const activeBuffs = getActiveBuffs(attacker.buffs);
             // P0-1: пересчитываем энергию по реальному времени перед тратой
             await recalcEnergy(client, attacker);
             if (!activeBuffs.free_energy && Number(attacker.energy || 0) < 1) {
-                throw new Error('Нужна энергия для удара');
+                throwPvpError(PvpError.INSUFFICIENT_ENERGY_HIT);
             }
 
             const energyCost = activeBuffs.free_energy ? 0 : 1;
@@ -471,14 +493,14 @@ router.post('/attack-hit', async (req, res) => {
 
             // Уклонение (soft cap 20%)
             const dodgeChance = Math.min(20, defender.agility / (defender.agility + 40) * 20);
-            const isDodged = Math.random() * 100 < dodgeChance;
+            const isDodged = crypto.randomInt(100) < dodgeChance;
             
             if (isDodged) {
                 await client.query(
                     `UPDATE pvp_battles
                      SET battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
                      WHERE id = $1`,
-                    [battle_id]
+                    [battleId]
                 );
 
                 // Уклонение защитник увидит только на своём экране PvP: активных
@@ -551,7 +573,7 @@ router.post('/attack-hit', async (req, res) => {
                  SET ${battleDamageField} = COALESCE(${battleDamageField}, 0) + $1,
                      battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
                  WHERE id = $2`,
-                [damage, battle_id]
+                [damage, battleId]
             );
 
             // Проверяем победу
@@ -575,7 +597,7 @@ router.post('/attack-hit', async (req, res) => {
                 const attackerInventory = normalizeInventory(attacker.inventory);
                 let stolenItem = null;
 
-                if (Math.random() < 0.1) {
+                if (crypto.randomInt(10) === 0) {
                     const [stolen] = pvp.getRandomItemsToSteal(defenderInventory, 1);
                     // Украденный предмет должен поместиться: снаряжение не стакуется,
                     // поэтому «втиснуть» его можно только в пустой слот —
@@ -621,7 +643,7 @@ await client.query(`
                          ended_at = NOW(),
                          battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
                      WHERE id = $4
-                 `, [attackerId, defenderId, coinsReward, battle_id]);
+                 `, [attackerId, defenderId, coinsReward, battleId]);
 
                 // Обновляем PvP статистику победителя и даём опыт
                 const pvpExpReward = pvp.calculatePVPRewardExperience(attacker.level, defender.level);
@@ -676,19 +698,16 @@ await client.query(`
 
                 // P1-5: устанавливаем кулдаун после боя для обоих + защита от фарма цели
                 const cooldownMin = 5;
+                // Атомарно ставим кулдауны обоим игрокам одним запросом:
+                // ON CONFLICT (player_id, cooldown_type) работает для каждой строки VALUES отдельно.
                 await client.query(
                     `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)
-                     VALUES ($1, 'pvp_battle', NOW() + ($2 || ' minutes')::interval)
+                     VALUES
+                         ($1, 'pvp_battle', NOW() + ($3 || ' minutes')::interval),
+                         ($2, 'pvp_battle', NOW() + ($3 || ' minutes')::interval)
                      ON CONFLICT (player_id, cooldown_type)
-                     DO UPDATE SET expires_at = NOW() + ($2 || ' minutes')::interval`,
-                    [attackerId, cooldownMin]
-                );
-                await client.query(
-                    `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)
-                     VALUES ($1, 'pvp_battle', NOW() + ($2 || ' minutes')::interval)
-                     ON CONFLICT (player_id, cooldown_type)
-                     DO UPDATE SET expires_at = NOW() + ($2 || ' minutes')::interval`,
-                    [defenderId, cooldownMin]
+                     DO UPDATE SET expires_at = NOW() + ($3 || ' minutes')::interval`,
+                    [attackerId, defenderId, cooldownMin]
                 );
                 // Защита от повторной атаки одной цели (10 мин)
                 await client.query(

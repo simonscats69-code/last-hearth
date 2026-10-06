@@ -163,6 +163,12 @@ router.post('/player/:telegramId/resources', requireAdmin, async (req, res) => {
         if (health !== undefined) {
             updates.push(`health = $${paramIndex++}`);
             values.push(health);
+            // Метка регена здоровья. Без её сброса игрок, которому админ
+            // выдал HP «в плюс», не мог восстановиться: regenerateHealth
+            // считает шаги от last_hp_regen, а она осталась на моменте
+            // смерти — до следующего шага (90 секунд) выданный HP просто
+            // висел, не доходя до потолка регенерации.
+            updates.push('last_hp_regen = NOW()');
         }
         
         if (experience !== undefined) {

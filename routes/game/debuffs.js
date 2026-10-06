@@ -8,12 +8,12 @@
  * - Расчёт влияния на статы
  */
 
-const { transaction: tx } = require('../../db/database');
+const { transaction } = require('../../db/database');
 // logger раньше использовался только в удалённых HTTP-роутах. Ошибки из
 // DebuffAPI ловит вызывающий: world.js пишет их в лог сам, status.js
 // отдаёт наружу через handleError (5xx без внутреннего текста).
 const { safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
-const { normalizeInventory } = require('../../utils/game-helpers');
+const { normalizeInventory, consumeInventoryItem } = require('../../utils/game-helpers');
 const { 
     DEBUFF_TYPES, 
     DEBUFF_CONFIG, 
@@ -136,7 +136,7 @@ const DebuffAPI = {
             return executor(options.client);
         }
 
-        return await tx(executor);
+        return await transaction(executor);
     },
     
     /**
@@ -145,7 +145,7 @@ const DebuffAPI = {
      * @returns {Promise<object>} статус дебаффов
      */
     async check(playerId) {
-        return await tx(async (client) => {
+        return await transaction(async (client) => {
             const playerResult = await client.query(
                 `SELECT radiation, infections, health FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
@@ -424,14 +424,20 @@ const DebuffAPI = {
                 }, client);
             }
             
-            // Удаляем использованный предмет (по умолчанию),
-            // опционально можно пропустить списание при внешней оркестрации.
             if (consumeItem) {
-                inventory.splice(resolvedItemIndex, 1);
+                const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, resolvedItemIndex);
+
                 await client.query(
                     `UPDATE players SET inventory = $1 WHERE id = $2`,
-                    [JSON.stringify(inventory), playerId]
+                    [JSON.stringify(updatedInventory), playerId]
                 );
+
+                return {
+                    success: true,
+                    cured: resolvedCureType,
+                    itemUsed: item.name,
+                    quantityLeft: quantityLeft
+                };
             }
             
             return {
@@ -445,7 +451,7 @@ const DebuffAPI = {
             return executor(externalClient);
         }
 
-        return await tx(executor);
+        return await transaction(executor);
     },
     
     /**
