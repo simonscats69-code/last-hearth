@@ -1694,6 +1694,26 @@ html, body {
     cursor: not-allowed;
 }
 
+/* Sell button in inventory slots */
+.btn-small {
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0c960;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.btn-small:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(224, 201, 96, 0.5);
+}
+.btn-small:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .inv-workshop-materials {
     font-size: 11px;
     color: var(--text-secondary, #9a9080);

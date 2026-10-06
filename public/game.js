@@ -292,6 +292,7 @@ window.getClanRoleEmoji = getClanRoleEmoji;
 window.getRarityClassByLevel = getRarityClassByLevel;
 window.getPlayerEmoji = getPlayerEmoji;
 window.formatTime = formatTime;
+window.sellItem = sellItem;
 /**
  * ============================================
  * ОБРАБОТЧИКИ ОШИБОК
@@ -1145,11 +1146,16 @@ const Templates = {
     inventorySlot(item) {
         const itemActionId = item.index ?? item.id;
         const rarityClass = escapeAttribute(item.rarity || 'common');
+        const canSell = item.rarity && item.rarity !== 'key' && item.type !== 'key';
+        const sellBtn = canSell 
+            ? `<button class="btn btn-small btn-sell" data-action="sell-item" data-item-index="${escapeAttribute(item.index ?? item.id)}" title="Продать">💰 Продать</button>`
+            : '';
         return `
             <div class="inventory-slot rarity-${rarityClass}" 
                  data-use-item="${escapeAttribute(itemActionId)}" data-id="${escapeAttribute(item.id)}">
                 <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
                 ${item.count > 1 ? `<span class="item-count">${Number(item.count)}</span>` : ''}
+                ${sellBtn}
             </div>
         `;
     }
@@ -3578,6 +3584,42 @@ async function useItem(itemId, options = {}) {
     }
 }
 
+/**
+ * Продать предмет
+ * @param {number} itemIndex - индекс предмета в инвентаре
+ */
+async function sellItem(itemIndex) {
+    if (!lockAction('sellItem')) return;
+    try {
+        const result = await apiRequest('/api/game/inventory/sell', {
+            method: 'POST',
+            body: { item_index: itemIndex }
+        });
+        const payload = result?.data || result;
+        
+        if (result.success) {
+            const message = payload.message || result.message || 'Предмет продан';
+            showModal('💰 Продано', message);
+            
+            // Сбрасываем кэш рендеринга
+            RenderCache.clear();
+            
+            // Обновляем инвентарь и профиль
+            await loadInventory();
+            await loadProfile();
+            
+            playSound('coin');
+        } else {
+            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось продать предмет');
+        }
+    } catch (error) {
+        console.error('Sell item error:', error);
+        showModal('⚠️ Внимание', clientErrorMessage(error, 'Не удалось продать предмет'));
+    } finally {
+        unlockAction('sellItem');
+    }
+}
+
 // ============================================================================
 // СИСТЕМА ИНВЕНТАРЯ
 // ============================================================================
@@ -3921,6 +3963,14 @@ async function upgradeEquipmentSlot(slot) {
         await loadInventory();
         await renderWorkshopPanel();
     } catch (error) {
+        // Подробное логирование ошибки для отладки
+        console.error('[upgradeEquipmentSlot] Error:', {
+            slot,
+            message: error.message,
+            code: error.code,
+            status: error.status,
+            response: error.response
+        });
         showNotification(clientErrorMessage(error, 'Не удалось улучшить'), 'error');
     } finally {
         unlockAction('workshopUpgrade');

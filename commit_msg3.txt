@@ -1,0 +1,7 @@
+Add item selling, sell button in inventory, and detailed error logging for workshop upgrade
+
+- public/game.js: added sellItem() function, sell button in inventorySlot template, window.sellItem export
+- public/styles.css: added .btn-small and .btn-sell styles for sell button
+- public/game.js: added detailed console.error logging in upgradeEquipmentSlot for debugging 400 errors
+
+Workshop upgrade 400 'Укажите корректный слот' - added detailed console.error logging to show slot value, status, response for debugging
