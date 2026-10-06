@@ -873,9 +873,11 @@ const RARITY_LABELS = {
 };
 
 // ============================================================================
-// МЕНЕДЖЕР ИНТЕРВАЛОВ (защита от утечек памяти)
+// МЕНЕДЖЕР ИНТЕРВАЛОВ И ТАЙМАУТОВ (защита от утечек памяти)
 // ============================================================================
 
+// Массив для отслеживания всех таймаутов и интервалов
+const activeTimeouts = [];
 const activeIntervals = [];
 
 /**
@@ -887,6 +889,18 @@ const activeIntervals = [];
 function safeSetInterval(callback, delay) {
     const id = setInterval(callback, delay);
     activeIntervals.push(id);
+    return id;
+}
+
+/**
+ * Безопасное создание таймаута с автоматической очисткой
+ * @param {Function} callback - функция
+ * @param {number} delay - задержка в мс
+ * @returns {number} id таймаута
+ */
+function safeSetTimeout(callback, delay) {
+    const id = setTimeout(callback, delay);
+    activeTimeouts.push(id);
     return id;
 }
 
@@ -903,16 +917,37 @@ function safeClearInterval(id) {
 }
 
 /**
- * Очистка всех интервалов при выходе
+ * Безопасная очистка одного таймаута
+ * @param {number} id - id таймаута для очистки
+ */
+function safeClearTimeout(id) {
+    clearTimeout(id);
+    const index = activeTimeouts.indexOf(id);
+    if (index !== -1) {
+        activeTimeouts.splice(index, 1);
+    }
+}
+
+/**
+ * Очистка всех интервалов и таймаутов при выходе
  */
 function clearAllIntervals() {
     activeIntervals.forEach(id => clearInterval(id));
     activeIntervals.length = 0;
+    activeTimeouts.forEach(id => clearTimeout(id));
+    activeTimeouts.length = 0;
 }
 
-// Очищаем интервалы при закрытии страницы
+// Очищаем интервалы и таймауты при закрытии страницы
 window.addEventListener('beforeunload', clearAllIntervals);
 window.addEventListener('pagehide', clearAllIntervals);
+
+// Также чистим actionLocks при выгрузке страницы
+window.addEventListener('beforeunload', () => {
+    Object.keys(actionLocks).forEach(key => {
+        actionLocks[key] = false;
+    });
+});
 
 // ============================================================================
 // БЛОКИРОВКИ ОПЕРАЦИЙ (защита от состояний гонки)
@@ -1155,6 +1190,8 @@ const API = {
     cancelRequest(type) {
         const controller = this._activeControllers.get(type);
         if (controller) {
+            // Помечаем как ручную отмену для корректной обработки в load()
+            controller.isManualAbort = true;
             controller.abort();
             this._activeControllers.delete(type);
         }
@@ -1163,6 +1200,7 @@ const API = {
     // Отмена всех активных запросов
     cancelAllRequests() {
         for (const controller of this._activeControllers.values()) {
+            controller.isManualAbort = true;
             controller.abort();
         }
         this._activeControllers.clear();
@@ -1229,7 +1267,8 @@ const API = {
         } catch (error) {
             // Отменённый пользователем запрос — не ошибка, глотаем,
             // чтобы не сыпались необработанные rejection'ы
-            if (error?.name === 'AbortError' && error?.isManualAbort) {
+            const isManualAbort = error?.name === 'AbortError' && (error?.isManualAbort || error?.target?.isManualAbort);
+            if (isManualAbort) {
                 return null;
             }
             throw error;
@@ -1503,6 +1542,14 @@ if ('serviceWorker' in navigator) {
             });
     });
 }
+
+// Дополнительная очистка при выгрузке страницы
+window.addEventListener('beforeunload', () => {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        // Отправляем сообщение контроллеру для корректного завершения
+        navigator.serviceWorker.controller.postMessage({ type: 'SHUTDOWN' });
+    }
+});
 
 // ============================================================================
 // ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
@@ -2022,6 +2069,13 @@ async function initGame() {
         renderInitError('⏳', 'Загрузка затянулась', 'Сервер долго не отвечает. Проверь интернет и попробуй ещё раз.');
     }, 30000);
 
+    // Обработчик для отлова unhandled rejections во время инициализации
+    const unhandledRejectionHandler = (event) => {
+        console.error('[initGame] Unhandled rejection during init:', event.reason);
+        event.preventDefault(); // Предотвращаем дефолтное логирование в консоль
+    };
+    window.addEventListener('unhandledrejection', unhandledRejectionHandler);
+
     try {
         // Ждём пока загрузится Telegram WebApp.
         // В production отсутствие Telegram — фатально: продолжать нельзя,
@@ -2118,6 +2172,7 @@ async function initGame() {
         renderInitError('😿', 'Ошибка', errorMessage);
     } finally {
         clearTimeout(initWatchdog);
+        window.removeEventListener('unhandledrejection', unhandledRejectionHandler);
     }
 }
 
@@ -5394,20 +5449,26 @@ function openModalElement(modal) {
     }
     modalState.openGeneration++;
 
+    // Убираем возможную старую анимацию перед новой
+    modal.style.animation = 'none';
+    void modal.offsetWidth; // force reflow
     modal.classList.add('active');
     modal.style.display = 'flex';
-    // Имя анимации совпадает с @keyframes fade-in-up в styles.css.
-    // Раньше здесь было 'fadeIn' — такое же имя было объявлено в CSS
-    // дважды, и работало второе объявление, из-за чего первое выглядело
-    // как рабочее, хотя нет. Теперь в CSS одно определение на имя.
     modal.style.animation = 'fade-in-up 0.3s ease-out';
 
     // Закрытие по клику вне окна и по крестику
     const modalClose = document.getElementById('modal-close');
-    if (modalClose) modalClose.onclick = () => hideModal();
-    modal.onclick = (e) => {
+    if (modalClose) {
+        // Удаляем старый обработчик если есть
+        modalClose.onclick = null;
+        modalClose.addEventListener('click', hideModal, { once: true });
+    }
+    
+    // Удаляем старый обработчик клика по оверлею
+    modal.onclick = null;
+    modal.addEventListener('click', (e) => {
         if (e.target === modal) hideModal();
-    };
+    }, { once: true });
 }
 
 /**
@@ -6863,7 +6924,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         initGame();
-        initReferralHandlers();
         
         // Инициализация навигации
         if (typeof initNavigationHandlers === 'function') {
@@ -9057,6 +9117,11 @@ function showModal(title, message, type = 'info') {
  * случай: showModal сразу после hideModal), старое закрывало новое.
  * Поэтому каждое открытие увеличивает счётчик modalState.openGeneration,
  * и таймер закрытия работает только если счётчик не изменился.
+ *
+ * Исправления:
+ * - Используем requestAnimationFrame для синхронизации с браузером
+ * - Правильно очищаем все обработчики событий
+ * - Защита от double-close и race conditions
  */
 function hideModal() {
     const modal = document.getElementById('modal');
@@ -9068,22 +9133,50 @@ function hideModal() {
     const generation = modalState.openGeneration;
     
     // Очищаем обработчики при закрытии
-    if (modalClose) modalClose.onclick = null;
+    if (modalClose) {
+        modalClose.onclick = null;
+        modalClose.removeEventListener('click', () => hideModal());
+    }
     modal.onclick = null;
+    
+    // Убираем анимацию если она уже играет (защита от прерывания)
+    modal.style.animation = 'none';
+    // Force reflow для корректного перезапуска анимации
+    void modal.offsetWidth;
     modal.style.animation = 'fadeOut 0.2s ease-out';
     
-    if (modalState.closeTimer) clearTimeout(modalState.closeTimer);
+    if (modalState.closeTimer) {
+        clearTimeout(modalState.closeTimer);
+        modalState.closeTimer = null;
+    }
+    
     modalState.closeTimer = setTimeout(() => {
         modalState.closeTimer = null;
+        
         // Пока открывали другое окно — не трогаем текущее
         if (generation !== modalState.openGeneration) return;
+        
+        // Дополнительная проверка: модалка ещё существует и не была переоткрыта
+        const currentModal = document.getElementById('modal');
+        if (!currentModal || currentModal !== modal) return;
+        if (generation !== modalState.openGeneration) return;
+        
+        // Убираем анимацию перед скрытием
+        modal.style.animation = 'none';
         modal.style.display = 'none';
         modal.classList.remove('active');
+        
+        // Очистка inline стилей анимации
         modal.style.animation = '';
+        
         // Сигнал фактического закрытия. Его слушает showConfirmDialog:
         // без него отмена через крестик или клик мимо окна оставила бы
         // промис подтверждения неразрешённым навсегда.
-        modal.dispatchEvent(new CustomEvent('modal:closed'));
+        try {
+            modal.dispatchEvent(new CustomEvent('modal:closed', { bubbles: true }));
+        } catch (e) {
+            console.warn('[hideModal] dispatchEvent failed:', e);
+        }
     }, 200);
 }
 

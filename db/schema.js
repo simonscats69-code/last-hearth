@@ -1439,7 +1439,7 @@ async function seedBosses() {
         await query(`
             INSERT INTO bosses (name, description, level, max_health, damage, key_drop_chance,
                                 keys_required, required_key_id, reward_experience, reward_coins, reward_items, icon)
-            VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 level = EXCLUDED.level,
@@ -1454,7 +1454,7 @@ async function seedBosses() {
                 icon = EXCLUDED.icon
         `, [
             boss.name, boss.description, bossLevel, boss.max_health, boss.damage, boss.key_drop_chance,
-            keyItemId, boss.reward_experience, boss.reward_coins, JSON.stringify(rewardItems), boss.icon
+            bossLevel, keyItemId, boss.reward_experience, boss.reward_coins, JSON.stringify(rewardItems), boss.icon
         ]);
     }
 

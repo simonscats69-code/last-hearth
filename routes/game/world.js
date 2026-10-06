@@ -90,28 +90,55 @@ function buildInventoryItem(item, rarity) {
  * именем/иконкой ключевого предмета. Множитель риска локации сохраняем:
  * чем опаснее зона, тем выше шанс сорвать ключ.
  *
+ * ОГРАНИЧЕНИЕ: ключи выпадают ТОЛЬКО для следующего босса в последовательности.
+ * Игрок не может получить ключ от босса N+2, пока не разблокировал N+1.
+ * Это обеспечивает строгую последовательность прогрессии.
+ *
  * @param {object} client клиент БД (транзакция)
+ * @param {number} playerId ID игрока
  * @returns {Promise<Array<{bossId:number,chance:number,name:string,icon:string,rarity:string,bossName:string}>>}
  */
-async function getBossKeyChances(client) {
+async function getBossKeyChances(client, playerId) {
+    // Определяем следующий босса, которого нужно открыть.
+    // Ищем максимальный boss_id в boss_keys, где у игрока есть ключи,
+    // плюс 1. Если ключей нет — следующий босс = 2 (первый с ключом).
+    const progressResult = await client.query(`
+        SELECT COALESCE(MAX(boss_id), 1) + 1 AS next_boss_id
+        FROM boss_keys
+        WHERE player_id = $1 AND quantity > 0
+    `, [playerId]);
+    
+    let nextBossId = Number(progressResult.rows[0]?.next_boss_id) || 2;
+    
+    // Ограничиваем максимумом существующих боссов
+    const maxBossResult = await client.query(`SELECT MAX(id) AS max_id FROM bosses`);
+    const maxBossId = Number(maxBossResult.rows[0]?.max_id) || 10;
+    nextBossId = Math.min(nextBossId, maxBossId);
+    
+    // Получаем ключ только для следующего босса
     const result = await client.query(`
         SELECT b.id AS boss_id, b.name AS boss_name, b.key_drop_chance,
                k.name AS key_name, k.icon AS key_icon, k.rarity AS key_rarity
           FROM bosses b
           JOIN items k ON k.id = b.required_key_id
-         WHERE b.key_drop_chance > 0
+         WHERE b.id = $1
+           AND b.key_drop_chance > 0
            AND b.required_key_id IS NOT NULL
-         ORDER BY b.id
-    `);
-
-    return result.rows.map((row) => ({
+    `, [nextBossId]);
+    
+    if (result.rows.length === 0) {
+        return []; // Ключ для этого босса не существует или шанс 0
+    }
+    
+    const row = result.rows[0];
+    return [{
         bossId: row.boss_id,
         bossName: row.boss_name,
         name: row.key_name,
         icon: row.key_icon,
         rarity: row.key_rarity,
         chance: Math.round(Number(row.key_drop_chance) * 100000) / 100000
-    }));
+    }];
 }
 
 // =============================================================================
@@ -359,9 +386,10 @@ router.post('/search', async (req, res) => {
             // required_key_id: без этого джойна ключ не находится вовсе,
             // энергия тратится, а лут не выпадает.
             //
-            // Ключ НЕ попадает в инвентарь: он хранится в boss_keys (валюта
-            // прогрессии), поэтому за него не тратится слот из 100.
-            const keyChanceRows = await getBossKeyChances(client);
+            // Ключи выпадают ТОЛЬКО для следующего босса в последовательности.
+            // getBossKeyChances теперь принимает playerId и возвращает ключ
+            // только для следующего босса в прогрессии игрока.
+            const keyChanceRows = await getBossKeyChances(client, playerId);
             const keyRoll = crypto.randomInt(10000) / 100;
 
             let foundKey = null;
