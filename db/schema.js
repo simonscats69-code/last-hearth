@@ -1139,22 +1139,30 @@ async function seedDatabase() {
     // required_key_id ссылаются на items по имени, и без предметов в БД
     // ссылки не разрешить (см. seedBosses ниже).
 
-    // Предметы
+// Предметы
     const items = [
-        { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 10, icon: '🥫', stats: { energy: 5 } },
-        { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 15, icon: '💧', stats: { energy: 3 } },
-        { name: 'Спирт', description: 'Медицинский спирт: обеззараживает раны', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 25, icon: '🍺', stats: { health: 15, infection_cure: 1 } },
-        { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 8, icon: '🍪', stats: { energy: 2 } },
-        { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 20, icon: '⚡', stats: { energy: 10 } },
-        { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 20, icon: '🩹', stats: { health: 10 } },
-        { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 50, icon: '💊', stats: { health: 30 } },
-        { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 100, icon: '💉', stats: { infection_cure: 2 } },
-{ name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 150, icon: '☢️', stats: { radiation_cure: 3 } },
+        // Еда / расходники (базовый множитель 1.0x)
+        { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '🥫', stats: { energy: 5 } },
+        { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '💧', stats: { energy: 3 } },
+        { name: 'Спирт', description: 'Медицинский спирт: обеззараживает раны', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 160, icon: '🍺', stats: { health: 15, infection_cure: 1 } },
+        { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '🍪', stats: { energy: 2 } },
+        { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 200, icon: '⚡', stats: { energy: 10 } },
+        { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 40, icon: '🩹', stats: { health: 10 } },
+        { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 160, icon: '💊', stats: { health: 30 } },
+        { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 640, icon: '💉', stats: { infection_cure: 2 } },
+        { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 640, icon: '☢️', stats: { radiation_cure: 3 } },
         // Цены лечения выстроены по одной кривой «HP за монету», чтобы нельзя было
         // купить заведомо худший предмет:
         //   Бинт 0.50 -> Витамины 0.57 -> Аптечка/Спирт 0.60 -> Нано 0.63 -> Реаниматор 0.67
         // Крупные лекарства выгоднее на HP, но требуют звёзд и места в инвентаре.
-        { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 35, icon: '💊', stats: { health: 20 } },
+        { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 160, icon: '💊', stats: { health: 20 } },
+        // Еда / расходники (продолжение)
+        { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '🍪', stats: { energy: 2 } },
+        { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 200, icon: '⚡', stats: { energy: 10 } },
+        { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '💧', stats: { energy: 3 } },
+        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 5000, stars_price: 6, icon: '💥', stats: { energy: 30 } },
+        { name: 'Сыворотка мутанта', description: 'Мутантная сыворотка: энергия как у зверя', type: 'food', category: 'consumable', rarity: 'legendary', price: 50000, icon: '🧬', stats: { energy: 50 } },
+        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 5000, stars_price: 5, icon: '🧠', stats: { energy: 25 } },
         // Оружие: только то, что реально встречается в постапокалипсисе.
         //
         // Два типа боя с разными ролями (stats.boss_bonus / stats.pvp_bonus):
@@ -1164,42 +1172,42 @@ async function seedDatabase() {
         // Экономика: цена за удар = price / durability, а урон за удар = stats.damage.
         // Энергия тратится на каждый удар, поэтому «дёшево за выстрел» важнее
         // общего урона оружия.
-        { name: 'Нож', description: 'Складной нож выжившего: тихо, дёшево, всегда с собой', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', ammo_type: 'none', stats: { damage: 5, boss_bonus: 40 }, durability: 50, max_durability: 50, price: 20, icon: '🔪' },
-        { name: 'Бита', description: 'Бейсбольная бита: крепче ножа, но изнашивается быстрее', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', set_id: 4, ammo_type: 'none', stats: { damage: 9, boss_bonus: 40 }, durability: 35, max_durability: 35, price: 45, icon: '🏏' },
-        { name: 'Пистолет', description: 'Пистолет Макарова: 8 патронов и никаких проблем', type: 'weapon', category: 'ranged', rarity: 'common', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 16, pvp_bonus: 25 }, durability: 60, max_durability: 60, price: 90, icon: '🔫' },
-        { name: 'Пистолет ТТ', description: 'Трофейный пистолет: точнее и кучнее «Макарова»', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 24, pvp_bonus: 25 }, durability: 90, max_durability: 90, price: 170, icon: '🔫' },
-        { name: 'Обрез', description: 'Двустволка, перерезанная из охотничьего ружья', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 34, pvp_bonus: 25 }, durability: 40, max_durability: 40, price: 240, icon: '🔫' },
-        { name: 'Топор', description: 'Тяжёлый топор: рубит вблизи, но управляться тяжело', type: 'weapon', category: 'melee', rarity: 'uncommon', slot: 'weapon', ammo_type: 'none', stats: { damage: 15, boss_bonus: 40 }, durability: 70, max_durability: 70, price: 130, icon: '🪓' },
-        { name: 'Автомат', description: 'Автомат из армейских запасов: универсальное оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 48, pvp_bonus: 25 }, durability: 160, max_durability: 160, price: 320, icon: '⚔️' },
-        { name: 'Винтовка Мосина', description: 'Старая магазинная винтовка: дёшево в обслуживании', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 52, pvp_bonus: 25 }, durability: 120, max_durability: 120, price: 380, icon: '🎯' },
-        { name: 'Дробовик', description: 'Охотничий дробовик: разброс урона ±25%', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 62, variance: 25, pvp_bonus: 25 }, durability: 130, max_durability: 130, price: 360, icon: '🔫' },
-        { name: 'Снайперская винтовка', description: 'Снайперская винтовка: один выстрел решает', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 95, pvp_bonus: 25 }, durability: 200, max_durability: 200, price: 850, stars_price: 40, icon: '🔭' },
-        { name: 'Пулемёт', description: 'Станковый пулемёт: тяжёлый, зверский, с чашей патронов', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 85, pvp_bonus: 25 }, durability: 260, max_durability: 260, price: 1100, stars_price: 55, icon: '🔧' },
-        { name: 'Реактивная пушка', description: 'Реактивная пушка: снос любого босса, но зарядов мало', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', ammo_type: 'rockets', stats: { damage: 240, variance: 20, pvp_bonus: 25 }, durability: 35, max_durability: 35, price: 2500, stars_price: 150, icon: '🚀' },
+        { name: 'Нож', description: 'Складной нож выжившего: тихо, дёшево, всегда с собой', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', ammo_type: 'none', stats: { damage: 5, boss_bonus: 40 }, durability: 50, max_durability: 50, price: 50, icon: '🔪' },
+        { name: 'Бита', description: 'Бейсбольная бита: крепче ножа, но изнашивается быстрее', type: 'weapon', category: 'melee', rarity: 'common', slot: 'weapon', set_id: 4, ammo_type: 'none', stats: { damage: 9, boss_bonus: 40 }, durability: 35, max_durability: 35, price: 50, icon: '🏏' },
+        { name: 'Пистолет', description: 'Пистолет Макарова: 8 патронов и никаких проблем', type: 'weapon', category: 'ranged', rarity: 'common', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 16, pvp_bonus: 25 }, durability: 60, max_durability: 60, price: 65, icon: '🔫' },
+        { name: 'Пистолет ТТ', description: 'Трофейный пистолет: точнее и кучнее «Макарова»', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 24, pvp_bonus: 25 }, durability: 90, max_durability: 90, price: 260, icon: '🔫' },
+        { name: 'Обрез', description: 'Двустволка, перерезанная из охотничьего ружья', type: 'weapon', category: 'ranged', rarity: 'uncommon', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 34, pvp_bonus: 25 }, durability: 40, max_durability: 40, price: 260, icon: '🔫' },
+        { name: 'Топор', description: 'Тяжёлый топор: рубит вблизи, но управляться тяжело', type: 'weapon', category: 'melee', rarity: 'uncommon', slot: 'weapon', ammo_type: 'none', stats: { damage: 15, boss_bonus: 40 }, durability: 70, max_durability: 70, price: 200, icon: '🪓' },
+        { name: 'Автомат', description: 'Автомат из армейских запасов: универсальное оружие', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 48, pvp_bonus: 25 }, durability: 160, max_durability: 160, price: 1040, icon: '⚔️' },
+        { name: 'Винтовка Мосина', description: 'Старая магазинная винтовка: дёшево в обслуживании', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 52, pvp_bonus: 25 }, durability: 120, max_durability: 120, price: 1040, icon: '🎯' },
+        { name: 'Дробовик', description: 'Охотничий дробовик: разброс урона ±25%', type: 'weapon', category: 'ranged', rarity: 'rare', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 62, variance: 25, pvp_bonus: 25 }, durability: 130, max_durability: 130, price: 1040, icon: '🔫' },
+        { name: 'Снайперская винтовка', description: 'Снайперская винтовка: один выстрел решает', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 95, pvp_bonus: 25 }, durability: 200, max_durability: 200, price: 6500, stars_price: 40, icon: '🔭' },
+        { name: 'Пулемёт', description: 'Станковый пулемёт: тяжёлый, зверский, с чашей патронов', type: 'weapon', category: 'ranged', rarity: 'epic', slot: 'weapon', ammo_type: 'ammo', stats: { damage: 85, pvp_bonus: 25 }, durability: 260, max_durability: 260, price: 6500, stars_price: 55, icon: '🔧' },
+        { name: 'Реактивная пушка', description: 'Реактивная пушка: снос любого босса, но зарядов мало', type: 'weapon', category: 'ranged', rarity: 'legendary', slot: 'weapon', ammo_type: 'rockets', stats: { damage: 240, variance: 20, pvp_bonus: 25 }, durability: 35, max_durability: 35, price: 125000, stars_price: 150, icon: '🚀' },
         // Броня. Слоты hands/boots/accessory не закрывал НИ ОДИН предмет —
         // 3 из 9 слотов экипировки были пустыми. Новые предметы закрывают
         // слоты и одновременно собирают 4 сета (items.set_id + item_sets).
-        { name: 'Кожаная куртка', description: 'Простая защита от холода и царапин', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, infection_resist: 3 }, durability: 60, max_durability: 60, price: 40, icon: '🧥' },
-        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 1, stats: { defense: 25, radiation_resist: 6, infection_resist: 4 }, durability: 150, max_durability: 150, price: 300, icon: '🦺' },
-        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 1, stats: { defense: 10, infection_resist: 5 }, durability: 90, max_durability: 90, price: 80, icon: '⛑️' },
-        { name: 'Военные перчатки', description: 'Перчатки пехоты: защита рук', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 1, stats: { defense: 6 }, durability: 100, max_durability: 100, price: 110, icon: '🧤' },
+        { name: 'Кожаная куртка', description: 'Простая защита от холода и царапин', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, infection_resist: 3 }, durability: 60, max_durability: 60, price: 60, icon: '🧥' },
+        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 1, stats: { defense: 25, radiation_resist: 6, infection_resist: 4 }, durability: 150, max_durability: 150, price: 960, icon: '🦺' },
+        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 1, stats: { defense: 10, infection_resist: 5 }, durability: 90, max_durability: 90, price: 160, icon: '⛑️' },
+        { name: 'Военные перчатки', description: 'Перчатки пехоты: защита рук', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 1, stats: { defense: 6 }, durability: 100, max_durability: 100, price: 120, icon: '🧤' },
         { name: 'Военные ботинки', description: 'Армейские ботинки: защита ног', type: 'armor', category: 'boots', rarity: 'uncommon', slot: 'boots', set_id: 1, stats: { defense: 8 }, durability: 100, max_durability: 100, price: 120, icon: '🥾' },
-        { name: 'Противогаз', description: 'Респиратор: защита от радиации и инфекций', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 2, stats: { radiation_resist: 18, infection_resist: 12 }, durability: 100, max_durability: 100, price: 100, icon: '😷' },
-        { name: 'Медицинский халат', description: 'Халат полевого медика', type: 'armor', category: 'body', rarity: 'uncommon', slot: 'body', set_id: 2, stats: { defense: 4, radiation_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 140, icon: '🥼' },
-        { name: 'Медицинские перчатки', description: 'Перчатки с антисептиком', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 2, stats: { defense: 4, infection_resist: 10, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 130, icon: '🧤' },
-        { name: 'Медицинский рюкзак', description: 'Рюкзак с аптечками', type: 'armor', category: 'accessory', rarity: 'uncommon', slot: 'accessory', set_id: 2, stats: { defense: 3, infection_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 150, icon: '🎒' },
-        { name: 'Сталкерский плащ', description: 'Плащ сталкера: защита от радиации', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 3, stats: { defense: 15, radiation_resist: 25 }, durability: 140, max_durability: 140, price: 400, icon: '🧥' },
-        { name: 'Сталкерские сапоги', description: 'Сапоги для долгих переходов', type: 'armor', category: 'boots', rarity: 'rare', slot: 'boots', set_id: 3, stats: { defense: 12, radiation_resist: 5 }, durability: 130, max_durability: 130, price: 350, icon: '🥾' },
-        { name: 'Сталкерский пояс', description: 'Пояс с карго: повышает удачу', type: 'armor', category: 'accessory', rarity: 'rare', slot: 'accessory', set_id: 3, stats: { defense: 4, luck: 5, radiation_resist: 5 }, durability: 120, max_durability: 120, price: 380, icon: '🧭' },
-        { name: 'Сталкерские перчатки', description: 'Перчатки с защитой от радиации', type: 'armor', category: 'hands', rarity: 'rare', slot: 'hands', set_id: 3, stats: { defense: 10, radiation_resist: 15 }, durability: 130, max_durability: 130, price: 360, icon: '🧤' },
-        { name: 'Бандитская куртка', description: 'Куртка мародёра', type: 'armor', category: 'body', rarity: 'common', slot: 'body', set_id: 4, stats: { defense: 8 }, durability: 70, max_durability: 70, price: 90, icon: '🧥' },
-        { name: 'Бандитская бандана', description: 'Маска бандита', type: 'armor', category: 'head', rarity: 'common', slot: 'head', set_id: 4, stats: { defense: 4 }, durability: 60, max_durability: 60, price: 60, icon: '🥷' },
-        { name: 'Бандитские наручи', description: 'Наручи из подручных материалов', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 4, stats: { defense: 7 }, durability: 90, max_durability: 90, price: 110, icon: '🧤' },
+        { name: 'Противогаз', description: 'Респиратор: защита от радиации и инфекций', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 2, stats: { radiation_resist: 18, infection_resist: 12 }, durability: 100, max_durability: 100, price: 160, icon: '😷' },
+        { name: 'Медицинский халат', description: 'Халат полевого медика', type: 'armor', category: 'body', rarity: 'uncommon', slot: 'body', set_id: 2, stats: { defense: 4, radiation_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 240, icon: '🥼' },
+        { name: 'Медицинские перчатки', description: 'Перчатки с антисептиком', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 2, stats: { defense: 4, infection_resist: 10, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 120, icon: '🧤' },
+        { name: 'Медицинский рюкзак', description: 'Рюкзак с аптечками', type: 'armor', category: 'accessory', rarity: 'uncommon', slot: 'accessory', set_id: 2, stats: { defense: 3, infection_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 100, icon: '🎒' },
+        { name: 'Сталкерский плащ', description: 'Плащ сталкера: защита от радиации', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 3, stats: { defense: 15, radiation_resist: 25 }, durability: 140, max_durability: 140, price: 960, icon: '🧥' },
+        { name: 'Сталкерские сапоги', description: 'Сапоги для долгих переходов', type: 'armor', category: 'boots', rarity: 'rare', slot: 'boots', set_id: 3, stats: { defense: 12, radiation_resist: 5 }, durability: 130, max_durability: 130, price: 480, icon: '🥾' },
+        { name: 'Сталкерский пояс', description: 'Пояс с карго: повышает удачу', type: 'armor', category: 'accessory', rarity: 'rare', slot: 'accessory', set_id: 3, stats: { defense: 4, luck: 5, radiation_resist: 5 }, durability: 120, max_durability: 120, price: 400, icon: '🧭' },
+        { name: 'Сталкерские перчатки', description: 'Перчатки с защитой от радиации', type: 'armor', category: 'hands', rarity: 'rare', slot: 'hands', set_id: 3, stats: { defense: 10, radiation_resist: 15 }, durability: 130, max_durability: 130, price: 480, icon: '🧤' },
+        { name: 'Бандитская куртка', description: 'Куртка мародёра', type: 'armor', category: 'body', rarity: 'common', slot: 'body', set_id: 4, stats: { defense: 8 }, durability: 70, max_durability: 70, price: 60, icon: '🧥' },
+        { name: 'Бандитская бандана', description: 'Маска бандита', type: 'armor', category: 'head', rarity: 'common', slot: 'head', set_id: 4, stats: { defense: 4 }, durability: 60, max_durability: 60, price: 40, icon: '🥷' },
+        { name: 'Бандитские наручи', description: 'Наручи из подручных материалов', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 4, stats: { defense: 7 }, durability: 90, max_durability: 90, price: 120, icon: '🧤' },
         // Боеприпасы. Патроны — расходник для улучшения любого стрелкового оружия,
         // реактивные гранаты — только для реактивной пушки. Дорогие и редкие:
         // их выдают боссы 7-10 и рейды, поэтому пушка остаётся «козырной».
-        { name: 'Патроны', description: 'Патроны для стрелкового оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 20, icon: '🔩' },
-        { name: 'Реактивные гранаты', description: 'Реактивные гранаты для трубы', type: 'resource', category: 'ammo', rarity: 'rare', stackable: true, price: 120, icon: '🚀' },
+        { name: 'Патроны', description: 'Патроны для стрелкового оружия', type: 'resource', category: 'ammo', rarity: 'uncommon', stackable: true, price: 60, icon: '🔩' },
+        { name: 'Реактивные гранаты', description: 'Реактивные гранаты для трубы', type: 'resource', category: 'ammo', rarity: 'rare', stackable: true, price: 240, icon: '🚀' },
 
         // Материалы мастерской.
         //
@@ -1221,14 +1229,14 @@ async function seedDatabase() {
         // растёт так же. Металлолом и Древесина намеренно почти бесплатны —
         // иначе прокачка ножа (20 монет) обходилась бы дороже самого ножа,
         // и апгрейд перестал бы быть достижимым.
-        { name: 'Металлолом', description: 'Куски металла: основа для ремонта и улучшения', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 4, icon: '⚙️' },
-        { name: 'Древесина', description: 'Доски и брёвна: ходовая часть ремонта брони', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 4, icon: '🪵' },
-        { name: 'Пластик', description: 'Обломки пластика: ходовой материал улучшения', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 12, icon: '🔧' },
-        { name: 'Ткань', description: 'Лоскуты ткани для облицовки брони', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 10, icon: '🧵' },
-        { name: 'Провода', description: 'Проводка: нужна для заточки и облицовки', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 35, icon: '🔌' },
-        { name: 'Электроника', description: 'Микросхемы и платы: редкий материал улучшения', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 40, icon: '💾' },
-        { name: 'Титан', description: 'Титановые сплавы: материал для лучшей брони и оружия', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 120, icon: '⛏️' },
-        { name: 'Кристалл силы', description: 'Кристалл из бункера: ключ к легендарному снаряжению', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 400, icon: '💎' },
+        { name: 'Металлолом', description: 'Куски металла: основа для ремонта и улучшения', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 20, icon: '⚙️' },
+        { name: 'Древесина', description: 'Доски и брёвна: ходовая часть ремонта брони', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 20, icon: '🪵' },
+        { name: 'Пластик', description: 'Обломки пластика: ходовой материал улучшения', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 80, icon: '🔧' },
+        { name: 'Ткань', description: 'Лоскуты ткани для облицовки брони', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 80, icon: '🧵' },
+        { name: 'Провода', description: 'Проводка: нужна для заточки и облицовки', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 320, icon: '🔌' },
+        { name: 'Электроника', description: 'Микросхемы и платы: редкий материал улучшения', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 320, icon: '💾' },
+        { name: 'Титан', description: 'Титановые сплавы: материал для лучшей брони и оружия', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 2000, icon: '⛏️' },
+        { name: 'Кристалл силы', description: 'Кристалл из бункера: ключ к легендарному снаряжению', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 20000, icon: '💎' },
 
         // Лутовые ресурсы боссов.
         //
@@ -1238,8 +1246,8 @@ async function seedDatabase() {
         // отсутствовали в каталоге, а bosses.js loadItemTemplates молча
         // пропускает ненайденные предметы — из четырёх наград эти боссы
         // выдавали игроку две, и потери нигде не отображались.
-        { name: 'Химикаты', description: 'Лабораторная химия: редкий трофей мутантов', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 90, icon: '🧪' },
-        { name: 'Уран', description: 'Урановые стержни: трофей последнего бункера', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 350, icon: '⚛️' },
+        { name: 'Химикаты', description: 'Лабораторная химия: редкий трофей мутантов', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 2000, icon: '🧪' },
+        { name: 'Уран', description: 'Урановые стержни: трофей последнего бункера', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 20000, icon: '⚛️' },
         // Ключи боссов. Имя предмета — «Ключ от <имя босса>», и именно
         // bosses.required_key_id ссылается на предмет с таким именем
         // (см. wireBossKeys ниже). Хранятся ключи в boss_keys, а не в
@@ -1255,14 +1263,14 @@ async function seedDatabase() {
         { name: 'Ключ от Последнего стража', description: 'Открывает финальный бой с Последним стражем', type: 'key', category: 'key', rarity: 'legendary', stackable: true, price: 0, icon: '🗝️' },
         // Товары за звёзды (stars_price): монеты и звёзды — две валюты,
         // иначе звёзды из достижений и заданий некуда тратить.
-        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 500, stars_price: 5, icon: '🧠', stats: { energy: 25 } },
-        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 600, stars_price: 6, icon: '💥', stats: { energy: 30 } },
-        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 80, stars_price: 8, icon: '🏥', stats: { health: 50 } },
-        { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 1000, stars_price: 10, icon: '🛡️', stats: { radiation_cure: 5 } },
-        { name: 'Сыворотка мутанта', description: 'Мутантная сыворотка: энергия как у зверя', type: 'food', category: 'consumable', rarity: 'legendary', price: 2000, icon: '🧬', stats: { energy: 50 } },
-        { name: 'Реаниматор', description: 'Полное восстановление здоровья из госзапаса', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 150, stars_price: 50, icon: '💉', stats: { health: 100 } },
-        { name: 'Экзо-костюм', description: 'Тяжёлая броня из армейского склада', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 3000, stars_price: 60, icon: '🤖' },
-        { name: 'Броня стражей', description: 'Легендарная броня последнего убежища', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 15000, stars_price: 200, icon: '👑' }
+        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 5000, stars_price: 5, icon: '🧠', stats: { energy: 25 } },
+        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 5000, stars_price: 6, icon: '💥', stats: { energy: 30 } },
+        { name: 'Нано-аптечка', description: 'Мгновенное лечение', type: 'medicine', category: 'medicine', rarity: 'epic', price: 4000, stars_price: 8, icon: '🏥', stats: { health: 50 } },
+        { name: 'Радиа-кур', description: 'Полная защита от радиации', type: 'medicine', category: 'medicine', rarity: 'epic', price: 4000, stars_price: 10, icon: '🛡️', stats: { radiation_cure: 5 } },
+        { name: 'Сыворотка мутанта', description: 'Мутантная сыворотка: энергия как у зверя', type: 'food', category: 'consumable', rarity: 'legendary', price: 50000, icon: '🧬', stats: { energy: 50 } },
+        { name: 'Реаниматор', description: 'Полное восстановление здоровья из госзапаса', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 40000, stars_price: 50, icon: '💉', stats: { health: 100 } },
+        { name: 'Экзо-костюм', description: 'Тяжёлая броня из армейского склада', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 6000, stars_price: 60, icon: '🤖' },
+        { name: 'Броня стражей', description: 'Легендарная броня последнего убежища', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 60000, stars_price: 200, icon: '👑' }
     ];
 
     // UPSERT, а не DO NOTHING. Именно из-за DO NOTHING на проде оставались
@@ -1411,16 +1419,16 @@ async function seedBosses() {
     // Склеивать его из имени босса нельзя: ключи названы в родительном падеже
     // («Ключ от Бездомного психа»), а bosses.name — в именительном.
     const bosses = [
-        { name: 'Крысиный король', key: null, description: 'Огромная радиоактивная крыса', max_health: 500, damage: 2, key_drop_chance: 2.5, reward_experience: 100, reward_coins: 150, icon: '🐀', loot: ['Металлолом', 'Консервы', 'Ткань'] },
-        { name: 'Бездомный псих', key: 'Ключ от Бездомного психа', description: 'Сумасшедший выживший с монтировкой', max_health: 2000, damage: 3, key_drop_chance: 1.25, reward_experience: 200, reward_coins: 300, icon: '🔪', loot: ['Пластик', 'Бинт', 'Спирт', 'Топор'] },
-        { name: 'Медведь-мутант', key: 'Ключ от Медведя-мутанта', description: 'Радиоактивный медведь', max_health: 5000, damage: 4, key_drop_chance: 0.625, reward_experience: 400, reward_coins: 600, icon: '🐻', loot: ['Ткань', 'Аптечка', 'Пистолет', 'Обрез'] },
-        { name: 'Военный дрон', key: 'Ключ от Военного дрона', description: 'Боевой дрон с системой охраны', max_health: 10000, damage: 5, key_drop_chance: 0.3125, reward_experience: 800, reward_coins: 1200, icon: '🤖', loot: ['Патроны', 'Электроника', 'Армейская каска', 'Автомат'] },
-        { name: 'Главарь мародёров', key: 'Ключ от Главаря мародёров', description: 'Лидер банды радиоактивных бандитов', max_health: 20000, damage: 6, key_drop_chance: 0.15625, reward_experience: 1600, reward_coins: 2400, icon: '💀', loot: ['Провода', 'Дробовик', 'Бандитская куртка'] },
-        { name: 'Биологический ужас', key: 'Ключ от Биологического ужаса', description: 'Мутировавшее существо из лаборатории', max_health: 40000, damage: 7, key_drop_chance: 0.078125, reward_experience: 3000, reward_coins: 4500, icon: '👾', loot: ['Химикаты', 'Антидот', 'Бронежилет', 'Винтовка Мосина'] },
-        { name: 'Офицер-нежить', key: 'Ключ от Офицера-нежить', description: 'Бывший военный офицер', max_health: 70000, damage: 8, key_drop_chance: 0.0390625, reward_experience: 6000, reward_coins: 9000, icon: '💂', loot: ['Титан', 'Реактивные гранаты', 'Нано-аптечка', 'Военные перчатки'] },
-        { name: 'Гигантский монстр', key: 'Ключ от Гигантского монстра', description: 'Колоссальное существо', max_health: 100000, damage: 9, key_drop_chance: 0.01953125, reward_experience: 12000, reward_coins: 18000, icon: '🦖', loot: ['Титан', 'Снайперская винтовка', 'Сталкерский плащ', 'Реактивные гранаты'] },
-        { name: 'Профессор безумия', key: 'Ключ от Профессора безумия', description: 'Учёный, сошедший с ума', max_health: 150000, damage: 10, key_drop_chance: 0.009765625, reward_experience: 24000, reward_coins: 36000, icon: '🧑‍🔬', loot: ['Уран', 'Радиа-кур', 'Пулемёт', 'Экзо-костюм'] },
-        { name: 'Последний страж', key: 'Ключ от Последнего стража', description: 'Последний защитник бункера', max_health: 250000, damage: 12, key_drop_chance: 0.0048828125, reward_experience: 50000, reward_coins: 75000, icon: '🛡️', loot: ['Кристалл силы', 'Реактивная пушка', 'Броня стражей', 'Реактивные гранаты'] }
+        { name: 'Крысиный король', key: null, description: 'Огромная радиоактивная крыса', max_health: 500, damage: 2, key_drop_chance: 2.5, reward_experience: 50, reward_coins: 150, icon: '🐀', loot: ['Металлолом', 'Консервы', 'Ткань'] },
+        { name: 'Бездомный псих', key: 'Ключ от Бездомного психа', description: 'Сумасшедший выживший с монтировкой', max_health: 2000, damage: 3, key_drop_chance: 1.25, reward_experience: 100, reward_coins: 300, icon: '🔪', loot: ['Пластик', 'Бинт', 'Спирт', 'Топор'] },
+        { name: 'Медведь-мутант', key: 'Ключ от Медведя-мутанта', description: 'Радиоактивный медведь', max_health: 5000, damage: 4, key_drop_chance: 0.625, reward_experience: 200, reward_coins: 600, icon: '🐻', loot: ['Ткань', 'Аптечка', 'Пистолет', 'Обрез'] },
+        { name: 'Военный дрон', key: 'Ключ от Военного дрона', description: 'Боевой дрон с системой охраны', max_health: 10000, damage: 5, key_drop_chance: 0.3125, reward_experience: 400, reward_coins: 1200, icon: '🤖', loot: ['Патроны', 'Электроника', 'Армейская каска', 'Автомат'] },
+        { name: 'Главарь мародёров', key: 'Ключ от Главаря мародёров', description: 'Лидер банды радиоактивных бандитов', max_health: 20000, damage: 6, key_drop_chance: 0.15625, reward_experience: 800, reward_coins: 2400, icon: '💀', loot: ['Провода', 'Дробовик', 'Бандитская куртка'] },
+        { name: 'Биологический ужас', key: 'Ключ от Биологического ужаса', description: 'Мутировавшее существо из лаборатории', max_health: 40000, damage: 7, key_drop_chance: 0.078125, reward_experience: 1600, reward_coins: 4500, icon: '👾', loot: ['Химикаты', 'Антидот', 'Бронежилет', 'Винтовка Мосина'] },
+        { name: 'Офицер-нежить', key: 'Ключ от Офицера-нежить', description: 'Бывший военный офицер', max_health: 70000, damage: 8, key_drop_chance: 0.0390625, reward_experience: 3200, reward_coins: 9000, icon: '💂', loot: ['Титан', 'Реактивные гранаты', 'Нано-аптечка', 'Военные перчатки'] },
+        { name: 'Гигантский монстр', key: 'Ключ от Гигантского монстра', description: 'Колоссальное существо', max_health: 100000, damage: 9, key_drop_chance: 0.01953125, reward_experience: 6400, reward_coins: 18000, icon: '🦖', loot: ['Титан', 'Снайперская винтовка', 'Сталкерский плащ', 'Реактивные гранаты'] },
+        { name: 'Профессор безумия', key: 'Ключ от Профессора безумия', description: 'Учёный, сошедший с ума', max_health: 150000, damage: 10, key_drop_chance: 0.009765625, reward_experience: 12800, reward_coins: 30000, icon: '🧑‍🔬', loot: ['Уран', 'Радиа-кур', 'Пулемёт', 'Экзо-костюм'] },
+        { name: 'Последний страж', key: 'Ключ от Последнего стража', description: 'Последний защитник бункера', max_health: 250000, damage: 12, key_drop_chance: 0.0048828125, reward_experience: 25000, reward_coins: 50000, icon: '🛡️', loot: ['Кристалл силы', 'Реактивная пушка', 'Броня стражей', 'Реактивные гранаты'] }
     ];
 
     for (const [bossIndex, boss] of bosses.entries()) {

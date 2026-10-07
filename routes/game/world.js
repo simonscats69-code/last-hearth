@@ -22,6 +22,7 @@ const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryI
 const { DebuffAPI } = require('./debuffs');
 const { lootPoolCache, getLootCacheReady, buildLootCache, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
 const crypto = require('crypto');
+const { calculateCoinDrop } = require('../../public/shared/equipment.js');
 
 // Лимит слотов инвентаря — из public/shared/equipment.js, того же файла,
 // который читает браузер.
@@ -484,6 +485,27 @@ router.post('/search', async (req, res) => {
                     expGained *= 2;
                 }
             }
+            
+            // Выпадение монет при поиске (30% шанс, зависит от риска, удачи, уровня)
+            let coinDrop = null;
+            try {
+                const playerLuck = updatedPlayer.luck || 0;
+                const playerLevel = updatedPlayer.level || 1;
+                const riskTier = riskProfile.tier;
+                const coinDropResult = calculateCoinDrop({
+                    riskTier: riskTier,
+                    luck: playerLuck,
+                    playerLevel: playerLevel
+                });
+                if (coinDropResult) {
+                    coinDrop = coinDropResult.amount;
+                    // Добавляем монеты в баланс игрока
+                    setParts.push(`coins = COALESCE(coins, 0) + $${params.length + 1}`);
+                    params.push(coinDrop);
+                }
+            } catch (err) {
+                logger.warn('Ошибка расчёта выпадения монет', { error: err.message });
+            }
         }
         
         // Вычисляем урон от радиации
@@ -528,7 +550,7 @@ router.post('/search', async (req, res) => {
         }
         
         params.push(playerId);
-        const updateSql = `UPDATE players SET ${setParts.join(', ')} WHERE id = $${params.length} RETURNING energy, max_energy, last_energy_update`;
+        const updateSql = `UPDATE players SET ${setParts.join(', ')} WHERE id = $${params.length} RETURNING energy, max_energy, last_energy_update, coins`;
         
         const energyResult = await client.query(updateSql, params);
 
@@ -569,7 +591,8 @@ router.post('/search', async (req, res) => {
                     current: newEnergy,
                     max: newMaxEnergy,
                     restored: 0,
-                    last_update: lastEnergyUpdate
+                    last_update: lastEnergyUpdate,
+                    coins: energyResult.rows[0].coins
                 },
                 radiation: {
                     level: resultingRadiationLevel,
@@ -599,14 +622,16 @@ router.post('/search', async (req, res) => {
                 risk_adjusted_luck: riskAdjustedLuck,
                 drop_chance: dropChance,
                 rolled: rolled.toFixed(2),
-                exp_gained: expGained
+                exp_gained: expGained,
+                coin_drop: coinDrop
             },
             // Данные для лога: нужны только при успешном поиске.
             log: {
                 foundItemName: foundItem?.name || null,
                 effectiveLuck,
                 dropChance,
-                locationId: locationData.id
+                locationId: locationData.id,
+                coinDrop: coinDrop || null
             }
         };
     });

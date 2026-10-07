@@ -207,13 +207,38 @@
     /** Прибавка к урону/защите за каждый уровень улучшения (8%) */
     const UPGRADE_BONUS_PER_LEVEL = 0.08;
 
-    /** Износ за один удар (1 единица прочности за 5 ударов) */
-    const WEAR_PER_HIT = 0.2;
+    /** Износ за один удар (1 единица прочности за 2 удара) */
+    const WEAR_PER_HIT = 0.5;
+
+    /** Множитель стоимости ремонта (40% от стоимости за полный износ) */
+    const REPAIR_COST_MULTIPLIER = 0.4;
+
+    /** Множитель стоимости улучшения (80% от стоимости за уровень) */
+    const UPGRADE_COST_MULTIPLIER = 0.8;
 
     /** Порядок редкостей от обычной к легендарной */
     const RARITY_ORDER = Object.freeze(['common', 'uncommon', 'rare', 'epic', 'legendary']);
+
+    /** Множители базовой цены по типу предмета */
+    const PRICE_MULTIPLIER_BY_TYPE = Object.freeze({
+        weapon_melee: 1.0,
+        weapon_ranged: 1.3,
+        weapon_legendary: 2.5,
+        armor_body: 1.2,
+        armor_head: 0.8,
+        armor_hands: 0.6,
+        armor_legs: 0.7,
+        armor_boots: 0.6,
+        armor_accessory: 0.5,
+        medicine: 0.8,
+        resource: 0.4,
+ammo: 0.3,
+        food: 1.0,
+        key: 0,
+        consumable: 1.0
+    });
 /**
-     * Формула опыта до следующего уровня.
+ * Формула опыта до следующего уровня.
      * Начисление (сервер) и полоска опыта (клиент) обязаны считать одно и то же.
      *
      * @param {number} level текущий уровень
@@ -254,22 +279,54 @@
     /** Сколько энергии даёт одна покупка (обрезается по max_energy) */
     const ENERGY_PER_PURCHASE = 25;
 
-    /* ================= ШАНС ДРОПА =================
-     *
-     * Единая формула для клиента и сервера.
-     * luck 1 → 10.4%, 30 → 22%, 60 → 34%, 100 → 50%, 125+ → 60%
-     */
-
-    const GAME_CONFIG = Object.freeze({
-        BASE_DROP_CHANCE: 8,
-        MAX_DROP_CHANCE: 60,
-        MAX_LUCK: 150
-    });
-
     function calculateDropChance(luck) {
         if (luck <= 0) return 5;
         const chance = 10 + (luck * 0.4);
         return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
+    }
+
+    /**
+     * Расчёт выпадения монет при поиске лута.
+     * 
+     * Формула:
+     * - Базовый шанс дропа монет: 30%
+     * - Базовая сумма: 50 монет
+     * - Множитель за риск зоны: safe=1.0, warning=1.5, danger=2.0, deadly=3.0
+     * - Множитель за удачу: 1 + luck * 0.01
+     * - Максимум: 500 монет за один поиск
+     * 
+     * @param {object} options { riskTier: string, luck: number, playerLevel: number }
+     * @returns {object|null} { amount: number } или null если монеты не выпали
+     */
+    function calculateCoinDrop(options = {}) {
+        const { riskTier = 'safe', luck = 0, playerLevel = 1 } = options;
+        
+        const COIN_DROP_CHANCE = 30; // 30% базовый шанс
+        const BASE_COIN_AMOUNT = 50;
+        const MAX_COIN_AMOUNT = 500;
+        
+        // Проверка шанса
+        const roll = Math.random() * 100;
+        if (roll > COIN_DROP_CHANCE) {
+            return null;
+        }
+        
+        // Множители
+        const riskMultipliers = {
+            safe: 1.0,
+            warning: 1.5,
+            danger: 2.0,
+            deadly: 3.0
+        };
+        
+        const riskMultiplier = riskMultipliers[riskTier] || 1.0;
+        const luckMultiplier = 1 + (luck * 0.01);
+        const levelMultiplier = 1 + (playerLevel * 0.05);
+        
+        const amount = Math.floor(BASE_COIN_AMOUNT * riskMultiplier * luckMultiplier * levelMultiplier);
+        const finalAmount = Math.min(MAX_COIN_AMOUNT, Math.max(1, amount));
+        
+        return { amount: finalAmount };
     }
 
     /* ================= ОЗДОРОВЛЕНИЕ И ЛЕЧЕНИЕ =================
@@ -501,11 +558,11 @@ function resolveEquipmentSlot(item) {
 
     /** Базовая цена ремонта/улучшения, если у предмета price = 0 */
     const BASE_PRICE_BY_RARITY = Object.freeze({
-        common: 20,
-        uncommon: 80,
-        rare: 300,
-        epic: 2500,
-        legendary: 12000
+        common: 50,
+        uncommon: 200,
+        rare: 800,
+        epic: 5000,
+        legendary: 50000
     });
 
     /** Привести редкость к известному значению */
@@ -724,8 +781,8 @@ function resolveEquipmentSlot(item) {
         };
     }
 
-    /**
-     * Цена ремонта: 25% стоимости предмета за полный износ (было 50%).
+/**
+     * Цена ремонта: 40% стоимости предмета за полный износ.
      * @returns {number} монеты (0 — ремонт не нужен)
      */
     function calculateRepairCost(item) {
@@ -735,7 +792,7 @@ function resolveEquipmentSlot(item) {
 
         const rarity = normalizeRarity(item && item.rarity);
         const basePrice = Number(item && item.price) || BASE_PRICE_BY_RARITY[rarity];
-        return Math.max(1, Math.ceil((missing / info.max) * basePrice * 0.25));
+        return Math.max(1, Math.ceil((missing / info.max) * basePrice * REPAIR_COST_MULTIPLIER));
     }
 
     /**
@@ -748,7 +805,7 @@ function resolveEquipmentSlot(item) {
 
         const rarity = normalizeRarity(item && item.rarity);
         const basePrice = Number(item && item.price) || BASE_PRICE_BY_RARITY[rarity];
-        const coins = Math.max(20, Math.round(basePrice * 0.6 * (level + 1)));
+        const coins = Math.max(20, Math.round(basePrice * UPGRADE_COST_MULTIPLIER * (level + 1)));
 
         const materials = {};
         const primary = UPGRADE_MATERIAL_BY_RARITY[rarity];
@@ -921,6 +978,93 @@ function resolveEquipmentSlot(item) {
         MAX_MODIFICATION_LEVEL,
         GAME_CONFIG,
         calculateDropChance,
+        calculateCoinDrop,
+        getEquipmentStatValue,
+        sumEquipmentResistance,
+        normalizeResistanceToThreatPoints,
+        normalizeThreatLevelToPoints,
+        calculateRadiationDefense,
+        calculateInfectionDefense,
+        normalizeRarity,
+        getUpgradeLevel,
+        getUpgradeMultiplier,
+        isEquipmentItem,
+        getDurabilityInfo,
+        getEffectiveStatValue,
+        calculateDefenseTotal,
+        calculateEquipmentLuckBonus,
+        applyDefenseReduction,
+        wearEquipment,
+        WEAR_PER_HIT,
+        REPAIR_COST_MULTIPLIER,
+        UPGRADE_COST_MULTIPLIER,
+        PRICE_MULTIPLIER_BY_TYPE,
+        BASE_PRICE_BY_RARITY,
+        AMMO_ITEM_NAME,
+        ROCKET_ITEM_NAME,
+        MODIFICATIONS,
+        MODIFICATION_BY_STAT,
+        MAX_MODIFICATION_LEVEL,
+        GAME_CONFIG,
+        calculateDropChance,
+        calculateCoinDrop,
+        getEquipmentStatValue,
+        sumEquipmentResistance,
+        normalizeResistanceToThreatPoints,
+        normalizeThreatLevelToPoints,
+        calculateRadiationDefense,
+        calculateInfectionDefense,
+        normalizeRarity,
+        getUpgradeLevel,
+        getUpgradeMultiplier,
+        isEquipmentItem,
+        getDurabilityInfo,
+        getEffectiveStatValue,
+        calculateDefenseTotal,
+        calculateEquipmentLuckBonus,
+        applyDefenseReduction,
+        wearEquipment,
+        WEAR_PER_HIT,
+        REPAIR_COST_MULTIPLIER,
+        UPGRADE_COST_MULTIPLIER,
+        PRICE_MULTIPLIER_BY_TYPE,
+        BASE_PRICE_BY_RARITY,
+        AMMO_ITEM_NAME,
+        ROCKET_ITEM_NAME,
+        MODIFICATIONS,
+        MODIFICATION_BY_STAT,
+        MAX_MODIFICATION_LEVEL,
+        GAME_CONFIG,
+        calculateDropChance,
+        getEquipmentStatValue,
+        sumEquipmentResistance,
+        normalizeResistanceToThreatPoints,
+        normalizeThreatLevelToPoints,
+        calculateRadiationDefense,
+        calculateInfectionDefense,
+        normalizeRarity,
+        getUpgradeLevel,
+        getUpgradeMultiplier,
+        isEquipmentItem,
+        getDurabilityInfo,
+        getEffectiveStatValue,
+        calculateDefenseTotal,
+        calculateEquipmentLuckBonus,
+        applyDefenseReduction,
+        wearEquipment,
+        WEAR_PER_HIT,
+        REPAIR_COST_MULTIPLIER,
+        UPGRADE_COST_MULTIPLIER,
+        PRICE_MULTIPLIER_BY_TYPE,
+        BASE_PRICE_BY_RARITY,
+        AMMO_ITEM_NAME,
+        ROCKET_ITEM_NAME,
+        MODIFICATIONS,
+        MODIFICATION_BY_STAT,
+        MAX_MODIFICATION_LEVEL,
+        GAME_CONFIG,
+        calculateDropChance,
+        calculateCoinDrop,
         getEquipmentStatValue,
         sumEquipmentResistance,
         normalizeResistanceToThreatPoints,
