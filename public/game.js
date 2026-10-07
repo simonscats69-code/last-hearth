@@ -3827,7 +3827,21 @@ function renderWorkshopModifications(entry, data) {
 function renderWorkshopSlot(entry, data) {
     const { slot, item, durability, repair_cost: repairCost, upgrade_cost: upgradeCost } = entry;
     const materials = upgradeCost?.materials || {};
-
+    
+    // Форматируем стоимость ремонта с разбивкой
+    const repairTooltip = repairCost > 0 
+        ? `Ремонт полностью: 🪙 ${formatNumber(repairCost)}` 
+        : 'Полностью отремонтировано';
+    
+    // Форматируем стоимость улучшения с разбивкой
+    let upgradeTooltip = 'Максимальный уровень';
+    if (upgradeCost) {
+        const materialsText = Object.entries(upgradeCost.materials || {})
+            .map(([name, qty]) => `  ${name} ×${qty}`)
+            .join('\n');
+        upgradeTooltip = `Улучшение до +${item.upgrade_level + 1}:\n🪙 ${formatNumber(upgradeCost.coins)}\n${materialsText}`;
+    }
+    
     const materialText = Object.entries(materials)
         .map(([name, quantity]) => {
             const owned = Number(data.materials?.[name] || 0);
@@ -3835,7 +3849,7 @@ function renderWorkshopSlot(entry, data) {
             return `${enough ? '✅' : '❌'} ${escapeHtml(name)} ${owned}/${quantity}`;
         })
         .join('<br>');
-
+    
     return `
         <div class="inv-workshop-slot">
             <div class="inv-workshop-head">
@@ -3845,10 +3859,12 @@ function renderWorkshopSlot(entry, data) {
                 </span>
             </div>
             <div class="inv-workshop-actions">
-                <button class="ws-btn" data-ws-repair="${slot}" ${repairCost > 0 ? '' : 'disabled'}>
+                <button class="ws-btn" data-ws-repair="${slot}" ${repairCost > 0 ? '' : 'disabled'} 
+                        title="${escapeHtml(repairTooltip)}">
                     🔧 Ремонт · 🪙 ${formatNumber(repairCost)}
                 </button>
-                <button class="ws-btn" data-ws-upgrade="${slot}" ${upgradeCost ? '' : 'disabled'}>
+                <button class="ws-btn" data-ws-upgrade="${slot}" ${upgradeCost ? '' : 'disabled'}
+                        title="${escapeHtml(upgradeTooltip)}">
                     ⬆️ Улучшение${upgradeCost ? ` · 🪙 ${formatNumber(upgradeCost.coins)}` : ' · максимум'}
                 </button>
             </div>
@@ -4190,6 +4206,12 @@ function renderInventory(items) {
  * Отдельная функция, а не window.prompt: промпт в Telegram WebApp выглядит
  * чужеродно и на некоторых платформах не поддерживается.
  */
+/**
+ * Диалог продажи стека: выбор количества + превью цены
+ * @param {Object} item - предмет
+ * @param {number} amount - всего в стеке
+ * @param {number} unitPrice - цена за 1 шт.
+ */
 function showStackSellDialog(item, amount, unitPrice) {
     const modal = document.getElementById('modal');
     const title = document.getElementById('modal-title');
@@ -4199,30 +4221,83 @@ function showStackSellDialog(item, amount, unitPrice) {
         return;
     }
 
-    title.textContent = `Продать: ${item.name || 'предмет'}`;
-    message.textContent = `В стопке ${amount} шт. по ${unitPrice} 🪙. Сколько продать?`;
+    title.textContent = '💰 Продажа: ' + escapeHtml(item.name || 'предмет');
+    
+    // Создаем контент с полем ввода количества
+    message.innerHTML = `
+        <div class="sell-dialog">
+            <p class="sell-dialog-info">В стопке <strong>${amount}</strong> шт. по <strong>${unitPrice} 🪙</strong> за шт.</p>
+            <div class="sell-dialog-quantity">
+                <label for="sell-quantity">Количество:</label>
+                <input type="number" id="sell-quantity" class="sell-quantity-input" 
+                       value="1" min="1" max="${amount}" step="1">
+                <div class="sell-quantity-buttons">
+                    <button type="button" class="btn-sell-qty" data-action="min">1</button>
+                    <button type="button" class="btn-sell-qty" data-action="half">${Math.floor(amount / 2)}</button>
+                    <button type="button" class="btn-sell-qty" data-action="max">${amount}</button>
+                </div>
+            </div>
+            <div class="sell-dialog-preview">
+                <span>Итого: </span>
+                <strong id="sell-total-price">${unitPrice} 🪙</strong>
+            </div>
+        </div>
+    `;
+    
     openModalElement(modal);
-
-    const close = hideModal;
+    
+    // Обработчики для кнопок количества
+    const quantityInput = document.getElementById('sell-quantity');
+    const totalPriceEl = document.getElementById('sell-total-price');
+    
+    const updatePreview = () => {
+        let qty = parseInt(quantityInput.value, 10) || 1;
+        qty = Math.max(1, Math.min(amount, qty));
+        quantityInput.value = qty;
+        totalPriceEl.textContent = unitPrice * qty + ' 🪙';
+    };
+    
+    quantityInput.addEventListener('input', updatePreview);
+    quantityInput.addEventListener('change', updatePreview);
+    
+    message.querySelectorAll('.btn-sell-qty').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.action;
+            if (action === 'min') quantityInput.value = 1;
+            else if (action === 'half') quantityInput.value = Math.floor(amount / 2);
+            else if (action === 'max') quantityInput.value = amount;
+            updatePreview();
+        });
+    });
+    
+    // Кнопки действий
     const actions = [
-        { label: `Продать 1 шт. (+${unitPrice} 🪙)`, onClick: () => sellItem(item.index, 1) },
-        { label: `Продать всё (+${unitPrice * amount} 🪙)`, onClick: () => sellItem(item.index, amount) },
-        { label: 'Отмена', onClick: () => {} }
+        { label: 'Отмена', class: 'modal-action-btn secondary', onClick: () => hideModal() },
+        { label: 'Продать', class: 'modal-action-btn primary', onClick: () => {
+            const qty = parseInt(quantityInput.value, 10) || 1;
+            const q = Math.max(1, Math.min(amount, qty));
+            hideModal();
+            sellItem(item.index, q);
+        }}
     ];
-
+    
     const box = document.createElement('div');
     box.className = 'modal-actions';
+    box.style.marginTop = '16px';
     for (const action of actions) {
         const button = document.createElement('button');
-        button.className = 'modal-action-btn';
+        button.className = 'modal-action-btn ' + (action.class || '');
         button.textContent = action.label;
-        bindClickOnce(button, `sell-stack-${item.index}-${action.label}`, () => {
-            close();
+        bindClickOnce(button, 'sell-stack-' + item.index + '-' + action.label, () => {
+            hideModal();
             action.onClick();
         });
         box.appendChild(button);
     }
     message.appendChild(box);
+    
+    // Фокус на инпут
+    setTimeout(() => quantityInput?.focus(), 100);
 }
 
 /** Снаряжение не стакается, поэтому выбор количества нужен только для стопок */
@@ -4729,42 +4804,136 @@ function renderWeapons(weapons) {
         return;
     }
     
-    for (const weapon of weapons) {
-        const item = document.createElement('div');
-        item.className = `weapon-item ${weapon.is_broken ? 'is-broken' : ''}`;
-        item.dataset.index = weapon.index;
-
-        const durabilityText = weapon.is_broken
-            ? '⚠️ сломано — отремонтируйте'
-            : (weapon.durability < weapon.max_durability
-                ? `🔧 ${Number(weapon.durability)}/${Number(weapon.max_durability)}`
-                : '');
-
-        // Тип оружия важен: ближний бой бьёт боссов, дальний — людей в PvP.
-        const rangeLabel = weapon.category === 'melee'
-            ? '<div class="weapon-tag melee">ближний бой · +40% к боссам</div>'
-            : '<div class="weapon-tag ranged">дальний бой · +25% в PvP</div>';
-
-        // Название/иконка приходят из инвентаря игрока (серверные данные) —
-        // без экранирования это XSS-вектор.
-        item.innerHTML = `
-            <span class="weapon-icon">${escapeHtml(weapon.icon)}</span>
-            <div class="weapon-info">
-                <div class="weapon-name">${escapeHtml(weapon.name)}</div>
-                <div class="weapon-damage">Урон: +${Number(weapon.damage) || 0}</div>
-                ${durabilityText ? `<div class="weapon-durability">${escapeHtml(durabilityText)}</div>` : ''}
-                ${rangeLabel}
-            </div>
-            <span class="weapon-rarity ${escapeAttribute(weapon.rarity)}">${escapeHtml(weapon.rarity)}</span>
-        `;
-
-        if (weapon.is_broken) {
-            item.classList.add('disabled');
-        } else {
-            item.addEventListener('click', () => attackWithWeapon(weapon.index));
+    // Состояние фильтров
+    const filterState = {
+        type: 'all',      // 'all', 'melee', 'ranged'
+        minDamage: 0,
+        maxDurability: 100,
+        onlyUsable: false
+    };
+    
+    // Создаем панель фильтров
+    const filterPanel = document.createElement('div');
+    filterPanel.className = 'weapon-filter-panel';
+    filterPanel.innerHTML = `
+        <div class="filter-row">
+            <label>Тип:</label>
+            <select id="filter-type" class="filter-select">
+                <option value="all">Все типы</option>
+                <option value="melee">🗡️ Ближний бой</option>
+                <option value="ranged">🏹 Дальний бой</option>
+            </select>
+        </div>
+        <div class="filter-row">
+            <label>Мин. урон:</label>
+            <input type="number" id="filter-min-damage" class="filter-input" min="0" placeholder="0">
+            <label>Макс. износ:</label>
+            <input type="number" id="filter-max-durability" class="filter-input" min="0" max="100" placeholder="100%">
+            <label class="filter-checkbox">
+                <input type="checkbox" id="filter-only-usable"> Только рабочее
+            </label>
+        </div>
+    `;
+    list.appendChild(filterPanel);
+    
+    // Создаем контейнер для списка оружия
+    const weaponsContainer = document.createElement('div');
+    weaponsContainer.id = 'weapons-container';
+    list.appendChild(weaponsContainer);
+    
+    // Функция фильтрации
+    function applyFilters() {
+        filterState.type = document.getElementById('filter-type').value;
+        filterState.minDamage = parseInt(document.getElementById('filter-min-damage').value, 10) || 0;
+        filterState.maxDurability = parseInt(document.getElementById('filter-max-durability').value, 10) || 100;
+        filterState.onlyUsable = document.getElementById('filter-only-usable').checked;
+        
+        renderFilteredWeapons();
+    };
+    
+    // Функция рендера отфильтрованного списка
+    function renderFilteredWeapons() {
+        const filtered = weapons.filter(w => {
+            if (filterState.type !== 'all' && w.category !== filterState.type) return false;
+            if (Number(w.damage || 0) < filterState.minDamage) return false;
+            
+            const durability = EquipmentShared.getDurabilityInfo ? 
+                EquipmentShared.getDurabilityInfo({max_durability: w.max_durability, durability: w.durability}) 
+                : {current: w.durability, max: w.max_durability, isBroken: !w.durability || w.durability <= 0};
+            
+            if (filterState.onlyUsable && (durability.isBroken || (durability.current / durability.max * 100) > filterState.maxDurability)) return false;
+            if (!durability.isBroken && (durability.current / durability.max * 100) > filterState.maxDurability) return false;
+            
+            return true;
+        });
+        
+        const container = document.getElementById('weapons-container');
+        if (!container) return;
+        container.innerHTML = '';
+        
+        if (!filtered || filtered.length === 0) {
+            container.innerHTML = '<div class="empty-message">Нет оружия, соответствующего фильтрам</div>';
+            return;
         }
-        list.appendChild(item);
-    }
+        
+        for (const weapon of filtered) {
+            const item = document.createElement('div');
+            item.className = `weapon-item ${weapon.is_broken ? 'is-broken' : ''}`;
+            item.dataset.index = weapon.index;
+            
+            const durabilityInfo = EquipmentShared.getDurabilityInfo ? 
+                EquipmentShared.getDurabilityInfo({max_durability: weapon.max_durability, durability: weapon.durability}) 
+                : {current: weapon.durability, max: weapon.max_durability, isBroken: !weapon.durability || weapon.durability <= 0};
+            
+            const durabilityText = durabilityInfo.isBroken
+                ? '⚠️ сломано — отремонтируйте'
+                : (durabilityInfo.current < durabilityInfo.max
+                    ? `🔧 ${Number(durabilityInfo.current)}/${Number(durabilityInfo.max)}`
+                    : '');
+            
+            const rangeLabel = weapon.category === 'melee'
+                ? '<div class="weapon-tag melee">ближний бой · +40% к боссам</div>'
+                : '<div class="weapon-tag ranged">дальний бой · +25% в PvP</div>';
+            
+            const itemEl = document.createElement('div');
+            itemEl.className = `weapon-item ${weapon.is_broken ? 'is-broken' : ''}`;
+            itemEl.dataset.index = weapon.index;
+            
+            itemEl.innerHTML = `
+                <span class="weapon-icon">${escapeHtml(weapon.icon)}</span>
+                <div class="weapon-info">
+                    <div class="weapon-name">${escapeHtml(weapon.name)}</div>
+                    <div class="weapon-damage">Урон: +${Number(weapon.damage) || 0}</div>
+                    ${durabilityText ? `<div class="weapon-durability">${escapeHtml(durabilityText)}</div>` : ''}
+                    ${rangeLabel}
+                </div>
+                <span class="weapon-rarity ${escapeAttribute(weapon.rarity)}">${escapeHtml(weapon.rarity)}</span>
+            `;
+            
+            if (weapon.is_broken) {
+                itemEl.classList.add('disabled');
+            } else {
+                itemEl.addEventListener('click', () => attackWithWeapon(weapon.index));
+            }
+            list.appendChild(itemEl);
+        }
+    };
+    
+    // Добавляем слушатели фильтров
+    setTimeout(() => {
+        const typeSelect = document.getElementById('filter-type');
+        const minDamageInput = document.getElementById('filter-min-damage');
+        const maxDurabilityInput = document.getElementById('filter-max-durability');
+        const onlyUsableCheckbox = document.getElementById('filter-only-usable');
+        
+        if (typeSelect) typeSelect.addEventListener('change', applyFilters);
+        if (minDamageInput) minDamageInput.addEventListener('input', applyFilters);
+        if (maxDurabilityInput) maxDurabilityInput.addEventListener('input', applyFilters);
+        if (onlyUsableCheckbox) onlyUsableCheckbox.addEventListener('change', applyFilters);
+    }, 0);
+    
+    // Начальный рендер
+    applyFilters();
 }
 
 /**
