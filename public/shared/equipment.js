@@ -207,6 +207,9 @@
     /** Прибавка к урону/защите за каждый уровень улучшения (8%) */
     const UPGRADE_BONUS_PER_LEVEL = 0.08;
 
+    /** Износ за один удар (1 единица прочности за 5 ударов) */
+    const WEAR_PER_HIT = 0.2;
+
     /** Порядок редкостей от обычной к легендарной */
     const RARITY_ORDER = Object.freeze(['common', 'uncommon', 'rare', 'epic', 'legendary']);
 /**
@@ -538,11 +541,12 @@ function resolveEquipmentSlot(item) {
      * Текущая и максимальная прочность предмета.
      * Старые записи инвентаря не знали про durability: отсутствующее значение
      * трактуем как «предмет ещё не изнашивался» (то есть максимум).
+     * Базовая прочность по умолчанию: 500 (было 100).
      * @returns {{current:number,max:number,isBroken:boolean,ratio:number}}
      */
     function getDurabilityInfo(item) {
         const maxRaw = Number(item && (item.max_durability || item.durability));
-        const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 100));
+        const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 500));
 
         if (!isEquipmentItem(item)) {
             return { current: max, max, isBroken: false, ratio: 1 };
@@ -704,12 +708,14 @@ function resolveEquipmentSlot(item) {
      * Износ предмета: возвращает НОВЫЙ объект (исходный не мутируется).
      * Прочность не уходит в минус: при нуле предмет «сломан» — бонусов не даёт
      * (см. getEffectiveStatValue), но остаётся в инвентаре, его можно починить.
+     * 
+     * Износ за удар: 0.2 единицы (1 единица за 5 ударов).
      */
     function wearEquipment(item, amount = 1) {
         if (!isEquipmentItem(item)) return item;
 
         const info = getDurabilityInfo(item);
-        const wear = Math.max(0, Math.round(Number(amount) || 0));
+        const wear = Math.max(0, Math.round(Number(amount) * WEAR_PER_HIT));
 
         return {
             ...item,
@@ -719,7 +725,7 @@ function resolveEquipmentSlot(item) {
     }
 
     /**
-     * Цена ремонта: половина стоимости предмета за полный износ.
+     * Цена ремонта: 25% стоимости предмета за полный износ (было 50%).
      * @returns {number} монеты (0 — ремонт не нужен)
      */
     function calculateRepairCost(item) {
@@ -729,7 +735,7 @@ function resolveEquipmentSlot(item) {
 
         const rarity = normalizeRarity(item && item.rarity);
         const basePrice = Number(item && item.price) || BASE_PRICE_BY_RARITY[rarity];
-        return Math.max(1, Math.ceil((missing / info.max) * basePrice * 0.5));
+        return Math.max(1, Math.ceil((missing / info.max) * basePrice * 0.25));
     }
 
     /**
@@ -931,6 +937,7 @@ function resolveEquipmentSlot(item) {
         calculateEquipmentLuckBonus,
         applyDefenseReduction,
         wearEquipment,
+        WEAR_PER_HIT,
         calculateRepairCost,
         calculateUpgradeCost,
         calculateScrapYield,

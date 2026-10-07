@@ -4466,49 +4466,75 @@ function renderBosses(bosses) {
     }
 }
 
-async function startSoloBossFight(bossId) {
-    try {
-        const result = await apiRequest('/api/game/bosses/start', {
-            method: 'POST',
-            body: { boss_id: bossId }
-        });
+async function renderPlayerEquipmentInBossFight() {
+    const equipmentContainer = document.getElementById('player-equipment-slots');
+    if (!equipmentContainer) return;
+    
+    const equipment = gameState.player?.equipment || {};
+    const normalizedEquipment = normalizeEquipment(equipment);
+    
+    // Слоты в порядке отображения
+    const slots = ['head', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
+    const slotNames = {
+        head: 'Голова',
+        body: 'Тело',
+        hands: 'Руки',
+        legs: 'Ноги',
+        boots: 'Ноги',
+        weapon: 'Оружие',
+        accessory: 'Аксес.'
+    };
+    const slotIcons = {
+        head: '🪖',
+        body: '🧥',
+        hands: '🧤',
+        legs: '👖',
+        boots: '🥾',
+        weapon: '⚔️',
+        accessory: '🧭'
+    };
+    
+    for (const slot of slots) {
+        const item = normalizedEquipment[slot];
+        const slotEl = equipmentContainer.querySelector(`[data-slot="${slot}"]`);
+        const itemEl = slotEl?.querySelector('.slot-item');
+        const durabilityEl = slotEl?.querySelector('.slot-durability');
         
-        const bossData = result?.data || result;
-
-        if (result.success && bossData.boss) {
-            startBossFight(bossData.boss, bossData.time_remaining_ms);
+        if (!slotEl) continue;
+        
+        if (item) {
+            slotEl.classList.remove('empty');
+            const durability = equipmentRules.getDurabilityInfo(item);
+            const isBroken = durability.isBroken;
+            
+            slotEl.classList.toggle('broken', isBroken);
+            
+            // Иконка предмета
+            const itemIcon = item.icon || (slotIcons[slot] || '📦');
+            if (itemEl) {
+                itemEl.textContent = itemIcon;
+                itemEl.title = `${item.name}${item.upgrade_level ? ` +${item.upgrade_level}` : ''}`;
+            }
+            
+            // Прочность
+            if (durabilityEl) {
+                const percent = Math.round((durability.current / Math.max(1, durability.max)) * 100);
+                let barClass = 'slot-durability-bar';
+                if (percent <= 0) barClass += ' broken';
+                else if (percent <= 20) barClass += ' critical';
+                else if (percent <= 50) barClass += ' low';
+                
+                durabilityEl.innerHTML = `<div class="${barClass}" style="width: ${percent}%"></div>`;
+                durabilityEl.title = `Прочность: ${durability.current}/${durability.max} (${percent}%)`;
+            }
         } else {
-            showModal('⚠️ Внимание', bossData.error || result.error || result.message || 'Не удалось начать бой');
+            slotEl.classList.add('empty');
+            slotEl.classList.remove('broken');
+            if (itemEl) itemEl.textContent = slotIcons[slot] || '📦';
+            if (durabilityEl) durabilityEl.innerHTML = '';
         }
-    } catch (error) {
-        console.error('Start solo boss fight error:', error);
-        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать бой с боссом'));
     }
 }
-
-async function startMassBossFight(bossId) {
-    try {
-        const result = await apiRequest('/api/game/bosses/raid/start', {
-            method: 'POST',
-            body: { boss_id: bossId }
-        });
-
-        if (result.success) {
-            await loadBosses();
-            switchBossesTab('mass');
-        } else {
-            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось начать массовый бой');
-        }
-    } catch (error) {
-        console.error('Start mass boss fight error:', error);
-        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать массовый бой'));
-    }
-}
-
-/**
- * Начало боя с боссом - обновлённый UI с кнопками атаки
- */
-function startBossFight(boss, timeRemainingMs = null) {
     gameState.currentBoss = boss;
     gameState.bossFightEndTime = timeRemainingMs ? Date.now() + timeRemainingMs : null;
     const isFreeAttack = Boolean(gameState.buffs?.free_energy);
@@ -4577,12 +4603,59 @@ function startBossFight(boss, timeRemainingMs = null) {
         }
     }
     
+    // Рендерим слоты экипировки игрока
+    renderPlayerEquipmentInBossFight();
+    
     // Показываем экран боя
     showScreen('boss-fight');
-}
+    showScreen('boss-fight');
 
 /**
  * Обновление таймера боя с боссом
+ */
+
+
+async function startSoloBossFight(bossId) {
+    try {
+        const result = await apiRequest('/api/game/bosses/start', {
+            method: 'POST',
+            body: { boss_id: bossId }
+        });
+        
+        const bossData = result?.data || result;
+
+        if (result.success && bossData.boss) {
+            startBossFight(bossData.boss, bossData.time_remaining_ms);
+        } else {
+            showModal('⚠️ Внимание', bossData.error || result.error || result.message || 'Не удалось начать бой');
+        }
+    } catch (error) {
+        console.error('Start solo boss fight error:', error);
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать бой с боссом'));
+    }
+}
+
+async function startMassBossFight(bossId) {
+    try {
+        const result = await apiRequest('/api/game/bosses/raid/start', {
+            method: 'POST',
+            body: { boss_id: bossId }
+        });
+
+        if (result.success) {
+            await loadBosses();
+            switchBossesTab('mass');
+        } else {
+            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось начать массовый бой');
+        }
+    } catch (error) {
+        console.error('Start mass boss fight error:', error);
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать массовый бой'));
+    }
+}
+
+/**
+ * Рендерит слоты экипировки игрока в экране боя с боссом
  */
 function updateBossFightTimer() {
     const timerText = document.getElementById('boss-timer-text');
@@ -5036,6 +5109,9 @@ function warnAboutBrokenEquipment(brokenSlots) {
     if (!Array.isArray(brokenSlots) || brokenSlots.length === 0) return;
 
     showNotification('⚠️ Снаряжение сломано — почините его в мастерской (инвентарь → снаряжение)', 'warning', 5000);
+    
+    // Перерисуем слоты экипировки в бою
+    renderPlayerEquipmentInBossFight();
 }
 
 /**
@@ -7362,26 +7438,111 @@ function generateScreens() {
                 <h2>⚔️ Бой с боссом</h2>
             </div>
             <div class="boss-fight-container">
-                <div class="boss-fight-header">
-                    <div class="boss-icon-large" id="boss-icon">👹</div>
-                    <div class="boss-name-large" id="boss-name">Босс</div>
-                </div>
-                <div class="boss-hp-section">
-                    <div class="boss-hp-bar">
-                        <div class="boss-hp-fill" id="boss-health-bar" style="width:100%"></div>
+                <!-- Игрок слева, босс справа -->
+                <div class="battle-field">
+                    <!-- Игрок -->
+                    <div class="combatant player-side">
+                        <div class="combatant-info">
+                            <div class="combatant-name" id="player-name-display">Игрок</div>
+                            <div class="combatant-stats">
+                                <div class="stat-row">
+                                    <span class="stat-label">❤️</span>
+                                    <span class="stat-value" id="player-hp-display">100/100</span>
+                                </div>
+                                <div class="stat-row">
+                                    <span class="stat-label">⚡</span>
+                                    <span class="stat-value" id="player-energy-display">100/100</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Слоты экипировки (RPG-style) -->
+                        <div class="equipment-slots player-equipment" id="player-equipment-slots">
+                            <div class="equipment-slot" data-slot="head" title="Шлем">
+                                <span class="slot-icon">🪖</span>
+                                <span class="slot-name">Голова</span>
+                                <div class="slot-item" data-slot="head"></div>
+                                <div class="slot-durability" data-slot="head"></div>
+                            </div>
+                            <div class="equipment-row">
+                                <div class="equipment-slot" data-slot="body" title="Нагрудник">
+                                    <span class="slot-icon">🧥</span>
+                                    <span class="slot-name">Тело</span>
+                                    <div class="slot-item" data-slot="body"></div>
+                                    <div class="slot-durability" data-slot="body"></div>
+                                </div>
+                                <div class="equipment-slot" data-slot="hands" title="Перчатки">
+                                    <span class="slot-icon">🧤</span>
+                                    <span class="slot-name">Руки</span>
+                                    <div class="slot-item" data-slot="hands"></div>
+                                    <div class="slot-durability" data-slot="hands"></div>
+                                </div>
+                            </div>
+                            <div class="equipment-row">
+                                <div class="equipment-slot" data-slot="legs" title="Ноги">
+                                    <span class="slot-icon">👖</span>
+                                    <span class="slot-name">Ноги</span>
+                                    <div class="slot-item" data-slot="legs"></div>
+                                    <div class="slot-durability" data-slot="legs"></div>
+                                </div>
+                                <div class="equipment-slot" data-slot="boots" title="Сапоги">
+                                    <span class="slot-icon">🥾</span>
+                                    <span class="slot-name">Ноги</span>
+                                    <div class="slot-item" data-slot="boots"></div>
+                                    <div class="slot-durability" data-slot="boots"></div>
+                                </div>
+                            </div>
+                            <div class="equipment-row">
+                                <div class="equipment-slot" data-slot="weapon" title="Оружие">
+                                    <span class="slot-icon">⚔️</span>
+                                    <span class="slot-name">Оружие</span>
+                                    <div class="slot-item" data-slot="weapon"></div>
+                                    <div class="slot-durability" data-slot="weapon"></div>
+                                </div>
+                                <div class="equipment-slot" data-slot="accessory" title="Аксессуар">
+                                    <span class="slot-icon">🧭</span>
+                                    <span class="slot-name">Аксес.</span>
+                                    <div class="slot-item" data-slot="accessory"></div>
+                                    <div class="slot-durability" data-slot="accessory"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="boss-hp-text" id="boss-health-text">0/0</div>
+                    
+                    <!-- Центр - VS -->
+                    <div class="battle-center">
+                        <div class="vs-label">VS</div>
+                        <div class="boss-timer" id="boss-fight-timer" style="display:none">
+                            <span>⏱️</span>
+                            <span id="boss-timer-text">00:00:00</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Босс справа -->
+                    <div class="combatant boss-side">
+                        <div class="boss-fight-header">
+                            <div class="boss-icon-large" id="boss-icon">👹</div>
+                            <div class="boss-name-large" id="boss-name">Босс</div>
+                        </div>
+                        <div class="boss-hp-section">
+                            <div class="boss-hp-bar">
+                                <div class="boss-hp-fill" id="boss-health-bar" style="width:100%"></div>
+                            </div>
+                            <div class="boss-hp-text" id="boss-health-text">0/0</div>
+                        </div>
+                    </div>
                 </div>
-                <div class="boss-timer" id="boss-fight-timer" style="display:none">
-                    <span>⏱️</span>
-                    <span id="boss-timer-text">00:00:00</span>
-                </div>
+                
+                <!-- Лог боя -->
                 <div class="fight-log" id="fight-log"></div>
+                
+                <!-- Энергия и действия -->
                 <div class="fight-energy-display">
                     <span class="energy-label">⚡ Энергия:</span>
                     <span id="boss-energy-text">0/100</span>
                     <span class="energy-used" id="boss-energy-used"></span>
                 </div>
+                
                 <div class="boss-actions">
                     <button class="btn attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать</button>
                     <div class="attack-progress-container" id="attack-progress-container" style="display:none"></div>
