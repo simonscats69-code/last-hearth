@@ -38,7 +38,10 @@ function getTelegramId() {
     if (tg) {
         const id = tg.initDataUnsafe?.user?.id;
         // Используем != null для проверки на null/undefined (включая 0)
-        if (id != null) return String(id);
+        if (id != null) {
+            console.log('[getTelegramId] Got ID from SDK:', id);
+            return String(id);
+        }
     }
 
     // SDK недоступен — пробуем подписанные данные из fragment прямой ссылки
@@ -46,7 +49,10 @@ function getTelegramId() {
     if (initData) {
         try {
             const user = JSON.parse(new URLSearchParams(initData).get('user') || '{}');
-            if (user?.id != null) return String(user.id);
+            if (user?.id != null) {
+                console.log('[getTelegramId] Got ID from hash:', user.id);
+                return String(user.id);
+            }
         } catch (e) {
             // повреждённый fragment — падаем в fallback ниже
         }
@@ -57,9 +63,12 @@ function getTelegramId() {
     // без валидного initData, то есть фактически без авторизации.
     if (DEV_FALLBACK_ENABLED) {
         // Fallback для разработки — только при явном DEV-флаге с сервера
-        return localStorage.getItem('telegram_id') || '123456789';
+        const fallbackId = localStorage.getItem('telegram_id') || '123456789';
+        console.log('[getTelegramId] Using DEV fallback:', fallbackId);
+        return fallbackId;
     }
 
+    console.warn('[getTelegramId] No Telegram ID available');
     return null;
 }
 
@@ -293,6 +302,7 @@ window.getRarityClassByLevel = getRarityClassByLevel;
 window.getPlayerEmoji = getPlayerEmoji;
 window.formatTime = formatTime;
 window.sellItem = sellItem;
+window.showBossFight = showBossFight;
 /**
  * ============================================
  * ОБРАБОТЧИКИ ОШИБОК
@@ -431,6 +441,20 @@ function delay(attempt) {
     return new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
 }
 
+/**
+ * Promise с таймаутом
+ * @param {Promise} promise - промис для обертывания
+ * @param {number} ms - таймаут в мс
+ * @param {string} errorMessage - сообщение об ошибке при таймауте
+ * @returns {Promise}
+ */
+function withTimeout(promise, ms, errorMessage = 'Таймаут операции') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(errorMessage)), ms))
+    ]);
+}
+
 /** Создание таймаута для индикатора загрузки */
 function createLoadingTimeout(showLoading) {
     if (showLoading !== false) {
@@ -484,7 +508,10 @@ function getInitDataFromHash() {
 function getInitData() {
     // 1. Основной источник: SDK Telegram (инжектится клиентом или telegram-web-app.js)
     const fromTelegram = window.Telegram?.WebApp?.initData || null;
-    if (fromTelegram) return fromTelegram;
+    if (fromTelegram) {
+        console.log('[getInitData] Got initData from Telegram SDK');
+        return fromTelegram;
+    }
 
     // 2. Фоллбэк: fragment прямой ссылки (если SDK не загрузился)
     const fromHash = getInitDataFromHash();
@@ -546,6 +573,8 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         : '';
     const url = `${API_BASE}${normalizedEndpoint.startsWith('/') ? '' : '/'}${normalizedEndpoint}${queryString}`;
 
+    console.log('[apiRequest]', method, url, 'retries:', retries, 'silent:', silent);
+
     // Получаем initData для авторизации
     const initData = getInitData();
 
@@ -573,11 +602,14 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         let timeoutId = null;
         let loadingTimeout = null;
 
+        // Позволяем переопределять таймаут через options.timeout (мс)
+        const requestTimeout = fetchOptions.timeout ?? 8000;
+
         try {
             loadingTimeout = createLoadingTimeout(fetchOptions.showLoading);
 
             const controller = new AbortController();
-            timeoutId = setTimeout(() => controller.abort(), 8000);
+            timeoutId = setTimeout(() => controller.abort(), requestTimeout);
 
             // Внешняя отмена (API.cancelRequest) тоже должна разрывать fetch.
             // Раньше контроллер создавался здесь и никогда не доходил до
@@ -633,8 +665,10 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 invalidateAllCaches();
             }
 
+            console.log('[apiRequest] Success:', method, url);
             return data;
         } catch (error) {
+            console.error('[apiRequest] Error:', method, url, error.message);
             const isLastAttempt = attempt === maxAttempts;
             const isExternalAbort = Boolean(externalSignal?.aborted);
 
@@ -2007,7 +2041,6 @@ function backToBosses() {
 }
 
 window.goToMain = goToMain;
-window.showBossFight = showBossFight;
 window.backToBosses = backToBosses;
 /**
  * Игровые системы
@@ -2035,6 +2068,8 @@ window.backToBosses = backToBosses;
 async function waitForTelegramWebApp(maxWait = 5000) {
     const startTime = Date.now();
     
+    console.log('[waitForTelegramWebApp] Starting wait, maxWait:', maxWait);
+    
     return new Promise((resolve, reject) => {
         // Данные доступны либо из SDK Telegram, либо из fragment прямой ссылки
         const isReady = () => Boolean(
@@ -2043,6 +2078,7 @@ async function waitForTelegramWebApp(maxWait = 5000) {
         
         // Если уже загружен - сразу успех
         if (isReady()) {
+            console.log('[waitForTelegramWebApp] Already ready');
             resolve();
             return;
         }
@@ -2050,11 +2086,13 @@ async function waitForTelegramWebApp(maxWait = 5000) {
         // Функция проверки
         const check = () => {
             if (isReady()) {
+                console.log('[waitForTelegramWebApp] Ready after', Date.now() - startTime, 'ms');
                 resolve();
                 return;
             }
             
             if (Date.now() - startTime > maxWait) {
+                console.error('[waitForTelegramWebApp] Timeout after', maxWait, 'ms');
                 reject(new Error('Telegram WebApp не загрузился'));
                 return;
             }
@@ -2099,15 +2137,15 @@ function renderInitError(icon, title, text) {
  */
 async function initGame() {
     // Страховка от «вечной загрузки»: если инициализация не завершилась за
-    // 30 секунд (зависший запрос, сбой SDK и т.п.), показываем пользователю
+    // 20 секунд (зависший запрос, сбой SDK и т.п.), показываем пользователю
     // причину и кнопку перезапуска вместо бесконечного лоадера.
     const initWatchdog = setTimeout(() => {
         if (gameState.player) return; // игра уже запущена
         const loadingScreen = document.getElementById('loading-screen');
         if (!loadingScreen || loadingScreen.style.display === 'none') return;
-        console.error('[initGame] Watchdog: инициализация не завершилась за 30 секунд');
+        console.error('[initGame] Watchdog: инициализация не завершилась за 20 секунд');
         renderInitError('⏳', 'Загрузка затянулась', 'Сервер долго не отвечает. Проверь интернет и попробуй ещё раз.');
-    }, 30000);
+    }, 20000);
 
     // Обработчик для отлова unhandled rejections во время инициализации
     const unhandledRejectionHandler = (event) => {
@@ -2117,11 +2155,14 @@ async function initGame() {
     window.addEventListener('unhandledrejection', unhandledRejectionHandler);
 
     try {
+        console.log('[initGame] Starting initialization...');
         // Ждём пока загрузится Telegram WebApp.
         // В production отсутствие Telegram — фатально: продолжать нельзя,
         // иначе запросы уйдут без валидного initData.
         try {
+            console.log('[initGame] Waiting for Telegram WebApp...');
             await waitForTelegramWebApp();
+            console.log('[initGame] Telegram WebApp ready');
         } catch (waitError) {
             if (!DEV_FALLBACK_ENABLED) {
                 console.error('[initGame] Telegram WebApp не загрузился:', waitError);
@@ -2137,11 +2178,14 @@ async function initGame() {
         
         // Инициализируем Telegram WebApp
         if (window.Telegram?.WebApp) {
+            console.log('[initGame] Calling WebApp.ready() and expand()');
             window.Telegram.WebApp.ready();
             window.Telegram.WebApp.expand();
         }
         
+        console.log('[initGame] Getting Telegram ID...');
         const telegramId = getTelegramId();
+        console.log('[initGame] Telegram ID:', telegramId);
         if (!telegramId) {
             renderInitError('😿', 'Ошибка', 'Не удалось определить пользователя Telegram. Откройте игру через бота @LastHearthBot');
             return;
@@ -2150,7 +2194,9 @@ async function initGame() {
         // Подписанные initData обязательны (в production — всегда).
         // localStorage НЕ используется: initData имеет auth_date и протухает,
         // поэтому сохранённая копия — это не валидный вход.
+        console.log('[initGame] Getting initData...');
         const initData = getInitData();
+        console.log('[initGame] initData present:', !!initData);
         if (!initData) {
             renderInitError('😿', 'Ошибка авторизации', 'Откройте игру через бота @LastHearthBot');
             return;
@@ -2159,16 +2205,27 @@ async function initGame() {
         // Проверяем/создаём игрока.
         // Сервер берёт user.id ИЗ ПОДПИСАННЫХ initData и сверяет его с
         // переданным telegram_id — подделать чужой ID невозможно.
-        await apiRequest('/verify-telegram', {
-            method: 'POST',
-            body: { telegram_id: telegramId, initData }
-        });
+        console.log('[initGame] Verifying with server...');
+        await withTimeout(
+            apiRequest('/verify-telegram', {
+                method: 'POST',
+                body: { telegram_id: telegramId, initData }
+            }),
+            10000,
+            'Таймаут проверки авторизации'
+        );
+        console.log('[initGame] Server verification OK');
         
         // loadProfile() и loadLocations() сами гасят свои ошибки (не бросают
         // наружу), чтобы падение перерисовки не выглядело как провал операции.
         // Отдельные try/catch здесь были лишними и никогда не срабатывали.
-        await loadProfile();
-        await loadLocations();
+        console.log('[initGame] Loading profile...');
+        await withTimeout(loadProfile(), 15000, 'Таймаут загрузки профиля');
+        console.log('[initGame] Profile loaded, player:', !!gameState.player);
+        
+        console.log('[initGame] Loading locations...');
+        await withTimeout(loadLocations(), 15000, 'Таймаут загрузки локаций');
+        console.log('[initGame] Locations loaded');
 
         // Проверяем, успешно ли загрузился профиль
         if (!gameState.player) {
@@ -2177,6 +2234,7 @@ async function initGame() {
             return;
         }
 
+        console.log('[initGame] Profile OK, showing main screen...');
         // Показываем основной контейнер: в index.html он скрыт (display: none),
         // чтобы до окончания инициализации игрок не видел полупустой интерфейс
         const gameContent = document.getElementById('game-content');
@@ -2189,6 +2247,7 @@ async function initGame() {
 
         // Скрываем экран загрузки
         hideLoadingScreen();
+        console.log('[initGame] Initialization complete!');
 
         // Запускаем обновление энергии
         safeSetInterval(updateEnergyDisplay, 60000); // Каждую минуту
