@@ -25,7 +25,19 @@ const {
     safeStringify,
     PlayerHelper: playerHelper
 } = require('../../utils/serverApi');
-const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory, applyAutoHeal } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory, applyAutoHeal } = helpers;
 // Валидация ID — общая, см. utils/validate.js.
 const { validateId } = require('../../utils/validate');
 // Файл правил предметов импортируется один раз: брать его и по имени

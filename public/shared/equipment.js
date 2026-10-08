@@ -279,6 +279,53 @@ ammo: 0.3,
     /** Сколько энергии даёт одна покупка (обрезается по max_energy) */
     const ENERGY_PER_PURCHASE = 25;
 
+    /* ================= ИГРОВАЯ КОНФИГУРАЦИЯ =================
+     *
+     * Единый источник конфигурации для клиента и сервера.
+     * Все числовые константы игрового баланса собраны здесь,
+     * чтобы избежать расхождений между клиентом и сервером.
+     */
+    const GAME_CONFIG = Object.freeze({
+        // Шанс дропа
+        BASE_DROP_CHANCE: 8,
+        MAX_DROP_CHANCE: 60,
+        MAX_LUCK: 150,
+
+        // Регенерация
+        ENERGY_REGEN_INTERVAL_MS: 60 * 1000,
+        HEALTH_REGEN_INTERVAL_MS: 90 * 1000,
+        HEALTH_REGEN_CAP_RATIO: 0.6,
+        DEFAULT_AUTO_HEAL_THRESHOLD: 35,
+        AUTO_HEAL_THRESHOLD_MIN: 10,
+        AUTO_HEAL_THRESHOLD_MAX: 90,
+
+        // Износ и ремонт
+        WEAR_PER_HIT: 0.5,
+        REPAIR_COST_MULTIPLIER: 0.4,
+        UPGRADE_COST_MULTIPLIER: 0.8,
+        BASE_DURABILITY: 500,
+
+        // Цены
+        BASE_PRICE_BY_RARITY: {
+            common: 50,
+            uncommon: 200,
+            rare: 800,
+            epic: 5000,
+            legendary: 50000
+        },
+
+        // Дроп монет
+        COIN_DROP_CHANCE: 30,
+        BASE_COIN_AMOUNT: 50,
+        MAX_COIN_AMOUNT: 500,
+        RISK_MULTIPLIERS: {
+            safe: 1.0,
+            warning: 1.5,
+            danger: 2.0,
+            deadly: 3.0
+        }
+    });
+
     function calculateDropChance(luck) {
         if (luck <= 0) return 5;
         const chance = 10 + (luck * 0.4);

@@ -13,7 +13,19 @@ const { transaction } = require('../../db/database');
 // DebuffAPI ловит вызывающий: world.js пишет их в лог сам, status.js
 // отдаёт наружу через handleError (5xx без внутреннего текста).
 const { safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
-const { normalizeInventory, consumeInventoryItem } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+const { normalizeInventory, consumeInventoryItem } = helpers;
 const { 
     DEBUFF_TYPES, 
     DEBUFF_CONFIG, 

@@ -15,7 +15,19 @@ const router = express.Router();
 // для чтений, которым транзакция не нужна — удобнее ручного pool.connect().
 const { transaction, withClient, isConnectionError } = require('../../db/database');
 const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger, unauthorized } = require('../../utils/serverApi');
-const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask, applyAutoHeal } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask, applyAutoHeal } = helpers;
 // Единый источник правды: тот же, что в world.js и items.js. Без проверки
 // лимита награда за босса довела бы инвентарь больше 100 слотов.
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;

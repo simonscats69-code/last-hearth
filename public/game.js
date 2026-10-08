@@ -1953,16 +1953,42 @@ function goToMain() {
 }
 
 /**
- * Показать экран боя с боссом
- * @param {number} bossId - ID босса
+ * Начать бой с боссом
+ * @param {Object} boss - объект босса
+ * @param {number} [timeRemainingMs] - оставшееся время в мс (опционально)
  */
-function showBossFight(bossId) {
-    const boss = gameState.bosses?.find(b => b.id === bossId);
-    if (boss) {
-        // Используем существующую функцию startBossFight
-        startBossFight(boss);
+async function startBossFight(boss, timeRemainingMs = null) {
+    if (!lockAction('attackBoss')) return;
+    
+    try {
+        const result = await apiRequest('/api/game/bosses/attack', {
+            method: 'POST',
+            body: { boss_id: boss.id }
+        });
+        
+        if (result.success) {
+            // Запускаем бой
+            const bossData = result.data || result;
+            gameState.currentBoss = {
+                ...bossData,
+                time_remaining: timeRemainingMs || bossData.time_remaining_ms || 0
+            };
+            showScreen('boss-fight');
+            renderBossFightUI();
+            playSound('boss_start');
+        } else {
+            showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось начать бой');
+        }
+    } catch (error) {
+        console.error('Start boss fight error:', error);
+        showModal('⚠️ Ошибка', clientErrorMessage(error, 'Не удалось начать бой'));
+    } finally {
+        unlockAction('attackBoss');
     }
 }
+
+/**
+ * Показать экран боя с боссом
 
 /**
  * Вернуться к списку боссов
@@ -3618,8 +3644,6 @@ async function sellItem(itemIndex) {
     } finally {
         unlockAction('sellItem');
     }
-}
-
 // ============================================================================
 // СИСТЕМА ИНВЕНТАРЯ
 // ============================================================================
@@ -9944,3 +9968,4 @@ function showLocationUnlockCelebration(locationName) {
 // Экспорт функций для глобального доступа
 window.showKeyRewardCelebration = showKeyRewardCelebration;
 window.showDamageEffect = showDamageEffect;
+}

@@ -18,7 +18,19 @@ const {
     calculateLocationRiskProfile
 } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = helpers;
 const { DebuffAPI } = require('./debuffs');
 const { lootPoolCache, getLootCacheReady, buildLootCache, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
 const crypto = require('crypto');

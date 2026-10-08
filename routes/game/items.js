@@ -9,7 +9,21 @@ const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, transaction } = require('../../db/database');
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
-const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory, equipmentRules, getSetBonuses, trackCollectedItems, consumeInventoryItem } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+
+// Импортируемые функции
+const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory, equipmentRules, getSetBonuses, trackCollectedItems, consumeInventoryItem } = helpers;
 
 /**
  * Лимит слотов инвентаря.

@@ -10,7 +10,19 @@ const express = require('express');
 const router = express.Router();
 const { transaction } = require('../../db/database');
 const { handleError, logger } = require('../../utils/serverApi');
-const { equipmentRules, normalizeEquipment, normalizeInventory } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+const { equipmentRules, normalizeEquipment, normalizeInventory } = helpers;
 
 const VALID_SLOTS = equipmentRules.COMBAT_SLOTS;
 

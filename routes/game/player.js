@@ -7,10 +7,22 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
 const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
-const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth } = helpers;
+const equipmentRules = require('../../public/shared/equipment.js');
 // Правила лечения (реген, порог автолечения) — из общего файла, который
 // читает и браузер.
-const equipmentRules = require('../../public/shared/equipment.js');
 
 
 // C-6: Whitelist разрешённых полей для обновления профиля

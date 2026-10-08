@@ -9,7 +9,19 @@ const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { validateId } = require('../../utils/validate');
 const { DebuffAPI } = require('./debuffs');
-const { buildPlayerStatus, normalizeInventory, consumeInventoryItem } = require('../../utils/game-helpers');
+
+// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+let gameHelpers = null;
+function getGameHelpers() {
+    if (!gameHelpers) {
+        gameHelpers = require('@last-hearth/core');
+    }
+    return gameHelpers;
+}
+
+// Экспортируемые функции через getGameHelpers()
+const helpers = getGameHelpers();
+const { buildPlayerStatus, normalizeInventory, consumeInventoryItem } = helpers;
 
 
 
