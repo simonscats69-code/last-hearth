@@ -482,12 +482,6 @@ async function createTables() {
             UNIQUE(clan_id, is_active)
         );
     `);
-
-    // Таблица PvP матчей — УДАЛЕНА: используется pvp_battles
-    // Для обратной совместимости удаляем старую таблицу если существует
-    await query(`DROP TABLE IF EXISTS pvp_matches CASCADE`);
-
-    // Таблица PvP кулдаунов
     await query(`
         CREATE TABLE IF NOT EXISTS pvp_cooldowns (
             id SERIAL PRIMARY KEY,
@@ -628,6 +622,10 @@ async function runMigrations() {
     
     // Удаляем временную функцию
     await queryTx(`DROP FUNCTION IF EXISTS convert_player_id_to_bigint(TEXT)`);
+
+    // One-time cleanup: удаляем устаревшую таблицу pvp_matches (заменена на pvp_battles)
+    // Запускается один раз при миграции, а не при каждом старте createTables()
+    await queryTx(`DROP TABLE IF EXISTS pvp_matches CASCADE`);
 
     // Миграция: FK player_boss_progress.player_id должен ссылаться на players(id),
     // а НЕ на players(telegram_id).

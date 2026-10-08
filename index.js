@@ -313,6 +313,13 @@ app.use(helmet({
             ],
         },
     },
+    permissionsPolicy: {
+        features: {
+            'device-orientation': ["'none'"],
+            'accelerometer': ["'none'"],
+            'gyroscope': ["'none'"],
+        }
+    },
     crossOriginEmbedderPolicy: false,
     frameguard: false
 }));
