@@ -18,8 +18,11 @@ RUN npm ci
 # Копируем исходный код
 COPY . .
 
-# Собираем все workspace пакеты
-RUN npm run build
+# Собираем пакеты в правильном порядке: core -> db -> server -> client
+RUN npm run -w @last-hearth/core -- build && \
+    npm run -w @last-hearth/db -- build && \
+    npm run -w @last-hearth/server -- build && \
+    npm run -w @last-hearth/client -- build
 
 # Не удаляем dev deps — npm prune ломает workspace symlinks
 

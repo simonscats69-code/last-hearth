@@ -7,6 +7,8 @@
     "packages/*"
   ],
   "scripts": {
+    "start": "node index.js",
+    "postinstall": "npm run build",
     "build": "npm run -ws -- build",
     "dev": "npm run -ws -- dev",
     "build:all": "npm run -ws -- build",
