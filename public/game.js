@@ -1989,6 +1989,15 @@ async function startBossFight(boss, timeRemainingMs = null) {
 
 /**
  * Показать экран боя с боссом
+ * @param {number} bossId - ID босса
+ */
+function showBossFight(bossId) {
+    const boss = gameState.bosses?.find(b => b.id === bossId);
+    if (boss) {
+        // Используем существующую функцию startBossFight
+        startBossFight(boss);
+    }
+}
 
 /**
  * Вернуться к списку боссов
