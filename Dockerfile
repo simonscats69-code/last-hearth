@@ -16,7 +16,7 @@ COPY packages/client/package*.json ./packages/client/
 RUN npm install --include=dev
 
 # Явная проверка/создание workspace-symlinks (фоллбек для старых npm)
-RUN node -e "
+RUN node <<'EOF'
 const fs = require('fs');
 const path = require('path');
 const pkgs = ['core', 'db', 'server', 'client'];
@@ -31,7 +31,7 @@ pkgs.forEach(p => {
     console.log('Symlink exists:', link);
   }
 });
-"
+EOF
 
 # Копируем исходный код
 COPY . .
@@ -43,7 +43,7 @@ RUN npm run -w @last-hearth/core -- build && \
     npm run -w @last-hearth/client -- build
 
 # Верификация: убеждаемся, что dist-файлы на месте
-RUN node -e "
+RUN node <<'EOF'
 const fs = require('fs');
 const path = require('path');
 const required = [
@@ -63,7 +63,7 @@ required.forEach(f => {
   }
 });
 console.log('All build outputs verified');
-"
+EOF
 
 # Не удаляем dev deps — npm prune ломает workspace symlinks
 
