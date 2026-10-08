@@ -12,6 +12,9 @@ COPY packages/db/package*.json ./packages/db/
 COPY packages/server/package*.json ./packages/server/
 COPY packages/client/package*.json ./packages/client/
 
+# Копируем исходный код ДО установки зависимостей (postinstall запускает build)
+COPY . .
+
 # Устанавливаем зависимости — npm install лучше работает с workspaces чем npm ci
 RUN npm install --include=dev
 
@@ -32,9 +35,6 @@ pkgs.forEach(p => {
   }
 });
 EOF
-
-# Копируем исходный код
-COPY . .
 
 # Собираем пакеты в правильном порядке: core -> db -> server -> client
 RUN npm run -w @last-hearth/core -- build && \
