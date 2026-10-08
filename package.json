@@ -21,6 +21,9 @@
     "typecheck": "npm run -ws -- typecheck",
     "clean": "npm run -ws -- clean"
   },
+  "dependencies": {
+    "express-async-errors": "^3.1.1"
+  },
   "devDependencies": {
     "typescript": "^5.3.3",
     "eslint": "^8.57.0",
