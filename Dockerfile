@@ -18,7 +18,13 @@ COPY . .
 # Устанавливаем зависимости — npm install лучше работает с workspaces чем npm ci
 RUN npm install --include=dev
 
-# Явная проверка/создание workspace-symlinks (фоллбек для старых npm)
+# Собираем пакеты в правильном порядке: core -> db -> server -> client
+RUN npm run -w @last-hearth/core -- build && \
+    npm run -w @last-hearth/db -- build && \
+    npm run -w @last-hearth/server -- build && \
+    npm run -w @last-hearth/client -- build
+
+# Явная проверка/создание workspace-symlinks ПОСЛЕ всех билдов
 RUN node <<'EOF'
 const fs = require('fs');
 const path = require('path');
@@ -26,21 +32,24 @@ const pkgs = ['core', 'db', 'server', 'client'];
 pkgs.forEach(p => {
   const link = path.join('/app/node_modules/@last-hearth', p);
   const target = path.join('/app/packages', p);
-  if (!fs.existsSync(link)) {
-    fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(target, link, 'dir');
-    console.log('Created symlink:', link, '->', target);
+  // Удаляем старый (если есть) и создаём заново
+  if (fs.existsSync(link) || fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    fs.rmSync(link);
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, 'dir');
+  console.log('Created symlink:', link, '->', target);
+  
+  // Верификация: проверяем, что через симлинк виден dist
+  const distPath = path.join(link, 'dist', 'index.js');
+  if (fs.existsSync(distPath)) {
+    console.log('VERIFIED:', distPath, '->', fs.realpathSync(distPath));
   } else {
-    console.log('Symlink exists:', link);
+    console.error('MISSING via symlink:', distPath);
+    process.exit(1);
   }
 });
 EOF
-
-# Собираем пакеты в правильном порядке: core -> db -> server -> client
-RUN npm run -w @last-hearth/core -- build && \
-    npm run -w @last-hearth/db -- build && \
-    npm run -w @last-hearth/server -- build && \
-    npm run -w @last-hearth/client -- build
 
 # Верификация: убеждаемся, что dist-файлы на месте
 RUN node <<'EOF'
