@@ -9,4 +9,9 @@ mkdir -p /app/data
 chmod 777 /app/data
 chown -R $(id -u):$(id -g) /app/data 2>/dev/null || true
 
-exec "$@"
+echo "=== Node version ==="
+node --version
+
+echo "=== Starting node index.js ==="
+# Запускаем явно, stderr в stdout, чтобы Bothost захватил ошибку
+exec node index.js 2>&1
