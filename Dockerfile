@@ -15,8 +15,8 @@ COPY . .
 # Собираем все workspace пакеты
 RUN npm run build
 
-# Удаляем dev dependencies в каждом workspace и в корне
-RUN npm prune --omit=dev --workspaces --include-workspace-root
+# Не удаляем dev deps — npm prune ломает workspace symlinks
+# Dev deps в продакшн образе допустимы (небольшой overhead)
 
 # Делаем entrypoint исполняемым
 RUN chmod +x /app/entrypoint.sh
