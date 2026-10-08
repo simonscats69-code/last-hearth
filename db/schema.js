@@ -3,7 +3,7 @@
  * Все CREATE TABLE, INDEX, ALTER TABLE здесь
  */
 
-const { query } = require('./database');
+const { query, transaction } = require('./database');
 const pg = require('pg');
 
 // utils/game-helpers подключается лениво и ОДИН раз на весь файл.
