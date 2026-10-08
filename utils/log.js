@@ -59,29 +59,26 @@ const transports = [
     })
 ];
 
-// NODE_ENV=test (так задаёт jest) — консоль не нужна: негативные тесты
-// валидации намеренно зовут validateTelegramInitData с пустыми параметрами,
-// и их warn-сообщения засоряют вывод тестов вместо отчёта jest.
-if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
-    transports.push(
-        new winston.transports.Console({
-            format: winston.format.combine(
-                winston.format.colorize(),
-                winston.format.timestamp({ format: 'HH:mm:ss' }),
-                winston.format.printf(({ level, message, timestamp, stack }) => {
-                    let msg = message;
-                    if (typeof message === 'object' && message !== null) {
-                        msg = JSON.stringify(message, null, 2);
-                    }
-                    if (stack) {
-                        return `${timestamp} ${level}: ${msg}\n${stack}`;
-                    }
-                    return `${timestamp} ${level}: ${msg}`;
-                })
-            )
-        })
-    );
-}
+// ВСЕГДА добавляем консольный транспорт (и в production тоже),
+// иначе в контейнерах логи не видны вовсе (файлы не читаются без exec).
+transports.push(
+    new winston.transports.Console({
+        format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.timestamp({ format: 'HH:mm:ss' }),
+            winston.format.printf(({ level, message, timestamp, stack }) => {
+                let msg = message;
+                if (typeof message === 'object' && message !== null) {
+                    msg = JSON.stringify(message, null, 2);
+                }
+                if (stack) {
+                    return `${timestamp} ${level}: ${msg}\n${stack}`;
+                }
+                return `${timestamp} ${level}: ${msg}`;
+            })
+        )
+    })
+);
 
 const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
