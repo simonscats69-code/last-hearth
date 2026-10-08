@@ -125,7 +125,11 @@ child.on('error', (err) => {
   process.exit(1);
 });
 
-child.on('exit', (code, signal) => {
+// 'close', а НЕ 'exit': событие 'exit' может сработать ДО того, как данные
+// из pipe stdout/stderr дочернего процесса будут доставлены — тогда сразу
+// после process.exit(code) вывод child (включая причину падения) терялся.
+// 'close' срабатывает после закрытия всех потоков — весь вывод уже получен.
+child.on('close', (code, signal) => {
   console.error('[PROCESS EXIT] code=', code, 'signal=', signal);
   if (code !== 0 && code !== null) {
     process.exit(code);

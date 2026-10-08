@@ -653,4 +653,10 @@ async function startServer() {
     }
 }
 
-startServer();
+// Запускаем сервер ТОЛЬКО при прямом запуске (node index.js).
+// Когда index.js require'ится извне (проверка загрузки модулей в entrypoint
+// wrapper'е), main() не должен выполняться: иначе require-проверка занимает
+// порт, а реальный экземпляр дочернего процесса падает с EADDRINUSE.
+if (require.main === module) {
+    startServer();
+}
