@@ -5,12 +5,18 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Устанавливаем зависимости
+# Устанавливаем зависимости для сборки (включая dev)
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # Копируем весь проект
 COPY . .
+
+# Собираем workspace пакеты
+RUN npm run build
+
+# Удаляем dev dependencies после сборки
+RUN npm prune --omit=dev
 
 # Делаем entrypoint исполняемым
 RUN chmod +x /app/entrypoint.sh
