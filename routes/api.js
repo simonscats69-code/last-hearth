@@ -31,3 +31,5 @@ const DAILY_TASK_TYPES = [
     { type: 'boss_damage', target: 100, reward: { coins: 100, stars: 2 } },
     { type: 'collect_items', target: 5, reward: { coins: 75, stars: 1 } }
 ];
+
+module.exports = router;
