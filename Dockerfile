@@ -6,7 +6,9 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # Устанавливаем все зависимости (включая dev для сборки)
+# Сначала копируем package.json файлы всех workspace пакетов
 COPY package*.json ./
+COPY packages/*/package*.json ./packages/*/
 RUN npm ci
 
 # Копируем исходный код
