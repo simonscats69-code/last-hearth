@@ -175,8 +175,10 @@ function isSameHostOrSubdomain(origin, baseUrl) {
     return originHost === baseHost || originHost.endsWith('.' + baseHost);
 }
 
-// Разрешённые источники для CORS
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://last-hearth.bothost.ru';
+// Разрешённые источники для CORS.
+// Fallback — актуальный домен мини-аппа (старый last-hearth.bothost.ru
+// больше не привязан к сервису); в панели Bothost задаётся FRONTEND_URL.
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://bot-1791489863-8300-greatcatsby.bothost.tech';
 const GITHUB_PAGES_URL = 'https://simonscats69-code.github.io';
 const ALLOWED_ORIGINS = [
     'https://telegram.org',
