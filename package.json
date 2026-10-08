@@ -22,7 +22,8 @@
     "clean": "npm run -ws -- clean"
   },
   "dependencies": {
-    "express-async-errors": "^3.1.1"
+    "express-async-errors": "^3.1.1",
+    "pg": "^8.11.3"
   },
   "devDependencies": {
     "typescript": "^5.3.3",
