@@ -1974,7 +1974,6 @@ async function startBossFight(boss, timeRemainingMs = null) {
                 time_remaining: timeRemainingMs || bossData.time_remaining_ms || 0
             };
             showScreen('boss-fight');
-            renderBossFightUI();
             playSound('boss_start');
         } else {
             showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось начать бой');
@@ -4579,10 +4578,18 @@ async function renderPlayerEquipmentInBossFight() {
     if (!equipmentContainer) return;
     
     const equipment = gameState.player?.equipment || {};
-    const normalizedEquipment = normalizeEquipment(equipment);
     
     // Слоты в порядке отображения
     const slots = ['head', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
+    // Нормализация своими силами (серверной normalizeEquipment здесь нет):
+    // оставляем только валидные объекты-предметы по списку слотов.
+    const normalizedEquipment = {};
+    for (const slot of slots) {
+        const item = equipment[slot];
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+            normalizedEquipment[slot] = item;
+        }
+    }
     const slotNames = {
         head: 'Голова',
         body: 'Тело',
