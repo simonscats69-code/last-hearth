@@ -1,6 +1,31 @@
 #!/bin/sh
 set -e
 
+echo "=== Fixing workspace symlinks ==="
+node <<'EOF'
+const fs = require('fs');
+const path = require('path');
+const pkgs = ['core', 'db', 'server', 'client'];
+pkgs.forEach(p => {
+  const link = path.join('/app/node_modules/@last-hearth', p);
+  const target = path.join('/app/packages', p);
+  if (fs.existsSync(link) || fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    fs.rmSync(link);
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, 'dir');
+  console.log('Created symlink:', link, '->', target);
+  
+  const distPath = path.join(link, 'dist', 'index.js');
+  if (fs.existsSync(distPath)) {
+    console.log('VERIFIED:', distPath, '->', fs.realpathSync(distPath));
+  } else {
+    console.error('MISSING via symlink:', distPath);
+    process.exit(1);
+  }
+});
+EOF
+
 echo "=== Список файлов в /app ==="
 ls -la /app
 echo "=== Конец списка ==="
@@ -16,7 +41,6 @@ echo "=== Starting node index.js with early error capture ==="
 exec node -e "
 const { spawn } = require('child_process');
 
-// Сначала проверяем, что index.js загружается без синтаксических ошибок
 try {
   require('./index.js');
   console.log('[EARLY] index.js loaded successfully');
@@ -26,7 +50,6 @@ try {
   process.exit(1);
 }
 
-// Если загрузился - запускаем нормально через spawn для логов
 const child = spawn('node', ['index.js'], {
   stdio: ['inherit', 'pipe', 'pipe'],
   env: process.env
