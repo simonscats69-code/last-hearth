@@ -12,8 +12,26 @@ COPY packages/db/package*.json ./packages/db/
 COPY packages/server/package*.json ./packages/server/
 COPY packages/client/package*.json ./packages/client/
 
-# Устанавливаем все зависимости (включая dev для сборки)
-RUN npm ci
+# Устанавливаем зависимости — npm install лучше работает с workspaces чем npm ci
+RUN npm install --include=dev
+
+# Явная проверка/создание workspace-symlinks (фоллбек для старых npm)
+RUN node -e "
+const fs = require('fs');
+const path = require('path');
+const pkgs = ['core', 'db', 'server', 'client'];
+pkgs.forEach(p => {
+  const link = path.join('/app/node_modules/@last-hearth', p);
+  const target = path.join('/app/packages', p);
+  if (!fs.existsSync(link)) {
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link, 'dir');
+    console.log('Created symlink:', link, '->', target);
+  } else {
+    console.log('Symlink exists:', link);
+  }
+});
+"
 
 # Копируем исходный код
 COPY . .
@@ -23,6 +41,29 @@ RUN npm run -w @last-hearth/core -- build && \
     npm run -w @last-hearth/db -- build && \
     npm run -w @last-hearth/server -- build && \
     npm run -w @last-hearth/client -- build
+
+# Верификация: убеждаемся, что dist-файлы на месте
+RUN node -e "
+const fs = require('fs');
+const path = require('path');
+const required = [
+  'packages/core/dist/index.js',
+  'packages/core/dist/index.mjs',
+  'packages/db/dist/index.js',
+  'packages/server/dist/index.js',
+  'packages/client/dist/index.js',
+];
+required.forEach(f => {
+  const full = path.join('/app', f);
+  if (!fs.existsSync(full)) {
+    console.error('MISSING:', full);
+    process.exit(1);
+  } else {
+    console.log('OK:', full);
+  }
+});
+console.log('All build outputs verified');
+"
 
 # Не удаляем dev deps — npm prune ломает workspace symlinks
 
