@@ -246,6 +246,11 @@ function testClient503() {
         assert(/status === 503/.test(src), 'game.js должен проверять статус 503');
     });
 
+    test('game.js опрашивает /ready перед API-вызовами', () => {
+        assert(/waitForServerReady/.test(src), 'game.js должен иметь waitForServerReady');
+        assert(/window\.location\.origin.*\/ready/.test(src), 'game.js должен опрашивать /ready');
+    });
+
     test('game.js использует увеличенный backoff для 503', () => {
         assert(/retryDelay/.test(src) && /5000/.test(src), 'game.js должен использовать длинный backoff для 503');
     });

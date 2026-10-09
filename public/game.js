@@ -2057,6 +2057,58 @@ function backToBosses() {
 
 window.goToMain = goToMain;
 window.backToBosses = backToBosses;
+
+/**
+ * Ожидание готовности сервера.
+ *
+ * /ready отвечает 503, пока БД не инициализирована. Опрашиваем его перед
+ * первым API-запросом, чтобы не гнаться за 503 retry-логикой в apiRequest
+ * (которая конфликтует с withTimeout в initGame).
+ *
+ * @param {number} [maxWait=30000] максимальное время ожидания в мс
+ * @returns {Promise<void>}
+ */
+async function waitForServerReady(maxWait = 30000) {
+    const startTime = Date.now();
+    const pollInterval = 2000;
+
+    // Обновляем текст загрузки
+    const loadingText = document.querySelector('.loading-text');
+    if (loadingText) {
+        loadingText.textContent = 'Подключение к серверу...';
+    }
+
+    while (Date.now() - startTime < maxWait) {
+        try {
+            const response = await fetch(`${window.location.origin}/ready`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.status === 'ready') {
+                    console.log('[waitForServerReady] Сервер готов');
+                    return;
+                }
+            }
+
+            // Сервер ещё запускается (503) или ошибка (500)
+            if (loadingText) {
+                loadingText.textContent = `Запуск сервера...`;
+            }
+        } catch (err) {
+            // Сетевая ошибка — сервер может ещё не слушать порт
+            console.log('[waitForServerReady] Сервер недоступен, ждём...');
+        }
+
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+
+    // Сервер не ответил за maxWait
+    throw new Error('Сервер не готов после ' + maxWait + 'мс ожидания');
+}
+
 /**
  * Игровые системы
  * Основная логика игры: профиль, инвентарь, крафт, боссы, кланы, PvP, рынок, рефералы, база
@@ -2171,6 +2223,16 @@ async function initGame() {
 
     try {
         console.log('[initGame] Starting initialization...');
+
+        // Ждём готовности сервера: пока БД не инициализирована, /api/game/*
+        // отвечает 503. Опрашиваем /ready (без auth) чтобы не конфликтовать
+        // с withTimeout в дальнейших apiRequest.
+        console.log('[initGame] Waiting for server to be ready...');
+        const loadingText = document.querySelector('.loading-text');
+        if (loadingText) loadingText.textContent = 'Ожидание сервера...';
+        await waitForServerReady(30000);
+        console.log('[initGame] Server is ready');
+
         // Ждём пока загрузится Telegram WebApp.
         // В production отсутствие Telegram — фатально: продолжать нельзя,
         // иначе запросы уйдут без валидного initData.
