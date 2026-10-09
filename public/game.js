@@ -354,7 +354,7 @@ const endpoints = {
     // Статус и магазин
     statusCheck: { endpoint: '/game/status/check', method: 'POST' },
     purchase: { endpoint: '/game/purchase', method: 'POST' },
-    achievements: { endpoint: '/achievements/progress', method: 'GET' },
+    achievements: { endpoint: '/game/profile/achievements', method: 'GET' },
     
     // Рейтинги
     // ratingsPlayers/ratingsClans удалены: loadRating(type) собирает путь
@@ -1232,10 +1232,10 @@ const API = {
             Object.entries(endpoints).map(([name, config]) => [name, `/api${config.endpoint}`])
         ),
         // Ключи из прежнего API.endpoints, отсутствующие в общем словаре
-        market: '/api/game/market/listings',
+        market: '/api/game/items/shop',
         pvp: '/api/game/pvp/players',
         status: '/api/game/status',
-        energy: '/api/game/energy'
+        energy: '/api/game/profile/energy'
     },
     
     // Активные контроллеры для отмены запросов
@@ -2279,23 +2279,10 @@ async function initGame() {
             return;
         }
 
-        // Проверяем/создаём игрока.
-        // Сервер берёт user.id ИЗ ПОДПИСАННЫХ initData и сверяет его с
-        // переданным telegram_id — подделать чужой ID невозможно.
-        console.log('[initGame] Verifying with server...');
-        await withTimeout(
-            apiRequest('/verify-telegram', {
-                method: 'POST',
-                body: { telegram_id: telegramId, initData }
-            }),
-            10000,
-            'Таймаут проверки авторизации'
-        );
-        console.log('[initGame] Server verification OK');
-        
         // loadProfile() и loadLocations() сами гасят свои ошибки (не бросают
         // наружу), чтобы падение перерисовки не выглядело как провал операции.
         // Отдельные try/catch здесь были лишними и никогда не срабатывали.
+        // Сервер валидирует игрока через middleware validatePlayer на всех роутах.
         console.log('[initGame] Loading profile...');
         await withTimeout(loadProfile(), 15000, 'Таймаут загрузки профиля');
         console.log('[initGame] Profile loaded, player:', !!gameState.player);
@@ -3756,40 +3743,6 @@ async function useItem(itemId, options = {}) {
     }
 }
 
-/**
- * Продать предмет
- * @param {number} itemIndex - индекс предмета в инвентаре
- */
-async function sellItem(itemIndex) {
-    if (!lockAction('sellItem')) return;
-    try {
-        const result = await apiRequest('/api/game/inventory/sell', {
-            method: 'POST',
-            body: { item_index: itemIndex }
-        });
-        const payload = result?.data || result;
-        
-        if (result.success) {
-            const message = payload.message || result.message || 'Предмет продан';
-            showModal('💰 Продано', message);
-            
-            // Сбрасываем кэш рендеринга
-            RenderCache.clear();
-            
-            // Обновляем инвентарь и профиль
-            await loadInventory();
-            await loadProfile();
-            
-            playSound('coin');
-        } else {
-            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось продать предмет');
-        }
-    } catch (error) {
-        console.error('Sell item error:', error);
-        showModal('⚠️ Внимание', clientErrorMessage(error, 'Не удалось продать предмет'));
-    } finally {
-        unlockAction('sellItem');
-    }
 // ============================================================================
 // СИСТЕМА ИНВЕНТАРЯ
 // ============================================================================
@@ -10122,4 +10075,3 @@ function showLocationUnlockCelebration(locationName) {
 // Экспорт функций для глобального доступа
 window.showKeyRewardCelebration = showKeyRewardCelebration;
 window.showDamageEffect = showDamageEffect;
-}

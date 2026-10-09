@@ -399,6 +399,29 @@ router.get('/achievements', async (req, res) => {
 });
 
 /**
+ * POST /achievements/claim — получить награду за достижение
+ */
+router.post('/achievements/claim', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        const { achievement_id } = req.body || {};
+        
+        if (!achievement_id) {
+            return res.status(400).json({ success: false, error: 'Не указан ID достижения', code: 'MISSING_ACHIEVEMENT_ID' });
+        }
+        
+        const helpers = getGameHelpers();
+        const { claimAchievementReward } = helpers;
+        
+        const result = await claimAchievementReward(playerId, Number(achievement_id));
+        
+        res.json({ success: true, data: result });
+    } catch (err) {
+        handleError(res, err, 'claim_achievement');
+    }
+});
+
+/**
  * GET /progress — прогресс игрока
  */
 router.get('/progress', async (req, res) => {

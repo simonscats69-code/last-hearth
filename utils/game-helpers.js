@@ -954,6 +954,79 @@ async function grantCurrencyReward(client, playerId, reward, touchUpdatedAt = fa
 }
 
 /**
+ * Получить награду за достижение.
+ * Проверяет, что достижение выполнено и награда не получена, затем выдает награду.
+ *
+ * @param {number} playerId - ID игрока
+ * @param {number} achievementId - ID достижения
+ * @returns {Promise<{success: boolean, message: string, new_balance: {coins: number, stars: number}}>}
+ */
+async function claimAchievementReward(playerId, achievementId) {
+    return await transaction(async (client) => {
+        // Получаем достижение и прогресс игрока
+        const achResult = await client.query(`
+            SELECT a.id, a.name, a.reward, a.category,
+                   pa.completed, pa.reward_claimed
+            FROM achievements a
+            LEFT JOIN player_achievements pa ON pa.achievement_id = a.id AND pa.player_id = $1
+            WHERE a.id = $2
+        `, [playerId, achievementId]);
+        
+        if (!achResult.rows.length) {
+            throw { message: 'Достижение не найдено', code: 'ACHIEVEMENT_NOT_FOUND', statusCode: 404 };
+        }
+        
+        const ach = achResult.rows[0];
+        
+        if (!ach.completed) {
+            throw { message: 'Достижение ещё не выполнено', code: 'NOT_COMPLETED', statusCode: 400 };
+        }
+        
+        if (ach.reward_claimed) {
+            throw { message: 'Награда уже получена', code: 'ALREADY_CLAIMED', statusCode: 400 };
+        }
+        
+        // Парсим награду
+        const reward = safeParseJson(ach.reward, {});
+        const coins = Math.max(0, Math.floor(Number(reward.coins) || 0));
+        const stars = Math.max(0, Math.floor(Number(reward.stars) || 0));
+        
+        // Выдаем награду
+        if (coins > 0 || stars > 0) {
+            await grantCurrencyReward(client, playerId, { coins, stars }, false);
+        }
+        
+        // Помечаем награду как полученную
+        await client.query(`
+            UPDATE player_achievements 
+            SET reward_claimed = true, claimed_at = NOW()
+            WHERE player_id = $1 AND achievement_id = $2
+        `, [playerId, achievementId]);
+        
+        // Логируем
+        await logPlayerAction(playerId, 'claim_achievement', { 
+            achievement_id: achievementId, 
+            coins, 
+            stars 
+        }, client);
+        
+        // Возвращаем новый баланс
+        const balanceResult = await client.query(
+            'SELECT coins, stars FROM players WHERE id = $1',
+            [playerId]
+        );
+        
+        return {
+            message: `Награда за «${ach.name}» получена${coins > 0 ? ` (+${coins} 🪙)` : ''}${stars > 0 ? ` (+${stars} ⭐)` : ''}`,
+            new_balance: {
+                coins: Number(balanceResult.rows[0]?.coins || 0),
+                stars: Number(balanceResult.rows[0]?.stars || 0)
+            }
+        };
+    });
+}
+
+/**
  * Инициализировать таблицу достижений.
  * P2-12: единый источник теперь schema.js (4 базовых ачивки).
  * Старый набор из 19 записей больше не вставляется, чтобы не дублировать
@@ -1047,5 +1120,6 @@ module.exports = {
     checkAchievements,
     getPlayerAchievements,
     getPlayerProgress,
+    claimAchievementReward,
     initAchievementsTable
 };
