@@ -297,6 +297,7 @@ input:checked + .slider:before {
      * Оттенки сохранены: кровь осталась красной, оксид — зелёным,
      * эпический — фиолетовым. Светлота добавлена, hue не сдвинут. */
     --accent-green: #6aa85a;      /* Оксид меди (неон Fallout) */
+    --accent-green-bright: #7ee787; /* Светлый оттенок для градиентов */
     --accent-rust: #8b4513;        /* Ржавчина: только рамки и заливки */
     --accent-orange: #e07a2f;       /* Предупреждение ржавчина */
     --accent-red: #e07a6e;         /* Кровь/опасность */
@@ -968,6 +969,7 @@ html, body {
     color: var(--text-secondary);
     background: rgba(0, 0, 0, 0.3);
     padding: 2px 6px;
+}
 /* Панель лечения на главном экране: кнопки лекарств + автолечение */
 .heal-panel {
     margin: 0 16px 12px;
@@ -1042,7 +1044,6 @@ html, body {
 .auto-heal-range {
     width: 100%;
     margin-top: 4px;
-}
     border-radius: 4px;
 }
 
@@ -3764,12 +3765,6 @@ html, body {
 }
 
 /* Анимация пульсации босса */
-@keyframes boss-pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.05); }
-}
-
-/* Анимация пульсации босса */
 .boss-icon-large {
     font-size: 80px;
     line-height: 1;
@@ -3784,7 +3779,7 @@ html, body {
 
 .boss-hp-bar {
     height: 22px;
-    background: #1a1a2e;
+    background: var(--bg-secondary);
     border-radius: 11px;
     overflow: hidden;
     border: 2px solid rgba(255, 255, 255, 0.15);
@@ -4437,19 +4432,24 @@ html, body {
 }
 
 /* Блок с кодом */
+.referral-code-box {
     background: var(--bg-card);
     border-radius: 12px;
     padding: 16px;
     text-align: center;
-    border: 2px solid var(--accent-purple);
+    font-weight: bold;
+    color: var(--accent-yellow);
+    letter-spacing: 2px;
 }
 
+.referral-code-display {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 12px;
 }
 
+.referral-code-display #referral-code {
     font-family: var(--font-mono);
     font-size: 20px;
     font-weight: bold;
@@ -4458,28 +4458,26 @@ html, body {
 }
 
 /* Секция изменения кода */
+.referral-change-section {
     margin-top: 16px;
     padding-top: 16px;
     border-top: 1px solid var(--border-color);
 }
 
-
-
-
-
-
 /* Секция ввода кода */
+.referral-use-section {
     padding: 16px;
     background: linear-gradient(135deg, rgba(72, 187, 120, 0.1), rgba(56, 178, 172, 0.1));
     border-bottom: 1px solid var(--border-color);
 }
 
+.referral-use-section h3 {
     margin: 0 0 8px 0;
     color: var(--text-primary);
     font-size: 18px;
 }
 
-
+.referral-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -4489,26 +4487,30 @@ html, body {
     border: 1px solid var(--border-color);
 }
 
+.referral-info {
     flex: 1;
 }
 
+.referral-name {
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 4px;
 }
 
+.referral-level {
     font-size: 14px;
     color: var(--accent-purple);
     margin-bottom: 2px;
 }
 
+.referral-joined {
     font-size: 12px;
     color: var(--text-secondary);
 }
 
+.referral-bonuses {
     font-size: 20px;
 }
-
 
 /* ============================================================================
    АУДИТ 2026-09 (продолжение): классы, которые рендерит game.js,
@@ -4600,24 +4602,28 @@ html, body {
 }
 
 /* ---------- Экран рефералов: секции и сетка статистики ---------- */
+.referral-code-section {
     margin-bottom: 16px;
 }
+.referral-code-section h3 {
     font-size: 14px;
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 10px;
 }
+.referral-stats {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
     margin: 12px 0 16px;
 }
 @media (max-width: 400px) {
+    .referral-stats {
         grid-template-columns: 1fr;
     }
 }
-   flex/gap без отступа — дубль правила, из-за которого правка в одном
+/* Сбрасываем flex/gap без отступа — дубль правила, из-за которого правка в одном
    месте не применялась к другому. */
 
 /* ---------- Карточки из Templates (используются в модальных окнах) ---------- */

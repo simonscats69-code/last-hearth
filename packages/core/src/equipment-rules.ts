@@ -9,9 +9,11 @@ import {
   PlayerEquipment,
   COMBAT_SLOTS,
   EQUIPMENT_SLOTS,
+  DEFENSE_SLOTS,
   RARITY_ORDER,
   BASE_PRICE_BY_RARITY,
   MAX_MODIFICATION_LEVEL,
+  MAX_UPGRADE_LEVEL,
   UPGRADE_BONUS_PER_LEVEL,
   UPGRADE_MATERIAL_BY_RARITY,
   SCRAP_YIELD_BY_RARITY,
@@ -24,9 +26,7 @@ import {
 import { GAME_CONFIG, WEAR_PER_HIT, REPAIR_COST_MULTIPLIER, UPGRADE_COST_MULTIPLIER } from './config';
 
 /** Слоты экипировки, которые участвуют в расчёте защиты */
-export const EQUIPMENT_SLOTS_LIST: readonly EquipmentSlot[] = Object.freeze([
-  'armor', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'
-]);
+export const EQUIPMENT_SLOTS_LIST: readonly EquipmentSlot[] = Object.freeze(DEFENSE_SLOTS);
 
 /** Синонимы полей сопротивления */
 export const RADIATION_KEYS = Object.freeze([
@@ -234,7 +234,7 @@ export function normalizeRarity(rarity: string | undefined): Rarity {
 export function getUpgradeLevel(item: InventoryItem | null | undefined): number {
   const raw = Number(item?.upgrade_level);
   if (!Number.isFinite(raw)) return 0;
-  return Math.min(MAX_MODIFICATION_LEVEL, Math.max(0, Math.round(raw)));
+  return Math.min(MAX_UPGRADE_LEVEL, Math.max(0, Math.round(raw)));
 }
 
 /** Множитель характеристик за улучшения */
@@ -352,7 +352,7 @@ export function calculateUpgradeCost(item: InventoryItem | null | undefined): {
 } | null {
   if (!item) return null;
   const level = getUpgradeLevel(item);
-  if (level >= MAX_MODIFICATION_LEVEL) return null;
+  if (level >= MAX_UPGRADE_LEVEL) return null;
 
   const rarity = normalizeRarity(item.rarity);
   const basePrice = Number(item.price) || BASE_PRICE_BY_RARITY[rarity];
@@ -404,23 +404,23 @@ export function getModificationLevel(item: InventoryItem | null | undefined, key
 export function getModificationBonus(item: InventoryItem | null | undefined, stat: string): number {
   const modification = MODIFICATION_BY_STAT[stat];
   if (!modification) return 0;
-  return getModificationLevel(item, modification.id) * modification.bonus_per_level;
+  return getModificationLevel(item, modification.key) * modification.perLevel;
 }
 
 /** Стоимость следующего уровня модификации */
 export function calculateModificationCost(item: InventoryItem | null | undefined, key: string): {
   level: number; next_level: number; coins: number; materials: Record<string, number>
 } | null {
-  const modification = MODIFICATIONS.find(m => m.id === key);
+  const modification = MODIFICATIONS.find(m => m.key === key);
   if (!modification || !item) return null;
 
   const level = getModificationLevel(item, key);
-  if (level >= modification.max_level) return null;
+  if (level >= MAX_MODIFICATION_LEVEL) return null;
 
   const rarity = normalizeRarity(item.rarity);
   const basePrice = Number(item.price) || BASE_PRICE_BY_RARITY[rarity];
-  const coins = Math.max(15, Math.round(basePrice * modification.cost_multiplier * (level + 1)));
-  const material = modification.materials_per_level[rarity];
+  const coins = Math.max(15, Math.round(basePrice * 0.25 * (level + 1)));
+  const material = modification.materials[rarity];
 
   return {
     level,
@@ -432,12 +432,12 @@ export function calculateModificationCost(item: InventoryItem | null | undefined
 
 /** Подходит ли модификация этому предмету */
 export function isModificationApplicable(item: InventoryItem | null | undefined, key: string): boolean {
-  const modification = MODIFICATIONS.find(m => m.id === key);
+  const modification = MODIFICATIONS.find(m => m.key === key);
   if (!modification || !item || !isEquipmentItem(item)) return false;
 
   const type = String(item.type || '').toLowerCase();
-  if (modification.stat === 'damage') return type === 'weapon';
-  if (modification.stat === 'defense') return type === 'armor';
+  if (modification.appliesTo === 'weapon') return type === 'weapon';
+  if (modification.appliesTo === 'armor') return type === 'armor';
   return true;
 }
 

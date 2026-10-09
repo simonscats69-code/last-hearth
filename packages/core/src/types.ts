@@ -4,10 +4,11 @@
 /** Item rarity levels */
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 
-/** Equipment slot types */
+/** Equipment slot types — согласованы с public/shared/equipment.js */
 export type EquipmentSlot =
   | 'weapon'
   | 'armor'
+  | 'helmet'
   | 'head'
   | 'body'
   | 'hands'
@@ -59,6 +60,7 @@ export interface InventoryItem extends BaseItem {
 export interface PlayerEquipment {
   weapon?: InventoryItem;
   armor?: InventoryItem;
+  helmet?: InventoryItem;
   head?: InventoryItem;
   body?: InventoryItem;
   hands?: InventoryItem;
@@ -122,14 +124,19 @@ export interface PlayerStats {
   active_boss_started_at: Date | null;
 }
 
-/** Equipment slot names */
+/** Equipment slot names — согласованы с public/shared/equipment.js */
 export const EQUIPMENT_SLOTS: EquipmentSlot[] = [
-  'weapon', 'armor', 'head', 'body', 'hands', 'legs', 'boots', 'accessory'
+  'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'
 ];
 
-/** Combat-relevant equipment slots */
+/** Combat-relevant equipment slots (EQUIPMENT_SLOTS + weapon) */
 export const COMBAT_SLOTS: EquipmentSlot[] = [
-  'weapon', 'armor', 'head', 'body', 'hands', 'legs', 'boots', 'accessory'
+  ...EQUIPMENT_SLOTS, 'weapon'
+];
+
+/** Combat slots used for defense calculation (без weapon — он не даёт защиту) */
+export const DEFENSE_SLOTS: EquipmentSlot[] = [
+  'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'
 ];
 
 /** Rarity order for sorting */
@@ -141,6 +148,7 @@ export const RARITY_ORDER: readonly Rarity[] = [
 export const SLOT_ICONS: Record<EquipmentSlot, string> = {
   weapon: '⚔️',
   armor: '🛡️',
+  helmet: '⛑️',
   head: '🪖',
   body: '🧥',
   hands: '🧤',
@@ -165,69 +173,48 @@ export const VALID_COMBAT_SLOTS = ['weapon', 'body', 'head', 'hands', 'legs', 'b
 export const AMMO_ITEM_NAME = 'Патроны';
 export const ROCKET_ITEM_NAME = 'Реактивные гранаты';
 
-/** Modification types */
+/** Modification applied to equipment: Заточка (damage) / Облицовка (defense) */
 export interface Modification {
-  id: string;
+  key: string;
   name: string;
-  description: string;
-  stat: 'damage' | 'defense' | 'luck' | 'radiation_resist' | 'infection_resist';
-  bonus_per_level: number;
-  max_level: number;
-  materials_per_level: Record<string, number>;
-  cost_multiplier: number;
+  stat: 'damage' | 'defense';
+  perLevel: number;
+  appliesTo: 'weapon' | 'armor' | 'both';
+  icon: string;
+  materials: Record<string, string>;
 }
 
 export const MODIFICATIONS: Modification[] = [
   {
-    id: 'sharpening',
+    key: 'sharpening',
     name: 'Заточка',
-    description: 'Увеличивает урон оружия',
     stat: 'damage',
-    bonus_per_level: 2,
-    max_level: 5,
-    materials_per_level: { 'Пластик': 2, 'Металлолом': 1 },
-    cost_multiplier: 1.5,
+    perLevel: 4,
+    appliesTo: 'weapon',
+    icon: '⚔️',
+    materials: {
+      common: 'Металлолом',
+      uncommon: 'Пластик',
+      rare: 'Провода',
+      epic: 'Электроника',
+      legendary: 'Титан'
+    }
   },
   {
-    id: 'reinforcement',
-    name: 'Укрепление',
-    description: 'Увеличивает защиту брони',
+    key: 'plating',
+    name: 'Облицовка',
     stat: 'defense',
-    bonus_per_level: 3,
-    max_level: 5,
-    materials_per_level: { 'Металлолом': 2, 'Пластик': 1 },
-    cost_multiplier: 1.5,
-  },
-  {
-    id: 'lucky_charm',
-    name: 'Амулет удачи',
-    description: 'Увеличивает удачу',
-    stat: 'luck',
-    bonus_per_level: 2,
-    max_level: 3,
-    materials_per_level: { 'Кристалл силы': 1 },
-    cost_multiplier: 2.0,
-  },
-  {
-    id: 'lead_lining',
-    name: 'Свинецовая подкладка',
-    description: 'Защита от радиации',
-    stat: 'radiation_resist',
-    bonus_per_level: 5,
-    max_level: 3,
-    materials_per_level: { 'Свинец': 2, 'Металлолом': 1 },
-    cost_multiplier: 1.8,
-  },
-  {
-    id: 'herbal_lining',
-    name: 'Травяная подкладка',
-    description: 'Защита от инфекций',
-    stat: 'infection_resist',
-    bonus_per_level: 5,
-    max_level: 3,
-    materials_per_level: { 'Трава': 2, 'Ткань': 1 },
-    cost_multiplier: 1.8,
-  },
+    perLevel: 3,
+    appliesTo: 'armor',
+    icon: '🛡️',
+    materials: {
+      common: 'Древесина',
+      uncommon: 'Ткань',
+      rare: 'Пластик',
+      epic: 'Провода',
+      legendary: 'Электроника'
+    }
+  }
 ];
 
 export const MODIFICATION_BY_STAT: Record<string, Modification> = Object.fromEntries(
@@ -238,18 +225,18 @@ export const MODIFICATION_BY_STAT: Record<string, Modification> = Object.fromEnt
 export const UPGRADE_MATERIAL_BY_RARITY: Record<string, string> = {
   common: 'Металлолом',
   uncommon: 'Пластик',
-  rare: 'Провода',
-  epic: 'Электроника',
+  rare: 'Электроника',
+  epic: 'Титан',
   legendary: 'Кристалл силы',
 };
 
-/** Scrap yield by rarity */
+/** Scrap yield by rarity — что даёт разбор предмета */
 export const SCRAP_YIELD_BY_RARITY: Record<string, Record<string, number>> = {
-  common: { 'Металлолом': 1, 'Древесина': 1 },
-  uncommon: { 'Металлолом': 2, 'Пластик': 1 },
-  rare: { 'Металлолом': 3, 'Провода': 1 },
-  epic: { 'Металлолом': 5, 'Электроника': 2 },
-  legendary: { 'Кристалл силы': 1, 'Титан': 2, 'Уран': 1 },
+  common: { 'Металлолом': 2, 'Древесина': 1 },
+  uncommon: { 'Пластик': 2, 'Металлолом': 2 },
+  rare: { 'Электроника': 2, 'Провода': 1, 'Пластик': 1 },
+  epic: { 'Титан': 2, 'Электроника': 1 },
+  legendary: { 'Кристалл силы': 2, 'Титан': 1 },
 };
 
 /** Base prices by rarity (used when item.price is not set) */
@@ -264,8 +251,11 @@ export const BASE_PRICE_BY_RARITY = {
 /** Max inventory slots */
 export const MAX_INVENTORY_SLOTS = 100;
 
-/** Modification max level */
-export const MAX_MODIFICATION_LEVEL = 5;
+/** Максимальный уровень улучшения предмета */
+export const MAX_UPGRADE_LEVEL = 10;
+
+/** Максимальный уровень одной модификации */
+export const MAX_MODIFICATION_LEVEL = 3;
 
 /** Upgrade bonus per level (8% per level) */
 export const UPGRADE_BONUS_PER_LEVEL = 0.08;

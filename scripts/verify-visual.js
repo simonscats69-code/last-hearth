@@ -30,7 +30,8 @@ for (const m of css.matchAll(/animation(?:-name)?\s*:\s*([^;]+);/g)) {
   }
 }
 for (const m of fs.readFileSync('public/game.js', 'utf8').matchAll(/animation\s*=\s*'([^']+)'/g)) {
-  usedAnim.add(m[1].trim().split(/\s+/)[0]);
+  const name = m[1].trim().split(/\s+/)[0];
+  if (name !== 'none' && name !== '' && name) usedAnim.add(name);
 }
 const missing = [...usedAnim].filter(n => !defined.has(n));
 missing.length ? bad('нет определения: ' + missing.join(', ')) : ok('все ' + usedAnim.size + ' используемых анимаций определены');

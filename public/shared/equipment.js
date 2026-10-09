@@ -207,15 +207,6 @@
     /** Прибавка к урону/защите за каждый уровень улучшения (8%) */
     const UPGRADE_BONUS_PER_LEVEL = 0.08;
 
-    /** Износ за один удар (1 единица прочности за 2 удара) */
-    const WEAR_PER_HIT = 0.5;
-
-    /** Множитель стоимости ремонта (40% от стоимости за полный износ) */
-    const REPAIR_COST_MULTIPLIER = 0.4;
-
-    /** Множитель стоимости улучшения (80% от стоимости за уровень) */
-    const UPGRADE_COST_MULTIPLIER = 0.8;
-
     /** Порядок редкостей от обычной к легендарной */
     const RARITY_ORDER = Object.freeze(['common', 'uncommon', 'rare', 'epic', 'legendary']);
 
@@ -348,9 +339,9 @@ ammo: 0.3,
     function calculateCoinDrop(options = {}) {
         const { riskTier = 'safe', luck = 0, playerLevel = 1 } = options;
         
-        const COIN_DROP_CHANCE = 30; // 30% базовый шанс
-        const BASE_COIN_AMOUNT = 50;
-        const MAX_COIN_AMOUNT = 500;
+        const COIN_DROP_CHANCE = GAME_CONFIG.COIN_DROP_CHANCE;
+        const BASE_COIN_AMOUNT = GAME_CONFIG.BASE_COIN_AMOUNT;
+        const MAX_COIN_AMOUNT = GAME_CONFIG.MAX_COIN_AMOUNT;
         
         // Проверка шанса
         const roll = Math.random() * 100;
@@ -359,14 +350,7 @@ ammo: 0.3,
         }
         
         // Множители
-        const riskMultipliers = {
-            safe: 1.0,
-            warning: 1.5,
-            danger: 2.0,
-            deadly: 3.0
-        };
-        
-        const riskMultiplier = riskMultipliers[riskTier] || 1.0;
+        const riskMultiplier = GAME_CONFIG.RISK_MULTIPLIERS[riskTier] || 1.0;
         const luckMultiplier = 1 + (luck * 0.01);
         const levelMultiplier = 1 + (playerLevel * 0.05);
         
@@ -819,7 +803,7 @@ function resolveEquipmentSlot(item) {
         if (!isEquipmentItem(item)) return item;
 
         const info = getDurabilityInfo(item);
-        const wear = Math.max(0, Math.round(Number(amount) * WEAR_PER_HIT));
+        const wear = Math.max(0, Math.round(Number(amount) * GAME_CONFIG.WEAR_PER_HIT));
 
         return {
             ...item,
@@ -839,7 +823,7 @@ function resolveEquipmentSlot(item) {
 
         const rarity = normalizeRarity(item && item.rarity);
         const basePrice = Number(item && item.price) || BASE_PRICE_BY_RARITY[rarity];
-        return Math.max(1, Math.ceil((missing / info.max) * basePrice * REPAIR_COST_MULTIPLIER));
+        return Math.max(1, Math.ceil((missing / info.max) * basePrice * GAME_CONFIG.REPAIR_COST_MULTIPLIER));
     }
 
     /**
@@ -852,7 +836,7 @@ function resolveEquipmentSlot(item) {
 
         const rarity = normalizeRarity(item && item.rarity);
         const basePrice = Number(item && item.price) || BASE_PRICE_BY_RARITY[rarity];
-        const coins = Math.max(20, Math.round(basePrice * UPGRADE_COST_MULTIPLIER * (level + 1)));
+        const coins = Math.max(20, Math.round(basePrice * GAME_CONFIG.UPGRADE_COST_MULTIPLIER * (level + 1)));
 
         const materials = {};
         const primary = UPGRADE_MATERIAL_BY_RARITY[rarity];
@@ -1042,9 +1026,6 @@ function resolveEquipmentSlot(item) {
         calculateEquipmentLuckBonus,
         applyDefenseReduction,
         wearEquipment,
-        WEAR_PER_HIT,
-        REPAIR_COST_MULTIPLIER,
-        UPGRADE_COST_MULTIPLIER,
         PRICE_MULTIPLIER_BY_TYPE,
         calculateRepairCost,
         calculateUpgradeCost,

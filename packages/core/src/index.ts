@@ -8,3 +8,8 @@ export * from './formulas';
 
 export { GAME_CONFIG } from './config';
 export type { GameConfig } from './config';
+
+export {
+  MAX_UPGRADE_LEVEL,
+  MAX_INVENTORY_SLOTS,
+} from './types';
