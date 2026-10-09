@@ -97,6 +97,8 @@ const { query, closePool, setLogger, describeError } = require('./db/database');
 // initDatabase живёт в db/init.js — он связывает подключение (database.js)
 // и DDL (schema.js). Импорт отсюда, а не из database.js, чтобы тот не
 // зависел от schema и цикл импортов не появлялся снова.
+// Тяжёлые миграции (runMigrations, DROP TABLE, DELETE, ремонт данных) вызываются
+// отдельной командой: node db/migrate.js — чтобы не уничтожать данные при каждом старте.
 const { initDatabase } = require('./db/init');
 const { setupWebhook, bot } = require('./webhook');
 const gameRouter = require('./routes/game');

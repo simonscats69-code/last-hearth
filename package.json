@@ -13,6 +13,7 @@
     "dev": "npm run -ws -- dev",
     "build:all": "npm run -ws -- build",
     "test": "npm run -ws -- test",
+    "test:root": "node tests/db-init.test.js",
     "lint": "npm run -ws -- lint",
     "db:migrate": "npm run -w @last-hearth/db -- migrate",
     "db:seed": "npm run -w @last-hearth/db -- seed",

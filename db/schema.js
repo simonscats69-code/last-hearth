@@ -4,6 +4,11 @@
  */
 
 const { query, transaction } = require('./database');
+// queryTx — модульный алиас на pool.query. Используется функциями, вызываемыми
+// вне runMigrations() (seedDatabase, seedAchievements, repairPlayerInventories,
+// applyItemRenames, mergeDuplicateInventoryStacks). Внутри runMigrations()
+// queryTx переопределяется локально через transaction(client).
+const queryTx = query;
 const pg = require('pg');
 
 // utils/game-helpers подключается лениво и ОДИН раз на весь файл.
@@ -623,75 +628,9 @@ async function runMigrations() {
     // Удаляем временную функцию
     await queryTx(`DROP FUNCTION IF EXISTS convert_player_id_to_bigint(TEXT)`);
 
-    // One-time cleanup: удаляем устаревшую таблицу pvp_matches (заменена на pvp_battles)
-    // Запускается один раз при миграции, а не при каждом старте createTables()
-    await queryTx(`DROP TABLE IF EXISTS pvp_matches CASCADE`);
-
-    // Миграция: FK player_boss_progress.player_id должен ссылаться на players(id),
-    // а НЕ на players(telegram_id).
-    // На проде (Supabase) ограничение оказалось создано вручную со ссылкой на
-    // telegram_id, тогда как приложение везде передаёт req.player.id === players.id
-    // (см. buildRequestPlayer в routes/game/index.js). Из-за этого INSERT ... ON CONFLICT
-    // падал с ошибкой 23503 (FK violation) -> 500 на POST /api/game/bosses/start.
-    // Приводим и ограничение, и данные к схеме CREATE TABLE (REFERENCES players(id)).
-    await queryTx(`
-        DO $do$
-        DECLARE r record;
-        BEGIN
-            -- 1. Убираем FK на players, ссылающийся на любую колонку кроме id.
-            FOR r IN
-                SELECT con.conname
-                FROM pg_constraint con
-                JOIN pg_class rel ON rel.oid = con.conrelid
-                JOIN pg_class frel ON frel.oid = con.confrelid
-                JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = con.confkey[1]
-                JOIN pg_namespace n ON n.oid = rel.relnamespace
-                WHERE n.nspname = current_schema()
-                  AND rel.relname = 'player_boss_progress'
-                  AND con.contype = 'f'
-                  AND frel.relname = 'players'
-                  AND fa.attname <> 'id'
-            LOOP
-                EXECUTE format('ALTER TABLE player_boss_progress DROP CONSTRAINT %I', r.conname);
-            END LOOP;
-
-            -- 2. Строки, где player_id хранит telegram_id, переводим в players.id.
-            --    Если по тому же боссу уже есть запись с правильным id — лишнюю убираем,
-            --    иначе нарушится UNIQUE (player_id, boss_id).
-            DELETE FROM player_boss_progress pbp
-            USING players p
-            WHERE pbp.player_id = p.telegram_id
-              AND pbp.player_id IS DISTINCT FROM p.id
-              AND EXISTS (
-                  SELECT 1 FROM player_boss_progress x
-                  WHERE x.player_id = p.id AND x.boss_id = pbp.boss_id
-              );
-
-            UPDATE player_boss_progress pbp
-            SET player_id = p.id
-            FROM players p
-            WHERE pbp.player_id = p.telegram_id
-              AND pbp.player_id IS DISTINCT FROM p.id
-              AND NOT EXISTS (SELECT 1 FROM players p2 WHERE p2.id = pbp.player_id);
-
-            -- 3. Корректный FK (добавляем только если его ещё нет).
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint con
-                JOIN pg_class rel ON rel.oid = con.conrelid
-                JOIN pg_class frel ON frel.oid = con.confrelid
-                JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = con.confkey[1]
-                WHERE rel.relname = 'player_boss_progress'
-                  AND con.contype = 'f'
-                  AND frel.relname = 'players'
-                  AND fa.attname = 'id'
-            ) THEN
-                ALTER TABLE player_boss_progress
-                    ADD CONSTRAINT player_boss_progress_player_id_fkey
-                    FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
-            END IF;
-        END $do$
-    `);
+    // Миграция: FK player_boss_progress.player_id должен ссылаться на players(id)
+    // (см. миграцию 006_fix_player_boss_progress_fk.sql — выполняется один раз
+    // через db/migrate.js, а не при каждом старте приложения).
 
     // Миграция: добавить active_boss_id после создания таблицы bosses
     await queryTx(`
@@ -864,13 +803,6 @@ await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMEST
 await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_enabled BOOLEAN DEFAULT false`);
 await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_threshold SMALLINT DEFAULT 35`);
 
-    // Удаление записей player_achievements с NULL achievement_id (ошибка старой схемы)
-    await queryTx(`
-        DELETE FROM player_achievements pa
-         WHERE pa.achievement_id IS NULL
-            OR NOT EXISTS (SELECT 1 FROM achievements a WHERE a.id = pa.achievement_id)
-    `);
-
     // Миграции для player_achievements
     await queryTx(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS progress_value INTEGER DEFAULT 0`);
     await queryTx(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS reward_claimed BOOLEAN DEFAULT false`);
@@ -979,36 +911,6 @@ await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_threshold 
             END $do$
 `);
     }
-
-    // Миграция: удаление таблиц баз и крафта (системы удалены)
-    await queryTx(`DROP TABLE IF EXISTS player_buildings CASCADE`);
-    await queryTx(`DROP TABLE IF EXISTS buildings CASCADE`);
-    await queryTx(`DROP TABLE IF EXISTS crafting_recipes CASCADE`);
-
-    // Миграция: полное удаление достижений крафта
-    await queryTx(`
-        DELETE FROM player_achievements
-        WHERE achievement_id IN (
-            SELECT id FROM achievements WHERE category = 'craft'
-        )
-    `);
-    await queryTx(`DELETE FROM achievements WHERE category = 'craft'`);
-
-    // Чистка легаси-строк каталога.
-    // 1) «Спирт» существует в проде дважды: старый (type=food, stats={}) и
-    //    новый (type=medicine, stats={health,infection_cure}). Старый в магазине
-    //    выглядел как еда, но /use его игнорировал. Оставляем medicine.
-    // 2) «Клюш от Биологического ужаса» — опечатка, из-за которой на проде
-    //    было два ключа от одного босса, а бой открывался «не тем» ключом.
-    // 3) «Ключ от босса» — безымянный ключ из ранних сборок: он не отвечает
-    //    ни одному боссу, поэтому раздавался только как мусор в инвентаре.
-    // Ключи из инвентарей переезжают в boss_keys (repairPlayerInventories),
-    // а не теряются вместе с удалённой строкой каталога.
-    await queryTx(`
-        DELETE FROM items
-         WHERE (type = 'food' AND name = 'Спирт')
-            OR (type = 'key' AND name IN ('Клюш от босса', 'Клюш от босса.', 'Клюш от Биологического ужаса'))
-    `);
 
     // Supabase Advisor: включение Row Level Security на всех таблицах public.
     // - Приложение подключается ролью postgres (владелец таблиц): RLS владельцу

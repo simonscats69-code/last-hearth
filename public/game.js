@@ -703,6 +703,20 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 continue;
             }
 
+            const status = Number(error.status || 0);
+
+            // 503 SERVICE_STARTING: сервер только что запустился, БД не готова.
+            // Увеличиваем количество попыток и задержку для этого случая —
+            // перезапуск контейнера может занять больше 10 секунд.
+            if (status === 503 && error.code === 'SERVICE_STARTING') {
+                if (attempt < 5) {
+                    // 5 секунд на старт, потом 10 секунд — даём подняться БД
+                    const retryDelay = attempt <= 2 ? 5000 : 10000;
+                    await new Promise(r => setTimeout(r, retryDelay));
+                    continue;
+                }
+            }
+
             // 4xx — детерминированная ошибка клиента: повтор ничего не изменит.
             // Раньше здесь уходили 3 одинаковых запроса (например, 400 «не в клане»).
             // Исключения: 408 (таймаут запроса) и 429 (лимит) — их есть смысл повторить.
@@ -711,7 +725,6 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             // а клиент шлёт тот же запрос ещё два раза с нарастающей паузой,
             // разгоняя лавину. Раньше именно это превращало одну ошибку лимита
             // в серию из трёх запросов на каждый чих.
-            const status = Number(error.status || 0);
             if (status >= 400 && status < 500 && status !== 408) {
                 if (!silent) {
                     console.warn(`[apiRequest] ${status} ${normalizedEndpoint}: ${error.message}`);
@@ -729,6 +742,8 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 // Проверяем код ошибки для более понятного сообщения
                 if (error.message.includes('401') || error.message.includes('Unauthorized')) {
                     showNotification('Ошибка авторизации. Обновите игру через Telegram.', 'error');
+                } else if (status === 503) {
+                    showNotification('Игра запускается. Попробуйте позже.', 'warning');
                 } else if (error.message.includes('502')) {
                     showNotification('Сервер перегружен. Попробуй через несколько минут.', 'error');
                 } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
@@ -2266,6 +2281,8 @@ async function initGame() {
             errorMessage = 'Напиши /start боту';
         } else if (error.message && (error.message.includes('network') || error.message.includes('fetch'))) {
             errorMessage = 'Нет соединения. Проверь интернет';
+        } else if (error.status === 503 || error.message?.includes('SERVICE_STARTING')) {
+            errorMessage = 'Игра запускается. Подожди и перезагрузи.';
         }
 
         renderInitError('😿', 'Ошибка', errorMessage);

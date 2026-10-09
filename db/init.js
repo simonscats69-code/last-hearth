@@ -5,17 +5,14 @@
  *
  *     db/database.js  ->  db/schema.js  ->  db/database.js
  *
- * Раньше database.js тянул schema.js ЛЕНИВО (require внутри initDatabase),
- * а schema.js импортировал query из database.js на верхнем уровне. Цикл
- * работал, но был хрупок: новый require на верхнем уровне в любом из двух
- * файлов дал бы частично инициализированный модуль, и ошибка проявилась бы
- * не при старте сервера, а посреди игры.
- *
  * Теперь связь односторонняя:
  *   database.js  <-  schema.js  (schema знает про подключение)
  *   db/init.js   ->  оба        (единственный, кто знает про оба)
+ *   db/migrate.js ->  schema + database  (тяжёлые миграции + ремонт данных)
  *
- * index.js вызывает initDatabase() отсюда.
+ * index.js вызывает initDatabase() отсюда (только createTables + seedDatabase).
+ * Тяжёлые миграции (runMigrations, DROP TABLE, DELETE, ремонт данных) вызываются
+ * отдельной командой: node db/migrate.js
  */
 
 const { pool, describeDbTarget, describeError } = require('./database');
@@ -31,6 +28,18 @@ function getSchema() {
     return schemaModule;
 }
 
+/**
+ * Быстрая инициализация БД при старте приложения.
+ *
+ * Выполняет только идемпотентные операции:
+ * - createTables (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS)
+ * - seedDatabase (UPSERT базовых данных)
+ * - seedAchievements (UPSERT достижений)
+ *
+ * Тяжёлые миграции (ALTER TABLE, DROP TABLE, DELETE, ремонт данных) вынесены
+ * в db/migrate.js и вызываются отдельно через `node db/migrate.js`.
+ * Это исключает уничтожение данных при каждом перезапуске приложения.
+ */
 async function initDatabase() {
     const target = describeDbTarget();
 
@@ -47,27 +56,13 @@ async function initDatabase() {
 
         const {
             createTables,
-            runMigrations,
             seedDatabase,
-            seedAchievements,
-            applyItemRenames,
-            repairPlayerInventories,
-            mergeDuplicateInventoryStacks
+            seedAchievements
         } = getSchema();
 
         await createTables();
-        await runMigrations();
         await seedDatabase();
         await seedAchievements();
-        // Переименования — сразу после сидов: новые предметы уже созданы,
-        // старые строки каталога ещё есть, предметы игроков на них ссылаются.
-        await applyItemRenames();
-        // После сидов: нужны метаданные items (stackable/max_stack/slot),
-        // чтобы свести старые дубли предметов к правилам стакования.
-        // Ремонт идёт до слияния стеков: он чинит состав инвентаря
-        // (фантомные id, ключи в boss_keys), а уже потом стеки сворачиваются.
-        await repairPlayerInventories();
-        await mergeDuplicateInventoryStacks();
 
         return true;
     } catch (error) {

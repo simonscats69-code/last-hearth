@@ -28,6 +28,9 @@ const MODULES = [
     'utils/scheduler.js',
     'utils/metrics.js',
     'db/database.js',
+    'db/schema.js',
+    'db/init.js',
+    'db/migrate.js',
     'db/players.js',
     'db/pvp.js'
 ];
