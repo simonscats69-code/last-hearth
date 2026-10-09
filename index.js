@@ -317,7 +317,6 @@ app.use(helmet({
     },
     permissionsPolicy: {
         features: {
-            'device-orientation': ["'none'"],
             'accelerometer': ["'none'"],
             'gyroscope': ["'none'"],
         }
