@@ -22,12 +22,9 @@ const { getExpForLevel } = sharedEquipment;
 // Шанс дропа — тоже из общего файла.
 const { calculateDropChance } = sharedEquipment;
 
-const GAME_CONFIG = {
-    // Базовые настройки
-    BASE_DROP_CHANCE: 8,        // Базовый шанс дропа (%)
-    MAX_DROP_CHANCE: 60,         // Максимальный шанс дропа (%)
-    MAX_LUCK: 150,               // Максимальная удача игрока
-};
+// Полный GAME_CONFIG (шансы дропа, удача, реген, цены) живёт в
+// public/shared/equipment.js. Прежняя локальная копия снята: она не
+// экспортировалась и не использовалась — мёртвый дубль.
 
 // Таблицы лута по локациям
 const LOOT_TABLES = {

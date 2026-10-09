@@ -26,11 +26,13 @@ const {
     PlayerHelper: playerHelper
 } = require('../../utils/serverApi');
 
-// Ленивая загрузка helpers: TypeScript-модуль monorepo.
+// Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
+// функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
+// (иначе цикл загрузки модулей).
 let gameHelpers = null;
 function getGameHelpers() {
     if (!gameHelpers) {
-        gameHelpers = require('@last-hearth/core');
+        gameHelpers = require('../../utils/game-helpers');
     }
     return gameHelpers;
 }

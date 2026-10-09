@@ -20,8 +20,10 @@ const pg = require('pg');
 let gameHelpers = null;
 function getGameHelpers() {
     if (!gameHelpers) {
-        // Пробуем TypeScript-модуль monorepo (приоритет)
-        gameHelpers = require('@last-hearth/core');
+        // Единственный источник правды — utils/game-helpers (проксирует
+        // public/shared/equipment.js). @last-hearth/core — расходящаяся
+        // форка без этих серверных функций, поэтому сюда не подключаем.
+        gameHelpers = require('../utils/game-helpers');
     }
     return gameHelpers;
 }
