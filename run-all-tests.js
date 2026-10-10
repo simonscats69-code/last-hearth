@@ -23,6 +23,8 @@ const harnesses = [
     'test-p2-fixes-harness.js',
     'test-404-fixes.js',
     'test-404-final.js',
+    'test-equipment-rules-fix.js',
+    'test-boss-screen-crash.js',
     'test-gamejs-harness.js',
     'test-gamejs-guards.js'
 ];

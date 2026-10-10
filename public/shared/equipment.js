@@ -668,10 +668,24 @@ function resolveEquipmentSlot(item) {
         const maxRaw = Number(item && (item.max_durability || item.durability));
         const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 500));
 
-        if (!isEquipmentItem(item)) {
+        // Полей прочности нет вообще (расходник, валюта, пустой объект) —
+        // предмет условно «бесконечен»: не ломается и не изнашивается.
+        const hasDurabilityData = Boolean(item && (item.durability !== undefined || item.max_durability !== undefined));
+        if (!hasDurabilityData) {
             return { current: max, max, isBroken: false, ratio: 1 };
         }
 
+        // Поля прочности ЕСТЬ — показываем их честно, независимо от
+        // isEquipmentItem.
+        //
+        // Раньше здесь стояло `if (!isEquipmentItem(item)) return {current: max...}`,
+        // то есть для предмета без type/slot функция ВСЕГДА возвращала
+        // «целый». Объект с durability: 0, но без type/slot (предмет из старого
+        // сохранения, собранный вручную, или пришедший по API без этих полей)
+        // выглядел полностью исправным: панель не показывала «сломано»,
+        // calculateRepairCost считал ремонт ненужным, wearEquipment не
+        // уменьшал износ. Экипировка из БД всегда имеет type и slot, поэтому
+        // на живых данных поведение не меняется — исправляется только ложь.
         const raw = Number(item && item.durability);
         const current = Number.isFinite(raw)
             ? Math.min(max, Math.max(0, Math.round(raw)))

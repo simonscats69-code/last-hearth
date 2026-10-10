@@ -4976,8 +4976,15 @@ function renderBosses(bosses) {
 async function renderPlayerEquipmentInBossFight() {
     const equipmentContainer = document.getElementById('player-equipment-slots');
     if (!equipmentContainer) return;
-    
+
     const equipment = gameState.player?.equipment || {};
+
+    // Общие правила (прочность/улучшения) — из shared/equipment.js, тот же
+    // модуль, что читает сервер. Доступ через window.EquipmentShared, как во
+    // всех остальных местах файла: раньше здесь использовалась необъявленная
+    // переменная equipmentRules, и функция падала с ReferenceError на первом
+    // же надетом предмете (Unhandled promise rejection при открытии боя).
+    const rules = window.EquipmentShared;
     
     // Слоты в порядке отображения
     const slots = ['head', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
@@ -5019,7 +5026,15 @@ async function renderPlayerEquipmentInBossFight() {
         
         if (item) {
             slotEl.classList.remove('empty');
-            const durability = equipmentRules.getDurabilityInfo(item);
+            // Если общий модуль не загрузился — показываем слот без полосок
+            // прочности, но экран боя всё равно работает.
+            const durability = rules && rules.getDurabilityInfo
+                ? rules.getDurabilityInfo(item)
+                : {
+                    current: Number(item.durability ?? item.max_durability ?? 0),
+                    max: Number(item.max_durability ?? 100),
+                    isBroken: !(item.durability ?? item.max_durability ?? 0) || Number(item.durability ?? 0) <= 0
+                };
             const isBroken = durability.isBroken;
             
             slotEl.classList.toggle('broken', isBroken);
@@ -5105,7 +5120,9 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
     if (progressContainer) progressContainer.style.display = 'none';
     
     // Удаляем старый обработчик и атрибут data-handler перед добавлением нового
-    if (attackSingleBtn) {
+    // Проверяем parentNode: без него replaceChild бросил бы TypeError (кнопка
+    // есть, но не в DOM) и сорвал бы рендер всего экрана боя.
+    if (attackSingleBtn && attackSingleBtn.parentNode) {
         if (attackSingleBtn.hasAttribute('data-handler')) {
             attackSingleBtn.removeAttribute('data-handler');
         }
@@ -5120,8 +5137,13 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
         }
     }
     
-    // Рендерим слоты экипировки игрока
-    renderPlayerEquipmentInBossFight();
+    // Рендерим слоты экипировки игрока.
+    // .catch: функция асинхронная, и раньше её вызывали без обработки —
+    // любая ошибка внутри становилась Unhandled promise rejection и
+    // срывала показ экрана боя. Теперь сбой панели экипировки не мешает бою.
+    Promise.resolve(renderPlayerEquipmentInBossFight()).catch((err) => {
+        console.error('Ошибка рендера экипировки в бою:', err);
+    });
     
     // Показываем экран боя
     showScreen('boss-fight');
@@ -5299,8 +5321,12 @@ function renderWeapons(weapons) {
             if (filterState.type !== 'all' && w.category !== filterState.type) return false;
             if (Number(w.damage || 0) < filterState.minDamage) return false;
             
-            const durability = EquipmentShared.getDurabilityInfo ? 
-                EquipmentShared.getDurabilityInfo({max_durability: w.max_durability, durability: w.durability}) 
+            // window.EquipmentShared, а не голый EquipmentShared: guard `? :`
+            // защищает только от отсутствующего СВОЙСТВА, но не от необъявленного
+            // идентификатора — ReferenceError падал всё равно.
+            const sharedRules = window.EquipmentShared;
+            const durability = sharedRules && sharedRules.getDurabilityInfo ?
+                sharedRules.getDurabilityInfo({max_durability: w.max_durability, durability: w.durability})
                 : {current: w.durability, max: w.max_durability, isBroken: !w.durability || w.durability <= 0};
             
             if (filterState.onlyUsable && (durability.isBroken || (durability.current / durability.max * 100) > filterState.maxDurability)) return false;
@@ -5323,8 +5349,10 @@ function renderWeapons(weapons) {
             item.className = `weapon-item ${weapon.is_broken ? 'is-broken' : ''}`;
             item.dataset.index = weapon.index;
             
-            const durabilityInfo = EquipmentShared.getDurabilityInfo ? 
-                EquipmentShared.getDurabilityInfo({max_durability: weapon.max_durability, durability: weapon.durability}) 
+            // window.EquipmentShared по той же причине, что и выше.
+            const sharedRules = window.EquipmentShared;
+            const durabilityInfo = sharedRules && sharedRules.getDurabilityInfo ?
+                sharedRules.getDurabilityInfo({max_durability: weapon.max_durability, durability: weapon.durability})
                 : {current: weapon.durability, max: weapon.max_durability, isBroken: !weapon.durability || weapon.durability <= 0};
             
             const durabilityText = durabilityInfo.isBroken
