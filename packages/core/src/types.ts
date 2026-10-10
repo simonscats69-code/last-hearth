@@ -90,7 +90,6 @@ export interface PlayerStats {
   intelligence: number;
   luck: number;
   radiation: { level: number; expires_at: string | null; applied_at: string | null } | null;
-  infections: Array<{ type: string; level: number; expires_at: string }>;
   buffs: Record<string, number>;
   equipment: Record<string, InventoryItem | null>;
   inventory: InventoryItem[];

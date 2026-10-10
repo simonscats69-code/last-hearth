@@ -19,7 +19,6 @@ export interface DbPlayer {
   radiation: string;
   energy: number;
   max_energy: number;
-  infections: string;
   current_location_id: number;
   inventory: string;
   equipment: string;

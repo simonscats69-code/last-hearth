@@ -2703,9 +2703,8 @@ async function loadProfile() {
         playerData.status = {
             health: Number(playerData.health || 0),
             max_health: Number(playerData.max_health || 100),
+            // Заражение зоны одно — radiation. Инфекции объединены с ним.
             radiation: Number(playerData.radiation || 0),
-            infections: Number(playerData.infections || 0),
-            infections_list: playerData.infections_list || [],
             energy: Number(playerData.energy || 0),
             // Дефолт 50 — как в схеме БД (players.max_energy DEFAULT 50) и в
             // серверном recalcEnergy. Раньше стоял 100: при отсутствующем поле
@@ -3009,8 +3008,8 @@ function getMainRecommendation(player) {
     const health = Number(status.health || 0);
     const maxHealth = Math.max(1, Number(status.max_health || 100));
     const energy = Number(status.energy || player.energy || 0);
+    // Заражение зоны одно — радиация (инфекции объединены с ней)
     const radiation = Number(status.radiation || 0);
-    const infections = Number(status.infections || 0);
     const healthPercent = Math.round((health / maxHealth) * 100);
     const achievementInsight = getAchievementInsight();
     const bossInsight = getBossInsight();
@@ -3032,23 +3031,10 @@ function getMainRecommendation(player) {
         return {
             tone: 'danger',
             state: 'Опасно',
-            title: 'Сними радиацию',
-            text: 'Высокая радиация уже мешает безопасно фармить. Лучше сначала стабилизировать состояние.',
-            primary: `☢️ Радиация: ${radiation}`,
+            title: 'Сними заражение',
+            text: 'Высокий уровень зоны уже мешает безопасно фармить. Лучше сначала стабилизировать состояние.',
+            primary: `☢️ Заражение: ${radiation}`,
             secondary: '🏪 В магазине уже есть антирад и лекарства',
-            actionLabel: 'Открыть магазин',
-            action: 'market'
-        };
-    }
-
-    if (infections > 0) {
-        return {
-            tone: 'warning',
-            state: 'Риск',
-            title: 'Вылечи инфекцию',
-            text: 'Инфекция будет тормозить прогресс. Лучше снять дебафф до долгой сессии.',
-            primary: `🦠 Инфекция: ${infections}`,
-            secondary: '💊 Лекарства уже доступны в магазине и инвентаре',
             actionLabel: 'Открыть магазин',
             action: 'market'
         };
@@ -3222,8 +3208,8 @@ function calculatePlayerPreparation(player) {
     const shared = window.EquipmentShared;
 
     return {
-        radiationDefense: shared.calculateRadiationDefense(equipment),
-        infectionDefense: shared.calculateInfectionDefense(equipment)
+        // Защита от зоны одна: инфекции объединены с радиацией.
+        contaminationDefense: shared.calculateContaminationDefense(equipment)
     };
 }
 
@@ -3234,11 +3220,11 @@ function getCurrentZoneRiskProfile(player) {
     // Раньше здесь стоял голый `shared.` без объявления — браузер падал с
     // ReferenceError: shared is not defined, и весь initGame прерывался.
     const shared = window.EquipmentShared;
-    const radiationThreat = shared.normalizeThreatLevelToPoints(location.radiation);
-    const infectionThreat = shared.normalizeThreatLevelToPoints(location.infection);
-    const radiationPressure = Math.max(0, radiationThreat - preparation.radiationDefense);
-    const infectionPressure = Math.max(0, infectionThreat - preparation.infectionDefense);
-    const score = radiationPressure + infectionPressure;
+    // Угроза зоны одна: радиация и инфекция локации складываются в общее
+    // «заражение» — так же, как на сервере (gameConstants.calculateLocationRiskProfile).
+    const contaminationThreat = shared.calculateLocationContaminationThreat(location);
+    const contaminationPressure = Math.max(0, contaminationThreat - preparation.contaminationDefense);
+    const score = contaminationPressure;
 
     // Тиры — из общего файла правил: подпись на экране обязана совпадать с
     // порогами, по которым сервер начисляет множители за лут, опыт и ключ.
@@ -3256,8 +3242,8 @@ function getCurrentZoneRiskProfile(player) {
         label: tier.label,
         hint: hints[tier.key],
         score,
-        radiationDefense: preparation.radiationDefense,
-        infectionDefense: preparation.infectionDefense,
+        contaminationThreat,
+        contaminationDefense: preparation.contaminationDefense,
         // Порог «освоено» — тот же, что в gameConstants.calculateLocationRiskProfile.
         isPrepared: score <= (shared.RISK_PREPARED_MAX_SCORE ?? 2)
     };
@@ -3267,13 +3253,12 @@ function updateZonePreparationUI(player) {
     const zoneRisk = getCurrentZoneRiskProfile(player || {});
     const riskLabel = document.getElementById('location-risk-label');
     const radDefense = document.getElementById('location-rad-defense');
-    const infDefense = document.getElementById('location-inf-defense');
     const riskHint = document.getElementById('location-risk-hint');
     const prepPanel = document.getElementById('location-preparation-panel');
 
     if (riskLabel) riskLabel.textContent = zoneRisk.label;
-    if (radDefense) radDefense.textContent = zoneRisk.radiationDefense;
-    if (infDefense) infDefense.textContent = zoneRisk.infectionDefense;
+    // Защита от зоны одна: инфекции объединены с радиацией.
+    if (radDefense) radDefense.textContent = zoneRisk.contaminationDefense;
     if (riskHint) riskHint.textContent = zoneRisk.hint;
     if (prepPanel) prepPanel.dataset.risk = zoneRisk.tier;
 
@@ -3283,12 +3268,14 @@ function updateZonePreparationUI(player) {
 function findBestPreparationItem(type) {
     const inventory = Array.isArray(gameState.inventory) ? gameState.inventory : [];
 
-    if (type === 'infection') {
-        return inventory.find(item => Number(item?.stats?.infection_cure || item?.infection_cure || 0) > 0) || null;
-    }
-
-    if (type === 'radiation') {
-        return inventory.find(item => Number(item?.stats?.radiation_cure || item?.rad_removal || 0) > 0) || null;
+    // Заражение зоны лечится одним типом предметов: инфекции объединены с
+    // радиацией. Старые infection_cure читаем тоже — чтобы Антидот и всё
+    // остальное продолжало работать без миграции инвентарей.
+    if (type === 'infection' || type === 'radiation') {
+        return inventory.find(item => Number(
+            item?.stats?.radiation_cure || item?.stats?.infection_cure
+            || item?.rad_removal || item?.infection_cure || 0
+        ) > 0) || null;
     }
 
     return null;
@@ -3401,26 +3388,23 @@ function updateProfileUI(player) {
     }
     
     refreshPlayerEnergyUI();
-    
-    // Статусы
+
+    // Статусы. Заражение зоны одно — радиация (инфекции объединены с ней),
+    // отдельного счётчика инфекций больше нет.
     const radiationValue = document.getElementById('radiation-value');
-    const infectionValue = document.getElementById('infection-value');
     if (radiationValue) radiationValue.textContent = status.radiation || 0;
-    if (infectionValue) infectionValue.textContent = status.infections || 0;
-    
+
     // Локацию
     if (player.location) {
         const locationIcon = document.getElementById('location-icon');
         const locationName = document.getElementById('location-name');
         const locationDesc = document.getElementById('location-desc');
         const locationRadiation = document.getElementById('location-radiation');
-        const locationInfection = document.getElementById('location-infection');
         const locationDanger = document.getElementById('location-danger');
         if (locationIcon) locationIcon.textContent = player.location.icon || '🏠';
         if (locationName) locationName.textContent = player.location.name;
         if (locationDesc) locationDesc.textContent = player.location.description || 'Описание локации недоступно';
         if (locationRadiation) locationRadiation.textContent = player.location.radiation;
-        if (locationInfection) locationInfection.textContent = player.location.infection || 0;
         if (locationDanger) locationDanger.textContent = player.location.danger_level || 1;
     }
     
@@ -3625,48 +3609,22 @@ function renderActiveBuffs(buffs = {}) {
 }
 
 /**
- * Обновление UI переломов и инфекций
+ * Обновление UI состояний игрока.
+ *
+ * Заражение зоны одно — радиация. Инфекции объединены с ней, поэтому блок
+ * инфекций, счётчик и кнопка «Лечить инфекции» убраны: лечение той же зоны
+ * идёт через панель лечения на главном экране.
  */
 function updateConditionsUI(status) {
     const conditionsGrid = document.getElementById('conditions-grid');
-    const infectionsDisplay = document.getElementById('infections-display');
-    const infectionValue = document.getElementById('infection-value');
-    const healActions = document.getElementById('heal-actions');
-    const healInfectionsBtn = document.getElementById('heal-infections-btn');
-    
+    const radiationValue = document.getElementById('radiation-value');
+
     if (!conditionsGrid) return;
-    
-    const infections = status.infections || 0;
-    if (infectionValue) infectionValue.textContent = infections;
-    
-    // Показываем/скрываем секцию состояний
-    if (infections > 0) {
-        conditionsGrid.style.display = 'grid';
-        if (healActions) healActions.style.display = 'flex';
-    } else {
-        conditionsGrid.style.display = 'none';
-        if (healActions) healActions.style.display = 'none';
-    }
-    
-    // Инфекции
-    if (infectionsDisplay) {
-        if (infections > 0) {
-            infectionsDisplay.style.display = 'flex';
-            const infectionsTextEl = document.getElementById('infections-text');
-            if (infectionsTextEl) {
-                infectionsTextEl.textContent = `🤒 Инфекции: ${infections}`;
-            }
-            // Обновляем эффект
-            const effect = document.getElementById('infection-effect');
-            if (effect) {
-                effect.textContent = `Ослабление: ур. ${infections}`;
-            }
-            if (healInfectionsBtn) healInfectionsBtn.style.display = 'flex';
-        } else {
-            infectionsDisplay.style.display = 'none';
-            if (healInfectionsBtn) healInfectionsBtn.style.display = 'none';
-        }
-    }
+
+    const radiation = Number(status.radiation || 0);
+    if (radiationValue) radiationValue.textContent = radiation;
+
+    conditionsGrid.style.display = radiation > 0 ? 'grid' : 'none';
 }
 
 /**
@@ -3782,10 +3740,12 @@ async function searchLoot() {
                 updateConditionsUI(gameState.player.status);
             }
 
-            if (result.infection) {
+            // Заражение зоны одно: сервер присылает только radiation.
+            // Прежний блок infection (свой счётчик и статус) удалён вместе
+            // с инфекциями.
+            if (result.radiation) {
                 if (!gameState.player.status) gameState.player.status = {};
-                const currentInfections = Number(gameState.player.status.infections || 0);
-                gameState.player.status.infections = Math.max(0, currentInfections + Number(result.infection.gained || 0));
+                gameState.player.status.radiation = result.radiation.level || 0;
                 updateConditionsUI(gameState.player.status);
             }
 
@@ -3916,11 +3876,9 @@ async function checkPlayerStatus() {
             return;
         }
         
-        // Обновляем UI если есть изменения
-        if (payload.infection_result?.success) {
-            showModal('🤒 Инфекция!', payload.infection_result.message);
-        }
-        
+        // Модалка заражения убрана: инфекции объединены с радиацией, поэтому
+        // зона показывает одно уведомление об изменении radiation.
+
         // Перезагружаем профиль
         await loadProfile();
 
@@ -6564,44 +6522,6 @@ function renderRating(items, type) {
 // ============================================================================
 
 /**
- * Лечение инфекций
- */
-async function healInfections() {
-    const status = gameState.player?.status;
-    if (!status || status.infections === 0) {
-        showModal('ℹ️ Инфо', 'У вас нет инфекций');
-        return;
-    }
-
-    if (!Array.isArray(gameState.inventory) || gameState.inventory.length === 0) {
-        await loadInventory();
-    }
-
-    const cureItem = findBestPreparationItem('infection');
-    if (!cureItem) {
-        showModal('⚠️ Нет антидота', 'В инвентаре нет предмета для лечения инфекции. Загляни в магазин подготовки.');
-        return;
-    }
-    
-    try {
-        const result = await apiRequest('/api/game/inventory/use-item', {
-            method: 'POST',
-            body: { item_index: cureItem.index }
-        });
-        
-        if (result.success) {
-            showModal('✅ Успех', result.message);
-            await loadInventory();
-            await loadProfile();
-        } else {
-            showModal('⚠️ Внимание', result.message || result.error || 'Не удалось вылечить инфекцию');
-        }
-    } catch (error) {
-        console.error('Ошибка лечения:', error);
-    }
-}
-
-/**
  * Выбранная на карте локация и троттлинг перерисовки.
  *
  * lastSelectedMapLocationId — чтобы DOM обновлялся только при смене выбора
@@ -6656,8 +6576,11 @@ function selectMapLocation(loc) {
 
     if (infoEl) {
         // textContent, а не innerHTML: значения приходят с сервера.
+        // Заражение зоны одно — показываем сумму радиации и инфекции
+        // (общее давление, как считает сервер).
+        const contamination = Number(loc.radiation || 0) + Number(loc.infection || 0);
         infoEl.textContent =
-            `☢️ ${Number(loc.radiation) || 0} · 🦠 ${Number(loc.infection) || 0} · ⚠️ риск ${Number(loc.danger_level) || 1}/7 · ${risk.label}`;
+            `☢️ ${contamination} · ⚠️ риск ${Number(loc.danger_level) || 1}/7 · ${risk.label}`;
         infoEl.dataset.locked = requiredLevel > level ? 'true' : 'false';
     }
 
@@ -6701,7 +6624,10 @@ function updateMapRiskPreview() {
     if (!info || !gameState.player?.location) return;
 
     const zoneRisk = getCurrentZoneRiskProfile(gameState.player);
-    info.textContent = `☢️ ${gameState.player.location.radiation || 0} | 🦠 ${gameState.player.location.infection || 0} | ${zoneRisk.label}`;
+    // Заражение зоны одно: радиация + инфекция локации дают общий уровень.
+    const contamination = Number(gameState.player.location.radiation || 0)
+        + Number(gameState.player.location.infection || 0);
+    info.textContent = `☢️ ${contamination} | ${zoneRisk.label}`;
 }
 
 // ============================================================================
@@ -7617,8 +7543,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
         
         // Лечение инфекций
-        document.getElementById('heal-infections-btn')?.addEventListener('click', healInfections);
-        
+                
         // PvP
         document.getElementById('pvp-refresh-btn')?.addEventListener('click', loadPVPGamePlayers);
         document.getElementById('pvp-stats-btn')?.addEventListener('click', () => showScreen('pvp-stats'));
@@ -7823,25 +7748,15 @@ function generateScreens() {
 
                     <div class="energy-timer inline" id="energy-timer" style="display:none">⌛ Энергия полная</div>
 
-                    <!-- Состояния: радиация и инфекции -->
+                    <!-- Состояния игрока: заражение зоны одно — радиация.
+                         Инфекции объединены с ней. -->
                     <div class="conditions-grid" id="conditions-grid" style="display:none">
                         <div class="condition-item">
-                            <span class="condition-icon">☢️</span>
-                            <span class="condition-text">Радиация</span>
+                            <span class="condition-icon">\u26a1\ufe0f</span>
+                            <span class="condition-text">Заражение</span>
                             <span class="condition-effect" id="radiation-value">0</span>
                         </div>
-                        <div class="condition-item infections" id="infections-display" style="display:none">
-                            <span class="condition-icon">🤒</span>
-                            <span class="condition-text" id="infections-text">Инфекции: 0</span>
-                            <span class="condition-effect" id="infection-effect"></span>
-                            <span id="infection-value" hidden>0</span>
-                        </div>
                     </div>
-                </div>
-
-                <!-- Кнопки лечения -->
-                <div class="heal-actions" id="heal-actions" style="display:none">
-                    <button class="heal-btn" id="heal-infections-btn" style="display:none">💊 Лечить инфекции</button>
                 </div>
 
                 <!-- Панель лечения: раньше кнопки лечения здоровья не было
@@ -7866,7 +7781,6 @@ function generateScreens() {
                             <p id="location-desc">Тихий жилой комплекс</p>
                             <div class="location-stats">
                                 <span class="radiation">☢️ <span id="location-radiation">0</span></span>
-                                <span class="infection">🦠 <span id="location-infection">0</span></span>
                                 <span class="danger">⚠️ ур. <span id="location-danger">1</span></span>
                             </div>
                         </div>
@@ -9096,8 +9010,7 @@ function renderCoinShop() {
         const safeItemId = parseInt(item.id) || 0;
         const prepTag = item.stats?.radiation_cure || item.stats?.infection_cure || item.stats?.radiation_resist || item.stats?.infection_resist
             ? '<div class="shop-item-role">Подготовка к опасной зоне</div>'
-            : '';
-        return `
+            : '';        return `
             <div class="shop-item-card ${escapedRarity}" data-item-id="${safeItemId}">
                 <div class="shop-item-icon">${escapedIcon}</div>
                 <div class="shop-item-info">
@@ -9141,10 +9054,13 @@ function renderItemStats(stats) {
     if (stats.defense) statLines.push(`🛡️ Защита: +${Number(stats.defense)}`);
     if (stats.health) statLines.push(`❤️ Здоровье: +${Number(stats.health)}`);
     if (stats.energy) statLines.push(`⚡ Энергия: +${Number(stats.energy)}`);
-    if (stats.radiation_cure) statLines.push(`☢️ Лечение радиации: ${Number(stats.radiation_cure)}`);
-    if (stats.infection_cure) statLines.push(`🦠 Лечение инфекции: ${Number(stats.infection_cure)}`);
-    if (stats.radiation_resist) statLines.push(`🛡️ Защита от радиации: ${Number(stats.radiation_resist)}`);
-    if (stats.infection_resist) statLines.push(`🧪 Защита от инфекции: ${Number(stats.infection_resist)}`);
+    // Заражение зоны одно: лечение и защита показываются одним статом.
+    // Старые infection_* читаются тоже — предметы в инвентарях игроков
+    // могли сохраниться со старой схемой.
+    const contaminationCure = Number(stats.radiation_cure || stats.infection_cure || 0);
+    if (contaminationCure > 0) statLines.push(`☢️ Лечение заражения: ${contaminationCure}`);
+    const contaminationResist = Number(stats.radiation_resist || stats.infection_resist || 0);
+    if (contaminationResist > 0) statLines.push(`🛡️ Защита от зоны: +${contaminationResist}`);
     return statLines.join('<br>');
 }
 

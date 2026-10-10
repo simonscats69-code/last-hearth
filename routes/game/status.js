@@ -6,6 +6,9 @@ const express = require('express');
 const router = express.Router();
 const { transaction } = require('../../db/database');
 const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
+// Порог урона от заражения — единое место правды (раньше «5» было вписано
+// и здесь, и в debuffs.js).
+const CONTAMINATION_DAMAGE_FROM_LEVEL = require('../../public/shared/equipment.js').CONTAMINATION_DAMAGE_FROM_LEVEL;
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
 const { validateId } = require('../../utils/validate');
 const { DebuffAPI } = require('./debuffs');
@@ -35,7 +38,7 @@ function getPlayerStatus(player) {
 
 async function runStatusCheck(client, playerId) {
     const lockResult = await client.query(
-        `SELECT health, radiation, infections
+        `SELECT health, radiation
          FROM players WHERE id = $1 FOR UPDATE`,
         [playerId]
     );
@@ -62,18 +65,16 @@ async function runStatusCheck(client, playerId) {
         radiationLevel = typeof parsed === 'object' ? (parsed.level || 0) : (parseInt(parsed) || 0);
     }
     
-    if (radiationLevel >= 5) {
-        radDamage = (radiationLevel - 4) * radConfig.damagePerLevel;
+    // Порог урона — из общего файла правил, одно место на весь проект.
+    if (radiationLevel >= CONTAMINATION_DAMAGE_FROM_LEVEL) {
+        radDamage = (radiationLevel - (CONTAMINATION_DAMAGE_FROM_LEVEL - 1)) * radConfig.damagePerLevel;
     }
 
-    const infections = safeJsonParse(p.infections, []);
-    const totalInfectionLevel = infections.reduce((sum, infection) => sum + (infection.level || 0), 0);
-    const infConfig = DEBUFF_CONFIG.infection;
-    const infectionDamage = totalInfectionLevel > 0 && Math.random() < 0.1
-        ? totalInfectionLevel * infConfig.damagePerLevel
-        : 0;
+    // Инфекции объединены с радиацией: урон один, отдельного слагаемого
+    // от players.infections больше нет. Прежняя строка второго урона
+    // (10% шанс × уровень × 2) удалена вместе с ним.
 
-    const totalDamage = radDamage + infectionDamage;
+    const totalDamage = radDamage;
 
     if (totalDamage > 0) {
         await client.query(
@@ -87,13 +88,11 @@ async function runStatusCheck(client, playerId) {
     return {
         totalDamage,
         effects: {
-            radiation: radDamage,
-            infections: infectionDamage
+            radiation: radDamage
         },
         states: {
             radiation: getDebuffTier(radiationLevel),
-            infections: getDebuffTier(totalInfectionLevel),
-            overall: getDebuffTier(Math.max(radiationLevel, totalInfectionLevel))
+            overall: getDebuffTier(radiationLevel)
         }
     };
 }
@@ -214,9 +213,11 @@ router.post('/heal', async (req, res) => {
         
         // Используем транзакцию с блокировкой строки
         const result = await transaction(async (client) => {
-            // Блокируем строку игрока
+            // Блокируем строку игрока.
+            // infections из SELECT убран: инфекции объединены с радиацией,
+            // теперь все лечится одним типом 'radiation'.
             const lockResult = await client.query(
-                `SELECT inventory, health, max_health, radiation, infections
+                `SELECT inventory, health, max_health, radiation
                  FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
@@ -228,7 +229,9 @@ router.post('/heal', async (req, res) => {
             const p = lockResult.rows[0];
             const inventory = normalizeInventory(p.inventory);
             
-            // Для типов, требующих item_id
+            // Для типов, требующих item_id.
+            // Инфекционный тип ('infection') больше не принимается: зона лечится
+            // тем же 'radiation', антидот работает как антирад.
             if (['health', 'radiation'].includes(type)) {
                 if (item_id === undefined && item_index === undefined) {
                     throw { message: 'item_id или item_index обязателен для этого типа', code: 'MISSING_ITEM_ID', statusCode: 400 };
@@ -259,9 +262,15 @@ router.post('/heal', async (req, res) => {
                     healed = true;
                     
                 } else if (type === 'radiation') {
-                    healAmount = Number(item.rad_removal || itemStats.radiation_cure || 0);
+                    // Один тип лечения зоны: радиация и инфекция объединены,
+                    // поэтому антирад, антидот и спирт читаются одинаково —
+                    // по radiation_cure, rad_removal или infection_cure.
+                    healAmount = Number(
+                        item.rad_removal || itemStats.radiation_cure
+                        || item.infection_cure || itemStats.infection_cure || 0
+                    );
                     if (healAmount <= 0) {
-                        throw { message: 'Этот предмет не снижает радиацию', code: 'INVALID_ITEM_TYPE', statusCode: 400 };
+                        throw { message: 'Этот предмет не снижает заражение', code: 'INVALID_ITEM_TYPE', statusCode: 400 };
                     }
                     
                     // Получаем текущее значение радиации (может быть JSON или числом)

@@ -28,12 +28,14 @@ import { GAME_CONFIG, WEAR_PER_HIT, REPAIR_COST_MULTIPLIER, UPGRADE_COST_MULTIPL
 /** Слоты экипировки, которые участвуют в расчёте защиты */
 export const EQUIPMENT_SLOTS_LIST: readonly EquipmentSlot[] = Object.freeze(DEFENSE_SLOTS);
 
-/** Синонимы полей сопротивления */
-export const RADIATION_KEYS = Object.freeze([
-  'radiation_resist', 'radiation_resistance', 'radiationDefense'
-]);
-
-export const INFECTION_KEYS = Object.freeze([
+/**
+ * Синонимы полей сопротивления зоне.
+ *
+ * Инфекции объединены с радиацией: infection_* и radiation_* дают одну
+ * защиту, поэтому ключи сведены в один список.
+ */
+export const CONTAMINATION_KEYS = Object.freeze([
+  'radiation_resist', 'radiation_resistance', 'radiationDefense',
   'infection_resist', 'infection_resistance', 'infectionDefense'
 ]);
 
@@ -76,18 +78,26 @@ export function normalizeResistanceToThreatPoints(totalResistance: number): numb
   return Math.max(0, Math.round(Number(totalResistance || 0) / 10));
 }
 
-/** Защита от радиации из экипировки */
-export function calculateRadiationDefense(equipment: PlayerEquipment | null | undefined): number {
+/**
+ * Защита от заражения зоной, в очках.
+ *
+ * Одна функция вместо прежних calculateRadiationDefense /
+ * calculateInfectionDefense: инфекции объединены с радиацией.
+ */
+export function calculateContaminationDefense(equipment: PlayerEquipment | null | undefined): number {
   return normalizeResistanceToThreatPoints(
-    sumEquipmentResistance(equipment, RADIATION_KEYS)
+    sumEquipmentResistance(equipment, CONTAMINATION_KEYS)
   );
 }
 
-/** Защита от инфекций из экипировки */
-export function calculateInfectionDefense(equipment: PlayerEquipment | null | undefined): number {
-  return normalizeResistanceToThreatPoints(
-    sumEquipmentResistance(equipment, INFECTION_KEYS)
-  );
+/**
+ * Суммарная угроза локации: радиация + инфекция дают одно заражение.
+ */
+export function calculateLocationContaminationThreat(
+  location: { radiation?: number | null; infection?: number | null }
+): number {
+  return normalizeThreatLevelToPoints(location.radiation ?? 0)
+    + normalizeThreatLevelToPoints(location.infection ?? 0);
 }
 
 /** Зеркало normalizeResistanceToThreatPoints с округлением вверх */

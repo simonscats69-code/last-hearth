@@ -125,53 +125,51 @@ function rollItemRarity(locationId, luck = 1) {
 // в проекте нет: лут берётся из кэша пула в routes/game/world.js
 // (getRandomLootItem), где учитываются тип локации и риск.
 
-// Типы дебаффов
+// Тип дебаффа. Раньше было два (RADIATION и INFECTION='zombie_infection') с
+// двумя колонками и двумя формулами начисления. Инфекции объединены с
+// радиацией: зона теперь даёт одно «заражение», которое хранится в
+// players.radiation.
 const DEBUFF_TYPES = {
-    RADIATION: 'radiation',
-    INFECTION: 'zombie_infection'
+    RADIATION: 'radiation'
 };
 
-// Конфигурация дебаффов
+// Конфигурация дебаффа — ЕДИНСТВЕННЫЙ конфиг зоны.
+//
+// Значения взяты от радиации: у инфекции была более длинная базовая
+// длительность (8 ч) и дольше прирост за уровень (+3 ч). Поскольку обе
+// угрозы теперь складываются в один уровень, длительность увеличена до
+// инфекционной, чтобы суммарное заражение не снималось слишком быстро.
 const DEBUFF_CONFIG = {
-    // Радиация
     radiation: {
-        baseDurationMs: 4 * 60 * 60 * 1000,  // 4 часа в мс
-        durationPerLevelMs: 90 * 60 * 1000,  // +1.5 часа за уровень
-        maxLevel: 10,
-        minLevel: 1,
-        damagePerLevel: 1,  // урон здоровью в час при level >= 5
-        regenRateMs: 30 * 60 * 1000  // естественное снижение каждые 30 мин
-    },
-    // Инфекция
-    infection: {
-        baseDurationMs: 8 * 60 * 60 * 1000,  // 8 часов
+        baseDurationMs: 8 * 60 * 60 * 1000,  // 8 часов в мс
         durationPerLevelMs: 3 * 60 * 60 * 1000,  // +3 часа за уровень
         maxLevel: 10,
         minLevel: 1,
-        damagePerLevel: 2,  // урон здоровью в час
-        regenRateMs: 60 * 60 * 1000  // естественное снижение каждый час
+        damagePerLevel: 1,  // урон здоровью за применённый тик при level >= 5
+        regenRateMs: 30 * 60 * 1000  // естественное снижение каждые 30 мин
     }
 };
 
-// Множители влияния на статы (за каждый уровень дебаффа)
+// Множители влияния на статы за каждый уровень заражения.
+//
+// Один плоский объект вместо прежних DEBUFF_EFFECTS.radiation /
+// DEBUFF_EFFECTS.infection. Значения — по наиболее сильному штрафу из
+// каждой пары: радиация била по удаче и дропу (−4%), инфекция по силе
+// (−4%) и выносливости (−3%). Объединённый дебафф сохраняет все эффекты.
 const DEBUFF_EFFECTS = {
-    // Радиация: сильно бьёт по удаче и дропу
-    radiation: {
-        strength: -0.02,      // -2% к урону за уровень
-        luck: -0.04,          // -4% к удаче за уровень
-        dropChance: -0.04    // -4% к шансу дропа за уровень
-    },
-    // Инфекция: сильно бьёт по силе и выносливости
-    infection: {
-        strength: -0.04,      // -4% к урону за уровень
-        endurance: -0.03,    // -3% к выносливости за уровень
-        dropChance: -0.02    // -2% к шансу дропа за уровень
-    }
+    strength: -0.04,      // −4% к урону за уровень
+    luck: -0.04,          // −4% к удаче за уровень
+    dropChance: -0.04,    // −4% к шансу дропа за уровень
+    endurance: -0.03     // −3% к выносливости за уровень
 };
 
-// Предметы для лечения дебаффов
+// Предметы для лечения заражения.
+//
+// Лечение строится от СТАТОВ самого предмета (radiation_cure /
+// rad_removal), поэтому таблица — только подсказка «чем лечить этот тип».
+// antibiotic и injection убраны вместе с инфекциями: антидот и всё
+// остальное теперь лечит радиацию.
 const DEBUFF_CURES = {
-    // Радиация
     antirad: {
         radiationReduction: 4,
         itemId: 'antirad',
@@ -181,17 +179,6 @@ const DEBUFF_CURES = {
         radiationReduction: 2,
         itemId: 'medkit',
         name: 'Аптечка'
-    },
-    // Инфекция
-    antibiotic: {
-        infectionReduction: 2,
-        itemId: 'antibiotic',
-        name: 'Антибиотики'
-    },
-    injection: {
-        infectionReduction: 3,
-        itemId: 'injection',
-        name: 'Укол'
     }
 };
 
@@ -202,8 +189,7 @@ const DEBUFF_CURES = {
  */
 function calculateDebuffModifiers(player) {
     let radiation = { level: 0 };
-    let infections = [];
-    
+
     if (player.radiation) {
         if (typeof player.radiation === 'string') {
             try {
@@ -215,48 +201,30 @@ function calculateDebuffModifiers(player) {
             radiation = player.radiation || { level: 0 };
         }
     }
-    
-    if (player.infections) {
-        if (typeof player.infections === 'string') {
-            try {
-                infections = JSON.parse(player.infections);
-            } catch {
-                infections = [];
-            }
-        } else {
-            infections = player.infections || [];
-        }
-    }
-    
-    const radLevel = radiation.level || 0;
-    const infLevel = infections.reduce((sum, i) => sum + (i.level || 0), 0);
-    
+
+    // Уровень заражения — единственный источник эффектов. Раньше здесь
+    // складывался ещё и уровень инфекций из players.infections.
+    const level = Math.max(0, Number(radiation.level || 0));
+
     const modifiers = {
         damage: 1.0,
         luck: 1.0,
         dropChance: 1.0,
         endurance: 1.0
     };
-    
-    if (radLevel > 0) {
-        const effect = DEBUFF_EFFECTS.radiation;
-        modifiers.damage += radLevel * effect.strength;
-        modifiers.luck += radLevel * effect.luck;
-        modifiers.dropChance += radLevel * effect.dropChance;
+
+    if (level > 0) {
+        modifiers.damage += level * DEBUFF_EFFECTS.strength;
+        modifiers.luck += level * DEBUFF_EFFECTS.luck;
+        modifiers.dropChance += level * DEBUFF_EFFECTS.dropChance;
+        modifiers.endurance += level * DEBUFF_EFFECTS.endurance;
     }
-    
-    if (infLevel > 0) {
-        const effect = DEBUFF_EFFECTS.infection;
-        modifiers.damage += infLevel * effect.strength;
-        modifiers.endurance += infLevel * effect.endurance;
-        modifiers.dropChance += infLevel * effect.dropChance;
-    }
-    
+
     modifiers.damage = Math.max(0.1, modifiers.damage);
     modifiers.luck = Math.max(0.1, modifiers.luck);
     modifiers.dropChance = Math.max(0.01, modifiers.dropChance);
     modifiers.endurance = Math.max(0.1, modifiers.endurance);
-    
+
     return modifiers;
 }
 
@@ -269,41 +237,40 @@ function getDebuffTier(level) {
 }
 
 /**
- * Рассчитать защиту от радиации из экипировки
- * @param {object} equipmentMap - экипировка игрока
- * @returns {number} защита от радиации
+ * Защита от заражения зоной из экипировки.
+ *
+ * Одна функция вместо прежних calculateRadiationDefense /
+ * calculateInfectionDefense: инфекции объединены, все ключи сопротивления
+ * (radiation_* и infection_*) дают одну защиту.
  */
-function calculateRadiationDefense(equipmentMap) {
-    return sharedEquipment.calculateRadiationDefense(equipmentMap);
-}
-
-function calculateInfectionDefense(equipmentMap) {
-    return sharedEquipment.calculateInfectionDefense(equipmentMap);
+function calculateContaminationDefense(equipmentMap) {
+    return sharedEquipment.calculateContaminationDefense(equipmentMap);
 }
 
 // getRiskTierByScore берётся из общего файла правил выше.
 
+/**
+ * Профиль риска локации.
+ *
+ * Угроза одна: радиация и инфекция локации складываются в общее «заражение»
+ * (calculateLocationContaminationThreat), из него вычитается защита. Раньше
+ * это были две независимые величины с двумя давлениями и двумя риск-скорами.
+ */
 function calculateLocationRiskProfile(location = {}, equipment = {}) {
-    const radiationThreat = sharedEquipment.normalizeThreatLevelToPoints(location.radiation);
-    const infectionThreat = sharedEquipment.normalizeThreatLevelToPoints(location.infection);
-    const radiationDefense = calculateRadiationDefense(equipment);
-    const infectionDefense = calculateInfectionDefense(equipment);
+    const contaminationThreat = sharedEquipment.calculateLocationContaminationThreat(location);
+    const contaminationDefense = calculateContaminationDefense(equipment);
 
-    const radiationPressure = Math.max(0, radiationThreat - radiationDefense);
-    const infectionPressure = Math.max(0, infectionThreat - infectionDefense);
-    const riskScore = radiationPressure + infectionPressure;
+    const contaminationPressure = Math.max(0, contaminationThreat - contaminationDefense);
+    const riskScore = contaminationPressure;
     const tier = getRiskTierByScore(riskScore);
 
     return {
         tier: tier.key,
         label: tier.label,
         riskScore,
-        radiationThreat,
-        infectionThreat,
-        radiationDefense,
-        infectionDefense,
-        radiationPressure,
-        infectionPressure,
+        contaminationThreat,
+        contaminationDefense,
+        contaminationPressure,
         rewardMultiplier: tier.rewardMultiplier,
         keyChanceMultiplier: tier.keyChanceMultiplier,
         rarityLuckBonus: tier.rarityLuckBonus,
@@ -317,16 +284,18 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
  * Что уходит наружу.
  *
  * Правило: наружу выходит то, что зовут другие модули. Внутренние
- * таблицы (LOOT_TABLES, DEBUFF_EFFECTS) и обёртки над
- * public/shared/equipment.js остаются здесь как реализация.
+ * таблицы (LOOT_TABLES) и обёртки над public/shared/equipment.js остаются
+ * здесь как реализация.
  */
 module.exports = {
     // Дебаффы — читают debuffs.js, status.js, world.js
     DEBUFF_TYPES,
     DEBUFF_CONFIG,
     DEBUFF_CURES,
+    DEBUFF_EFFECTS,
     getDebuffTier,
     calculateDebuffModifiers,
+    calculateContaminationDefense,
 
     // Опыт — читает utils/serverApi.js (PlayerHelper.addExperience)
     getExpForLevel,

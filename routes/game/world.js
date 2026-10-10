@@ -27,7 +27,6 @@ const { getGameHelpers } = require('../../utils/getGameHelpers');
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
 const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = helpers;
-const { DebuffAPI } = require('./debuffs');
 const { lootPoolCache, getLootCacheReady, buildLootCache, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
 const crypto = require('crypto');
 // Один require на файл правил: раньше путь '../../public/shared/equipment.js'
@@ -336,14 +335,19 @@ router.post('/search', async (req, res) => {
             const equipment = safeJsonParse(updatedPlayer.equipment, {});
             const riskProfile = calculateLocationRiskProfile(locationData, equipment);
         
+        // Заражение зоной: радиация и инфекция локации складываются в ОДНО
+        // давление (calculateLocationRiskProfile считает общую угрозу).
+        // Раньше это были два независимых блока с двумя разными формулами:
+        // радиация брала riskProfile.radiationPressure, а инфекция
+        // пересчитывала baseInfection от локации на месте.
         let radiationGain = 0;
-        const radiationDefense = riskProfile.radiationDefense;
+        const contaminationDefense = riskProfile.contaminationDefense;
         let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         
-        if (locationData.radiation > 0 && !activeBuffs.no_radiation) {
-            // P1-7: используем уже посчитанное давление радиации (с учётом защиты)
+        if (riskProfile.contaminationThreat > 0 && !activeBuffs.no_radiation) {
+            // P1-7: используем уже посчитанное давление (с учётом защиты)
             const randomFactor = 0.7 + crypto.randomInt(600) / 1000;
-            radiationGain = Math.max(0, Math.ceil(riskProfile.radiationPressure * randomFactor));
+            radiationGain = Math.max(0, Math.ceil(riskProfile.contaminationPressure * randomFactor));
             
             if (radiationGain > 0) {
                 const currentRadiation = normalizeRadiation(updatedPlayer.radiation);
@@ -363,30 +367,6 @@ router.post('/search', async (req, res) => {
                         applied_at: now.toISOString()
                     }), playerId]
                 );
-            }
-        }
-        
-        // Применяем инфекцию
-        let infectionGain = 0;
-        const infectionDefense = riskProfile.infectionDefense;
-        
-        if (locationData.infection && locationData.infection > 0) {
-            const baseInfection = Math.ceil(locationData.infection / 10);
-            const randomFactor = 0.7 + crypto.randomInt(600) / 1000;
-            infectionGain = Math.max(0, Math.ceil((baseInfection - infectionDefense) * randomFactor));
-            
-            if (infectionGain > 0) {
-                try {
-                    // Передаём client текущей транзакции, чтобы не открывать
-                    // вложенную транзакцию с блокировкой той же строки игрока
-                    await DebuffAPI.apply(playerId, 'zombie_infection', infectionGain, {
-                        source: locationData.name,
-                        locationId: locationData.id,
-                        client
-                    });
-                } catch (err) {
-                    logger.error('Ошибка применения инфекции', { playerId, error: err.message });
-                }
             }
         }
         
@@ -623,20 +603,22 @@ router.post('/search', async (req, res) => {
                     last_update: lastEnergyUpdate,
                     coins: energyResult.rows[0].coins
                 },
+                // Заражение зоной — одно. Инфекции объединены с радиацией,
+                // поэтому отдельный блок infection больше не отдаётся:
+                // весь «урон зоне» считается в radiation.
                 radiation: {
                     level: resultingRadiationLevel,
                     gained: radiationGain,
-                    defense: radiationDefense,
+                    defense: contaminationDefense,
                     effect: radiationEffect
-                },
-                infection: {
-                    gained: infectionGain,
-                    defense: infectionDefense
                 },
                 risk_profile: {
                     tier: riskProfile.tier,
                     label: riskProfile.label,
                     score: riskProfile.riskScore,
+                    contamination_threat: riskProfile.contaminationThreat,
+                    contamination_defense: riskProfile.contaminationDefense,
+                    contamination_pressure: riskProfile.contaminationPressure,
                     reward_multiplier: riskProfile.rewardMultiplier,
                     key_chance_multiplier: riskProfile.keyChanceMultiplier,
                     rarity_luck_bonus: riskProfile.rarityLuckBonus,
@@ -644,6 +626,8 @@ router.post('/search', async (req, res) => {
                 },
                 location: {
                     name: locationData.name,
+                    // Оба значения остаются в ответе: это данные мира,
+                    // по ним клиент рисует карточку локации.
                     radiation: locationData.radiation,
                     infection: locationData.infection || 0
                 },

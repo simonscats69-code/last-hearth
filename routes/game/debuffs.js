@@ -28,13 +28,16 @@ function getGameHelpers() {
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
 const { normalizeInventory, consumeInventoryItem } = helpers;
-const { 
-    DEBUFF_TYPES, 
-    DEBUFF_CONFIG, 
+const {
+    DEBUFF_TYPES,
+    DEBUFF_CONFIG,
     DEBUFF_CURES,
     calculateDebuffModifiers,
     getDebuffTier
 } = require('../../utils/gameConstants');
+// Порог «с какого уровня заражение бьёт по здоровью» — из общего файла
+// правил. Прежнее голое «5» в двух местах было источником расхождений.
+const CONTAMINATION_DAMAGE_FROM_LEVEL = require('../../public/shared/equipment.js').CONTAMINATION_DAMAGE_FROM_LEVEL;
 
 function createDebuffError(message, code, statusCode = 400) {
     return { message, code, statusCode };
@@ -46,7 +49,7 @@ const DebuffAPI = {
     /**
      * Применить дебафф к игроку
      * @param {number} playerId - ID игрока
-     * @param {string} type - тип дебаффа (radiation, zombie_infection)
+     * @param {string} type - тип дебаффа (только radiation — инфекции объединены с ним)
      * @param {number} level - уровень дебаффа
      * @param {object} options - дополнительные опции {source, client}
      *   client — внешний клиент транзакции; если передан, новая транзакция
@@ -74,7 +77,7 @@ const DebuffAPI = {
         const executor = async (client) => {
             // Блокируем строку игрока по внутреннему id
             const playerResult = await client.query(
-                `SELECT radiation, infections FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT radiation FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
             const player = playerResult.rows[0];
@@ -109,51 +112,12 @@ const DebuffAPI = {
                 }, client);
                 
                 return { type, oldLevel: currentRadiation.level, newLevel, expiresAt };
-                
-            } else if (type === DEBUFF_TYPES.INFECTION) {
-                // Добавляем инфекцию в массив
-                const infections = safeJsonParse(player.infections, []);
-                
-                // Проверяем, есть ли уже такая инфекция
-                const existingIndex = infections.findIndex(i => i.type === type);
-                let newInfections = [...infections];
-                
-                if (existingIndex >= 0) {
-                    // Увеличиваем уровень существующей
-                    const existing = newInfections[existingIndex];
-                    const newLevel = Math.min(config.maxLevel, existing.level + level);
-                    newInfections[existingIndex] = {
-                        ...existing,
-                        level: newLevel,
-                        expires_at: expiresAt.toISOString(),
-                        applied_at: now.toISOString(),
-                        source: options.source
-                    };
-                } else {
-                    // Добавляем новую
-                    newInfections.push({
-                        type,
-                        level,
-                        expires_at: expiresAt.toISOString(),
-                        applied_at: now.toISOString(),
-                        source: options.source
-                    });
-                }
-                
-                await client.query(
-                    `UPDATE players SET infections = $1 WHERE id = $2`,
-                    [JSON.stringify(newInfections), playerId]
-                );
-                
-                await logPlayerAction(playerId, 'debuff_infection_apply', {
-                    type,
-                    level,
-                    totalInfections: newInfections.reduce((s, i) => s + i.level, 0),
-                    source: options.source
-                }, client);
-                
-                return { type, level, newInfections, expiresAt };
             }
+
+            // Единственный тип дебаффа — радиация. Прежняя ветка
+            // DEBUFF_TYPES.INFECTION писала в players.infections отдельным
+            // массивом; теперь зона даёт одно заражение в players.radiation.
+            throw new Error(`Неизвестный тип дебаффа: ${type}`);
         };
 
         if (options.client) {
@@ -171,7 +135,7 @@ const DebuffAPI = {
     async check(playerId) {
         return await transaction(async (client) => {
             const playerResult = await client.query(
-                `SELECT radiation, infections, health FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT radiation, health FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
             const player = playerResult.rows[0];
@@ -207,41 +171,12 @@ const DebuffAPI = {
                 }
             }
             
-            // Проверяем инфекции
-            const infections = safeJsonParse(player.infections, []);
-            const validInfections = [];
+            // Проверяем заражение: единственный дебафф — радиация.
+            // Прежний блок проверки players.infections (массив с expires_at
+            // по каждому элементу) удалён вместе с инфекциями.
             
-            for (const inf of infections) {
-                if (inf.expires_at) {
-                    const expiresAt = new Date(inf.expires_at);
-                    if (expiresAt <= now) {
-                        expired.push(`infection_${inf.type}`);
-                    } else {
-                        validInfections.push(inf);
-                        active.push({ type: inf.type, level: inf.level, expiresAt: inf.expires_at });
-                        
-                        // Предупреждение
-                        const timeLeft = expiresAt - now;
-                        if (timeLeft < 30 * 60 * 1000) {
-                            warnings.push(`infection_${inf.type}_expiring`);
-                        }
-                    }
-                } else {
-                    validInfections.push(inf);
-                    active.push({ type: inf.type, level: inf.level, expiresAt: null });
-                }
-            }
-            
-            // Обновляем инфекции если есть изменения
-            if (validInfections.length !== infections.length) {
-                await client.query(
-                    `UPDATE players SET infections = $1 WHERE id = $2`,
-                    [JSON.stringify(validInfections), playerId]
-                );
-            }
-            
-            // Расчёт урона от дебаффов.
-            // P2: this.calculateDebuffDamage(...) ломалось при деструктуризации
+            // Расчёт урона от дебаффа.
+            // P2: this.calculateDebuffDamage(...) ломался при деструктуризации
             // (`const { apply } = require('./debuffs').DebuffAPI`) — this терялся
             // и метод был недоступен. Вызываем через DebuffAPI явно.
             const totalDamage = DebuffAPI.calculateDebuffDamage(active);
@@ -258,6 +193,12 @@ const DebuffAPI = {
     
     /**
      * Рассчитать урон от дебаффов
+     *
+     * Единственный дебафф — радиация. Урон начинается с 5 уровня:
+     * (level - 4) * damagePerLevel. Прежняя ветка инфекции (10% шанс ×
+     * уровень × 2) удалена вместе с infection: порог и коэффициент
+     * захардкоживались в двух местах статуса и здесь.
+     *
      * @param {Array} activeDebuffs - массив активных дебаффов
      * @returns {number} суммарный урон
      */
@@ -273,16 +214,13 @@ const DebuffAPI = {
             // Дебафф истёк - пропускаем (урон не наносится)
             if (expiresAt <= now) continue;
             
-            const configKey = debuff.type === DEBUFF_TYPES.INFECTION ? 'infection' : debuff.type;
-            const config = DEBUFF_CONFIG[configKey];
+            if (debuff.type !== DEBUFF_TYPES.RADIATION) continue;
+
+            const config = DEBUFF_CONFIG.radiation;
             if (!config) continue;
 
-            if (debuff.type === DEBUFF_TYPES.RADIATION && debuff.level >= 5) {
-                damage += Math.max(0, debuff.level - 4) * config.damagePerLevel;
-            }
-
-            if (debuff.type === DEBUFF_TYPES.INFECTION && debuff.level > 0 && Math.random() < 0.1) {
-                damage += debuff.level * config.damagePerLevel;
+            if (debuff.level >= CONTAMINATION_DAMAGE_FROM_LEVEL) {
+                damage += Math.max(0, debuff.level - (CONTAMINATION_DAMAGE_FROM_LEVEL - 1)) * config.damagePerLevel;
             }
         }
         
@@ -291,37 +229,22 @@ const DebuffAPI = {
     
     /**
      * Получить активные дебаффы игрока
+     *
+     * Только радиация: инфекции объединены с ней.
      */
     getActive(player) {
         const radiation = safeJsonParse(player.radiation, { level: 0, expires_at: null });
-        const infections = safeJsonParse(player.infections, []);
         
         const active = [];
         
         if (radiation.level > 0) {
             active.push({
-                type: 'radiation',
+                type: DEBUFF_TYPES.RADIATION,
                 level: radiation.level,
                 expiresAt: radiation.expires_at,
                 severity: getDebuffTier(radiation.level),
                 name: 'Радиация',
                 icon: '☢'
-            });
-        }
-        
-        const totalInfection = infections.reduce((sum, i) => sum + (i.level || 0), 0);
-        if (totalInfection > 0) {
-            active.push({
-                type: 'zombie_infection',
-                level: totalInfection,
-                expiresAt: infections.reduce((max, i) => {
-                    if (!i.expires_at) return max;
-                    const exp = new Date(i.expires_at);
-                    return exp > max ? exp : max;
-                }, new Date(0)).toISOString(),
-                severity: getDebuffTier(totalInfection),
-                name: 'Инфекция',
-                icon: '🦠'
             });
         }
         
@@ -338,7 +261,7 @@ const DebuffAPI = {
         const executor = async (client) => {
             // Получаем игрока и инвентарь
             const playerResult = await client.query(
-                `SELECT radiation, infections, inventory FROM players WHERE id = $1 FOR UPDATE`,
+                `SELECT radiation, inventory FROM players WHERE id = $1 FOR UPDATE`,
                 [playerId]
             );
             const player = playerResult.rows[0];
@@ -365,30 +288,51 @@ const DebuffAPI = {
 
             // Авто-режим подбирает силу лечения из реального предмета,
             // чтобы не завышать эффект при предметах со слабыми статами.
+            //
+            // Один источник силы лечения: contamination_cure (radiation_cure /
+            // rad_removal). Прежняя пара radiationReduction /
+            // infectionReduction склеена в одно, поэтому Антидот и всё
+            // остальное лечит радиацию одинаково.
             if (!cure && (resolvedCureType === 'auto' || resolvedCureType === 'debuff')) {
                 resolvedCureType = 'auto';
                 cure = {
-                    radiationReduction: Number(itemStats.radiation_cure || item.rad_removal || 0),
-                    infectionReduction: Number(itemStats.infection_cure || item.infection_cure || 0)
+                    contaminationReduction: Number(itemStats.radiation_cure || item.rad_removal || 0)
                 };
+            }
+
+            // Легаси-имена типов лечения (antibiotic/injection) после
+            // объединения инфекций с радиацией. Нормализуем к antirad,
+            // чтобы старый вызов не падал с INVALID_TYPE: реальную силу
+            // всё равно задают статы предмета ниже.
+            if (!cure && (resolvedCureType === 'antibiotic' || resolvedCureType === 'injection')) {
+                resolvedCureType = 'antirad';
+                cure = DEBUFF_CURES.antirad;
             }
 
             if (!cure) {
                 throw createDebuffError(`Неизвестный тип лечения: ${cureType}`, 'INVALID_TYPE', 400);
             }
+
+            // Нормализуем поле: у auto-режима contaminationReduction,
+            // у таблицы DEBUFF_CURES — radiationReduction.
+            const curePower = Number(
+                cure.contaminationReduction !== undefined
+                    ? cure.contaminationReduction
+                    : cure.radiationReduction
+            );
             
             // Проверяем, что предмет подходит для лечения
-            const canCure = (cure.radiationReduction && Number(itemStats.radiation_cure || item.rad_removal || 0) > 0) ||
-                           (cure.infectionReduction && Number(itemStats.infection_cure || item.infection_cure || 0) > 0);
-            
-            if (!canCure) {
+            const itemPower = Number(itemStats.radiation_cure || item.rad_removal || 0);
+            if (!(curePower > 0) || !(itemPower > 0)) {
                 throw createDebuffError('Этот предмет не лечит дебаффы', 'INVALID_ITEM_TYPE', 400);
             }
             
-            // Лечим радиацию
-            if (cure.radiationReduction && Number(itemStats.radiation_cure || item.rad_removal || 0) > 0) {
+            // Лечим заражение: снижаем уровень и пропорционально укорачиваем
+            // срок действия. Один блок вместо прежних «лечим радиацию» и
+            // «лечим инфекции».
+            {
                 const radiation = safeJsonParse(player.radiation, { level: 0 });
-                const newLevel = Math.max(0, radiation.level - cure.radiationReduction);
+                const newLevel = Math.max(0, radiation.level - curePower);
                 
                 // Пересчитываем время истечения
                 let newExpiresAt = null;
@@ -397,7 +341,7 @@ const DebuffAPI = {
                     const now = new Date();
                     // Защита от деления на ноль: используем Math.max(1, ...) для уровня
                     const safeLevel = Math.max(1, radiation.level);
-                    const reductionRatio = cure.radiationReduction / safeLevel;
+                    const reductionRatio = curePower / safeLevel;
                     const reduction = (oldExpires - now) * reductionRatio;
                     newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
                 }
@@ -415,39 +359,6 @@ const DebuffAPI = {
                     cureType: resolvedCureType,
                     oldLevel: radiation.level,
                     newLevel
-                }, client);
-            }
-            
-            // Лечим инфекции
-            if (cure.infectionReduction && Number(itemStats.infection_cure || item.infection_cure || 0) > 0) {
-                const infections = safeJsonParse(player.infections, []);
-                const remaining = [];
-                
-                for (const inf of infections) {
-                    const newLevel = Math.max(0, inf.level - cure.infectionReduction);
-                    if (newLevel > 0) {
-                        // Пересчитываем время
-                        let newExpiresAt = inf.expires_at;
-                        if (inf.expires_at && inf.level > 0) {
-                            const oldExpires = new Date(inf.expires_at);
-                            const now = new Date();
-                            // Защита от деления на ноль: используем Math.max(1, ...) для уровня
-                            const safeLevel = Math.max(1, inf.level);
-                            const reduction = (oldExpires - now) * (cure.infectionReduction / safeLevel);
-                            newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
-                        }
-                        remaining.push({ ...inf, level: newLevel, expires_at: newExpiresAt });
-                    }
-                }
-                
-                await client.query(
-                    `UPDATE players SET infections = $1 WHERE id = $2`,
-                    [JSON.stringify(remaining), playerId]
-                );
-                
-                await logPlayerAction(playerId, 'debuff_cure_infection', {
-                    cureType: resolvedCureType,
-                    removed: infections.length - remaining.length
                 }, client);
             }
             
@@ -499,7 +410,7 @@ const DebuffAPI = {
 //
 // Применять дебаффы напрямую из других модулей:
 //   const { DebuffAPI } = require('./debuffs');
-//   await DebuffAPI.apply(playerId, 'zombie_infection', 2, { source: 'zone_5' });
+//   await DebuffAPI.apply(playerId, DEBUFF_TYPES.RADIATION, 2, { source: 'zone_5' });
 
 // Экспорт для использования в других модулях
 module.exports = { DebuffAPI };

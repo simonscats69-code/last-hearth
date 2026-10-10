@@ -28,7 +28,9 @@ function getGameHelpers() {
 const helpers = getGameHelpers();
 
 // Импортируемые функции
-const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRadiation, normalizeInfections, calculateSellPrice, addItemToInventory, equipmentRules, getSetBonuses, trackCollectedItems, consumeInventoryItem } = helpers;
+// normalizeInfections убран: инфекции объединены с радиацией,
+// лечится одно поле players.radiation.
+const { normalizeInventory, normalizeEquipment, createInventoryItem, normalizeRadiation, calculateSellPrice, addItemToInventory, equipmentRules, getSetBonuses, trackCollectedItems, consumeInventoryItem } = helpers;
 
 /**
  * Лимит слотов инвентаря.
@@ -251,7 +253,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
         const result = await transaction(async (client) => {
             const player = await client.query(
-                'SELECT inventory, equipment, health, max_health, radiation, infections FROM players WHERE id = $1 FOR UPDATE',
+                'SELECT inventory, equipment, health, max_health, radiation FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
             );
 
@@ -303,7 +305,6 @@ router.post(['/use', '/use-item'], async (req, res) => {
             const updates = [];
             const params = [playerId];
             const playerRadiation = normalizeRadiation(player.rows[0].radiation);
-            const playerInfections = normalizeInfections(player.rows[0].infections);
 
             // Бонусы сетов: heal_bonus (процент к лечению) и energy_bonus
             // (плоская прибавка к энергии). Без них Медицинский сет был
@@ -330,8 +331,12 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 }
             }
 
-            if (stats.radiation_cure) {
-                const cureAmount = Number(stats.radiation_cure);
+            if (stats.radiation_cure || stats.infection_cure) {
+                // Заражение лечит одно «радиационное» поле: инфекции объединены
+                // с радиацией, поэтому антирад, антидот и спирт эквивалентны.
+                // Прежняя ветка для infection_cure писала в players.infections
+                // отдельным массивом.
+                const cureAmount = Number(stats.radiation_cure || stats.infection_cure || 0);
                 const curRad = playerRadiation.level;
                 const newRad = Math.max(0, curRad - cureAmount);
                 // radiation — JSONB-колонка ({ level, expires_at, applied_at }).
@@ -345,21 +350,6 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 });
                 updates.push(`radiation = $${params.length + 1}::jsonb`);
                 params.push(radPayload);
-            }
-
-            if (stats.infection_cure) {
-                // infections — JSONB-массив объектов {type, level, expires_at};
-                // снижаем уровень каждой инфекции, полностью вылеченные удаляем
-                const cureAmount = Number(stats.infection_cure);
-                const remaining = [];
-                for (const inf of playerInfections) {
-                    const newLevel = Math.max(0, Number(inf?.level || 0) - cureAmount);
-                    if (newLevel > 0) {
-                        remaining.push({ ...inf, level: newLevel });
-                    }
-                }
-                updates.push(`infections = $${params.length + 1}`);
-                params.push(JSON.stringify(remaining));
             }
 
             if (updates.length > 0) {

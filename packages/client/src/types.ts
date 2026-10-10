@@ -8,8 +8,6 @@ export interface ClientPlayerState {
   fatigue: number;
   energy: number;
   max_energy: number;
-  infections: number;
-  infections_list: Array<{ type: string; level: number; expires_at: string }>;
   last_energy_update: string | null;
 }
 
@@ -28,7 +26,6 @@ export interface ClientInventoryItem {
   heal?: number;
   rad_removal?: number;
   radiation_resist?: number;
-  infection_resist?: number;
   durability: number;
   max_durability: number;
   quantity: number;

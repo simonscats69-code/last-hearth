@@ -139,9 +139,9 @@ router.get(['/', '/profile'], async (req, res) => {
                     max_energy: status.max_energy,
                     health: status.health,
                     max_health: status.max_health,
+                    // Заражение зоны одно — radiation. Инфекции объединены
+                    // с ним, полей infections / infections_list в ответе нет.
                     radiation: status.radiation,
-                    infections: status.infections,
-                    infections_list: status.infections_list,
                     clan_id: player.clan_id,
                     clan_role: player.clan_role,
                     daily_streak: player.daily_streak,

@@ -17,6 +17,14 @@
  * (calculateRadiationDefense / calculateInfectionDefense). Копии разъезжались
  * незаметно: клиент показывал игроку одну защиту, а сервер начислял другую.
  *
+ * Инфекции объединены с радиацией: раньше это были ДВА дебаффа с двумя
+ * колонками (players.radiation и players.infections), двумя типами
+ * (DEBUFF_TYPES.RADIATION / INFECTION), двумя конфигами и двумя формулами
+ * начисления. Теперь одно «заражение» — players.radiation. Ключи сопротивления
+ * и лечения с обоих типов сходятся в одну защиту, поэтому старая экипировка
+ * (Противогаз, Медицинские перчатки, броня Врача) продолжает работать без
+ * миграции данных.
+ *
  * Шаблон UMD — сознательно, без сборщика: Node берёт module.exports,
  * браузер — глобальную переменную. Никакой трансляции.
  */
@@ -37,13 +45,13 @@
     ]);
 
     /**
-     * Синонимы полей сопротивления. Предмет может хранить стат и на верхнем
-     * уровне, и в объекте stats — проверяем оба, в этом же порядке.
+     * Ключи сопротивления зоне. Инфекции объединены с радиацией, поэтому
+     * infection_* и radiation_* дают одну и ту же защиту: старые предметы
+     * с infection_resist не потерялись, а новых «отдельных» характеристик
+     * больше нет.
      */
-    const RADIATION_KEYS = Object.freeze([
-        'radiation_resist', 'radiation_resistance', 'radiationDefense'
-    ]);
-    const INFECTION_KEYS = Object.freeze([
+    const CONTAMINATION_KEYS = Object.freeze([
+        'radiation_resist', 'radiation_resistance', 'radiationDefense',
         'infection_resist', 'infection_resistance', 'infectionDefense'
     ]);
 
@@ -106,28 +114,24 @@
     }
 
     /**
-     * Защита от радиации из экипировки, в очках.
+     * Защита от заражения зоной из экипировки, в очках.
+     *
+     * Одна функция вместо прежних calculateRadiationDefense и
+     * calculateInfectionDefense: инфекции объединены с радиацией, поэтому
+     * все ключи сопротивления (radiation_* и infection_*) сходятся в одну
+     * защиту.
+     *
      * @param {object|null} equipment
      * @returns {number}
      */
-    function calculateRadiationDefense(equipment) {
+    function calculateContaminationDefense(equipment) {
         return normalizeResistanceToThreatPoints(
-            sumEquipmentResistance(equipment, RADIATION_KEYS)
+            sumEquipmentResistance(equipment, CONTAMINATION_KEYS)
         );
     }
 
     /**
-     * Защита от инфекций из экипировки, в очках.
-     * @param {object|null} equipment
-     * @returns {number}
-     */
-    function calculateInfectionDefense(equipment) {
-        return normalizeResistanceToThreatPoints(
-            sumEquipmentResistance(equipment, INFECTION_KEYS)
-        );
-    }
-
-    /**
+     * Сколько очков угрозы даёт «сырое» значение зоны (10 -> 1 очко).
      * Зеркало normalizeResistanceToThreatPoints, но с округлением ВВЕРХ:
      * локация округляется «в плюс», чтобы игрок видел худший случай.
      *
@@ -136,6 +140,23 @@
      */
     function normalizeThreatLevelToPoints(rawLevel) {
         return Math.max(0, Math.ceil(Number(rawLevel || 0) / 10));
+    }
+
+    /**
+     * Суммарная угроза локации: радиация и инфекция дают одно «заражение».
+     *
+     * Раньше это были две независимые величины с двумя формулами
+     * начисления в world.js; теперь общее число, из которого и получается
+     * уровень радиации. Локации хранят radiation и infection по отдельности
+     * (это данные мира), но в бою/начислении они одно.
+     *
+     * @param {object} location {radiation, infection}
+     * @returns {number}
+     */
+    function calculateLocationContaminationThreat(location) {
+        const radiation = normalizeThreatLevelToPoints(location && location.radiation);
+        const infection = normalizeThreatLevelToPoints(location && location.infection);
+        return radiation + infection;
     }
 
     // -------------------------------------------------------------------------
@@ -149,7 +170,17 @@
     const RISK_PREPARED_MAX_SCORE = 2;
 
     /**
-     * Тиры риска по сумме давления угроз (радиация + инфекции).
+     * С какого уровня заражение начинает отнимать здоровье.
+     *
+     * Единственное место, где задан этот порог. Раньше «5» было вписано
+     * руками в routes/game/status.js и routes/game/debuffs.js — при смене
+     * баланса одно из двух мест легко забывалось, и урон в разных экранах
+     * расходился.
+     */
+    const CONTAMINATION_DAMAGE_FROM_LEVEL = 5;
+
+    /**
+     * Тиры риска по давлению заражения локации.
      * maxScore — верхняя граница тира: первый подходящий тир и есть ответ.
      * Множители применяет сервер, подписи показывает клиент — строки одни.
      */
@@ -936,13 +967,13 @@ function resolveEquipmentSlot(item) {
         EQUIPMENT_SLOTS,
         COMBAT_SLOTS,
         resolveEquipmentSlot,
-        RADIATION_KEYS,
-        INFECTION_KEYS,
+    CONTAMINATION_KEYS,
         DEFENSE_KEYS,
         LUCK_KEYS,
         MAX_INVENTORY_SLOTS,
         RISK_TIERS,
         RISK_PREPARED_MAX_SCORE,
+    CONTAMINATION_DAMAGE_FROM_LEVEL,
         getRiskTierByScore,
         getExpForLevel,
         getTotalExpForLevel,
@@ -976,8 +1007,8 @@ function resolveEquipmentSlot(item) {
         sumEquipmentResistance,
         normalizeResistanceToThreatPoints,
         normalizeThreatLevelToPoints,
-        calculateRadiationDefense,
-        calculateInfectionDefense,
+    calculateContaminationDefense,
+    calculateLocationContaminationThreat,
         normalizeRarity,
         getUpgradeLevel,
         getUpgradeMultiplier,

@@ -45,7 +45,10 @@ function safeId(name) {
 }
 
 /**
- * Создание всех таблиц
+ * Создание всех таблиц.
+ *
+ * Колонки players.infections здесь нет: инфекции объединены с радиацией,
+ * заражение зоны хранится только в players.radiation.
  */
 async function createTables() {
     // Таблица игроков
@@ -68,7 +71,6 @@ async function createTables() {
             radiation JSONB DEFAULT '{"level": 0}',
             energy INTEGER DEFAULT 50,
             max_energy INTEGER DEFAULT 50,
-            infections JSONB DEFAULT '[]',
             current_location_id INTEGER DEFAULT 1,
             inventory JSONB DEFAULT '[]',
             equipment JSONB DEFAULT '{}',
@@ -1052,12 +1054,16 @@ async function seedDatabase() {
         // Еда / расходники (базовый множитель 1.0x)
         { name: 'Консервы', description: 'Просроченные консервы', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '🥫', stats: { energy: 5 } },
         { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '💧', stats: { energy: 3 } },
-        { name: 'Спирт', description: 'Медицинский спирт: обеззараживает раны', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 160, icon: '🍺', stats: { health: 15, infection_cure: 1 } },
+        { name: 'Спирт', description: 'Медицинский спирт: обеззараживает раны, снимает заражение', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 160, icon: '🍺', stats: { health: 15, radiation_cure: 1 } },
         { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '🍪', stats: { energy: 2 } },
         { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 200, icon: '⚡', stats: { energy: 10 } },
         { name: 'Бинт', description: 'Обычный бинт', type: 'medicine', category: 'medicine', rarity: 'common', price: 40, icon: '🩹', stats: { health: 10 } },
         { name: 'Аптечка', description: 'Полная аптечка', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 160, icon: '💊', stats: { health: 30 } },
-        { name: 'Антидот', description: 'Лекарство от инфекций', type: 'medicine', category: 'medicine', rarity: 'rare', price: 640, icon: '💉', stats: { infection_cure: 2 } },
+        // Антидот и Антирадин лечат одно и то же (заражение зоны): инфекции
+        // объединены с радиацией. Цены и силу лечения сохранили, поэтому
+        // «от инфекций» и «от радиации» — теперь просто два препарата с разной
+        // силой снятия заражения.
+        { name: 'Антидот', description: 'Снимает заражение зоны', type: 'medicine', category: 'medicine', rarity: 'rare', price: 640, icon: '💉', stats: { radiation_cure: 2 } },
         { name: 'Антирадин', description: 'Препарат от радиации', type: 'medicine', category: 'medicine', rarity: 'rare', price: 640, icon: '☢️', stats: { radiation_cure: 3 } },
         // Цены лечения выстроены по одной кривой «HP за монету», чтобы нельзя было
         // купить заведомо худший предмет:
@@ -1095,15 +1101,15 @@ async function seedDatabase() {
         // Броня. Слоты hands/boots/accessory не закрывал НИ ОДИН предмет —
         // 3 из 9 слотов экипировки были пустыми. Новые предметы закрывают
         // слоты и одновременно собирают 4 сета (items.set_id + item_sets).
-        { name: 'Кожаная куртка', description: 'Простая защита от холода и царапин', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, infection_resist: 3 }, durability: 60, max_durability: 60, price: 60, icon: '🧥' },
-        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 1, stats: { defense: 25, radiation_resist: 6, infection_resist: 4 }, durability: 150, max_durability: 150, price: 960, icon: '🦺' },
-        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 1, stats: { defense: 10, infection_resist: 5 }, durability: 90, max_durability: 90, price: 160, icon: '⛑️' },
+        { name: 'Кожаная куртка', description: 'Простая защита от холода и царапин', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, radiation_resist: 3 }, durability: 60, max_durability: 60, price: 60, icon: '🧥' },
+        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 1, stats: { radiation_resist: 10, defense: 25 }, durability: 150, max_durability: 150, price: 960, icon: '🦺' },
+        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 1, stats: { defense: 10, radiation_resist: 5 }, durability: 90, max_durability: 90, price: 160, icon: '⛑️' },
         { name: 'Военные перчатки', description: 'Перчатки пехоты: защита рук', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 1, stats: { defense: 6 }, durability: 100, max_durability: 100, price: 120, icon: '🧤' },
         { name: 'Военные ботинки', description: 'Армейские ботинки: защита ног', type: 'armor', category: 'boots', rarity: 'uncommon', slot: 'boots', set_id: 1, stats: { defense: 8 }, durability: 100, max_durability: 100, price: 120, icon: '🥾' },
-        { name: 'Противогаз', description: 'Респиратор: защита от радиации и инфекций', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 2, stats: { radiation_resist: 18, infection_resist: 12 }, durability: 100, max_durability: 100, price: 160, icon: '😷' },
+        { name: 'Противогаз', description: 'Респиратор: защита от заражения зоной', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 2, stats: { radiation_resist: 30, }, durability: 100, max_durability: 100, price: 160, icon: '😷' },
         { name: 'Медицинский халат', description: 'Халат полевого медика', type: 'armor', category: 'body', rarity: 'uncommon', slot: 'body', set_id: 2, stats: { defense: 4, radiation_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 240, icon: '🥼' },
-        { name: 'Медицинские перчатки', description: 'Перчатки с антисептиком', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 2, stats: { defense: 4, infection_resist: 10, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 120, icon: '🧤' },
-        { name: 'Медицинский рюкзак', description: 'Рюкзак с аптечками', type: 'armor', category: 'accessory', rarity: 'uncommon', slot: 'accessory', set_id: 2, stats: { defense: 3, infection_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 100, icon: '🎒' },
+        { name: 'Медицинские перчатки', description: 'Перчатки с антисептиком, стойкие к зоне', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 2, stats: { defense: 4, radiation_resist: 10, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 120, icon: '🧤' },
+        { name: 'Медицинский рюкзак', description: 'Рюкзак с аптечками', type: 'armor', category: 'accessory', rarity: 'uncommon', slot: 'accessory', set_id: 2, stats: { defense: 3, radiation_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 100, icon: '🎒' },
         { name: 'Сталкерский плащ', description: 'Плащ сталкера: защита от радиации', type: 'armor', category: 'body', rarity: 'rare', slot: 'body', set_id: 3, stats: { defense: 15, radiation_resist: 25 }, durability: 140, max_durability: 140, price: 960, icon: '🧥' },
         { name: 'Сталкерские сапоги', description: 'Сапоги для долгих переходов', type: 'armor', category: 'boots', rarity: 'rare', slot: 'boots', set_id: 3, stats: { defense: 12, radiation_resist: 5 }, durability: 130, max_durability: 130, price: 480, icon: '🥾' },
         { name: 'Сталкерский пояс', description: 'Пояс с карго: повышает удачу', type: 'armor', category: 'accessory', rarity: 'rare', slot: 'accessory', set_id: 3, stats: { defense: 4, luck: 5, radiation_resist: 5 }, durability: 120, max_durability: 120, price: 400, icon: '🧭' },
@@ -1229,7 +1235,7 @@ async function seedDatabase() {
  * Поддерживаемые ключи (остальные игнорируются):
  *   damage, defense — урон и защита;
  *   luck — прибавка к удаче (шанс находки);
- *   radiation_resist / infection_resist — стойкость к зоне;
+ *   radiation_resist — стойкость к зоне (радиация и инфекция объединены);
  *   heal_bonus — процент к лечению расходниками;
  *   energy_bonus — плоская прибавка к энергии из расходников.
  * Считает их public/shared/equipment.js → calculateSetBonuses().
@@ -1242,17 +1248,20 @@ async function seedSets() {
             description: 'Армейская экипировка выжившего',
             icon: '🎖️',
             bonus_2: { defense: 6, radiation_resist: 4 },
-            bonus_3: { defense: 12, infection_resist: 6, radiation_resist: 8 },
-            bonus_4: { defense: 18, infection_resist: 10, radiation_resist: 12, heal_bonus: 10 }
+            // Сопротивления зоны (радиация + инфекция) слиты в один стат:
+            // бонусы 3 и 4 предметов складывались (6+8 и 10+12).
+            bonus_3: { defense: 12, radiation_resist: 14 },
+            bonus_4: { defense: 18, radiation_resist: 22, heal_bonus: 10 }
         },
         {
             id: 2,
             name: 'Медицинский сет',
             description: 'Оборудование для выживания',
             icon: '🏥',
-            bonus_2: { heal_bonus: 10, infection_resist: 6 },
-            bonus_3: { heal_bonus: 20, infection_resist: 10 },
-            bonus_4: { heal_bonus: 30, infection_resist: 14, radiation_resist: 10 }
+            bonus_2: { heal_bonus: 10, radiation_resist: 6 },
+            bonus_3: { heal_bonus: 20, radiation_resist: 10 },
+            // (10+14) — бонус за 4 предмета медицинского сета
+            bonus_4: { heal_bonus: 30, radiation_resist: 24 }
         },
         {
             id: 3,

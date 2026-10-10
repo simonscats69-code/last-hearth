@@ -154,7 +154,8 @@ console.log('\n=== 4. Debuffs: level NaN, this-binding ===');
 
     // Реальные значения из utils/gameConstants.js:
     //   radiation.damagePerLevel = 1, порог 5 -> (level-4) * 1
-    //   infection.damagePerLevel = 2, шанс 10% (Math.random() < 0.1)
+    //   Инфекции объединены с радиацией: второго урона (10% шанс × уровень × 2)
+    //   больше нет — зона одна.
     const future = new Date(Date.now() + 3600000).toISOString();
 
     ok('радиация ур.6 = (6-4)*1 = 2',
@@ -165,24 +166,14 @@ console.log('\n=== 4. Debuffs: level NaN, this-binding ===');
     ok('радиация ур.4 = 0 (ниже порога урона нет)',
         DebuffAPI.calculateDebuffDamage([{ type: 'radiation', level: 4, expiresAt: future }]) === 0);
 
-    // Инфекция зависит от Math.random(): подменяем его на детерминированный
-    const realRandom = Math.random;
-    try {
-        Math.random = () => 0;      // всегда «выпало»
-        ok('инфекция ур.2 при срабатывании = 2*2 = 4',
-            DebuffAPI.calculateDebuffDamage([{ type: 'zombie_infection', level: 2, expiresAt: future }]) === 4,
-            DebuffAPI.calculateDebuffDamage([{ type: 'zombie_infection', level: 2, expiresAt: future }]));
-        ok('радиация + инфекция вместе = 2 + 4 = 6',
-            DebuffAPI.calculateDebuffDamage([
-                { type: 'radiation', level: 6, expiresAt: future },
-                { type: 'zombie_infection', level: 2, expiresAt: future }
-            ]) === 6);
-        Math.random = () => 0.99;   // никогда не срабатывает
-        ok('инфекция не сработавшая = 0 урона',
-            DebuffAPI.calculateDebuffDamage([{ type: 'zombie_infection', level: 9, expiresAt: future }]) === 0);
-    } finally {
-        Math.random = realRandom;
-    }
+    // Легаси-тип больше не даёт собственного урона: зона одна.
+    ok('старый тип zombie_infection не наносит урона',
+        DebuffAPI.calculateDebuffDamage([{ type: 'zombie_infection', level: 9, expiresAt: future }]) === 0);
+    ok('getActive возвращает только радиацию',
+        DebuffAPI.getActive({
+            radiation: { level: 5, expires_at: future },
+            infections: '[{"type":"zombie_infection","level":9}]'
+        }).length === 1);
 
     const past = new Date(Date.now() - 1000).toISOString();
     ok('истёкший дебафф даёт 0 урона', DebuffAPI.calculateDebuffDamage([{ type: 'radiation', level: 9, expiresAt: past }]) === 0);

@@ -616,42 +616,16 @@ async function cleanupExpiredDebuffs() {
             WHERE p.id = expired.id
         `);
 
-        // Инфекции: оставляем только те, у которых срок ещё не вышел.
-        // jsonb_array_length на NULL даёт NULL, а условие NULL > 0 — не
-        // истина, поэтому игроки без инфекций отсекаются корректно.
-        const expiredInfections = await query(`
-            WITH expired AS (
-                SELECT id
-                FROM players
-                WHERE infections IS NOT NULL
-                  AND jsonb_typeof(infections) = 'array'
-                  AND jsonb_array_length(infections) > 0
-                  AND EXISTS (
-                      SELECT 1
-                      FROM jsonb_array_elements(infections) elem
-                      WHERE elem->>'expires_at' IS NOT NULL
-                        AND (elem->>'expires_at')::timestamp <= NOW()
-                  )
-                LIMIT 100
-            )
-            UPDATE players p
-            SET infections = COALESCE((
-                SELECT jsonb_agg(elem)
-                FROM jsonb_array_elements(p.infections) AS elem
-                WHERE (elem->>'expires_at')::timestamp > NOW()
-                   OR elem->>'expires_at' IS NULL
-            ), '[]'::jsonb)
-            FROM expired
-            WHERE p.id = expired.id
-        `);
+        // Очистка инфекций убрана: инфекции объединены с радиацией.
+        // Теперь зона хранит одно заражение в players.radiation, и его
+        // истечением занимается UPDATE выше.
 
-        const cleanedCount = (expiredRadiation.rowCount || 0) + (expiredInfections.rowCount || 0);
+        const cleanedCount = expiredRadiation.rowCount || 0;
         if (cleanedCount > 0) {
             logger.info({
                 type: 'debuffs_cleanup_batch',
                 players_updated: cleanedCount,
-                radiation: expiredRadiation.rowCount || 0,
-                infections: expiredInfections.rowCount || 0
+                radiation: expiredRadiation.rowCount || 0
             });
         }
 

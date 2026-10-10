@@ -81,8 +81,18 @@ function createInventoryItem(item, options = {}) {
         defense: Number(options.defense ?? source.defense ?? stats.defense ?? 0),
         heal: Number(options.heal ?? source.heal ?? stats.health ?? stats.health_restore ?? 0),
         rad_removal: Number(options.rad_removal ?? source.rad_removal ?? stats.radiation_cure ?? 0),
+        // Заражение зоны одно: сопротивления радиации и инфекции сведены
+        // в один стат contamination_resist. Старое имя infection_resist
+        // читаем тоже — предметы могли сохраниться в инвентаре со старой
+        // схемой, и защита не должна пропадать.
+        contamination_resist: Number(
+            options.contamination_resist ?? source.contamination_resist
+            ?? options.radiation_resist ?? source.radiation_resist
+            ?? options.infection_resist ?? source.infection_resist
+            ?? stats.radiation_resist ?? stats.infection_resist ?? 0
+        ),
+        // Сохраняем и старое имя, чтобы не ломать инвентари, где оно уже лежит
         radiation_resist: Number(options.radiation_resist ?? source.radiation_resist ?? stats.radiation_resist ?? 0),
-        infection_resist: Number(options.infection_resist ?? source.infection_resist ?? stats.infection_resist ?? 0),
         durability,
         max_durability: Number(options.max_durability ?? source.max_durability ?? 100),
         quantity: Math.max(1, Number(options.quantity ?? source.quantity ?? 1) || 1),
@@ -118,14 +128,6 @@ function normalizeRadiation(value) {
         expires_at: null,
         applied_at: null
     };
-}
-
-/**
- * Нормализация инфекций
- */
-function normalizeInfections(value) {
-    const parsed = safeParseJson(value, []);
-    return Array.isArray(parsed) ? parsed : [];
 }
 
 /**
@@ -275,11 +277,14 @@ function getActiveBuffs(value, now = Date.now()) {
 }
 
 /**
- * Построение объекта статуса игрока
+ * Построение объекта статуса игрока.
+ *
+ * Один дебафф — radiation. Инфекции объединены с радиацией, поэтому
+ * суммарный уровень зоны хранится только в players.radiation, а поля
+ * infections / infections_list из ответа убраны.
  */
 function buildPlayerStatus(player) {
     const radiation = normalizeRadiation(player.radiation);
-    const infectionsList = normalizeInfections(player.infections);
 
     return {
         health: Number(player.health || 0),
@@ -288,8 +293,6 @@ function buildPlayerStatus(player) {
         fatigue: 0,
         energy: Number(player.energy || 0),
         max_energy: Number(player.max_energy || 0),
-        infections: infectionsList.reduce((sum, infection) => sum + (infection.level || 0), 0),
-        infections_list: infectionsList,
         last_energy_update: player.last_energy_update || null
     };
 }
@@ -1035,7 +1038,6 @@ module.exports = {
     normalizeInventory,
     createInventoryItem,
     normalizeRadiation,
-    normalizeInfections,
     getActiveBuffs,
     buildPlayerStatus,
     recalcEnergy,
