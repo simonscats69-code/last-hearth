@@ -2311,9 +2311,14 @@ function goToMain() {
  */
 async function startBossFight(boss, timeRemainingMs = null) {
     if (!lockAction('attackBoss')) return;
-    
+
     try {
-        const result = await apiRequest('/api/game/bosses/attack', {
+        // POST /api/game/bosses/start — реальный маршрут (routes/game/bosses.js).
+        // Было '/api/game/bosses/attack': такого пути на сервере нет, поэтому
+        // кнопка «Начать бой» всегда получала 404 Not found и бой не начинался.
+        // Ответ /start содержит ровно то, что читает код ниже: data.boss с hp
+        // и data.time_remaining_ms.
+        const result = await apiRequest('/api/game/bosses/start', {
             method: 'POST',
             body: { boss_id: boss.id }
         });
@@ -6495,14 +6500,21 @@ async function restoreEnergy() {
  */
 async function loadRating(type = 'players') {
     try {
-        const data = await apiRequest(`/rating/${type}`);
-        
-        // Обрабатываем разные форматы ответа
-        const rating = data?.data?.rating || data?.rating || [];
+        // Публичный рейтинг живёт на /api/leaderboard/{players|clans} и внутри
+        // перенаправляется на /minigames/leaderboard/* .
+        //
+        // Было apiRequest(`/rating/${type}`): такого маршрута на сервере нет
+        // (нет ни /api/rating, ни соответствующего router.use), поэтому экран
+        // рейтинга всегда получал 404 и показывал «Рейтинг временно недоступен».
+        const data = await apiRequest(`/api/leaderboard/${type}`);
+
+        // Сервер отдаёт массив в поле leaderboard (см. routes/game/minigames.js).
+        // Старое чтение data.rating всегда давало undefined -> пустой список.
+        const rating = data?.leaderboard || data?.data?.leaderboard || data?.rating || [];
         renderRating(rating, type);
     } catch (error) {
         console.error('Rating error:', error);
-        
+
         // При ошибке показываем пустой список
         const list = document.getElementById('rating-list');
         if (list) {
@@ -6984,19 +6996,24 @@ let currentAchievementCategory = null;
 async function renderAchievementsScreen(category, logPrefix) {
     currentAchievementCategory = category;
     try {
-        const data = await apiRequest('/api/achievements/progress');
+        // GET /api/game/player/achievements/progress — реальный маршрут
+        // (routes/game/player.js). Было '/api/achievements/progress': путь без
+        // монтирования -> 404 Not found, экран достижений оставался пустым.
+        const data = await apiRequest('/api/game/player/achievements/progress');
 
-        if (data && data.progress) {
+        // Ответ приходит в { success, data: { progress, categories } }
+        const payload = (data && data.data) || data;
+        if (payload && payload.progress) {
             // Блок «Выполнено достижений X / Y» удалён: та же информация
             // стоит в каждой кнопке категории («Боссы (3/5)») и в каждой
             // карточке достижения. Отдельная шапка была третьим местом,
             // где показывалось одно и то же число.
-            renderAchievementsCategories(data.categories);
+            renderAchievementsCategories(payload.categories);
 
             if (category) {
-                renderAchievementsList(data.progress.filter(a => a.category === category));
+                renderAchievementsList(payload.progress.filter(a => a.category === category));
             } else {
-                renderAchievementsList(data.progress);
+                renderAchievementsList(payload.progress);
             }
         }
     } catch (error) {
@@ -7128,17 +7145,23 @@ async function claimAchievement(achievementId) {
     if (!lockAction('claimAchievement')) return;
 
     try {
-        const data = await apiRequest('/api/achievements/claim', {
+        // POST /api/game/player/achievements/claim — реальный маршрут
+        // (routes/game/player.js). Было '/api/achievements/claim': пути нет
+        // на сервере -> 404, награду забрать было невозможно.
+        const result = await apiRequest('/api/game/player/achievements/claim', {
             method: 'POST',
             body: { achievement_id: achievementId }
         });
-        
-        if (data.success) {
-            showModal('✅ Награда получена', data.message || 'Награда получена');
-            updateBalanceDisplay(data.new_balance);
+
+        // Сервер отвечает { success, data: { message, new_balance } }
+        const payload = result?.data || result;
+
+        if (result.success) {
+            showModal('✅ Награда получена', payload.message || 'Награда получена');
+            updateBalanceDisplay(payload.new_balance);
             await loadAchievements();
         } else {
-            showModal('❌ Ошибка', data.error || 'Ошибка получения награды');
+            showModal('❌ Ошибка', payload.error || result.error || 'Ошибка получения награды');
         }
     } catch (error) {
         console.error('Ошибка получения награды:', error);

@@ -446,7 +446,7 @@ router.get('/leaderboard/players', async (req, res) => {
             case 'strength':
                 orderBy = 'strength DESC';
                 whereClause = 'WHERE banned = false';
-                selectFields = 'telegram_id, username, first_name, level, strength';
+                selectFields = 'telegram_id, username, first_name, level, strength, bosses_killed';
                 break;
             case 'bosses':
                 orderBy = 'bosses_killed DESC';
@@ -456,13 +456,13 @@ router.get('/leaderboard/players', async (req, res) => {
             case 'pvp':
                 orderBy = 'pvp_wins DESC';
                 whereClause = 'WHERE banned = false AND (pvp_wins > 0 OR pvp_losses > 0)';
-                selectFields = 'telegram_id, username, first_name, level, pvp_wins, pvp_losses';
+                selectFields = 'telegram_id, username, first_name, level, pvp_wins, pvp_losses, bosses_killed';
                 break;
             case 'level':
             default:
                 orderBy = 'level DESC, experience DESC';
                 whereClause = 'WHERE banned = false';
-                selectFields = 'telegram_id, username, first_name, level, strength, experience';
+                selectFields = 'telegram_id, username, first_name, level, strength, experience, bosses_killed';
                 break;
         }
         
@@ -510,7 +510,15 @@ router.get('/leaderboard/players', async (req, res) => {
                     break;
                 }
             }
-            
+
+            // bosses_killed отдаём ВСЕГДА, независимо от сортировки: клиент
+            // рисует «Уровень N | M боссов» для любой категории рейтинга, а при
+            // сортировке по уровню это поле не выбиралось — в списке появлялось
+            // «undefined боссов».
+            if (entry.bosses_killed === undefined) {
+                entry.bosses_killed = Number(player.bosses_killed) || 0;
+            }
+
             return entry;
         });
         

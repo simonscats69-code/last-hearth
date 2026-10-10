@@ -462,6 +462,104 @@ router.get('/achievements', async (req, res) => {
 });
 
 /**
+ * GET /achievements/progress — достижения в формате экрана достижений.
+ *
+ * Зачем отдельно от GET /achievements: тот отдаёт «плоский» список для
+ * профиля (id/key/desc/req/reward-числом), а экран достижений ждёт
+ * { progress: [...], categories: { key: {completed, total} } } с полями
+ * description/current/target/percent/completed и reward-ОБЪЕКТОМ
+ * (renderAchievementsList читает reward.coins и reward.stars).
+ *
+ * Клиент звал /api/achievements/progress, которого не существовало:
+ * 404 Not found и пустой экран достижений.
+ *
+ * target/current считаем ТЕМИ ЖЕ функциями, что и /progress
+ * (getAchievementTargetValue / getAchievementCurrentValue): условие в БД
+ * хранит цель в count, в value, или не хранит вовсе (first_boss_kill),
+ * и собственный разбор разошёлся бы с экраном прогресса.
+ */
+router.get('/achievements/progress', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) {
+            return res.status(401).json({ error: 'Требуется авторизация' });
+        }
+
+        const helpers = getGameHelpers();
+        const {
+            getAchievementRuntimeContext,
+            getAchievementTargetValue,
+            getAchievementCurrentValue,
+            safeParseJson: parseJson
+        } = helpers;
+
+        // Достижения + прогресс игрока
+        const rowsResult = await query(`
+            SELECT a.id, a.name, a.description, a.category, a.icon, a.rarity,
+                   a.condition, a.reward,
+                   pa.completed, pa.completed_at, pa.reward_claimed, pa.progress_value
+              FROM achievements a
+              LEFT JOIN player_achievements pa ON pa.achievement_id = a.id AND pa.player_id = $1
+             ORDER BY a.category, a.id
+        `, [playerId]);
+
+        // Статы игрока: нужны getAchievementCurrentValue (level, pvp_wins, ...)
+        const playerResult = await queryOne(
+            'SELECT level, pvp_wins, items_collected, clan_id, clan_role, daily_streak, unique_items, locations_visited FROM players WHERE id = $1',
+            [playerId]
+        );
+        const player = playerResult || {};
+        const runtimeContext = await getAchievementRuntimeContext(null, playerId);
+
+        const progress = (rowsResult.rows || []).map(row => {
+            const condition = parseJson(row.condition, {}) || {};
+            const target = Math.max(0, Number(getAchievementTargetValue(condition, runtimeContext)) || 0);
+            const stored = Math.max(0, Number(row.progress_value) || 0);
+            const computed = Number(getAchievementCurrentValue(condition, player, runtimeContext)) || 0;
+            // Берём большее из двух: progress_value обновляется фоновым
+            // обработчиком, computed — живой расчёт. Иначе прогресс-бар
+            // показывал бы 0 у только что выполненного достижения.
+            const current = Math.max(stored, computed);
+            const reward = parseJson(row.reward, {}) || {};
+
+            return {
+                id: row.id,
+                name: row.name,
+                // Клиентский renderAchievementsList читает именно description
+                description: row.description || '',
+                category: row.category,
+                icon: row.icon,
+                rarity: row.rarity,
+                current: current,
+                target: target,
+                percent: target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0,
+                completed: Boolean(row.completed) || (target > 0 && current >= target),
+                reward_claimed: Boolean(row.reward_claimed),
+                // reward — ОБЪЕКТ {coins, stars}: клиент читает reward.coins/stars.
+                reward: {
+                    coins: Number(reward.coins) || 0,
+                    stars: Number(reward.stars) || 0
+                }
+            };
+        });
+
+        // Группировка для кнопок категорий: «👾 Боссы (3/5)»
+        const categories = {};
+        for (const item of progress) {
+            const key = item.category || 'other';
+            if (!categories[key]) categories[key] = { completed: 0, total: 0 };
+            categories[key].total += 1;
+            if (item.completed) categories[key].completed += 1;
+        }
+
+        res.json({ success: true, data: { progress, categories } });
+    } catch (err) {
+        logger.error({ type: 'achievements_progress_error', message: err.message });
+        res.status(500).json({ error: 'Ошибка получения достижений' });
+    }
+});
+
+/**
  * POST /achievements/claim — получить награду за достижение
  */
 router.post('/achievements/claim', async (req, res) => {

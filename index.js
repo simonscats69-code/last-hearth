@@ -400,8 +400,16 @@ function requireDatabaseReady(req, res, next) {
 // Перенесён в routes/game/index.js — сразу после validatePlayer.
 app.use('/api/game', requireDatabaseReady, gameRouter);
 app.use('/api/admin', requireDatabaseReady, adminRouter);
+// Публичный рейтинг: /api/leaderboard/* -> игровой роутер.
+//
+// ВАЖНО про req.url: внутри обработчика Express уже снял префикс монтирования,
+// то есть для запроса /api/leaderboard/players здесь req.url === '/players'.
+// Раньше код делал req.url = '/minigames' + req.url, получая '/minigames/players',
+// а в minigames.js зарегистрирован '/leaderboard/players'. Совпадения не
+// происходило -> все обращения к рейтингу уходили в 404 Not found.
+// Нужен полный внутренний путь: '/minigames/leaderboard' + остаток.
 app.use('/api/leaderboard', requireDatabaseReady, (req, res, next) => {
-    req.url = '/minigames' + req.url;
+    req.url = '/minigames/leaderboard' + req.url;
     gameRouter(req, res, next);
 });
 app.use('/api', apiRouter);

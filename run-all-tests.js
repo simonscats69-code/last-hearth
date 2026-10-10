@@ -21,6 +21,8 @@ const harnesses = [
     'test-ratelimit-harness.js',
     'test-idempotency-harness.js',
     'test-p2-fixes-harness.js',
+    'test-404-fixes.js',
+    'test-404-final.js',
     'test-gamejs-harness.js',
     'test-gamejs-guards.js'
 ];
