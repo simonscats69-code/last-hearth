@@ -12,37 +12,7 @@
  * В production там всегда `false`, поэтому поддельные telegram_id/initData
  * физически недоступны: без настоящего Telegram.WebApp.initData игра не
  * стартует, а не продолжает работать от имени фиктивного игрока 123456789.
- *
- * Дополнительная страховка: даже если сервер по ошибке пришлёт `true`,
- * на нелокальном домене фоллбэк выключен. Локальными считаем localhost,
- * 127.0.0.1, [::1], *.local, пустой hostname и file:// (открытие файла
- * напрямую при разработке).
- */
-const DEV_FALLBACK_ENABLED = (() => {
-    if (window.__DEV_MODE__ !== true) return false;
-
-    const hostname = (typeof location !== 'undefined' && location.hostname) || '';
-    const protocol = (typeof location !== 'undefined' && location.protocol) || '';
-
-    const isLocalHost = hostname === 'localhost'
-        || hostname === '127.0.0.1'
-        || hostname === '[::1]'
-        || hostname === ''
-        || hostname.endsWith('.local');
-    const isFileProtocol = protocol === 'file:';
-
-    if (!isLocalHost && !isFileProtocol) {
-        console.error(
-            '[DEV_FALLBACK_ENABLED] Сервер прислал __DEV_MODE__=true на домене "' +
-            hostname + '". Фоллбэк-авторизация отключена: это похоже на ' +
-            'утечку dev-настроек в production.'
-        );
-        return false;
-    }
-    return true;
-})();
-
-/**
+ /**
  * Состояние анимации закрытия модального окна.
  *
  * Объявлено здесь, а не рядом с hideModal(): файл выполняется сверху вниз,
@@ -88,13 +58,6 @@ function getTelegramId() {
     // Production: подтвердить пользователя не удалось — возвращаем null.
     // Раньше здесь был жёсткий '123456789': приложение продолжало работать
     // без валидного initData, то есть фактически без авторизации.
-    if (DEV_FALLBACK_ENABLED) {
-        // Fallback для разработки — только при явном DEV-флаге с сервера
-        const fallbackId = localStorage.getItem('telegram_id') || '123456789';
-        console.log('[getTelegramId] Using DEV fallback:', fallbackId);
-        return fallbackId;
-    }
-
     console.warn('[getTelegramId] No Telegram ID available');
     return null;
 }
@@ -641,14 +604,6 @@ function getInitData() {
     // 3. Заглушка для разработки — только при явном DEV-флаге с сервера.
     // В production её нет: поддельный initData с hash=dummy раньше позволял
     // пройти инициализацию без Telegram вообще.
-    if (DEV_FALLBACK_ENABLED) {
-        console.warn('[getInitData] initData отсутствует, используется DEV-заглушка');
-        // Используем недавнюю auth_date, чтобы сервер не отверг запрос
-        // из-за слишком старого токена (MAX_INIT_DATA_AGE_SECONDS=3600)
-        const recentAuthDate = Math.floor(Date.now() / 1000) - 60; // минута назад
-        return `user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22username%22%3A%22testuser%22%7D&chat_instance=123&auth_date=${recentAuthDate}&hash=dummy`;
-    }
-
     console.warn('[getInitData] Telegram WebApp initData отсутствует');
     return null;
 }
@@ -711,7 +666,7 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
     // Получаем initData для авторизации
     const initData = getInitData();
 
-    if (!initData && !DEV_FALLBACK_ENABLED) {
+    if (!initData) {
         // Без подписанных initData сервер всё равно отдаст 401. Лучше fail-fast:
         // не тратим 8 секунд таймаута и не показываем «Сервер не отвечает».
         const authError = new Error('Нет данных авторизации Telegram');
@@ -2535,16 +2490,13 @@ async function initGame() {
             await waitForTelegramWebApp();
             console.log('[initGame] Telegram WebApp ready');
         } catch (waitError) {
-            if (!DEV_FALLBACK_ENABLED) {
-                console.error('[initGame] Telegram WebApp не загрузился:', waitError);
-                renderInitError(
-                    '😿',
-                    'Ошибка авторизации',
-                    'Не удалось получить данные Telegram. Откройте игру через бота @LastHearthBot'
-                );
-                return;
-            }
-            console.warn('[initGame] Telegram WebApp не загрузился, продолжаем в DEV-режиме');
+            console.error('[initGame] Telegram WebApp не загрузился:', waitError);
+            renderInitError(
+                '😿',
+                'Ошибка авторизации',
+                'Не удалось получить данные Telegram. Откройте игру через бота @LastHearthBot'
+            );
+            return;
         }
         
         // Инициализируем Telegram WebApp
