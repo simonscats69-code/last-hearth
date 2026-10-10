@@ -33,7 +33,7 @@ const { getGameHelpers } = require('../../utils/getGameHelpers');
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
-const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory, applyAutoHeal } = helpers;
+const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory } = helpers;
 // Валидация ID — общая, см. utils/validate.js.
 const { validateId } = require('../../utils/validate');
 // Файл правил предметов импортируется один раз: брать его и по имени
@@ -552,16 +552,9 @@ router.post('/attack-hit', async (req, res) => {
                  WHERE id = $3
             `, [newHealth, JSON.stringify(defenderEq), defenderId]);
 
-            // Автолечение защитника: то же, что и в бою с боссом — если у
-            // него здоровье упало ниже порога, игра сама выпьет лекарство.
-            // PvP без этого превращался в «добивай в ноль», потому что
-            // защитник не успевал/не мог вылечиться.
-            const defenderAutoHeal = await applyAutoHeal(client, defenderId, {
-                ...defender,
-                health: newHealth,
-                auto_heal_enabled: defender.auto_heal_enabled,
-                auto_heal_threshold: defender.auto_heal_threshold
-            });
+            // Автолечение защитника убрано: лекарства расходуются только
+            // вручную с панели лечения. Раньше здесь вызывался applyAutoHeal,
+            // и PvP автоматически тратил аптечку защитника.
 
             // Износ оружия атакующего сохраняем ВСЕГДА, а не только при поломке:
             // иначе −1 прочности за удар просто терялся бы в памяти.
@@ -602,9 +595,8 @@ router.post('/attack-hit', async (req, res) => {
             // транзакции: падение записи лога не должно откатывать бой.
             let battleLogData = null;
 
-            // Победа считается по здоровью ПОСЛЕ автолечения: если защитник
-            // автоматически выпил лекарство, он не погиб.
-            const defenderHealth = defenderAutoHeal ? defenderAutoHeal.health : newHealth;
+            // Победа считается по здоровье после урона.
+            const defenderHealth = newHealth;
 
             if (defenderHealth <= 0) {
                 battleEnded = true;
@@ -775,9 +767,6 @@ await client.query(`
                     yourHealth: attacker.health,
                     targetHealth: defenderHealth,
                     maxHealth: defender.max_health,
-                    targetAutoHeal: defenderAutoHeal
-                        ? { used: defenderAutoHeal.used, heal: defenderAutoHeal.heal }
-                        : null,
                     your_broken_equipment: attackerBroken,
                     target_broken_equipment: defenderBroken
                 },

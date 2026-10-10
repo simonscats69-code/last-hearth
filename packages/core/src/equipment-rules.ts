@@ -150,54 +150,6 @@ export function getRegenerableHealth(health: number, maxHealth: number): number 
   return Math.max(0, getHealthRegenCap(maxHealth) - Math.max(0, Number(health) || 0));
 }
 
-/** Порог здоровья для автолечения */
-export function getAutoHealThreshold(maxHealth: number, threshold: number | null | undefined): number {
-  const isBlank = threshold === null || threshold === undefined;
-  const value = isBlank ? NaN : Number(threshold);
-  const percent = Number.isFinite(value)
-    ? Math.min(GAME_CONFIG.AUTO_HEAL_THRESHOLD_MAX, Math.max(GAME_CONFIG.AUTO_HEAL_THRESHOLD_MIN, value))
-    : GAME_CONFIG.DEFAULT_AUTO_HEAL_THRESHOLD;
-  return Math.max(1, Math.floor((Math.max(1, Number(maxHealth) || 1) * percent) / 100));
-}
-
-/** Выбрать предмет для автолечения */
-export function selectHealItem(
-  items: Array<{ id: number; name: string; heal: number; price: number; stack?: number; stars_price?: number }>,
-  options: { health: number; maxHealth: number; threshold: number }
-): { id: number; name: string; heal: number; price: number; stack?: number; covers: boolean } | null {
-  const hasStock = (item: { stack?: number }) => {
-    if (item.stack === undefined || item.stack === null) return true;
-    return Number(item.stack) > 0;
-  };
-
-  const usable = (Array.isArray(items) ? items : [])
-    .filter((item) => item && Number(item.heal) > 0 && hasStock(item));
-
-  const regular = usable.filter((item) => !Number(item.stars_price));
-  const pool = regular.length > 0 ? regular : usable;
-
-  if (pool.length === 0) return null;
-
-  const health = Math.max(0, Number(options.health) || 0);
-  const maxHealth = Math.max(1, Number(options.maxHealth) || 1);
-
-  const efficiencyOf = (item: { heal: number; price: number }) => {
-    const price = Number(item.price);
-    if (!Number.isFinite(price) || price <= 0) return 0.5;
-    return Number(item.heal) / price;
-  };
-
-  const sorted = [...pool].sort((a, b) => {
-    const byEfficiency = efficiencyOf(b) - efficiencyOf(a);
-    if (Math.abs(byEfficiency) > 1e-9) return byEfficiency;
-    return Number(a.heal) - Number(b.heal);
-  });
-
-  const best = sorted[0];
-  if (!best) return null;
-  return { ...best, covers: health + Number(best.heal) >= maxHealth };
-}
-
 /** Определить слот экипировки для предмета */
 export function resolveEquipmentSlot(item: InventoryItem | null | undefined): EquipmentSlot | null {
   if (!item || typeof item !== 'object') return null;

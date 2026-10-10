@@ -1,5 +1,5 @@
 /**
- * Тест P0-1: бесплатное лечение при атаке с оружием.
+ * Тест P0-1 + удаление автохила: инвентарь при атаке с оружием.
  *
  * Сценарий эксплуатации:
  *   1. У игрока HP ниже порога автохила и есть аптечка (quantity: 1).
@@ -54,7 +54,6 @@ const helpersMock = {
     addItemToInventory: realGameHelpers.addItemToInventory,
     equipmentRules: realEquipmentRules,
     wearEquipmentSlots: realGameHelpers.wearEquipmentSlots,
-    applyAutoHeal: realGameHelpers.applyAutoHeal,
     trackCollectedItems: realGameHelpers.trackCollectedItems,
     progressDailyTask: realGameHelpers.progressDailyTask,
     // Единственная функция game-helpers, которая обращается к БД НЕ через
@@ -208,7 +207,7 @@ const ok = (name, cond, extra) => {
 
 async function run() {
     const handler = getHandler('/attack-with-weapon');
-    console.log('=== P0-1: атака оружием + автохил (аптечка должна быть списана) ===');
+    console.log('=== P0-1: атака оружием + инвентарь (автохил удалён) ===');
     ok('хендлер найден', typeof handler === 'function');
 
     playerRow = playerFactory();
@@ -223,8 +222,7 @@ async function run() {
     console.log('  ответ: ' + JSON.stringify(res.body && res.body.data ? {
         damage: res.body.data.damage,
         weapon_used: res.body.data.weapon_used,
-        health: res.body.data.health,
-        auto_heal: res.body.data.auto_heal
+        health: res.body.data.health
     } : res.body));
 
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
@@ -233,37 +231,55 @@ async function run() {
     console.log('\n  финальное состояние инвентаря в БД:');
     playerRow.inventory.forEach((it, i) => console.log('    [' + i + '] ' + it.name + ' qty=' + (it.quantity ?? 1) + ' dur=' + (it.durability ?? '-')));
 
+    // Автоиспользование лекарств удалено: аптечка должна ОСТАТЬСЯ в
+    // инвентаре — лечиться игрок теперь может только вручную.
     const medkit = playerRow.inventory.find(i => i.id === 902);
-    ok('аптечка ИСЧЕЗЛА из инвентаря (лечение не бесплатное)', medkit === undefined, medkit && medkit.quantity);
+    ok('аптечка НЕ тратится автоматически (автохил удалён)',
+        medkit !== undefined && (medkit.quantity ?? 1) === 1, medkit && medkit.quantity);
 
     const weapon = playerRow.inventory.find(i => i.id === 901);
     ok('износ оружия сохранён (50 -> 49)', weapon && weapon.durability === 49, weapon && weapon.durability);
 
-    ok('здоровье восстановлено автохилом', playerRow.health > playerFactory().health - 1000 || playerRow.health !== res.body.data.health || true);
+    // Здоровье = здоровье после ответного удара, без восстановления.
+    ok('здоровье в БД = значение из ответа (без автохила)',
+        playerRow.health === (res.body && res.body.data && res.body.data.health),
+        playerRow.health + ' vs ' + (res.body && res.body.data && res.body.data.health));
     console.log('  health в БД =', playerRow.health, '| Ответ сервера health =', res.body && res.body.data && res.body.data.health);
-    ok('health в БД совпадает с ответом (нет рассинхрона)', playerRow.health === (res.body && res.body.data && res.body.data.health), playerRow.health + ' vs ' + (res.body && res.body.data && res.body.data.health));
+    ok('health в ответе не выше начального (лечения не произошло)',
+        (res.body && res.body.data && res.body.data.health) <= 100);
 
     ok('энергия списана (10 -> 9)', playerRow.energy === 9, playerRow.energy);
 
-    console.log('\n=== P0-1b: нет аптечки -> инвентарь всё равно фиксирует износ ===');
+    console.log('\n=== P0-1b: инвентарь фиксирует износ оружия ===');
     playerRow = playerFactory();
-    playerRow.health = 90;   // автохил не сработает (порог 35)
     callLog.length = 0;
     await handler(req, res);
     const weapon2 = playerRow.inventory.find(i => i.id === 901);
-    ok('износ оружия записан даже без автохила', weapon2 && weapon2.durability === 49, weapon2 && weapon2.durability);
-    ok('аптечка на месте (её не тратили)', Boolean(playerRow.inventory.find(i => i.id === 902)));
+    ok('износ оружия записан', weapon2 && weapon2.durability === 49, weapon2 && weapon2.durability);
+    ok('аптечка на месте (автохила нет — тратить некому)', Boolean(playerRow.inventory.find(i => i.id === 902)));
 
-    console.log('\n=== P0-1c: инвентарь перезаписан РОВНО один раз после автохила ===');
-    // Если бы stale-копия вернулась — в логе был бы UPDATE energy+inventory ПОСЛЕ автохила
+    console.log('\n=== P0-1c: inventory не перезаписывается вслепую после записи износа ===');
+    // Регрессия, которую ловил этот тест раньше: финальный UPDATE энергии
+    // затирал inventory своей stale-копией. Сейчас энергии-обновление
+    // inventory не трогает вовсе, поэтому после записи износа может быть
+    // только UPDATE ответного удара (health + equipment).
     playerRow = playerFactory();
     callLog.length = 0;
     await handler(req, res);
-    const autoHealIdx = callLog.findIndex(q => /UPDATE players SET health = \$1, inventory = \$2/.test(q.sql));
-    const inventoryWritesAfter = callLog
+    const wearIdx = callLog.findIndex(q => /^UPDATE players SET inventory = \$1 WHERE id = \$2$/.test(q.sql));
+    ok('запись износа оружия есть', wearIdx !== -1, JSON.stringify(callLog.map(q => q.sql)));
+    const badWritesAfter = callLog
         .map((q, i) => ({ q, i }))
-        .filter(x => x.i > autoHealIdx && /UPDATE players/.test(x.q.sql) && /inventory/.test(x.q.sql));
-    ok('после applyAutoHeal НЕТ записи inventory', inventoryWritesAfter.length === 0, JSON.stringify(inventoryWritesAfter.map(x => x.q.sql)));
+        .filter(x => x.i > wearIdx
+            && /UPDATE players/.test(x.q.sql)
+            && /inventory/.test(x.q.sql)
+            && !/equipment/.test(x.q.sql));
+    ok('после записи износа НЕТ захламления inventory',
+        badWritesAfter.length === 0,
+        JSON.stringify(badWritesAfter.map(x => x.q.sql)));
+    ok('энергия-апдейт inventory не трогает',
+        callLog.filter(q => /UPDATE players SET energy = GREATEST/.test(q.sql) && /inventory/.test(q.sql)).length === 0,
+        'energy-update содержит inventory');
 
     console.log('\n========================================');
     console.log('ИТОГ:', passed, 'passed,', failed, 'failed');

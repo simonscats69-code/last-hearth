@@ -100,8 +100,6 @@ export interface PlayerStats {
   last_action_time: Date;
   last_energy_update: Date;
   last_hp_regen: Date;
-  auto_heal_enabled: boolean;
-  auto_heal_threshold: number;
   boss_damage: number;
   items_collected: number;
   bosses_killed: number;

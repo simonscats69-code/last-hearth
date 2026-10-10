@@ -2707,7 +2707,10 @@ async function loadProfile() {
             infections: Number(playerData.infections || 0),
             infections_list: playerData.infections_list || [],
             energy: Number(playerData.energy || 0),
-            max_energy: Number(playerData.max_energy || 100),
+            // Дефолт 50 — как в схеме БД (players.max_energy DEFAULT 50) и в
+            // серверном recalcEnergy. Раньше стоял 100: при отсутствующем поле
+            // клиент рисовал x/100, а сервер считал по 50.
+            max_energy: Number(playerData.max_energy || 50),
             last_energy_update: playerData.last_energy_update || null
         };
         playerData.energy = playerData.status.energy;
@@ -2864,6 +2867,14 @@ function renderEnergyIndicators() {
     const bossEnergyText = document.getElementById('boss-energy-text');
     if (bossEnergyText) {
         bossEnergyText.textContent = `${Math.floor(currentEnergy)}/${maxEnergy}`;
+    }
+
+    // Пишем и в панель игрока слева: она тоже есть в разметке боя, но
+    // раньше оставалась с дефолтом "100/100" и противоречила нижней
+    // полосе, где показывалось реальное значение.
+    const playerEnergyText = document.getElementById('player-energy-display');
+    if (playerEnergyText) {
+        playerEnergyText.textContent = `${Math.floor(currentEnergy)}/${maxEnergy}`;
     }
 }
 
@@ -3485,10 +3496,14 @@ function updateHealPanel(player) {
     panel.style.display = '';
 
     // Подсказка: что именно сейчас происходит со здоровьем.
+    // Единственный источник правды — public/shared/equipment.js (его же читает
+    // сервер): и потолок регена, и интервал. Фоллбэков-констант здесь нет
+    // намеренно — раньше `: 90` дублировал HEALTH_REGEN_INTERVAL_MS и после
+    // смены баланса подсказка врала бы.
     const hintEl = document.getElementById('heal-panel-hint');
-    if (hintEl) {
-        const cap = shared ? shared.getHealthRegenCap(maxHealth) : Math.floor(maxHealth * 0.6);
-        const interval = shared ? Math.round(shared.HEALTH_REGEN_INTERVAL_MS / 1000) : 90;
+    if (hintEl && shared) {
+        const cap = shared.getHealthRegenCap(maxHealth);
+        const interval = Math.round(shared.HEALTH_REGEN_INTERVAL_MS / 1000);
         hintEl.textContent = missing <= 0
             ? `Здоровье полное · восстановление до ${cap}/${maxHealth} идёт само (+1 HP / ${interval} с)`
             : `Не хватает ${missing} HP · реген сам поднимет до ${cap}/${maxHealth}`;
@@ -3511,58 +3526,6 @@ function updateHealPanel(player) {
         }
     }
 
-    // Настройки автолечения. Порог в HP считаем тем же правилом, по которому
-    // лечит сервер (shared.getAutoHealThreshold): раньше лейбл округлял через
-    // Math.round, а сервер — вниз, и надпись обещала на 1 HP больше.
-    const enabled = player.auto_heal_enabled !== false;
-    const threshold = Number(player.auto_heal_threshold) || (shared ? shared.DEFAULT_AUTO_HEAL_THRESHOLD : 35);
-    const toggle = document.getElementById('auto-heal-enabled');
-    const range = document.getElementById('auto-heal-threshold');
-    const label = document.getElementById('auto-heal-threshold-label');
-    const thresholdHp = shared
-        ? shared.getAutoHealThreshold(maxHealth, threshold)
-        : Math.floor((Math.max(1, maxHealth) * threshold) / 100);
-
-    if (toggle) toggle.checked = enabled;
-    if (range) {
-        // Границы ползунка — из общего файла правил: HTML-атрибуты min/max
-        // не должны расходиться с серверной валидацией после смены баланса.
-        if (shared) {
-            range.min = String(shared.AUTO_HEAL_THRESHOLD_MIN);
-            range.max = String(shared.AUTO_HEAL_THRESHOLD_MAX);
-        }
-        range.value = String(threshold);
-    }
-    if (label) {
-        label.textContent = enabled
-            ? `— сработает при ${thresholdHp} HP`
-            : '— выключено';
-    }
-}
-
-/** Настройка автолечения */
-async function saveAutoHealSettings() {
-    const toggle = document.getElementById('auto-heal-enabled');
-    const range = document.getElementById('auto-heal-threshold');
-    if (!toggle || !range) return;
-
-    try {
-        const result = await apiRequest('/api/game/player/auto-heal', {
-            method: 'POST',
-            body: {
-                enabled: toggle.checked,
-                threshold: Number(range.value)
-            }
-        });
-
-        if (gameState.player) {
-            gameState.player.auto_heal_enabled = result.data?.enabled ?? toggle.checked;
-            gameState.player.auto_heal_threshold = result.data?.threshold ?? Number(range.value);
-        }
-        updateHealPanel(gameState.player);
-    } catch (error) {
-        showNotification(clientErrorMessage(error, 'Не удалось сохранить настройку'), 'error');
-    }
 }
 
 /** Использовать лечебный предмет из панели лечения */
@@ -4312,33 +4275,9 @@ function bindWorkshopActions() {
         bindClickOnce(button, `heal-${button.dataset.healIndex}`, () => healItem(Number(button.dataset.healIndex)));
     });
 
-    const autoHealToggle = document.getElementById('auto-heal-enabled');
-    if (autoHealToggle && !autoHealToggle.dataset.bound) {
-        autoHealToggle.dataset.bound = '1';
-        autoHealToggle.addEventListener('change', saveAutoHealSettings);
-    }
-
-    const autoHealRange = document.getElementById('auto-heal-threshold');
-    if (autoHealRange && !autoHealRange.dataset.bound) {
-        autoHealRange.dataset.bound = '1';
-        // Ползунок меняется часто — шлём настройку только по отпусканию.
-        autoHealRange.addEventListener('input', () => {
-            const label = document.getElementById('auto-heal-threshold-label');
-            const player = gameState.player;
-            const shared = window.EquipmentShared;
-            if (label && player) {
-                const maxHealth = Math.max(1, Number(player.max_health) || 1);
-                const value = Number(autoHealRange.value);
-                // Тот же расчёт, что у сервера: иначе предпросмотр обещает
-                // порог, до которого автолечение не доберётся.
-                const thresholdHp = shared
-                    ? shared.getAutoHealThreshold(maxHealth, value)
-                    : Math.floor((maxHealth * value) / 100);
-                label.textContent = `— сработает при ${thresholdHp} HP`;
-            }
-        });
-        autoHealRange.addEventListener('change', saveAutoHealSettings);
-    }
+    // Настройки автолечения (галочка + ползунок порога) удалены: лекарства
+    // расходуются только вручную кнопками выше. Обработчики убраны вместе
+    // с элементами управления.
 
     document.querySelectorAll('[data-ws-unequip]').forEach(button => {
         bindClickOnce(button, `ws-unequip-${button.dataset.wsUnequip}`, () => unequipSlot(button.dataset.wsUnequip));
@@ -4799,12 +4738,14 @@ async function loadBosses() {
         gameState.bossesInfo = data?.info || null;
         gameState.activeBattle = data?.active_battle || null;
 
-        // Обновляем информацию об энергии игрока
+        // Обновляем информацию об энергии игрока.
+        // Фоллбэк 50 совпадает со схемой БД; прежде был 100, и при отсутствии
+        // поля панель показывала завышенный максимум.
         const playerEnergy = data?.player_energy;
         if (playerEnergy !== undefined) {
             syncPlayerEnergyState(
                 playerEnergy,
-                data?.player_max_energy ?? 100
+                data?.player_max_energy ?? 50
             );
             refreshPlayerEnergyUI();
         }
@@ -5084,6 +5025,28 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
         bossIcon.textContent = boss.icon;
         bossIcon.classList.remove('damage-shake');
     }
+
+    // Заполняем панель игрока слева: имя, HP и энергия. Раньше эти три
+    // элемента существовали только в разметке — их никто не наполнял, и в
+    // бою было видно лишь "Игрок / 100/100 / 100/100".
+    const playerName = gameState.player?.first_name || gameState.player?.username || gameState.player?.name;
+    const playerNameEl = document.getElementById('player-name-display');
+    if (playerNameEl) playerNameEl.textContent = playerName || 'Игрок';
+
+    const player = gameState.player || {};
+    const playerMaxHealth = Math.max(1, Number(player.max_health) || Number(player.status?.max_health) || 100);
+    const playerHealth = Math.max(0, Math.min(playerMaxHealth,
+        Number(player.health ?? player.status?.health ?? playerMaxHealth)));
+    const playerMaxEnergy = Math.max(1, Number(player.max_energy ?? player.status?.max_energy) || 50);
+    const playerEnergy = Math.max(0, Math.min(playerMaxEnergy,
+        Number(player.energy ?? player.status?.energy ?? playerMaxEnergy)));
+
+    const playerHpEl = document.getElementById('player-hp-display');
+    if (playerHpEl) playerHpEl.textContent = `${playerHealth}/${playerMaxHealth}`;
+
+    const playerEnergyEl = document.getElementById('player-energy-display');
+    if (playerEnergyEl) playerEnergyEl.textContent = `${playerEnergy}/${playerMaxEnergy}`;
+
     const currentBossHp = boss.hp ?? boss.health ?? boss.max_health;
     const maxBossHp = boss.max_hp ?? boss.max_health;
     if (bossHealthText) bossHealthText.textContent = `${currentBossHp}/${maxBossHp}`;
@@ -5703,17 +5666,9 @@ function appendCounterDamageToLog(payload) {
     log.appendChild(line);
     log.scrollTop = log.scrollHeight;
 
-    // Автолечение: сервер сам выпил лекарство, сообщаем что именно.
-    // Поле обязано быть и в payload, и в payload.data — клиент читает
-    // `payload.auto_heal ?? payload.data.auto_heal`.
-    const autoHeal = payload?.auto_heal ?? payload?.data?.auto_heal;
-    if (autoHeal?.used) {
-        const healLine = document.createElement('p');
-        healLine.className = 'damage damage-heal';
-        healLine.innerHTML = `❤️ Автолечение: <strong>${escapeHtml(autoHeal.used)}</strong> +${Number(autoHeal.heal) || 0} HP`;
-        log.appendChild(healLine);
-        log.scrollTop = log.scrollHeight;
-    }
+    // Строка «❤️ Автолечение» убрана вместе с автоиспользованием лекарств:
+    // лечение теперь только ручное, поэтому в логе нечего автоматическое
+    // сообщать. Ответный урон игрок видит строкой выше.
 
     if (Number(payload?.health ?? payload?.data?.health ?? 0) <= 0) {
         showModal('💀 Вы погибли', 'Здоровье кончилось. Используйте аптечку, чтобы продолжить бой.', 'error');
@@ -5738,6 +5693,14 @@ function updatePlayerHealthUi(health) {
     if (healthBar) {
         healthBar.style.width = `${Math.max(0, Math.min(100, (value / maxHealth) * 100))}%`;
     }
+
+    // Тот же показатель на экране боя: элементы #player-hp-display /
+    // #player-energy-display есть в разметке boss-fight-screen, но раньше
+    // никем не заполнялись и навсегда оставались с дефолтом "100/100".
+    // Из-за этого в бою нельзя было увидеть своё HP (а на главном экране
+    // полоса есть).
+    const fightHp = document.getElementById('player-hp-display');
+    if (fightHp) fightHp.textContent = `${value}/${maxHealth}`;
 }
 
 /**
@@ -7850,7 +7813,7 @@ function generateScreens() {
                         </div>
                         <div class="stat-bar">
                             <div class="bar energy-bar" id="energy-bar" style="width:100%"></div>
-                            <span class="bar-text" id="energy-text">⚡ 100/100</span>
+                            <span class="bar-text" id="energy-text">⚡ 50/50</span>
                         </div>
                         <div class="stat-bar">
                             <div class="bar exp-bar" id="exp-bar" style="width:0%"></div>
@@ -7890,14 +7853,9 @@ function generateScreens() {
                         <span class="heal-panel-hint" id="heal-panel-hint"></span>
                     </div>
                     <div class="heal-panel-items" id="heal-panel-items"></div>
-                    <label class="auto-heal-toggle">
-                        <input type="checkbox" id="auto-heal-enabled">
-                        <span>Автолечение</span>
-                        <span class="auto-heal-threshold" id="auto-heal-threshold-label"></span>
-                    </label>
-                    <input type="range" class="auto-heal-range" id="auto-heal-threshold"
-                           min="10" max="90" step="5" value="35">
                 </section>
+                <!-- Блок «Автолечение» (галочка + ползунок порога) удалён:
+                     лекарства расходуются только вручную кнопками выше. -->
 
                 <!-- Текущая локация -->
                 <section class="location-section">
@@ -8196,7 +8154,7 @@ function generateScreens() {
                 <!-- Энергия и действия -->
                 <div class="fight-energy-display">
                     <span class="energy-label">⚡ Энергия:</span>
-                    <span id="boss-energy-text">0/100</span>
+                    <span id="boss-energy-text">50/50</span>
                     <span class="energy-used" id="boss-energy-used"></span>
                 </div>
                 

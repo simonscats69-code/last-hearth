@@ -798,12 +798,15 @@ async function runMigrations() {
     await queryTx(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);
     await queryTx(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS rarity VARCHAR(20) DEFAULT 'common'`);
 
-    // Здоровье и лечение: пассивный реген и автолечение.
-// До этого колонок не было вовсе — здоровье росло только от предметов,
-// поэтому кончились аптечки — и игрок застревал.
-await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMESTAMP`);
-await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_enabled BOOLEAN DEFAULT false`);
-await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS auto_heal_threshold SMALLINT DEFAULT 35`);
+    // Здоровье и лечение: пассивный реген.
+    // last_hp_regen хранит метку времени последнего начисления: по ней
+    // regenerateHealth считает, сколько тиков по 90 секунд прошло.
+    //
+    // Колонки auto_heal_enabled / auto_heal_threshold удалены вместе с
+    // автоиспользованием лекарств: лекарства расходуются только вручную,
+    // настраивать нечего. ADD COLUMN для них больше не выполняется, а сами
+    // колонки, если они остались в БД от прошлой версии, никем не читаются.
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMESTAMP`);
 
     // Миграции для player_achievements
     await queryTx(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS progress_value INTEGER DEFAULT 0`);

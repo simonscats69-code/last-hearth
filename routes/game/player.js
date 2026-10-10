@@ -22,9 +22,8 @@ function getGameHelpers() {
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
 const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth } = helpers;
+// Общий файл правил с клиентом: цены покупки энергии (в звёздах).
 const equipmentRules = require('../../public/shared/equipment.js');
-// Правила лечения (реген, порог автолечения) — из общего файла, который
-// читает и браузер.
 
 
 // C-6: Whitelist разрешённых полей для обновления профиля
@@ -382,71 +381,9 @@ router.post('/daily-bonus', async (req, res) => {
     }
 });
 
-/**
- * POST /auto-heal — настройка автолечения.
- * body: { enabled: boolean, threshold: 10..90 }
- *
- * Автолечение: при падении здоровья ниже порога игра сама расходует самый
- * экономный лечащий предмет из инвентаря. Игроку не нужно в панике искать
- * аптечку посреди боя с боссом.
- */
-router.post('/auto-heal', async (req, res) => {
-    try {
-        const playerId = req.player?.id;
-        if (!playerId) return res.status(401).json({ error: 'Требуется авторизация' });
-
-        const { enabled, threshold } = req.body || {};
-        const rules = equipmentRules;
-
-        const result = await transaction(async (client) => {
-            const current = await client.query(
-                'SELECT auto_heal_enabled, auto_heal_threshold FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
-            if (!current.rows[0]) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-            }
-
-            // Поля не заданы — оставляем как есть (частичное обновление).
-            const nextEnabled = enabled === undefined
-                ? current.rows[0].auto_heal_enabled !== false
-                : Boolean(enabled);
-            // getAutoHealThreshold(100, x) возвращает процент напрямую:
-            // пустое значение (null/'') и мусор вроде 'abc' дают дефолт 35,
-            // число зажимается в 10..90. Своя цепочка с Math.round(Number(...))
-            // на нечисловом входе давала NaN, и UPDATE падал пятисоткой.
-            const currentThreshold = Number(current.rows[0].auto_heal_threshold)
-                || rules.DEFAULT_AUTO_HEAL_THRESHOLD;
-            const nextThreshold = threshold === undefined
-                ? currentThreshold
-                : rules.getAutoHealThreshold(100, threshold);
-
-            await client.query(
-                'UPDATE players SET auto_heal_enabled = $1, auto_heal_threshold = $2 WHERE id = $3',
-                [nextEnabled, nextThreshold, playerId]
-            );
-
-            await logPlayerAction(playerId, 'auto_heal_settings', {
-                enabled: nextEnabled,
-                threshold: nextThreshold
-            }, client);
-
-            return {
-                enabled: nextEnabled,
-                threshold: nextThreshold,
-                threshold_min: rules.AUTO_HEAL_THRESHOLD_MIN,
-                threshold_max: rules.AUTO_HEAL_THRESHOLD_MAX
-            };
-        });
-
-        res.json({ success: true, data: result });
-    } catch (err) {
-        if (err.code === 'PLAYER_NOT_FOUND') {
-            return res.status(404).json({ success: false, error: err.message, code: err.code });
-        }
-        handleError(res, err, 'auto_heal_settings');
-    }
-});
+// Роут POST /auto-heal удалён вместе с автоиспользованием лекарств:
+// настраивать порог и включение больше не нужно — лечение только ручное,
+// кнопками на панели лечения главного экрана.
 
 /**
  * GET /achievements — достижения игрока

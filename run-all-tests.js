@@ -25,6 +25,7 @@ const harnesses = [
     'test-404-final.js',
     'test-equipment-rules-fix.js',
     'test-boss-screen-crash.js',
+    'test-no-autoheal.js',
     'test-gamejs-harness.js',
     'test-gamejs-guards.js'
 ];

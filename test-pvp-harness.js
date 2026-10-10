@@ -317,9 +317,15 @@ async function run() {
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
     ok('success', res.body && res.body.success === true, JSON.stringify(res.body).slice(0, 150));
     // Бьющий игрок (id 1, защитник боя) становится атакующим в этом ударе:
-    // yourHealth — его здоровье (80), targetHealth — противника (id 2, 90 - 10 = 80)
+    // yourHealth — его здоровье (80).
+    // targetHealth — здоровье противника ПОСЛЕ удара: было 90, урон 10 -> 80.
+    // Раньше здесь же срабатывало автолечение и значение było 70 — теперь
+    // автоаптек нет, поэтому ровно «здоровье минус урон».
     ok('yourHealth = 80 (бьющий игрок)', res.body && res.body.hit && res.body.hit.yourHealth === 80, JSON.stringify(res.body && res.body.hit));
-    ok('targetHealth = 80', res.body && res.body.hit && res.body.hit.targetHealth === 80, JSON.stringify(res.body && res.body.hit && res.body.hit.targetHealth));
+    ok('targetHealth = 80 (90 - 10, без автохила)', res.body && res.body.hit && res.body.hit.targetHealth === 80, JSON.stringify(res.body && res.body.hit && res.body.hit.targetHealth));
+    ok('targetAutoHeal больше не приходит (автохил удалён)',
+        res.body && res.body.hit && res.body.hit.targetAutoHeal === undefined,
+        JSON.stringify(res.body.hit));
 
     console.log('');
     console.log('=== /players: COUNT(*) OVER() вместо отдельного COUNT ===');

@@ -1032,21 +1032,6 @@ html, body {
     color: var(--text-secondary);
 }
 
-.auto-heal-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-    font-size: 12px;
-    color: var(--text-secondary);
-}
-
-.auto-heal-range {
-    width: 100%;
-    margin-top: 4px;
-    border-radius: 4px;
-}
-
 /* Кнопки лечения */
 .heal-actions {
     display: flex;
