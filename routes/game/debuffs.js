@@ -300,15 +300,6 @@ const DebuffAPI = {
                 };
             }
 
-            // Легаси-имена типов лечения (antibiotic/injection) после
-            // объединения инфекций с радиацией. Нормализуем к antirad,
-            // чтобы старый вызов не падал с INVALID_TYPE: реальную силу
-            // всё равно задают статы предмета ниже.
-            if (!cure && (resolvedCureType === 'antibiotic' || resolvedCureType === 'injection')) {
-                resolvedCureType = 'antirad';
-                cure = DEBUFF_CURES.antirad;
-            }
-
             if (!cure) {
                 throw createDebuffError(`Неизвестный тип лечения: ${cureType}`, 'INVALID_TYPE', 400);
             }

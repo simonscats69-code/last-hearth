@@ -874,38 +874,6 @@ router.post('/start', async (req, res) => {
     }
 });
 
-router.get('/bonuses', async (req, res) => {
-    try {
-        const outcome = await withClient(async (client) => {
-            const playerId = req.player.id;
-            const player = await getPlayerBaseState(client, playerId);
-            const masteries = await getBossMasteries(client, playerId);
-            const masteryMap = {};
-            for (const m of masteries) masteryMap[m.boss_id] = m.kills;
-            const bossesResult = await client.query('SELECT id, name FROM bosses ORDER BY id');
-            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
-
-            return {
-                success: true,
-                data: {
-                    player_level: player.level,
-                    set_bonuses: setBonuses,
-                    bonuses: bossesResult.rows.map((boss) => ({
-                        boss_id: boss.id,
-                        boss_name: boss.name,
-                        defeated_count: masteryMap[boss.id] || 0,
-                        current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
-                        mastery_bonus: calculateDamageBonus(boss.id, masteries)
-                    }))
-                }
-            };
-        });
-        res.json(outcome);
-    } catch (error) {
-        return handleError(res, error, 'bonuses');
-    }
-});
-
 router.get('/', async (req, res) => {
     logger.info('[bosses/get] Начало запроса', { playerId: req.player?.id });
     try {
@@ -1867,25 +1835,6 @@ router.post('/raid/:id/attack', async (req, res) => {
     } catch (error) {
         if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'mass_attack');
-    }
-});
-
-router.get('/active', async (req, res) => {
-    try {
-        const outcome = await withClient(async (client) => {
-            const activeBattle = await resolveActiveBattle(client, req.player.id);
-
-            return {
-                success: true,
-                data: {
-                    has_active_boss: Boolean(activeBattle),
-                    active_boss: activeBattle
-                }
-            };
-        });
-        res.json(outcome);
-    } catch (error) {
-        return handleError(res, error, 'active');
     }
 });
 

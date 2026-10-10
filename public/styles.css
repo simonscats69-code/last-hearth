@@ -252,16 +252,11 @@ input:checked + .slider:before {
     background: linear-gradient(180deg, #8cc97a 0%, #6aa85a 100%);
     border-color: var(--accent-green);
 }
-
 .btn-primary:active {
     box-shadow: 
         0 1px 4px rgba(106, 168, 90, 0.4),
         inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
-
-/* Карточка опасности (для радиации) */
-
-
 
 /* Сброс стилей */
 * {
@@ -303,8 +298,6 @@ input:checked + .slider:before {
     --accent-red: #e07a6e;         /* Кровь/опасность */
     --accent-yellow: #c29412;      /* Радиация */
     --accent-blue: #4a6b8a;        /* Сталь: только рамки (3.17 — проходит 3:1) */
-    /* --accent-radiation удалён: дублировал --radiation-color (#39ff14),
-       который и используется для отображения радиации. */
     
     /* Состояния карточек (в т.ч. для .item-card, .boss-card, .shop-item-card) */
     --card-bg: #2f2921;          /* Альтернативный фон карточек */
@@ -333,9 +326,7 @@ input:checked + .slider:before {
     --health-color: #cc3333;       /* Красный */
     --energy-color: #ffcc00;       /* Жёлтый */
     --radiation-color: #39ff14;    /* Радиоактивный неон */
-    /* --hunger-color / --thirst-color удалены: механик голода и жажды
-       в игре нет (см. buildPlayerStatus — fatigue всегда 0), а переменные
-       не читались ни одним правилом. */
+    
 
     /* ---------- Токены интерфейса ----------
        Добавлены, потому что эти цвета повторялись в десятках правил

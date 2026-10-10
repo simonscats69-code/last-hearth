@@ -219,30 +219,6 @@ router.put('/update', async (req, res) => {
 });
 
 /**
- * GET /energy — текущая энергия
- */
-router.get('/energy', async (req, res) => {
-    try {
-        const playerId = req.player?.id;
-        const player = await queryOne('SELECT energy, max_energy, last_energy_update FROM players WHERE id = $1', [playerId]);
-        if (!player) return res.status(404).json({ error: 'Игрок не найден' });
-
-        const status = buildPlayerStatus(player);
-
-        res.json({
-            success: true,
-            data: {
-                energy: status.energy,
-                max_energy: status.max_energy,
-                regen_interval_ms: 60000
-            }
-        });
-    } catch (err) {
-        handleError(res, err, 'get_energy');
-    }
-});
-
-/**
  * POST /buy-energy — покупка энергии за звёзды
  */
 router.post('/buy-energy', async (req, res) => {

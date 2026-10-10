@@ -570,64 +570,6 @@ router.get('/leaderboard/clans', async (req, res) => {
     }
 });
 
-// Получить позицию игрока в рейтингах - оптимизированная версия.
-// БЕЗОПАСНОСТЬ: позиция считается только для авторизованного игрока из req.player,
-// параметр :telegramId игнорируется, чтобы нельзя было смотреть чужие позиции.
-router.get('/leaderboard/my-position/:telegramId?', async (req, res) => {
-    try {
-        const telegramId = req.player?.telegram_id;
-
-        if (!telegramId) {
-            return unauthorized(res, 'Требуется авторизация');
-        }
-
-        // Сначала получаем статы целевого игрока одним запросом
-        const playerResult = await query(
-            'SELECT level, experience, strength, bosses_killed FROM players WHERE telegram_id = $1',
-            [telegramId]
-        );
-        
-        if (!playerResult.rows.length) {
-            return res.status(404).json({ success: false, error: 'Игрок не найден' });
-        }
-        
-        const { level, experience, strength, bosses_killed } = playerResult.rows[0];
-        
-        // Затем вычисляем ранги без подзапросов
-        const [levelRankResult, strengthRankResult, bossRankResult] = await Promise.all([
-            // Уровень (с учётом опыта при равном уровне)
-            query(
-                `SELECT COUNT(*) + 1 as rank 
-                 FROM players 
-                 WHERE banned = false AND (level > $1 OR (level = $1 AND experience > $2))`,
-                [level, experience]
-            ),
-            // Сила
-            query(
-                'SELECT COUNT(*) + 1 as rank FROM players WHERE banned = false AND strength > $1',
-                [strength]
-            ),
-            // Боссы
-            query(
-                'SELECT COUNT(*) + 1 as rank FROM players WHERE banned = false AND bosses_killed > $1',
-                [bosses_killed]
-            )
-        ]);
-        
-        res.json({
-            success: true,
-            position: {
-                level_rank: parseInt(levelRankResult.rows[0].rank, 10),
-                strength_rank: parseInt(strengthRankResult.rows[0].rank, 10),
-                boss_rank: parseInt(bossRankResult.rows[0].rank, 10)
-            }
-        });
-    } catch (err) {
-        logger.error('[leaderboard] Ошибка получения позиции', { error: err.message });
-        res.status(500).json({ error: 'Ошибка получения позиции' });
-    }
-});
-
 // ==========================================
 // ЭКСПОРТ
 // ==========================================

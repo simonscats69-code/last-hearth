@@ -238,27 +238,8 @@
     /** Прибавка к урону/защите за каждый уровень улучшения (8%) */
     const UPGRADE_BONUS_PER_LEVEL = 0.08;
 
-    /** Порядок редкостей от обычной к легендарной */
+/** Порядок редкостей от обычной к легендарной */
     const RARITY_ORDER = Object.freeze(['common', 'uncommon', 'rare', 'epic', 'legendary']);
-
-    /** Множители базовой цены по типу предмета */
-    const PRICE_MULTIPLIER_BY_TYPE = Object.freeze({
-        weapon_melee: 1.0,
-        weapon_ranged: 1.3,
-        weapon_legendary: 2.5,
-        armor_body: 1.2,
-        armor_head: 0.8,
-        armor_hands: 0.6,
-        armor_legs: 0.7,
-        armor_boots: 0.6,
-        armor_accessory: 0.5,
-        medicine: 0.8,
-        resource: 0.4,
-ammo: 0.3,
-        food: 1.0,
-        key: 0,
-        consumable: 1.0
-    });
 /**
  * Формула опыта до следующего уровня.
      * Начисление (сервер) и полоска опыта (клиент) обязаны считать одно и то же.
@@ -1019,7 +1000,6 @@ function resolveEquipmentSlot(item) {
         calculateEquipmentLuckBonus,
         applyDefenseReduction,
         wearEquipment,
-        PRICE_MULTIPLIER_BY_TYPE,
         calculateRepairCost,
         calculateUpgradeCost,
         calculateScrapYield,

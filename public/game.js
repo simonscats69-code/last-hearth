@@ -1271,14 +1271,12 @@ window.addEventListener('beforeunload', () => {
  * Страховочный таймер гарантированно разблокирует операцию.
  */
 const actionLocks = {
-    healing: false,
     clanCreate: false,
     clanJoin: false,
     clanLeave: false,
     clanDonate: false,
     raidJoin: false,
     claimAchievement: false,
-    pvpAttack: false,
     pvpStart: false,
     useItem: false,
     purchase: false,
@@ -1998,14 +1996,6 @@ function updateEnergyTimer() {
         timerEl.textContent = `Энергия через ${timeToEnergy.formatted}`;
     }
 }
-
-/**
- * Удалены getDamagePreview и updateDamagePreviewUI вместе с блоком
- * damage-preview на экране выбора оружия: функцию никто не вызывал,
- * предпросмотр не отображался, а список оружия и так показывает урон
- * каждого ствола. Вместе с ними удалены обращения к /bosses/bonuses —
- * единственным потребителем был этот мёртвый предпросмотр.
- */
 
 // ============================================================================
 // УПРАВЛЕНИЕ ЭКРАНАМИ
@@ -3281,15 +3271,6 @@ function findBestPreparationItem(type) {
     return null;
 }
 
-/**
- * Удалены updateQuickEntryBadges и setQuickEntryBadge: бейджи «доступно»,
- * «нужно», «награда» ставились на кнопки быстрого доступа, но элементов
- * bosses-badge / shop-badge / rating-badge / pvp-badge в разметке нет —
- * функции молча ничего не делали, но требовали данных о боссах и
- * достижениях, то есть лишние запросы при каждом обновлении экрана.
- * Совет «что делать» теперь даёт единственная карточка рекомендаций.
- */
-
 function syncUnlockedLocations(announce = false) {
     if (!Array.isArray(gameState.locations) || !gameState.locations.length || !gameState.player) {
         return;
@@ -3324,12 +3305,6 @@ function syncUnlockedLocations(announce = false) {
 function updateMainScreenInsights(player) {
     if (!player) return;
 
-    // Три функции-дубли удалены вместе с их блоками разметки:
-    // updateMainProgressCards (карточки Опыт/Боссы/Достижения),
-    // updateMainBonuses (пилюли Урон/Дроп/Выживаемость) и
-    // updateRiskSummary (карточка «Состояние»).
-    // Карточка рекомендаций ниже уже показывает состояние, совет и действие,
-    // поэтому экран больше не повторяет одну мысль четыре раза.
     updateMainRecommendationUI(player);
     updateJourneyProgress(player);
     updateZonePreparationUI(player);
