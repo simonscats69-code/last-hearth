@@ -28,14 +28,8 @@ const {
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
-// (иначе цикл загрузки модулей).
-let gameHelpers = null;
-function getGameHelpers() {
-    if (!gameHelpers) {
-        gameHelpers = require('../../utils/game-helpers');
-    }
-    return gameHelpers;
-}
+// (иначе цикл загрузки модулей). Общий загрузчик — utils/getGameHelpers.js.
+const { getGameHelpers } = require('../../utils/getGameHelpers');
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
@@ -175,24 +169,30 @@ router.get('/players', async (req, res) => {
         // забаненных (иначе они видны как цели, хотя атаковать их нельзя),
         // health > 0 — мёртвый противник всё равно отклоняется в /attack
         // («Противник уже мертв»), то есть это был клик в никуда.
-        const players = await queryAll(`
-            SELECT id, telegram_id, username, first_name, level, 
+        //
+        // COUNT(*) OVER() считает общее число подходящих строк в том же
+        // проходе выборки: раньше total приходилось считать отдельным
+        // запросом с тем же WHERE — два прохода по players на каждый
+        // рендер списка потенциальных целей.
+        // ВАЖНО: queryAll() возвращает массив строк, а не { rows }.
+        const resultRows = await queryAll(`
+            SELECT id, telegram_id, username, first_name, level,
                    health, max_health, strength, endurance, agility,
-                   pvp_wins, pvp_rating, pvp_streak
-            FROM players 
+                   pvp_wins, pvp_rating, pvp_streak,
+                   COUNT(*) OVER() AS total_count
+            FROM players
             WHERE current_location_id = $1 AND id != $2
               AND banned = false AND health > 0
             LIMIT $3 OFFSET $4
         `, [player.current_location_id, playerId, limit, offset]);
 
-        // Общее количество игроков (те же фильтры, иначе pagination.total
-        // не совпадает с реальным числом строк в players)
-        const countResult = await queryOne(`
-            SELECT COUNT(*) as total FROM players 
-            WHERE current_location_id = $1 AND id != $2
-              AND banned = false AND health > 0
-        `, [player.current_location_id, playerId]);
-        const total = parseInt(countResult?.total || 0);
+        // total одинаков для всех строк; если строк нет, total = 0
+        const total = resultRows.length > 0
+            ? parseInt(resultRows[0].total_count || 0)
+            : 0;
+
+        // Убираем служебное поле из ответа клиенту
+        const players = resultRows.map(({ total_count, ...playerRow }) => playerRow);
 
         // Логируем
         await logPlayerAction(playerId, 'pvp_view_players', {
@@ -242,8 +242,9 @@ router.post('/attack', async (req, res) => {
             return fail(res, 'Нельзя атаковать самого себя', 'SELF_TARGET');
         }
 
-        // Выполняем атаку в транзакции с блокировкой обоих игроков
-        const result = await transaction(async (client) => {
+        // Выполняем атаку в транзакции с блокировкой обоих игроков.
+        // Результат содержит данные ответа и лог: лог уходит после COMMIT.
+        const outcome = await transaction(async (client) => {
             // Блокируем обоих игроков в порядке возрастания ID для предотвращения deadlock
             // Сравниваются нормализованные числа (targetId), а не строки из
             // тела запроса: порядок нужен для единого порядка блокировок.
@@ -294,55 +295,47 @@ router.post('/attack', async (req, res) => {
                 throwPvpError(PvpError.TARGET_PROTECTED);
             }
 
-            const attackerCooldownResult = await client.query(
-                `SELECT expires_at
+            // Объединённый запрос всех кулдаунов для обоих игроков (вместо 3-х отдельных)
+            const cooldownResults = await client.query(
+                `SELECT player_id, cooldown_type, expires_at
                  FROM pvp_cooldowns
-                 WHERE player_id = $1 AND cooldown_type = 'pvp_battle' AND expires_at > NOW()
-                 ORDER BY expires_at DESC
-                 LIMIT 1`,
-                [playerId]
+                 WHERE player_id IN ($1, $2)
+                   AND cooldown_type IN ('pvp_battle', $3)
+                   AND expires_at > NOW()`,
+                [playerId, targetId, `pvp_target_${targetId}`]
             );
 
-            if (attackerCooldownResult.rows[0]) {
+            const cooldownsByPlayer = {};
+            for (const row of cooldownResults.rows) {
+                if (!cooldownsByPlayer[row.player_id]) cooldownsByPlayer[row.player_id] = {};
+                cooldownsByPlayer[row.player_id][row.cooldown_type] = row.expires_at;
+            }
+
+            if (cooldownsByPlayer[playerId]?.['pvp_battle']) {
                 throwPvpError(PvpError.COOLDOWN);
             }
-
-            const targetCooldownResult = await client.query(
-                `SELECT expires_at
-                 FROM pvp_cooldowns
-                 WHERE player_id = $1 AND cooldown_type = 'pvp_battle' AND expires_at > NOW()
-                 ORDER BY expires_at DESC
-                 LIMIT 1`,
-                [targetId]
-            );
-
-            if (targetCooldownResult.rows[0]) {
+            if (cooldownsByPlayer[targetId]?.['pvp_battle']) {
                 throwPvpError(PvpError.TARGET_COOLDOWN);
             }
-
-            // P1-5: защита от фарма одной цели (короткий кулдаун на пару)
-            const targetFarmCooldown = await client.query(
-                `SELECT expires_at FROM pvp_cooldowns
-                 WHERE player_id = $1 AND cooldown_type = $2 AND expires_at > NOW()
-                 LIMIT 1`,
-                [playerId, `pvp_target_${targetId}`]
-            );
-            if (targetFarmCooldown.rows[0]) {
+            if (cooldownsByPlayer[playerId]?.[`pvp_target_${targetId}`]) {
                 throwPvpError(PvpError.RATE_LIMIT);
             }
 
-            const existingBattleResult = await client.query(
+const existingBattleResult = await client.query(
                 `SELECT id, attacker_id, defender_id
                  FROM pvp_battles
                  WHERE status = 'active'
                    AND (attacker_id = $1 OR defender_id = $1 OR attacker_id = $2 OR defender_id = $2)
-                 LIMIT 1`,
+                   LIMIT 1`,
                 [playerId, targetId]
             );
 
             if (existingBattleResult.rows[0]) {
                 throwPvpError(PvpError.ALREADY_IN_BATTLE);
             }
+
+            // P0-1: пересчитываем энергию по реальному времени ПЕРЕД проверкой
+            await recalcEnergy(client, lockedPlayer);
 
             const startBuffs = getActiveBuffs(lockedPlayer.buffs);
 
@@ -354,14 +347,7 @@ router.post('/attack', async (req, res) => {
             // Создаём сессию боя с передачей client для работы внутри транзакции
             const battle = await pvp.createPVPMatch(playerId, targetId, lockedPlayer.current_location_id, client);
 
-            // Логируем начало боя
-            await logPlayerAction(playerId, 'pvp_attack_start', {
-                target_id: targetId,
-                target_name: targetPlayer.username || targetPlayer.first_name || 'Unknown',
-                location_id: lockedPlayer.current_location_id,
-                battle_id: battle.id
-            }, client);
-
+            // Возвращаем результат и данные для логирования ПОСЛЕ коммита
             return {
                 battle_id: battle.id,
                 attacker: {
@@ -376,11 +362,26 @@ router.post('/attack', async (req, res) => {
                     health: targetPlayer.health,
                     max_health: targetPlayer.max_health,
                     strength: targetPlayer.strength
+                },
+                log: {
+                    action: 'pvp_attack_start',
+                    playerId,
+                    data: {
+                        target_id: targetId,
+                        target_name: targetPlayer.username || targetPlayer.first_name || 'Unknown',
+                        location_id: lockedPlayer.current_location_id,
+                        battle_id: battle.id
+                    }
                 }
             };
         });
 
-        ok(res, result);
+        // Логируем ПОСЛЕ коммита транзакции
+        if (outcome.log) {
+            await logPlayerAction(outcome.log.playerId, outcome.log.action, outcome.log.data);
+        }
+
+        ok(res, outcome);
 
     } catch (error) {
         return handleError(res, error, 'pvp_attack', playerId);
@@ -407,7 +408,9 @@ router.post('/attack-hit', async (req, res) => {
         const battleId = battleIdCheck.value;
 
         // Выполняем удар в транзакции
-        const battleResult = await transaction(async (client) => {
+        // Результат транзакции: содержит данные ответа и лог.
+        // Логи уходят после COMMIT — см. ниже.
+        const outcome = await transaction(async (client) => {
             // Получаем бой
             const battle = await client.query(`
                 SELECT * FROM pvp_battles WHERE id = $1 FOR UPDATE
@@ -595,6 +598,9 @@ router.post('/attack-hit', async (req, res) => {
             let rewards = null;
             let winner = null;
             let loser = null;
+            // Данные для логов собираем здесь и формируем ПОСЛЕ коммита
+            // транзакции: падение записи лога не должно откатывать бой.
+            let battleLogData = null;
 
             // Победа считается по здоровью ПОСЛЕ автолечения: если защитник
             // автоматически выпил лекарство, он не погиб.
@@ -735,22 +741,28 @@ await client.query(`
                 // Активных push-уведомлений нет: поражение противник увидит на своём
                 // экране PvP — там бой подтягивается по /api/game/pvp/matches.
 
-                // Логируем завершение боя
-                await logPlayerAction(playerId, 'pvp_battle_win', {
-                    battle_id,
-                    opponent_id: defenderId,
-                    damage_dealt: damage,
-                    coins_reward: coinsReward,
-                    item_stolen: !!stolenItem
-                }, client);
+                // Логи боя формируем как данные: сама запись уйдёт в лог
+                // уже после COMMIT, чтобы её падение не откатило бой.
+                battleLogData = {
+                    action: 'pvp_battle_win',
+                    data: {
+                        battle_id,
+                        opponent_id: defenderId,
+                        damage_dealt: damage,
+                        coins_reward: coinsReward,
+                        item_stolen: !!stolenItem
+                    }
+                };
             } else {
-                // Логируем удар
-                await logPlayerAction(playerId, 'pvp_attack_hit', {
-                    battle_id,
-                    opponent_id: defenderId,
-                    damage_dealt: damage,
-                    opponent_health_after: newHealth
-                }, client);
+                battleLogData = {
+                    action: 'pvp_attack_hit',
+                    data: {
+                        battle_id,
+                        opponent_id: defenderId,
+                        damage_dealt: damage,
+                        opponent_health_after: newHealth
+                    }
+                };
             }
 
             return {
@@ -763,23 +775,28 @@ await client.query(`
                     yourHealth: attacker.health,
                     targetHealth: defenderHealth,
                     maxHealth: defender.max_health,
-                    // Автолечение защитника — клиент показывает, что он
-                    // выжил и какое лекарство было израсходовано.
                     targetAutoHeal: defenderAutoHeal
                         ? { used: defenderAutoHeal.used, heal: defenderAutoHeal.heal }
                         : null,
-                    // Слоты сломанного снаряжения — клиент предупреждает игрока,
-                    // что пора в мастерскую.
                     your_broken_equipment: attackerBroken,
                     target_broken_equipment: defenderBroken
                 },
                 energy_left: energyLeft,
                 last_energy_update: energyLastUpdate,
-                message: battleEnded ? 'Победа!' : 'Удар нанесён'
+                message: battleEnded ? 'Победа!' : 'Удар нанесён',
+                log: {
+                    playerId,
+                    ...battleLogData
+                }
             };
         });
+        
+        // Логируем ПОСЛЕ коммита транзакции
+        if (outcome.log) {
+            await logPlayerAction(outcome.log.playerId, outcome.log.action, outcome.log.data);
+        }
 
-        return ok(res, battleResult);
+        return ok(res, outcome);
 
     } catch (error) {
         return handleError(res, error, 'pvp_attack_hit', playerId);
@@ -796,29 +813,30 @@ router.get('/stats', async (req, res) => {
     const playerId = player?.id;
     
     try {
-        const stats = await queryOne(`
-            SELECT pvp_wins, pvp_losses, pvp_total_damage_dealt, pvp_total_damage_taken,
-                   pvp_rating, pvp_streak, pvp_max_streak, coins_stolen_from_me, items_stolen_from_me
-            FROM players WHERE id = $1
-        `, [playerId]);
-
-        const cooldown = await pvp.getPVPCooldown(playerId);
-        const recentBattles = await queryAll(`
-            SELECT b.id, b.attacker_id, b.defender_id, b.winner_id,
-                   b.attacker_damage, b.defender_damage,
-                   COALESCE(b.ended_at, b.started_at) AS battle_time,
-                   attacker.username AS attacker_username,
-                   attacker.first_name AS attacker_first_name,
-                   defender.username AS defender_username,
-                   defender.first_name AS defender_first_name
-            FROM pvp_battles b
-            LEFT JOIN players attacker ON attacker.id = b.attacker_id
-            LEFT JOIN players defender ON defender.id = b.defender_id
-            WHERE (b.attacker_id = $1 OR b.defender_id = $1)
-              AND b.status = 'completed'
-            ORDER BY COALESCE(b.ended_at, b.started_at) DESC
-            LIMIT 10
-        `, [playerId]);
+        const [stats, cooldown, recentBattles] = await Promise.all([
+            queryOne(`
+                SELECT pvp_wins, pvp_losses, pvp_total_damage_dealt, pvp_total_damage_taken,
+                       pvp_rating, pvp_streak, pvp_max_streak, coins_stolen_from_me, items_stolen_from_me
+                FROM players WHERE id = $1
+            `, [playerId]),
+            pvp.getPVPCooldown(playerId),
+            queryAll(`
+                SELECT b.id, b.attacker_id, b.defender_id, b.winner_id,
+                       b.attacker_damage, b.defender_damage,
+                       COALESCE(b.ended_at, b.started_at) AS battle_time,
+                       attacker.username AS attacker_username,
+                       attacker.first_name AS attacker_first_name,
+                       defender.username AS defender_username,
+                       defender.first_name AS defender_first_name
+                FROM pvp_battles b
+                LEFT JOIN players attacker ON attacker.id = b.attacker_id
+                LEFT JOIN players defender ON defender.id = b.defender_id
+                WHERE (b.attacker_id = $1 OR b.defender_id = $1)
+                  AND b.status = 'completed'
+                ORDER BY COALESCE(b.ended_at, b.started_at) DESC
+                LIMIT 10
+            `, [playerId])
+        ]);
 
         const recentMatches = recentBattles.map((battle) => {
             const isOriginalAttacker = Number(battle.attacker_id) === Number(playerId);

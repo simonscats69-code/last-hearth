@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const { query, queryOne, describeError } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
-const { validateTelegramInitData, logger } = require('../../utils/serverApi');
+const { validateTelegramInitData, logger, idempotencyMiddleware } = require('../../utils/serverApi');
 
 // ====== ЛИМИТЫ ЗАПРОСОВ ======
 //
@@ -47,10 +47,21 @@ const criticalActionLimiter = rateLimit({
     keyGenerator: playerKey
 });
 
+// Общий лимит на игрока — ЕДИНСТВЕННЫЙ на этом уровне.
+//
+// Раньше здесь висело два последовательных router.use(generalActionLimiter)
+// (max: 60) и router.use(playerActionLimiter) (max: 120): первый всегда
+// срабатывал первым, поэтому фактический лимит был 60/мин, а лимитер на 120
+// был недостижимым мёртвым кодом — и его комментарий «120/мин хватает на бой
+// и фарм» не соответствовал поведению. Легитимный бой (удар + добивка +
+// инвентарь + профиль) упирался в 429.
+//
+// Теперь один лимитер, ровно с теми 120/мин, которые и задумывались.
+// Точечные лимиты выше (атаки 60/мин, покупки 20/мин) остаются отдельными.
 const generalActionLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 60,
-    message: { error: 'Слишком много запросов.', code: 'ACTION_LIMIT' },
+    max: 120,
+    message: { error: 'Слишком много запросов. Подождите минуту.', code: 'ACTION_LIMIT' },
     keyGenerator: playerKey
 });
 
@@ -233,6 +244,34 @@ async function validatePlayer(req, res, next) {
 const ACTIVITY_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 const lastActivityTouch = new Map();
 
+/**
+ * Через сколько чистить «залипшие» записи шины активности.
+ *
+ * Запись живёт только чтобы троттлить UPDATE last_action_time: одно
+ * значение на игрока. Без чистки Map растёт по числу уникальных игроков
+ * (десятки тысяч) и держит ключи, которые уже никогда не пригодятся.
+ * Один проход в час — дешёвая страховка.
+ */
+const ACTIVITY_BUS_RETENTION_MS = 60 * 60 * 1000;
+
+/**
+ * Удаляет из Map записи, которые никто не трогал дольше retention.
+ * Идемпотентно: запись заново создастся при следующем запросе игрока.
+ * @param {number} [retentionMs]
+ * @returns {number} сколько записей удалено
+ */
+function pruneActivityBus(retentionMs = ACTIVITY_BUS_RETENTION_MS) {
+    const cutoff = Date.now() - retentionMs;
+    let removed = 0;
+    for (const [id, at] of lastActivityTouch) {
+        if (at < cutoff) {
+            lastActivityTouch.delete(id);
+            removed++;
+        }
+    }
+    return removed;
+}
+
 function touchPlayerActivity(playerId) {
     const id = Number(playerId);
     if (!Number.isInteger(id) || id <= 0) return;
@@ -242,6 +281,10 @@ function touchPlayerActivity(playerId) {
     if (now - last < ACTIVITY_TOUCH_INTERVAL_MS) return;
 
     lastActivityTouch.set(id, now);
+
+    // Периодически подчищаем шину. Сравнение по остатку от деления, чтобы не
+    // заводить отдельный setInterval: чистим не чаще раза в минуту.
+    pruneActivityBus(ACTIVITY_BUS_RETENTION_MS);
 
     // Ошибку не пробрасываем: отметка активности не должна ломать запрос.
     query(
@@ -287,18 +330,33 @@ router.use('/items/buy-stars', purchaseLimiter);
 // и /inventory/buy-stars проходили бы мимо purchaseLimiter.
 router.use('/inventory/buy', purchaseLimiter);
 router.use('/inventory/buy-stars', purchaseLimiter);
-router.use(generalActionLimiter);
 
-// ====== 4. ОБЩИЙ ЛИМИТ ИГРОКА (по id) ======
-// 120/мин хватает на бой и фарм (пара десятков запросов на действие), но
-// не даёт спамить в цикле.
-const playerActionLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 120,
-    message: { success: false, error: 'Слишком много запросов. Подождите минуту.', code: 'PLAYER_RATE_LIMIT' },
+// Лимитер чата клана. Общий лимитер ниже (120/мин) допускал ~2 сообщения
+// в секунду: этого хватало, чтобы завалить clan_chat чужими участниками.
+// Чат — не бой, поэтому окно шире и планка ниже.
+const chatLimiter = rateLimit({
+    windowMs: 30 * 1000,
+    max: 10,
+    message: { error: 'Слишком часто отправляешь сообщения. Подожди немного.', code: 'CHAT_RATE_LIMIT' },
     keyGenerator: playerKey
 });
-router.use(playerActionLimiter);
+router.use('/clans/clan/chat', chatLimiter);
+
+// ====== ИДЕМПОТЕНТНОСТЬ МУТАЦИЙ ======
+// P1-8: раньше idempotencyMiddleware висел на app.use('/api/game', ...) в
+// index.js — то есть ДО validatePlayer. В этот момент req.player ещё не
+// установлен, playerId undefined, и middleware всегда уходил в next(),
+// ничего не проверяя и ничего не сохраняя: мёртвый код, который только
+// добавлял req/res-обёртки.
+//
+// Теперь он смонтирован ЗДЕСЬ, после validatePlayer (есть req.player.id),
+// но ПОСЛЕ лимитов запросов: иначе запросы с разными ключами обходили бы
+// rate-limit вообще, не расходуя бюджет. Повторы с тем же ключом попадут
+// под реплей и не выполнят действие второй раз.
+router.use(idempotencyMiddleware);
+
+// Общий лимит на игрока — последний, тоже по id игрока.
+router.use(generalActionLimiter);
 
 // ====== ЛОГИРОВАНИЕ ======
 router.use((req, res, next) => {

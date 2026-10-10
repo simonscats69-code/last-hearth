@@ -21,7 +21,7 @@ const DEV_MODE = process.env.DEV_MODE === 'true';
 // читается напрямую в utils/serverApi.js (validateTelegramInitData) —
 // дубль константы здесь был мёртвым кодом и удалён.
 
-const { logger, requestMiddleware, telegramAuthMiddleware, idempotencyMiddleware } = require('./utils/serverApi');
+const { logger, requestMiddleware, telegramAuthMiddleware } = require('./utils/serverApi');
 
 let server;
 let isShuttingDown = false;
@@ -395,13 +395,12 @@ function requireDatabaseReady(req, res, next) {
 }
 
 // Роутеры
-logger.info('[index] gameRouter загружен:', gameRouter ? 'OK' : 'NULL');
-if (gameRouter?.stack) {
-    logger.info('[index] gameRouter routes:', gameRouter.stack.filter(l => l.route).map(l => l.route?.path));
-}
-app.use('/api/game', requireDatabaseReady, idempotencyMiddleware, gameRouter);
+// idempotencyMiddleware здесь был бесполезен: он стоял ДО validatePlayer,
+// req.player ещё не заполнен, и middleware всегда уходил в next().
+// Перенесён в routes/game/index.js — сразу после validatePlayer.
+app.use('/api/game', requireDatabaseReady, gameRouter);
 app.use('/api/admin', requireDatabaseReady, adminRouter);
-app.use('/api/leaderboard', requireDatabaseReady, idempotencyMiddleware, (req, res, next) => {
+app.use('/api/leaderboard', requireDatabaseReady, (req, res, next) => {
     req.url = '/minigames' + req.url;
     gameRouter(req, res, next);
 });

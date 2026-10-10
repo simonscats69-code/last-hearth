@@ -270,6 +270,38 @@ ammo: 0.3,
     /** Сколько энергии даёт одна покупка (обрезается по max_energy) */
     const ENERGY_PER_PURCHASE = 25;
 
+    /** Цена создания клана. Была захардкожена в 4 местах routes/game/clans.js. */
+    const CLAN_CREATE_COST = 1000;
+
+    /** Максимальная длина описания клана. */
+    const CLAN_DESCRIPTION_MAX = 200;
+
+    /** Максимамая длина имени клана. */
+    const CLAN_NAME_MAX = 30;
+
+    /* ================= КОЛЕСО УДАЧИ =================
+     *
+     * Раньше список призов жил двумя копиями: с весами в
+     * routes/game/minigames.js (сервер решает, что выпало) и без весов в
+     * public/game.js (клиент рисовал секторы). Копии расходились молча:
+     * анимация подсвечивала сектор, который сервер уже не выдаёт.
+     *
+     * Теперь источник один. Сервер берёт весь объект (ему нужен weight),
+     * клиент — тот же список для отрисовки до первого ответа сервера.
+     * После ответа сервера клиент перезаписывает свой список актуальным.
+     */
+    const WHEEL_PRIZES = Object.freeze([
+        { type: 'coins', value: 10, text: '10 монет', weight: 20 },
+        { type: 'coins', value: 25, text: '25 монет', weight: 15 },
+        { type: 'coins', value: 50, text: '50 монет', weight: 10 },
+        { type: 'coins', value: 100, text: '100 монет', weight: 5 },
+        { type: 'multiplier', value: 2, text: 'x2 к монетам', weight: 3 },
+        { type: 'energy', value: 20, text: '20 энергии', weight: 12 }
+    ]);
+
+    /** Кулдаун бесплатного вращения (24 часа). */
+    const WHEEL_FREE_SPIN_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
     /* ================= ИГРОВАЯ КОНФИГУРАЦИЯ =================
      *
      * Единый источник конфигурации для клиента и сервера.
@@ -988,6 +1020,11 @@ function resolveEquipmentSlot(item) {
         ENERGY_REGEN_INTERVAL_MS,
         ENERGY_PURCHASE_STARS_COST,
         ENERGY_PER_PURCHASE,
+        CLAN_CREATE_COST,
+        CLAN_DESCRIPTION_MAX,
+        CLAN_NAME_MAX,
+        WHEEL_PRIZES,
+        WHEEL_FREE_SPIN_COOLDOWN_MS,
         HEALTH_REGEN_CAP_RATIO,
         DEFAULT_AUTO_HEAL_THRESHOLD,
         AUTO_HEAL_THRESHOLD_MIN,

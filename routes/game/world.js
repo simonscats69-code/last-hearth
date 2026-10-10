@@ -21,14 +21,8 @@ const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
-// (иначе цикл загрузки модулей).
-let gameHelpers = null;
-function getGameHelpers() {
-    if (!gameHelpers) {
-        gameHelpers = require('../../utils/game-helpers');
-    }
-    return gameHelpers;
-}
+// (иначе цикл загрузки модулей). Общий загрузчик — utils/getGameHelpers.js.
+const { getGameHelpers } = require('../../utils/getGameHelpers');
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
@@ -36,15 +30,45 @@ const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryI
 const { DebuffAPI } = require('./debuffs');
 const { lootPoolCache, getLootCacheReady, buildLootCache, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
 const crypto = require('crypto');
-const { calculateCoinDrop } = require('../../public/shared/equipment.js');
-
-// Лимит слотов инвентаря — из public/shared/equipment.js, того же файла,
-// который читает браузер.
-const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
+// Один require на файл правил: раньше путь '../../public/shared/equipment.js'
+// фигурировал дважды (отдельно для calculateCoinDrop, отдельно для
+// MAX_INVENTORY_SLOTS). Node кэширует модуль, поэтому это было безвредно,
+// но выглядело как два разных источника одних и тех же правил.
+// equipmentRules (объект с методами) берётся из helpers — это он и есть
+// «файл правил» в виде namespace-объекта; из самого equipment.js
+// экспортируются отдельные функции, а не объект equipmentRules.
+const equipmentShared = require('../../public/shared/equipment.js');
+const { calculateCoinDrop, MAX_INVENTORY_SLOTS } = equipmentShared;
 
 // =============================================================================
 // УТИЛИТЫ
 // =============================================================================
+
+// --- Баланс опыта за поиск (были «магические числа» прямо в расчёте) -------
+
+/** Базовый опыт за находку до множителей локации, комбо и риска. */
+const SEARCH_BASE_XP = 6;
+
+/**
+ * Бонус опыта по редкости.
+ * common не даёт прибавки — иначе ранние локации качались бы слишком быстро.
+ */
+const SEARCH_RARITY_XP = {
+    common: 0,
+    uncommon: 3,
+    rare: 7,
+    epic: 11,
+    legendary: 15
+};
+
+/** Прирост бонуса локации за каждый id; локация 1 — базовая. */
+const LOCATION_XP_BONUS_PER_ID = 0.15;
+
+/** Каждый N-й поиск даёт комбо-бонус. */
+const SEARCH_COMBO_EVERY = 10;
+
+/** Множитель комбо на юбилейном действии. */
+const SEARCH_COMBO_MULTIPLIER = 1.5;
 
 function validateLocationId(locationId) {
     return Number.isInteger(locationId) && locationId > 0;
@@ -82,21 +106,9 @@ async function getRandomLootItem(client, rarity, locationId) {
     if (result.rows[0]) {
         return createInventoryItem(result.rows[0], { quantity: 1 });
     }
-    return null;
+return null;
 }
 
-
-function buildInventoryItem(item, rarity) {
-    return createInventoryItem({
-        ...item,
-        stats: safeJsonParse(item?.stats, {})
-    }, {
-        rarity,
-        quantity: 1,
-        upgrade_level: 0,
-        modifications: {}
-    });
-}
 
 /**
  * Шансы выпадения ключей боссов из поиска.
@@ -117,34 +129,31 @@ async function getBossKeyChances(client, playerId) {
     // Определяем следующий босса, которого нужно открыть.
     // Ищем максимальный boss_id в boss_keys, где у игрока есть ключи,
     // плюс 1. Если ключей нет — следующий босс = 2 (первый с ключом).
-    const progressResult = await client.query(`
-        SELECT COALESCE(MAX(boss_id), 1) + 1 AS next_boss_id
-        FROM boss_keys
-        WHERE player_id = $1 AND quantity > 0
-    `, [playerId]);
-    
-    let nextBossId = Number(progressResult.rows[0]?.next_boss_id) || 2;
-    
-    // Ограничиваем максимумом существующих боссов
-    const maxBossResult = await client.query(`SELECT MAX(id) AS max_id FROM bosses`);
-    const maxBossId = Number(maxBossResult.rows[0]?.max_id) || 10;
-    nextBossId = Math.min(nextBossId, maxBossId);
-    
-    // Получаем ключ только для следующего босса
+    //
+    // Три отдельных запроса (прогресс -> максимум боссов -> ключ) заменены
+    // одним: в нём макс. босс считается подзапросом, а ключ — джойном к нему.
+    // Один roundtrip вместо трёх на КАЖДОМ вызове поиска лута.
     const result = await client.query(`
+        WITH next_boss AS (
+            SELECT LEAST(
+                (SELECT COALESCE(MAX(boss_id), 1) + 1 FROM boss_keys
+                  WHERE player_id = $1 AND quantity > 0),
+                (SELECT COALESCE(MAX(id), 2) FROM bosses)
+            ) AS boss_id
+        )
         SELECT b.id AS boss_id, b.name AS boss_name, b.key_drop_chance,
                k.name AS key_name, k.icon AS key_icon, k.rarity AS key_rarity
           FROM bosses b
           JOIN items k ON k.id = b.required_key_id
-         WHERE b.id = $1
-           AND b.key_drop_chance > 0
+          JOIN next_boss nb ON nb.boss_id = b.id
+         WHERE b.key_drop_chance > 0
            AND b.required_key_id IS NOT NULL
-    `, [nextBossId]);
-    
+    `, [playerId]);
+
     if (result.rows.length === 0) {
         return []; // Ключ для этого босса не существует или шанс 0
     }
-    
+
     const row = result.rows[0];
     return [{
         bossId: row.boss_id,
@@ -231,7 +240,9 @@ router.get('/locations', handleLocationsList);
  * POST /world/search → POST /api/game/world/search
  */
 router.post('/search', async (req, res) => {
-    logger.info('[world] POST /search вызван', { playerId: req.player?.id, body: req.body, headers: Object.keys(req.headers) });
+    // Фильтруем чувствительные заголовки перед логированием
+    const safeHeaderKeys = Object.keys(req.headers).filter(k => !['authorization', 'cookie', 'x-init-data'].includes(k.toLowerCase()));
+    logger.info('[world] POST /search вызван', { playerId: req.player?.id, body: req.body, headers: safeHeaderKeys });
     const playerId = req.player.id;
 
     // Раньше здесь вручную бралось соединение, а ветки отказа («нет
@@ -394,6 +405,9 @@ router.post('/search', async (req, res) => {
         let expGained = 0;
         let itemsCollected = 0;
         let inventoryUpdate = null;
+        // coinDrop объявлен здесь, а не внутри блока лута: значение нужно
+        // и в setParts, и в теле ответа, которое идёт после блока.
+        let coinDrop = null;
         
         if (rolled <= dropChance) {
             // Ключи боссов. Шансы берём из bosses.key_drop_chance (в процентах
@@ -445,20 +459,15 @@ router.post('/search', async (req, res) => {
             if (foundItem) {
                 const inventory = normalizeInventory(updatedPlayer.inventory);
 
-                // P2-10: лимит слотов инвентаря
-                if (inventory.length >= MAX_INVENTORY_SLOTS) {
-                    return {
-                        status: 200,
-                        body: {
-                            success: false,
-                            // Функции продажи в игре нет, поэтому предлагать её здесь нельзя.
-                            error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
-                            code: 'INVENTORY_FULL'
-                        }
-                    };
-                }
-
-                const newItem = buildInventoryItem(foundItem, itemRarity);
+                const newItem = createInventoryItem({
+                    ...foundItem,
+                    stats: safeJsonParse(foundItem?.stats, {})
+                }, {
+                    rarity: itemRarity,
+                    quantity: 1,
+                    upgrade_level: 0,
+                    modifications: {}
+                });
 
                 // Стакование: однотипные предметы складываются в один слот, иначе
                 // 100 слотов забиваются быстрее, чем игрок успевает их разбирать.
@@ -471,10 +480,9 @@ router.post('/search', async (req, res) => {
                     itemsCollected += 1;
                 }
 
-                // Лимит слотов перепроверяем ПОСЛЕ обоих добавлений.
-                // Проверка выше (до лота) не защищала: при 99 слотах и
-                // нестакуемом предмете бафф x2 добавлял ещё два слота и
-                // инвентарь становился 101 — лимит 100 молча превышался.
+                // Проверка лимита слотов ПОСЛЕ всех добавлений (включая loot_x2).
+                // При 99 слотах и нестакуемом предмете бафф x2 добавлял 2 слота
+                // и инвентарь становился 101 — лимит 100 молча превышался.
                 if (inventory.length > MAX_INVENTORY_SLOTS) {
                     return {
                         status: 200,
@@ -488,20 +496,23 @@ router.post('/search', async (req, res) => {
 
                 inventoryUpdate = JSON.stringify(inventory);
                 
-                // P0-3: XP с бонусом локации и комбо за серию действий
-                const rarityExp = itemRarity === 'common' ? 0 : itemRarity === 'uncommon' ? 3 : itemRarity === 'rare' ? 7 : itemRarity === 'epic' ? 11 : 15;
-                const locBonus = 1 + (locationData.id - 1) * 0.15;
-                const comboBonus = (updatedPlayer.total_actions + 1) % 10 === 0 ? 1.5 : 1;
-                const baseExpReward = Math.floor(6 + rarityExp) * locBonus * comboBonus;
+                // Опыт: базовый + бонус редкости, домножается на бонус
+                // локации и на комбо за серию действий.
+                const rarityExp = SEARCH_RARITY_XP[itemRarity] ?? 0;
+                const locBonus = 1 + (locationData.id - 1) * LOCATION_XP_BONUS_PER_ID;
+                const comboBonus = (updatedPlayer.total_actions + 1) % SEARCH_COMBO_EVERY === 0 ? SEARCH_COMBO_MULTIPLIER : 1;
+                const baseExpReward = Math.floor(SEARCH_BASE_XP + rarityExp) * locBonus * comboBonus;
                 expGained = Math.max(1, Math.floor(baseExpReward * riskProfile.expMultiplier));
 
                 if (activeBuffs.exp_x2) {
                     expGained *= 2;
                 }
             }
-            
-            // Выпадение монет при поиске (30% шанс, зависит от риска, удачи, уровня)
-            let coinDrop = null;
+
+            // Выпадение монет при поиске (30% шанс, зависит от риска, удачи, уровня).
+            // Здесь только считаем: параметры в UPDATE добавляются ниже, после
+            // сборки setParts — раньше push вызывался до объявления setParts,
+            // и выпадение монет падало с ReferenceError.
             try {
                 const playerLuck = updatedPlayer.luck || 0;
                 const playerLevel = updatedPlayer.level || 1;
@@ -513,19 +524,17 @@ router.post('/search', async (req, res) => {
                 });
                 if (coinDropResult) {
                     coinDrop = coinDropResult.amount;
-                    // Добавляем монеты в баланс игрока
-                    setParts.push(`coins = COALESCE(coins, 0) + $${params.length + 1}`);
-                    params.push(coinDrop);
                 }
             } catch (err) {
                 logger.warn('Ошибка расчёта выпадения монет', { error: err.message });
             }
         }
-        
-        // Вычисляем урон от радиации
+
+        // Вычисляем урон от радиации ВНЕ блока лута: здоровье теряется при
+        // любом поиске, даже если лут не выпал. Значение уходит в setParts как $2.
         let radiationEffect = null;
         let radiationDamage = 0;
-        
+
         if (resultingRadiationLevel >= 10) {
             radiationEffect = 'critical';
             radiationDamage = 10;
@@ -536,7 +545,7 @@ router.post('/search', async (req, res) => {
         } else if (radiationGain > 0) {
             radiationEffect = 'applied';
         }
-        
+
         // Строим UPDATE динамически с правильными позициями параметров
         // P0-1: НЕ трогаем last_energy_update — реген идёт от реального времени
         // GREATEST(0, ...) — страховка от гонки: колонка под CHECK (energy >= 0),
@@ -549,6 +558,12 @@ router.post('/search', async (req, res) => {
             'health = GREATEST(0, health - $2)'
         ];
         const params = [energyCost, radiationDamage];
+
+        // Монеты из поиска (если выпали)
+        if (coinDrop) {
+            params.push(coinDrop);
+            setParts.push(`coins = COALESCE(coins, 0) + $${params.length}`);
+        }
         
         if (inventoryUpdate) {
             params.push(inventoryUpdate);

@@ -66,7 +66,43 @@ function requireId(value, name = 'id') {
     return result.value;
 }
 
+/**
+ * Валидация количества предметов для покупки/использования.
+ *
+ * Зачем отдельно от validateId: в items.js было
+ * `Math.max(1, Math.min(99, Number(req.body?.quantity || 1)))`.
+ * При quantity = {} или "abc" Number() даёт NaN, а Math.min(99, NaN) и
+ * Math.max(1, NaN) тоже NaN. Дальше `totalPrice = price * NaN` -> NaN и
+ * проверка `player.coins < NaN` ВСЕГДА ложна, то есть оплата молча
+ * «проходила», а управление уходило в UPDATE с NaN.
+ *
+ * Здесь NaN отсекается до арифметики, а границы задаются явно.
+ *
+ * @param {*} value проверяемое количество
+ * @param {number} [min=1] минимальное допустимое
+ * @param {number} [max=99] максимальное допустимое
+ * @returns {{ok: true, value: number}|{ok: false, error: string, code: string}}
+ */
+function validateQuantity(value, min = 1, max = 99) {
+    if (value === undefined || value === null || value === '') {
+        return { ok: true, value: min };
+    }
+
+    const num = Number(value);
+
+    if (!Number.isSafeInteger(num) || num < min || num > max) {
+        return {
+            ok: false,
+            error: `Количество должно быть целым числом от ${min} до ${max}`,
+            code: 'INVALID_QUANTITY'
+        };
+    }
+
+    return { ok: true, value: num };
+}
+
 module.exports = {
     validateId,
+    validateQuantity,
     requireId
 };

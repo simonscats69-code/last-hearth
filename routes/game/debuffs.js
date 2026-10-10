@@ -58,8 +58,18 @@ const DebuffAPI = {
             throw new Error(`Неизвестный тип дебаффа: ${type}`);
         }
 
-        // Ограничиваем уровень
-        level = Math.min(config.maxLevel, Math.max(config.minLevel, level));
+        // P2: уровень приводим к конечному числу ДО арифметики.
+        //
+        // Было: level = Math.min(config.maxLevel, Math.max(config.minLevel, level)).
+        // При level = undefined/NaN/{} Math.min/Max c NaN дают NaN, далее
+        // (level - 1) * durationPerLevel = NaN, expiresAt = Invalid Date,
+        // и в JSONB уходит expires_at: null — радиация висит вечно,
+        // а инфекция даёт 0 урона навсегда.
+        const numericLevel = Number(level);
+        if (!Number.isFinite(numericLevel)) {
+            throw new Error(`Некорректный уровень дебаффа: ${level}`);
+        }
+        level = Math.min(config.maxLevel, Math.max(config.minLevel, numericLevel));
 
         const executor = async (client) => {
             // Блокируем строку игрока по внутреннему id
@@ -230,8 +240,11 @@ const DebuffAPI = {
                 );
             }
             
-            // Расчёт урона от дебаффов
-            const totalDamage = this.calculateDebuffDamage(active);
+            // Расчёт урона от дебаффов.
+            // P2: this.calculateDebuffDamage(...) ломалось при деструктуризации
+            // (`const { apply } = require('./debuffs').DebuffAPI`) — this терялся
+            // и метод был недоступен. Вызываем через DebuffAPI явно.
+            const totalDamage = DebuffAPI.calculateDebuffDamage(active);
             if (totalDamage > 0) {
                 await client.query(
                     `UPDATE players SET health = GREATEST(0, health - $1) WHERE id = $2`,

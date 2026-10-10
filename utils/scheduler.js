@@ -414,16 +414,38 @@ async function cleanupOldLogs() {
         
         // Удаляем старые сессии
         const sessionsResult = await query(`
-            DELETE FROM player_sessions 
+            DELETE FROM player_sessions
             WHERE expires_at < NOW()
             RETURNING id
         `);
-        
+
         if (sessionsResult.rows.length > 0) {
-            logger.info({ 
-                type: 'sessions_cleanup', 
-                sessions_deleted: sessionsResult.rows.length 
+            logger.info({
+                type: 'sessions_cleanup',
+                sessions_deleted: sessionsResult.rows.length
             });
+        }
+
+        // Удаляем сообщения клан-чата старше 30 дней.
+        // Без ретеншена clan_chat рос forever: чат — самая активная таблица
+        // на действия игроков, а лимитер (10 сообщений / 30 с) лишь снижает
+        // скорость роста, но не ограничивает историю.
+        try {
+            const chatResult = await query(`
+                DELETE FROM clan_chat
+                WHERE created_at < NOW() - INTERVAL '30 days'
+                RETURNING id
+            `);
+
+            if (chatResult.rows.length > 0) {
+                logger.info({
+                    type: 'clan_chat_cleanup',
+                    messages_deleted: chatResult.rows.length
+                });
+            }
+        } catch (chatErr) {
+            // Таблицы может не быть в устаревшей схеме — не роняем всю очистку.
+            logger.warn('clan_chat cleanup пропущен: ' + describeError(chatErr));
         }
         
         const duration = Date.now() - startTime;

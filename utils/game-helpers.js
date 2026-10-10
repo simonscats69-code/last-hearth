@@ -11,7 +11,7 @@ const { query, transaction } = require('../db/database');
 // Один импорт вместо двух: и logger, и safeParseJson берутся из того же
 // модуля. Два отдельных require одного файла выглядят мелкой безобидной
 // правдой, пока однажды не появится третья строка, взятая не оттуда.
-const { logger, safeJsonParse } = require('./serverApi');
+const { logger, safeJsonParse, logPlayerAction } = require('./serverApi');
 
 // ==========================================
 // ФУНКЦИИ СОСТОЯНИЯ ИГРОКА (из playerState.js)
@@ -971,51 +971,84 @@ async function claimAchievementReward(playerId, achievementId) {
             LEFT JOIN player_achievements pa ON pa.achievement_id = a.id AND pa.player_id = $1
             WHERE a.id = $2
         `, [playerId, achievementId]);
-        
+
         if (!achResult.rows.length) {
             throw { message: 'Достижение не найдено', code: 'ACHIEVEMENT_NOT_FOUND', statusCode: 404 };
         }
-        
+
         const ach = achResult.rows[0];
-        
+
         if (!ach.completed) {
             throw { message: 'Достижение ещё не выполнено', code: 'NOT_COMPLETED', statusCode: 400 };
         }
-        
-        if (ach.reward_claimed) {
+
+        // P0-2: право на награду забирается АТОМАРНО, а не «прочитали-обновили».
+        //
+        // До исправления проверка reward_claimed и пометка были разными
+        // операциями: два параллельных POST /achievements/claim читали
+        // reward_claimed = false оба, оба начисляли валюту, оба писали
+        // reward_claimed = true. Каждый параллельный запрос = +N монет.
+        //
+        // UPDATE ... AND reward_claimed = false сам берёт блокировку строки:
+        // второй запрос ждёт, а после COMMIT первого перепроверяет условие
+        // уже по новой версии строки и получает 0 rows. RETURNING-строка и
+        // есть признак «я deed winner».
+        //
+        // Пометка идёт ДО начисления, но в той же транзакции: если
+        // grantCurrencyReward упадёт, ROLLBACK вернёт reward_claimed = false
+        // и игрок сможет забрать награду повторно.
+        const claimed = await client.query(`
+            UPDATE player_achievements
+               SET reward_claimed = true, claimed_at = NOW()
+             WHERE player_id = $1
+               AND achievement_id = $2
+               AND completed = true
+               AND reward_claimed = false
+             RETURNING achievement_id
+        `, [playerId, achievementId]);
+
+        if (claimed.rows.length === 0) {
+            // Запись не обновилась. Причина — либо гонка (другой запрос забрал
+            // первым), либо состояние изменилось между SELECT и UPDATE.
+            // Перечитываем, чтобы отдать игроку точную причину.
+            const current = await client.query(`
+                SELECT completed, reward_claimed
+                  FROM player_achievements
+                 WHERE player_id = $1 AND achievement_id = $2
+            `, [playerId, achievementId]);
+
+            if (!current.rows[0]) {
+                throw { message: 'Прогресс по достижению не найден', code: 'ACHIEVEMENT_NOT_FOUND', statusCode: 404 };
+            }
+            if (!current.rows[0].completed) {
+                throw { message: 'Достижение ещё не выполнено', code: 'NOT_COMPLETED', statusCode: 400 };
+            }
             throw { message: 'Награда уже получена', code: 'ALREADY_CLAIMED', statusCode: 400 };
         }
-        
+
         // Парсим награду
         const reward = safeParseJson(ach.reward, {});
         const coins = Math.max(0, Math.floor(Number(reward.coins) || 0));
         const stars = Math.max(0, Math.floor(Number(reward.stars) || 0));
-        
+
         // Выдаем награду
         if (coins > 0 || stars > 0) {
             await grantCurrencyReward(client, playerId, { coins, stars }, false);
         }
-        
-        // Помечаем награду как полученную
-        await client.query(`
-            UPDATE player_achievements 
-            SET reward_claimed = true, claimed_at = NOW()
-            WHERE player_id = $1 AND achievement_id = $2
-        `, [playerId, achievementId]);
-        
+
         // Логируем
-        await logPlayerAction(playerId, 'claim_achievement', { 
-            achievement_id: achievementId, 
-            coins, 
-            stars 
+        await logPlayerAction(playerId, 'claim_achievement', {
+            achievement_id: achievementId,
+            coins,
+            stars
         }, client);
-        
+
         // Возвращаем новый баланс
         const balanceResult = await client.query(
             'SELECT coins, stars FROM players WHERE id = $1',
             [playerId]
         );
-        
+
         return {
             message: `Награда за «${ach.name}» получена${coins > 0 ? ` (+${coins} 🪙)` : ''}${stars > 0 ? ` (+${stars} ⭐)` : ''}`,
             new_balance: {

@@ -12,8 +12,35 @@
  * В production там всегда `false`, поэтому поддельные telegram_id/initData
  * физически недоступны: без настоящего Telegram.WebApp.initData игра не
  * стартует, а не продолжает работать от имени фиктивного игрока 123456789.
+ *
+ * Дополнительная страховка: даже если сервер по ошибке пришлёт `true`,
+ * на нелокальном домене фоллбэк выключен. Локальными считаем localhost,
+ * 127.0.0.1, [::1], *.local, пустой hostname и file:// (открытие файла
+ * напрямую при разработке).
  */
-const DEV_FALLBACK_ENABLED = window.__DEV_MODE__ === true;
+const DEV_FALLBACK_ENABLED = (() => {
+    if (window.__DEV_MODE__ !== true) return false;
+
+    const hostname = (typeof location !== 'undefined' && location.hostname) || '';
+    const protocol = (typeof location !== 'undefined' && location.protocol) || '';
+
+    const isLocalHost = hostname === 'localhost'
+        || hostname === '127.0.0.1'
+        || hostname === '[::1]'
+        || hostname === ''
+        || hostname.endsWith('.local');
+    const isFileProtocol = protocol === 'file:';
+
+    if (!isLocalHost && !isFileProtocol) {
+        console.error(
+            '[DEV_FALLBACK_ENABLED] Сервер прислал __DEV_MODE__=true на домене "' +
+            hostname + '". Фоллбэк-авторизация отключена: это похоже на ' +
+            'утечку dev-настроек в production.'
+        );
+        return false;
+    }
+    return true;
+})();
 
 /**
  * Состояние анимации закрытия модального окна.
@@ -79,13 +106,28 @@ function getTelegramId() {
  * @returns {boolean}
  */
 function isColorDark(hexColor) {
-    if (!hexColor) return false;
-    
-    const hex = hexColor.replace('#', '');
-    const r = parseInt(hex.substr(0, 2), 16);
-    const g = parseInt(hex.substr(2, 2), 16);
-    const b = parseInt(hex.substr(4, 2), 16);
-    
+    if (typeof hexColor !== 'string' || !hexColor) return false;
+
+    // Срезаем '#'. substr заменён на slice — устаревшее API.
+    const hex = hexColor.replace('#', '').trim();
+
+    // Поддерживаем и короткую форму #abc, и полную #aabbcc: короткую раньше
+    // не разбирали вовсе, и parseInt('ab', 16) давал NaN -> isDark всегда false.
+    let r, g, b;
+    if (hex.length === 3) {
+        r = parseInt(hex[0] + hex[0], 16);
+        g = parseInt(hex[1] + hex[1], 16);
+        b = parseInt(hex[2] + hex[2], 16);
+    } else {
+        r = parseInt(hex.slice(0, 2), 16);
+        g = parseInt(hex.slice(2, 4), 16);
+        b = parseInt(hex.slice(4, 6), 16);
+    }
+
+    // Не HEX, обрезанная или пустая строка — считаем светлым (безопаснее
+    // для читаемости: тёмный текст на тёмном фоне нечитаем).
+    if ([r, g, b].some(Number.isNaN)) return false;
+
     // Формула яркости
     const brightness = (r * 299 + g * 587 + b * 114) / 1000;
     return brightness < 128;
@@ -134,9 +176,18 @@ function hapticSelection() {
  * @returns {string}
  */
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    // null/undefined -> '' (пусто), всё остальное приводим к строке.
+    // Числа здесь — обычное дело: id, level, members_count, HP приходят
+    // из БД как числа. typeof-guard прошлой версии превращал их в ''
+    // и ломал обработчики: escapeHtml(clan.id) давал data-clan-id="",
+    // joinClan(parseInt('')) возвращал NaN.
+    if (text === null || text === undefined) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -162,14 +213,24 @@ function escapeAttribute(value) {
 
 /**
  * Форматирование числа с разделением разрядов
- * @param {number} num - Число
+ * @param {number} num - Число (может быть нецелым и отрицательным — долги/штрафы)
  * @returns {string}
  */
 function formatNumber(num) {
-    if (typeof num !== 'number' || isNaN(num)) {
+    if (typeof num !== 'number' || !Number.isFinite(num)) {
         return '0';
     }
-    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+    // Раньше знак 'минус' входил в разбор регексаром разделителями:
+    // для -1000 он давал "- 1000" (или не разделял вовсе), а для дробей
+    // вроде 1000.5 — "1 000.5". Обрабатываем знак и дробную часть явно.
+    const sign = num < 0 ? '-' : '';
+    const normalized = Math.abs(num);
+
+    const [intPart, fracPart] = normalized.toString().split('.');
+    const withSpaces = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+    return sign + withSpaces + (fracPart ? '.' + fracPart : '');
 }
 
 /**
@@ -380,6 +441,16 @@ const endpoints = {
 const apiCache = new Map();
 const CACHE_TTL = 30000; // 30 секунд
 
+/**
+ * Верхняя граница числа записей в кэше.
+ *
+ * Без неё Map рос неограниченно: при долгой сессии с разными query-параметрами
+ * (например /rating/clans?limit=20&offset=40) в памяти копилась каждая
+ * уникальная выборка. Порядок вставок Map сохраняет, поэтому вытесняем
+ * самую старую запись — дешёвый LRU без внешних библиотек.
+ */
+const MAX_CACHE_ENTRIES = 100;
+
 // Связи между endpoint-ами для умной инвалидации
 const cacheInvalidationMap = {
     'purchase': ['profile', 'inventory'],
@@ -407,7 +478,16 @@ function getCached(key) {
 }
 
 function setCached(key, data) {
+    // Перезапись существующего ключа не должна «съедать» лишнюю запись:
+    // удаляем, чтобы при повторном set запись ушла в конец порядка.
+    apiCache.delete(key);
     apiCache.set(key, { data, timestamp: Date.now() });
+
+    // Вытесняем самые старые записи, пока не влезем в лимит
+    while (apiCache.size > MAX_CACHE_ENTRIES) {
+        const oldestKey = apiCache.keys().next().value;
+        apiCache.delete(oldestKey);
+    }
 }
 
 function invalidateCache(key) {
@@ -436,23 +516,61 @@ function invalidateAllCaches() {
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================
 
-/** Задержка перед повторной попыткой */
+/**
+ * Задержка перед повторной попыткой.
+ *
+ * Джиттер обязателен: без него при массовой ошибке (5xx, обрыв сети) все
+ * клиенты режут интервал одинаково и бьют по серверу одним синхронным
+ * лавинообразным потоком. Разброс ±1000 мс рассыпает пик по времени.
+ *
+ * @param {number} attempt номер попытки (0 — первая)
+ * @returns {Promise<void>}
+ */
 function delay(attempt) {
-    return new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    const base = 1000 * Math.pow(2, attempt);
+    const jitter = Math.random() * 1000;
+    return new Promise(r => setTimeout(r, base + jitter));
 }
 
 /**
- * Promise с таймаутом
+ * Promise с таймаутом, который гарантированно очищает таймер.
+ * Если передан signal, при таймауте он будет вызван abort(), чтобы отменить
+ * связанные операции (fetch, чтение тела ответа).
  * @param {Promise} promise - промис для обертывания
  * @param {number} ms - таймаут в мс
  * @param {string} errorMessage - сообщение об ошибке при таймауте
+ * @param {AbortSignal} [externalSignal] - внешний сигнал для связывания отмены
  * @returns {Promise}
  */
-function withTimeout(promise, ms, errorMessage = 'Таймаут операции') {
+function withTimeout(promise, ms, errorMessage = 'Таймаут операции', externalSignal = null) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), ms);
+
+    // Если есть внешний сигнал — связываем его с нашим контроллером
+    let removeExternalListener = null;
+    if (externalSignal) {
+        if (externalSignal.aborted) {
+            controller.abort();
+        } else {
+            const onExternalAbort = () => controller.abort();
+            externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+            removeExternalListener = () => externalSignal.removeEventListener('abort', onExternalAbort);
+        }
+    }
+
+    const timeoutPromise = new Promise((_, reject) => {
+        controller.signal.addEventListener('abort', () => {
+            reject(new Error(errorMessage));
+        }, { once: true });
+    });
+
     return Promise.race([
         promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error(errorMessage)), ms))
-    ]);
+        timeoutPromise
+    ]).finally(() => {
+        clearTimeout(timeoutId);
+        if (removeExternalListener) removeExternalListener();
+    });
 }
 
 /** Создание таймаута для индикатора загрузки */
@@ -559,14 +677,29 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
     // например «игрок не в клане»). Вытаскиваем из options, чтобы не утекло в fetch.
     // signal — внешний AbortController (API.cancelRequest), чтобы отмена
     // действительно разрывала fetch, а не жила в отдельном Map.
-    const { silent = false, signal: externalSignal, idempotent = false, ...fetchOptions } = options;
+    const { silent = false, signal: externalSignal, idempotent = false, idempotencyKey = null, ...fetchOptions } = options;
 
     const method = String(fetchOptions.method || 'GET').toUpperCase();
-    const hasIdempotencyKey = Boolean(fetchOptions.headers?.['Idempotency-Key']);
+    // Idempotency-Key проверяем без учёта регистра: заголовки HTTP нечувствительны к регистру
+    let hasIdempotencyKey = Boolean(fetchOptions.headers &&
+        Object.keys(fetchOptions.headers).some(k => k.toLowerCase() === 'idempotency-key'));
     const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
     // Повторять мутацию можно только если сервер гарантирует идемпотентность
     const canRetry = !isMutation || idempotent || hasIdempotencyKey;
     const maxAttempts = canRetry ? retries : 0;
+
+    // P1-8: если вызывающий попросил идемпотентность, а ключ не передал —
+    // генерируем его здесь. Без ключа серверный idempotencyMiddleware
+    // (который видит req.player только после validatePlayer) не сработает
+    // и повтор мутации спишет ресурсы заново.
+    // Ключ ОДИН на вызов: ретраи внутри apiRequest уйдут с тем же ключом.
+    // Для защиты от двойного тапа используй idempotencyKey, переданный
+    // снаружи (см. api.wheelSpin) — тогда оба тапа уносят один ключ.
+    const effectiveIdempotencyKey = idempotencyKey
+        || (idempotent && !hasIdempotencyKey
+            ? `m-${method}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+            : null);
+    if (effectiveIdempotencyKey) hasIdempotencyKey = true;
 
     const queryString = Object.keys(params).length > 0
         ? '?' + new URLSearchParams(params).toString()
@@ -586,12 +719,22 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         throw authError;
     }
 
+    // Защищённые заголовки, которые не должны перезаписываться вызывающим кодом.
+    // Используем Headers для корректной работы с регистром: set() перезаписывает
+    // заголовки независимо от регистра (content-type, Content-Type, CONTENT-TYPE).
+    const headers = new Headers(fetchOptions.headers || {});
+    headers.set('Content-Type', 'application/json');
+    headers.set('x-init-data', initData || '');
+
+    // P1-8: ключ идемпотентности уходит заголовком. Именно он позволяет
+    // серверу распознать повтор того же действия и не выполнить его дважды.
+    if (effectiveIdempotencyKey) {
+        headers.set('Idempotency-Key', effectiveIdempotencyKey);
+    }
+
     const config = {
-        headers: {
-            'Content-Type': 'application/json',
-            'x-init-data': initData || ''  // Используем x-init-data для безопасной авторизации
-        },
-        ...fetchOptions
+        ...fetchOptions,
+        headers
     };
 
     if (config.body && typeof config.body === 'object') {
@@ -599,7 +742,6 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
     }
 
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
-        let timeoutId = null;
         let loadingTimeout = null;
 
         // Позволяем переопределять таймаут через options.timeout (мс)
@@ -608,12 +750,11 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         try {
             loadingTimeout = createLoadingTimeout(fetchOptions.showLoading);
 
+            // Единый контроллер для таймаута и внешней отмены
             const controller = new AbortController();
-            timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+            const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
 
-            // Внешняя отмена (API.cancelRequest) тоже должна разрывать fetch.
-            // Раньше контроллер создавался здесь и никогда не доходил до
-            // настоящего запроса, поэтому cancelRequest() ни на что не влиял.
+            // Внешняя отмена (API.cancelRequest) связываем с нашим контроллером
             let removeExternalAbort = null;
             if (externalSignal) {
                 if (externalSignal.aborted) {
@@ -625,20 +766,26 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 removeExternalAbort = () => externalSignal.removeEventListener('abort', onExternalAbort);
             }
 
-            let response;
+            // Выполняем запрос с нашим сигналом
+            const fetchPromise = (async () => {
+                const response = await fetch(url, { ...config, signal: controller.signal });
+                const contentType = response.headers.get('content-type') || '';
+                const data = contentType.includes('application/json')
+                    ? await response.json()
+                    : null;
+                return { response, data };
+            })();
+
+            let result;
             try {
-                response = await fetch(url, { ...config, signal: controller.signal });
+                result = await fetchPromise;
             } finally {
                 clearTimeout(timeoutId);
-                timeoutId = null;
                 if (removeExternalAbort) removeExternalAbort();
             }
             if (loadingTimeout) clearTimeout(loadingTimeout);
 
-            const contentType = response.headers.get('content-type') || '';
-            const data = contentType.includes('application/json')
-                ? await response.json()
-                : null;
+            const { response, data } = result;
 
             if (!response.ok) {
                 const serverMessage = data?.error || data?.message || `HTTP error! status: ${response.status}`;
@@ -665,6 +812,11 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 invalidateAllCaches();
             }
 
+            // Сбрасываем счётчик 503 при успешном ответе
+            if (apiRequest._serviceStartingAttempts) {
+                apiRequest._serviceStartingAttempts = 0;
+            }
+
             console.log('[apiRequest] Success:', method, url);
             return data;
         } catch (error) {
@@ -673,10 +825,6 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             const isExternalAbort = Boolean(externalSignal?.aborted);
 
             // Всегда очищаем таймауты при ошибке
-            if (timeoutId) {
-                clearTimeout(timeoutId);
-                timeoutId = null;
-            }
             if (loadingTimeout) clearTimeout(loadingTimeout);
 
             if (error.name === 'AbortError') {
@@ -708,12 +856,26 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             // 503 SERVICE_STARTING: сервер только что запустился, БД не готова.
             // Увеличиваем количество попыток и задержку для этого случая —
             // перезапуск контейнера может занять больше 10 секунд.
+            // Счётчик попыток 503 хранится ЛОКАЛЬНО в замыкании, а не в объекте ошибки,
+            // чтобы не зависеть от maxAttempts (который для мутаций равен 0).
+            // Максимум 5 попыток: 3 попытки с задержкой 5с, затем 2 попытки с задержкой 10с.
             if (status === 503 && error.code === 'SERVICE_STARTING') {
-                if (attempt < 5) {
-                    // 5 секунд на старт, потом 10 секунд — даём подняться БД
-                    const retryDelay = attempt <= 2 ? 5000 : 10000;
+                if (!apiRequest._serviceStartingAttempts) {
+                    apiRequest._serviceStartingAttempts = 0;
+                }
+                const maxServiceStartingAttempts = 5;
+                if (apiRequest._serviceStartingAttempts < maxServiceStartingAttempts) {
+                    const retryDelay = apiRequest._serviceStartingAttempts < 3 ? 5000 : 10000;
+                    apiRequest._serviceStartingAttempts++;
                     await new Promise(r => setTimeout(r, retryDelay));
                     continue;
+                }
+                // Попытки исчерпаны — сбрасываем счётчик и выбрасываем ошибку
+                apiRequest._serviceStartingAttempts = 0;
+            } else {
+                // Любая другая ошибка (не 503 SERVICE_STARTING) сбрасывает счётчик
+                if (apiRequest._serviceStartingAttempts) {
+                    apiRequest._serviceStartingAttempts = 0;
                 }
             }
 
@@ -757,6 +919,10 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
 
             await delay(attempt);
         }
+
+        // Если цикл завершился без возврата (например, исчерпаны 503 попытки),
+        // выбрасываем ошибку вместо неявного undefined
+        throw new Error('Сервер недоступен после повторных попыток');
     }
 }
 
@@ -794,12 +960,66 @@ function clientErrorMessage(error, fallback) {
 }
 
 /** Создаёт API метод на основе словаря эндпоинтов */
+/**
+ * Мутации через createApiMethod, где повтор ВСЕГДА ошибочен и должен
+ * схлопываться в первый ответ.
+ *
+ * Сюда НЕ входят удары/атаки: два удара подряд — легитимная игра (энергии
+ * хватает), и схлопывание второго сломало бы бой. Для таких действий
+ * защита остаётся на FOR UPDATE + энергетическом кулдауне.
+ *
+ * Колесо — кулдаун, покупка за звёзды — трата, членство в клане — состояние:
+ * повтор не имеет смысла, а двойной тап возможен.
+ *
+ * ВАЖНО: сюда входят только имена из объекта endpoints. Покупка за монеты
+ * (buyCoinItem) идёт через gameApi.post('/game/items/buy') напрямую и
+ * защищена lockAction — ей ключ передаётся явно, см. gameApi.post.
+ */
+const IDEMPOTENT_ENDPOINTS = new Set([
+    'wheelSpin',
+    'purchase',
+    'clanJoin',
+    'clanLeave',
+    'clanCreate'
+]);
+
+/**
+ * Окно, в котором повторный вызов несёт ТОТ ЖЕ ключ идемпотентности.
+ * Достаточно, чтобы поймать двойной тап (человек тапает за <500 мс),
+ * и мало, чтобы схлопнуть осмысленное второе действие.
+ */
+const IDEMPOTENCY_WINDOW_MS = 1500;
+
+/**
+ * Стабильный ключ идемпотентности для области действия в пределах окна.
+ *
+ * Повторный вызов внутри окна получает ТОТ ЖЕ ключ, поэтому сервер
+ * (idempotencyMiddleware) отвечает сохранённым результатом вместо второго
+ * выполнения. Разные области (разные предметы, разные действия) получают
+ * разные ключи и не схлопываются друг с другом.
+ *
+ * @param {string} scope область действия, например 'buy-coin-150480'
+ * @param {number} [windowMs=1500] окно, в котором ключ считается тем же
+ * @returns {string} ключ идемпотентности
+ */
+const mutationKeys = new Map();
+function stableMutationKey(scope, windowMs = 1500) {
+    const now = Date.now();
+    const prev = mutationKeys.get(scope);
+    if (prev && now - prev.at < windowMs) {
+        return prev.key;
+    }
+    const key = `${scope}-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    mutationKeys.set(scope, { key, at: now });
+    return key;
+}
+
 function createApiMethod(name) {
     const config = endpoints[name];
     if (!config) {
         return () => { throw new Error(`Unknown endpoint: ${name}`); };
     }
-    
+
     if (config.method === 'GET') {
         return async function(body = {}) {
             if (Object.keys(body).length === 0) {
@@ -812,9 +1032,26 @@ function createApiMethod(name) {
             return apiRequest(config.endpoint, { method: 'GET' }, 2, body);
         };
     } else {
-        return async function(body = {}) {
+        // Ключ идемпотентности живёт в замысании конкретного эндпоинта:
+        // повторный вызов внутри окна получает тот же ключ, поэтому сервер
+        // отвечает сохранённым результатом вместо второго выполнения.
+        let lastIdempotencyKey = null;
+        let lastKeyAt = 0;
+        const isIdempotent = IDEMPOTENT_ENDPOINTS.has(name);
+
+        return async function(body = {}, callOptions = {}) {
             invalidateCache(name);
-            return apiRequest(config.endpoint, { method: 'POST', body });
+
+            // Повторного вызова внутри окна получает тот же ключ -> сервер
+            // отвечает сохранённым результатом вместо второго выполнения.
+            const idempotencyKey = callOptions.idempotencyKey
+                || (isIdempotent ? stableMutationKey(name, IDEMPOTENCY_WINDOW_MS) : null);
+
+            return apiRequest(config.endpoint, {
+                method: 'POST',
+                body,
+                idempotencyKey
+            }, callOptions.retries);
         };
     }
 }
@@ -825,8 +1062,17 @@ const gameApi = Object.fromEntries(
 );
 
 // Добавляем статические методы
+// post принимает options: { idempotencyKey, silent, signal } — ключ нужен
+// вызовам «в обход» endpoints (например покупка за монеты), чтобы серверный
+// idempotencyMiddleware схлопнул повтор вместо второго списания.
 gameApi.get = (endpoint, params = {}) => apiRequest(endpoint, { method: 'GET' }, 2, params);
-gameApi.post = (endpoint, body = {}) => apiRequest(endpoint, { method: 'POST', body });
+gameApi.post = (endpoint, body = {}, options = {}) => apiRequest(endpoint, {
+    method: 'POST',
+    body,
+    idempotencyKey: options.idempotencyKey || null,
+    silent: options.silent,
+    signal: options.signal
+}, options.retries);
 gameApi.endpoints = endpoints;
 gameApi.cache = { get: getCached, set: setCached, invalidate: invalidateCache };
 
@@ -926,9 +1172,9 @@ const RARITY_LABELS = {
 // МЕНЕДЖЕР ИНТЕРВАЛОВ И ТАЙМАУТОВ (защита от утечек памяти)
 // ============================================================================
 
-// Массив для отслеживания всех таймаутов и интервалов
-const activeTimeouts = [];
-const activeIntervals = [];
+// Используем Set для O(1) добавления/удаления и автоматической очистки
+const activeTimeouts = new Set();
+const activeIntervals = new Set();
 
 /**
  * Безопасное создание интервала с автоматической очисткой
@@ -937,8 +1183,14 @@ const activeIntervals = [];
  * @returns {number} id интервала
  */
 function safeSetInterval(callback, delay) {
-    const id = setInterval(callback, delay);
-    activeIntervals.push(id);
+    const id = setInterval(() => {
+        try {
+            callback();
+        } catch (e) {
+            console.error('[safeSetInterval] callback error:', e);
+        }
+    }, delay);
+    activeIntervals.add(id);
     return id;
 }
 
@@ -949,8 +1201,15 @@ function safeSetInterval(callback, delay) {
  * @returns {number} id таймаута
  */
 function safeSetTimeout(callback, delay) {
-    const id = setTimeout(callback, delay);
-    activeTimeouts.push(id);
+    const id = setTimeout(() => {
+        activeTimeouts.delete(id);
+        try {
+            callback();
+        } catch (e) {
+            console.error('[safeSetTimeout] callback error:', e);
+        }
+    }, delay);
+    activeTimeouts.add(id);
     return id;
 }
 
@@ -960,10 +1219,7 @@ function safeSetTimeout(callback, delay) {
  */
 function safeClearInterval(id) {
     clearInterval(id);
-    const index = activeIntervals.indexOf(id);
-    if (index !== -1) {
-        activeIntervals.splice(index, 1);
-    }
+    activeIntervals.delete(id);
 }
 
 /**
@@ -972,10 +1228,7 @@ function safeClearInterval(id) {
  */
 function safeClearTimeout(id) {
     clearTimeout(id);
-    const index = activeTimeouts.indexOf(id);
-    if (index !== -1) {
-        activeTimeouts.splice(index, 1);
-    }
+    activeTimeouts.delete(id);
 }
 
 /**
@@ -983,9 +1236,9 @@ function safeClearTimeout(id) {
  */
 function clearAllIntervals() {
     activeIntervals.forEach(id => clearInterval(id));
-    activeIntervals.length = 0;
+    activeIntervals.clear();
     activeTimeouts.forEach(id => clearTimeout(id));
-    activeTimeouts.length = 0;
+    activeTimeouts.clear();
 }
 
 // Очищаем интервалы и таймауты при закрытии страницы
@@ -997,12 +1250,26 @@ window.addEventListener('beforeunload', () => {
     Object.keys(actionLocks).forEach(key => {
         actionLocks[key] = false;
     });
+    actionLockTimers.forEach(id => safeClearTimeout(id));
+    actionLockTimers.clear();
+    // Ключи идемпотентности живут только чтобы схлопнуть быстрый повтор:
+    // после выгрузки они не нужны, а Map иначе рос бы по числу предметов.
+    mutationKeys.clear();
 });
 
 // ============================================================================
 // БЛОКИРОВКИ ОПЕРАЦИЙ (защита от состояний гонки)
 // ============================================================================
 
+/**
+ * Блокировки операций + их таймеры-страховки.
+ *
+ * Раньше lockAction не ставил никакого автоматического снятия: если
+ * unlockAction не вызывался (исключение в коде между try и finally, забытый
+ * finally, упавший промис), действие оставалось заблокированным до
+ * перезагрузки страницы — кнопка просто переставала работать.
+ * Страховочный таймер гарантированно разблокирует операцию.
+ */
 const actionLocks = {
     healing: false,
     clanCreate: false,
@@ -1024,10 +1291,16 @@ const actionLocks = {
     loadBosses: false
 };
 
+/** Через сколько мс принудительно снимать блокировку */
+const ACTION_LOCK_TIMEOUT_MS = 30000;
+
+/** Страховочные таймеры по имени операции */
+const actionLockTimers = new Map();
+
 /**
  * Блокировка операции
  * @param {string} name - имя операции
- * @returns {boolean} true если заблокировано
+ * @returns {boolean} true если захватить удалось, false если уже занята
  */
 function lockAction(name) {
     if (actionLocks[name]) {
@@ -1035,6 +1308,20 @@ function lockAction(name) {
         return false;
     }
     actionLocks[name] = true;
+
+    // Снимаем возможный старый таймер этой операции и ставим новый
+    const existing = actionLockTimers.get(name);
+    if (existing !== undefined) safeClearTimeout(existing);
+
+    const timerId = safeSetTimeout(() => {
+        if (actionLocks[name]) {
+            console.warn(`[lockAction] Снята зависшая блокировка: ${name}`);
+            actionLocks[name] = false;
+        }
+        actionLockTimers.delete(name);
+    }, ACTION_LOCK_TIMEOUT_MS);
+    actionLockTimers.set(name, timerId);
+
     return true;
 }
 
@@ -1044,6 +1331,13 @@ function lockAction(name) {
  */
 function unlockAction(name) {
     actionLocks[name] = false;
+
+    // Таймер-страховка больше не нужен — иначе он бы винтовал состояние
+    const timerId = actionLockTimers.get(name);
+    if (timerId !== undefined) {
+        safeClearTimeout(timerId);
+        actionLockTimers.delete(name);
+    }
 }
 
 // ============================================================================
@@ -1086,7 +1380,7 @@ const RenderCache = {
 
 const Loader = {
     _element: null,
-    
+
     show(message = 'Загрузка...') {
         if (!this._element) {
             this._element = document.createElement('div');
@@ -1102,13 +1396,22 @@ const Loader = {
         this._element.querySelector('.loader-text').textContent = message;
         this._element.classList.add('active');
     },
-    
+
     hide() {
-        if (this._element) {
-            this._element.classList.remove('active');
+        if (!this._element) return;
+
+        this._element.classList.remove('active');
+
+        // Лоадер больше не нужен: снимаем его из DOM и обнуляем ссылку.
+        // Раньше скрытый элемент (display:none) оставался в document.body
+        // с текстом последнего сообщения до конца жизни страницы, а _element
+        // продолжал держать его — лишний узел и лишние ссылки на слушателей.
+        if (this._element.parentNode) {
+            this._element.parentNode.removeChild(this._element);
         }
+        this._element = null;
     },
-    
+
     async wrap(fn, message = 'Загрузка...') {
         this.show(message);
         try {
@@ -1131,7 +1434,7 @@ const Templates = {
                 <div class="modal-overlay"></div>
                 <div class="modal-content">
                     <h3>${escapeHtml(title)}</h3>
-                    <div class="modal-body">${content}</div>
+                    <div class="modal-body">${escapeHtml(content)}</div>
                     ${buttons || '<button class="btn modal-close">OK</button>'}
                 </div>
             </div>
@@ -2018,11 +2321,7 @@ async function startBossFight(boss, timeRemainingMs = null) {
         if (result.success) {
             // Запускаем бой
             const bossData = result.data || result;
-            gameState.currentBoss = {
-                ...bossData,
-                time_remaining: timeRemainingMs || bossData.time_remaining_ms || 0
-            };
-            showScreen('boss-fight');
+            renderBossFightScreen(bossData, bossData.time_remaining_ms || timeRemainingMs);
             playSound('boss_start');
         } else {
             showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось начать бой');
@@ -2361,6 +2660,7 @@ function setInventoryState(rawItems) {
 /**
  * Загрузка профиля игрока
  * API возвращает { success, data: { player, achievements, progress, inventory, equipment, active_buffs } }
+ * @returns {Promise<boolean>} true если профиль загружен успешно, false при ошибке
  */
 async function loadProfile() {
     // Сбрасываем кэш ДО запроса: gameApi кэширует GET на 30 секунд, и после
@@ -2373,78 +2673,82 @@ async function loadProfile() {
     // Так как loadProfile() вызывается ПОСЛЕ успешной мутации (продажа,
     // покупка, перемещение), игрок видел «Не удалось продать предмет»,
     // хотя продажа прошла — падал только перерисованный профиль.
+    // Возвращает true при успехе, false при ошибке (кроме отмены).
     try {
         const response = await apiRequest('/api/game/profile');
 
         if (!response?.success) {
             console.error('Ошибка загрузки профиля:', response?.message || 'Unknown error');
-            return;
+            return false;
         }
 
         const payload = response?.data || response;
 
         if (!payload || typeof payload !== 'object') {
             console.error('Неверный формат ответа профиля:', response);
-            return;
+            return false;
         }
 
-    // Распаковываем вложенный объект player в плоскую структуру,
-    // которую ожидает остальной UI
-    const rawPlayer = payload.player || {};
-    const playerData = { ...rawPlayer };
+        // Распаковываем вложенный объект player в плоскую структуру,
+        // которую ожидает остальной UI
+        const rawPlayer = payload.player || {};
+        const playerData = { ...rawPlayer };
 
-    // Статус для getEffectivePlayerStatus / updateProfileUI
-    playerData.status = {
-        health: Number(playerData.health || 0),
-        max_health: Number(playerData.max_health || 100),
-        radiation: Number(playerData.radiation || 0),
-        infections: Number(playerData.infections || 0),
-        infections_list: playerData.infections_list || [],
-        energy: Number(playerData.energy || 0),
-        max_energy: Number(playerData.max_energy || 100),
-        last_energy_update: playerData.last_energy_update || null
-    };
-    playerData.energy = playerData.status.energy;
-    playerData.max_energy = playerData.status.max_energy;
+        // Статус для getEffectivePlayerStatus / updateProfileUI
+        playerData.status = {
+            health: Number(playerData.health || 0),
+            max_health: Number(playerData.max_health || 100),
+            radiation: Number(playerData.radiation || 0),
+            infections: Number(playerData.infections || 0),
+            infections_list: playerData.infections_list || [],
+            energy: Number(playerData.energy || 0),
+            max_energy: Number(playerData.max_energy || 100),
+            last_energy_update: playerData.last_energy_update || null
+        };
+        playerData.energy = playerData.status.energy;
+        playerData.max_energy = playerData.status.max_energy;
 
-    // Прогресс опыта по ОБЩЕЙ формуле (public/shared/equipment.js — тот же файл,
-    // что читает сервер): вторая копия здесь делала бы полосу опыта врущей.
-    const sharedRules = window.EquipmentShared;
-    const level = Math.max(1, Number(playerData.level || 1));
-    const expNeeded = sharedRules && typeof sharedRules.getExpForLevel === 'function'
-        ? sharedRules.getExpForLevel(level)
-        : Math.round(500 * level * (1 + level / 25));
-    const expCurrent = Number(playerData.experience || 0);
-    playerData.exp_progress = {
-        current: expCurrent,
-        needed: expNeeded,
-        percent: Math.min(100, Math.floor((expCurrent / expNeeded) * 100))
-    };
+        // Прогресс опыта по ОБЩЕЙ формуле (public/shared/equipment.js — тот же файл,
+        // что читает сервер): вторая копия здесь делала бы полосу опыта врущей.
+        const sharedRules = window.EquipmentShared;
+        const level = Math.max(1, Number(playerData.level || 1));
+        const expNeeded = sharedRules && typeof sharedRules.getExpForLevel === 'function'
+            ? sharedRules.getExpForLevel(level)
+            : Math.round(500 * level * (1 + level / 25));
+        const expCurrent = Number(playerData.experience || 0);
+        playerData.exp_progress = {
+            current: expCurrent,
+            needed: expNeeded,
+            percent: Math.min(100, Math.floor((expCurrent / expNeeded) * 100))
+        };
 
-    // Экипировка, баффы и инвентарь из ответа
-    playerData.equipment = payload.equipment || {};
-    setInventoryState(payload.inventory);
-    gameState.buffs = payload.active_buffs || {};
-    playerData.buffs = gameState.buffs;
+        // Экипировка, баффы и инвентарь из ответа
+        playerData.equipment = payload.equipment || {};
+        setInventoryState(payload.inventory);
+        gameState.buffs = payload.active_buffs || {};
+        playerData.buffs = gameState.buffs;
 
-    // Текущая локация — берём из уже загруженного списка локаций
-    if (Array.isArray(gameState.locations) && gameState.locations.length && playerData.current_location_id) {
-        playerData.location = gameState.locations.find(loc => loc.id === playerData.current_location_id)
-            || playerData.location
-            || null;
-    }
+        // Текущая локация — берём из уже загруженного списка локаций
+        if (Array.isArray(gameState.locations) && gameState.locations.length && playerData.current_location_id) {
+            playerData.location = gameState.locations.find(loc => loc.id === playerData.current_location_id)
+                || playerData.location
+                || null;
+        }
 
-    gameState.player = playerData;
+        gameState.player = playerData;
 
-    // Обновляем UI
-    updateProfileUI(playerData);
-    refreshPlayerEnergyUI();
+        // Обновляем UI
+        updateProfileUI(playerData);
+        refreshPlayerEnergyUI();
+        return true;
     } catch (error) {
-        // Сетевая ошибка или таймаут. Молча гасим: вызывающий код уже
-        // показал результат своей операции (продажа, покупка, переход),
-        // и сообщение об ошибке здесь было бы ложным.
-        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        // Сетевая ошибка или таймаут. Отмену запроса не считаем ошибкой.
+        if (error?.isManualAbort || error?.name === 'AbortError') {
+            return false;
+        }
+        // Остальные ошибки логируем явно. Вызывающий код решает, показывать ли уведомление.
         console.error('[loadProfile] Не удалось обновить профиль:', error);
+        return false;
     }
 }
 
@@ -4504,7 +4808,7 @@ async function loadBosses() {
 
         if (gameState.activeBattle?.type === 'solo' && gameState.activeBattle?.boss) {
             const timeRemaining = gameState.activeBattle?.time_remaining_ms;
-            startBossFight(
+            renderBossFightScreen(
                 gameState.activeBattle.boss, 
                 typeof timeRemaining === 'number' && timeRemaining > 0 ? timeRemaining : null
             );
@@ -4741,6 +5045,8 @@ async function renderPlayerEquipmentInBossFight() {
         }
     }
 }
+
+function renderBossFightScreen(boss, timeRemainingMs = null) {
     gameState.currentBoss = boss;
     gameState.bossFightEndTime = timeRemainingMs ? Date.now() + timeRemainingMs : null;
     const isFreeAttack = Boolean(gameState.buffs?.free_energy);
@@ -4814,7 +5120,7 @@ async function renderPlayerEquipmentInBossFight() {
     
     // Показываем экран боя
     showScreen('boss-fight');
-    showScreen('boss-fight');
+}
 
 /**
  * Обновление таймера боя с боссом
@@ -8418,15 +8724,22 @@ function hasBuff(effect) {
  * и loadWheelInfo() перезаписывает эту переменную. Раньше клиент держал
  * свою копию списка, и если сервер менял набор призов, анимация
  * подсвечивала не тот сектор.
+ *
+ * P2: сама копия тоже берётся из общего EquipmentShared (тот же модуль,
+ * что читает сервер), поэтому «молчалое расхождение» стало невозможным
+ * даже до первого ответа сервера. Локальный массив ниже — подстраховка
+ * на случай, если EquipmentShared не загрузился.
  */
-const WHEEL_PRIZES = [
-    { type: 'coins', value: 10, text: '10 монет' },
-    { type: 'coins', value: 25, text: '25 монет' },
-    { type: 'coins', value: 50, text: '50 монет' },
-    { type: 'coins', value: 100, text: '100 монет' },
-    { type: 'multiplier', value: 2, text: 'x2 к монетам' },
-    { type: 'energy', value: 20, text: '20 энергии' },
-];
+const WHEEL_PRIZES = (window.EquipmentShared && Array.isArray(window.EquipmentShared.WHEEL_PRIZES))
+    ? window.EquipmentShared.WHEEL_PRIZES.map(p => ({ type: p.type, value: p.value, text: p.text }))
+    : [
+        { type: 'coins', value: 10, text: '10 монет' },
+        { type: 'coins', value: 25, text: '25 монет' },
+        { type: 'coins', value: 50, text: '50 монет' },
+        { type: 'coins', value: 100, text: '100 монет' },
+        { type: 'multiplier', value: 2, text: 'x2 к монетам' },
+        { type: 'energy', value: 20, text: '20 энергии' },
+    ];
 
 /** Актуальный список призов: перезаписывается ответом сервера. */
 let wheelPrizes = WHEEL_PRIZES;
@@ -8924,6 +9237,12 @@ async function buyCoinItem(itemId, triggerButton = null) {
     // успевала пройти оба раза до ответа сервера).
     if (!lockAction('buyCoinItem')) return;
 
+    // P1-8: ключ идемпотентности со областью на конкретный предмет. Два
+    // быстрых тапа по ОДНОЙ кнопке получают один ключ — сервер ответит
+    // сохранённым результатом вместо второго списания. Покупка другого
+    // предмета получит свой ключ и выполнится нормально.
+    const buyIdempotencyKey = stableMutationKey(`buy-coin-${itemId}`, IDEMPOTENCY_WINDOW_MS);
+
     // Блокируем ТОЛЬКО нажатую кнопку. Раньше отключались все кнопки
     // покупки, и если список перерисовывался, восстановление зависело от
     // того, какие элементы ещё остались в DOM.
@@ -8933,10 +9252,10 @@ async function buyCoinItem(itemId, triggerButton = null) {
     if (button) button.disabled = true;
     
     try {
-        const response = await gameApi.post('/game/items/buy', { 
+        const response = await gameApi.post('/game/items/buy', {
             item_id: itemId,
             currency: 'coins'
-        });
+        }, { idempotencyKey: buyIdempotencyKey });
         
         if (response.success) {
             // textContent не интерпретирует HTML, поэтому escapeHtml здесь дал бы

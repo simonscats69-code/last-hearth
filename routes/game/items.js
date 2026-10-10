@@ -9,6 +9,9 @@ const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, transaction } = require('../../db/database');
 const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
+// validateQuantity: единая проверка количества для /buy и /buy-stars.
+// Без неё Math.max/min с NaN пропускали проверку баланса (см. коммент. в роутах).
+const { validateQuantity } = require('../../utils/validate');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -116,10 +119,24 @@ router.get(['/', '/inventory'], async (req, res) => {
 router.post('/buy', async (req, res) => {
     try {
         const playerId = req.player.id;
-        const itemId = Number(req.body?.item_id);
-        const quantity = Math.max(1, Math.min(99, Number(req.body?.quantity || 1)));
 
-        if (!itemId || itemId <= 0) {
+        // P1-5: quantity валидируется ДО арифметики.
+        //
+        // Было: Math.max(1, Math.min(99, Number(req.body?.quantity || 1))).
+        // При quantity = {} или "abc" Number() -> NaN, Math.min/max c NaN тоже
+        // дают NaN. Дальше totalPrice = price * NaN -> NaN, и проверка
+        // `player.coins < NaN` всегда ложна — оплата молча «проходила»,
+        // а UPDATE уходил с NaN в колонку.
+        const qtyCheck = validateQuantity(req.body?.quantity);
+        if (!qtyCheck.ok) {
+            return res.status(400).json({ success: false, error: qtyCheck.error, code: qtyCheck.code });
+        }
+        const quantity = qtyCheck.value;
+
+        // itemId тоже целое: раньше `!itemId || itemId <= 0` пропускало 2.5.
+        const itemId = Number(req.body?.item_id);
+
+        if (!Number.isSafeInteger(itemId) || itemId <= 0) {
             return res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
         }
 
@@ -175,6 +192,12 @@ router.post('/buy', async (req, res) => {
                 [totalPrice, JSON.stringify(inventory), playerId]
             );
 
+            // P2: покупка тоже идёт в уникальный collection-tracker, иначе
+            // достижение «Коллекционер» считало только лутом и звёздным
+            // магазином, а купленные предметы в него не попадали.
+            // Вызов безопасен: пустой/невалидный id функция сама отфильтрует.
+            await trackCollectedItems(client, playerId, [shopItem.id]);
+
             await logPlayerAction(playerId, 'item_bought', {
                 item_id: itemId,
                 item_name: shopItem.name,
@@ -220,7 +243,9 @@ router.post(['/use', '/use-item'], async (req, res) => {
         const itemIndex = Number(req.body?.item_index);
         const equip = Boolean(req.body?.equip);
 
-        if (isNaN(itemIndex) || itemIndex < 0) {
+        // P2: 2.5 — не NaN и >= 0, поэтому старая проверка его пропускала,
+        // а inventory[2.5] === undefined давал TypeError -> 500.
+        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
             return res.status(400).json({ success: false, error: 'Укажите корректный индекс предмета', code: 'INVALID_INDEX' });
         }
 
@@ -711,8 +736,15 @@ router.post('/unequip', async (req, res) => {
 router.post('/buy-stars', async (req, res) => {
     try {
         const playerId = req.player.id;
+
+        // P1-5: та же валидация количества, что и в /buy — см. комментарий там.
+        const qtyCheck = validateQuantity(req.body?.quantity);
+        if (!qtyCheck.ok) {
+            return res.status(400).json({ success: false, error: qtyCheck.error, code: qtyCheck.code });
+        }
+        const quantity = qtyCheck.value;
+
         const itemId = Number(req.body?.item_id);
-        const quantity = Math.max(1, Math.min(99, Number(req.body?.quantity || 1)));
 
         if (!Number.isInteger(itemId) || itemId <= 0) {
             return res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });

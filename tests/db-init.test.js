@@ -284,6 +284,50 @@ function testIndexReadiness() {
 }
 
 // ============================================
+// Тест 8: public/game.js — исправления apiRequest
+// ============================================
+function testApiRequestFixes() {
+    console.log('\nГруппа: public/game.js apiRequest fixes');
+
+    const src = fs.readFileSync(path.join(ROOT, 'public/game.js'), 'utf8');
+
+    test('503 SERVICE_STARTING: счётчик попыток хранится в замыкании функции, а не в объекте ошибки', () => {
+        // Проверяем что используется apiRequest._serviceStartingAttempts
+        assert(/apiRequest\._serviceStartingAttempts/.test(src), 'счётчик 503 должен быть свойством функции apiRequest');
+        assert(/maxServiceStartingAttempts\s*=\s*5/.test(src), 'максимум 5 попыток для 503');
+        assert(/apiRequest\._serviceStartingAttempts\s*<\s*3\s*\?\s*5000\s*:\s*10000/.test(src), 'backoff: 5с для первых 3, потом 10с');
+        // Счётчик сбрасывается при успехе
+        assert(/apiRequest\._serviceStartingAttempts\s*=\s*0/.test(src), 'счётчик сбрасывается при успехе');
+        // Счётчик сбрасывается при других ошибках
+        assert(/status === 503 && error\.code === 'SERVICE_STARTING'[\s\S]*?else\s*\{[\s\S]*?apiRequest\._serviceStartingAttempts\s*=\s*0/.test(src), 'счётчик сбрасывается при не-503 ошибках');
+    });
+
+    test('Заголовки: используется new Headers() и set() для защищённых заголовков', () => {
+        assert(/const headers = new Headers\(fetchOptions\.headers/.test(src), 'headers создаётся через new Headers()');
+        assert(/headers\.set\('Content-Type', 'application\/json'\)/.test(src), 'Content-Type устанавливается через set()');
+        assert(/headers\.set\('x-init-data'/.test(src), 'x-init-data устанавливается через set()');
+    });
+
+    test('Idempotency-Key: проверка без учёта регистра', () => {
+        assert(/Object\.keys\(fetchOptions\.headers\)\.some\(k => k\.toLowerCase\(\) === 'idempotency-key'\)/.test(src), 'Idempotency-Key проверяется case-insensitive');
+    });
+
+    test('withTimeout: таймер очищается в finally и abort связывается с внешним signal', () => {
+        assert(/clearTimeout\(timeoutId\)/.test(src), 'таймер очищается в finally');
+        assert(/externalSignal\)/.test(src), 'withTimeout принимает externalSignal');
+        assert(/externalSignal\.addEventListener\('abort'/.test(src), 'внешний signal связывается с контроллером');
+        assert(/controller\.abort\(\)/.test(src), 'таймаут вызывает abort()');
+    });
+
+    test('loadProfile: возвращает boolean, не выбрасывает исключения', () => {
+        assert(/async function loadProfile\(\)/.test(src), 'loadProfile должна быть async функцией');
+        assert(/return false/.test(src), 'loadProfile должна возвращать false при ошибке');
+        assert(/return true/.test(src), 'loadProfile должна возвращать true при успехе');
+        assert(/@returns \{Promise<boolean>\}/.test(src), 'JSDoc должен указывать Promise<boolean>');
+    });
+}
+
+// ============================================
 // Запуск всех тестов
 // ============================================
 async function main() {
@@ -301,6 +345,7 @@ async function main() {
     await testWorkshopRoute();
     testClient503();
     testIndexReadiness();
+    testApiRequestFixes();
 
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed > 0 ? 1 : 0);

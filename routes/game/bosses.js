@@ -40,16 +40,23 @@ const crypto = require('crypto');
 // ключей от босса N-1 (этим же пользуется spendBossKeys).
 // Fallback = 1: за убийство выдаётся ровно один ключ, поэтому любое большее
 // значение делает боссов со второго недостижимыми навсегда.
+//
+// P1-6: ошибку БД здесь намеренно НЕ глушим.
+//
+// Было `catch { return 1; }` — и любой сбой запроса (обрыв соединения,
+// таймаут, падение пула) молча превращался в «нужен 1 ключ». Последствия:
+//   * spendBossKeys недосписывал ключи, если босс требует 3;
+//   * raid/:id/join пускал игрока в рейд с меньшим числом ключей, чем
+//     требуется для входной цепочки.
+// Отсутствие строки — это НЕ ошибка (босс удалён или id = 0), fallback 1
+// сохраняется. Ошибка запроса пробрасывается: роут покажет 500/503, а не
+// тихо проведёт операцию по неверным данным.
 async function getKeysRequiredForBoss(client, bossId) {
-    try {
-        const result = await client.query(
-            'SELECT keys_required FROM bosses WHERE id = $1',
-            [bossId]
-        );
-        return Math.max(1, Number(result.rows[0]?.keys_required) || 1);
-    } catch {
-        return 1;
-    }
+    const result = await client.query(
+        'SELECT keys_required FROM bosses WHERE id = $1',
+        [bossId]
+    );
+    return Math.max(1, Number(result.rows[0]?.keys_required) || 1);
 }
 const SOLO_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
@@ -1001,7 +1008,12 @@ router.get('/', async (req, res) => {
 router.post('/attack-boss', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const bossId = Number(req.body?.boss_id);
-    const playerId = req.player.id;
+    // P2: guard на req.player (см. коммент. в /attack-with-weapon).
+    const playerId = req.player?.id;
+
+    if (!playerId) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
 
     if (!validateBossId(bossId)) {
         return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
@@ -1125,7 +1137,14 @@ router.post('/attack-with-weapon', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const bossId = Number(req.body?.boss_id);
     const itemIndex = Number(req.body?.item_index);
-    const playerId = req.player.id;
+    // P2: req.player.id без guard. Обычно гарантирован validatePlayer, но
+    // при прямом вызове роутера (как у /api/leaderboard) req.player может
+    // отсутствовать, и роутер отвечал 500 вместо 401.
+    const playerId = req.player?.id;
+
+    if (!playerId) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
 
     if (!validateBossId(bossId)) {
         return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
@@ -1197,6 +1216,26 @@ router.post('/attack-with-weapon', async (req, res) => {
             const wornWeapon = equipmentRules.wearEquipment(weapon, 1);
             inventory[itemIndex] = wornWeapon;
 
+            // P0-1: изношенное оружие должно стать ЕДИНСТВЕННОЙ версией инвентаря
+            // для всех последующих писателей в этой транзакции.
+            //
+            // Раньше `player.inventory` оставался исходным JSON: внутри
+            // applyBossCounterHit -> applyAutoHeal списывал аптечку уже из
+            // устаревшей копии, а финальный UPDATE энергии записывал инвентарь
+            // своей stale-копией (строка 1218). Итог: здоровье
+            // восстанавливалось, аптечка оставалась в инвентаре.
+            //
+            // Теперь порядок такой:
+            //   1) фиксируем износ оружия в объекте и в БД;
+            //   2) applyAutoHeal читает ЭТУ версию и пишет inventory последним
+            //      (изношенное оружие + списанная аптечка);
+            //   3) UPDATE энергии больше не трогает inventory вообще.
+            player.inventory = inventory;
+            await client.query(
+                'UPDATE players SET inventory = $1 WHERE id = $2',
+                [JSON.stringify(inventory), playerId]
+            );
+
             const boss = await getBossById(client, bossId);
             const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
             const baseDamage = calculateDamage(bossId, player, masteries, setBonuses);
@@ -1212,13 +1251,15 @@ router.post('/attack-with-weapon', async (req, res) => {
             await progressDailyTask(client, playerId, 'boss_damage', damage);
 
             // См. комментарий выше про last_energy_update при атаке с оружием.
+            // Инвентарь здесь НЕ пишется: финальную версию (изношенное оружие +
+            // списанная аптечка автохила) уже записал applyAutoHeal внутри
+            // applyBossCounterHit. Повторная запись затирала бы расходники.
             const energyResult = await client.query(`
                 UPDATE players
-                SET energy = GREATEST(0, energy - $1),
-                    inventory = $2
-                WHERE id = $3
+                SET energy = GREATEST(0, energy - $1)
+                WHERE id = $2
                 RETURNING energy, max_energy, last_energy_update
-            `, [energyCost, JSON.stringify(inventory), playerId]);
+            `, [energyCost, playerId]);
 
             await client.query(`
                 UPDATE player_boss_progress
@@ -1385,6 +1426,22 @@ router.post('/raid/start', async (req, res) => {
                 };
             }
 
+            // P1-4: сериализуем создание рейда по строке босса.
+            //
+            // Порядок блокировок — player (getPlayerBaseState выше) → bosses,
+            // и он такой же во всех остальных роутах: ни одна транзакция не
+            // берёт босса раньше игрока, поэтому взаимоблокировки не будет.
+            //
+            // Зачем: проверка «рейд уже идёт» (SELECT ниже) и INSERT шли без
+            // блокировки, поэтому два лидера, запустившие рейд одновременно,
+            // оба проходили проверку и упирались в UNIQUE(boss_id, is_active):
+            // победитель получал рейд, а проигравший — 500 INTERNAL_ERROR
+            // вместо внятной бизнес-ошибки RAID_ALREADY_ACTIVE.
+            await client.query(
+                'SELECT id FROM bosses WHERE id = $1 FOR UPDATE',
+                [bossId]
+            );
+
             const player = await getPlayerBaseState(client, playerId);
             if (!player || player.health <= 0) {
                 return {
@@ -1488,6 +1545,19 @@ router.post('/raid/start', async (req, res) => {
         // и полями keys_owned/keys_required, а не 500.
         if (error.code === 'INSUFFICIENT_KEYS') {
             return res.status(400).json(error);
+        }
+        // P1-4 (страховка): если UNIQUE(boss_id, is_active) сработал раньше,
+        // чем блокировка босса (например, рейд создан другим путём) — отдаём
+        // ту же бизнес-ошибку, а не непонятный 500 INTERNAL_ERROR.
+        if (error.code === '23505' || /unique|duplicate/i.test(error.constraint || error.message || '')) {
+            logger.warn('[bosses] Гонка при создании рейда, рейд уже существует', {
+                playerId, bossId, constraint: error.constraint
+            });
+            return res.status(400).json({
+                success: false,
+                error: 'Массовый бой на этого босса уже идёт',
+                code: 'RAID_ALREADY_ACTIVE'
+            });
         }
         if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'mass_start');

@@ -12,14 +12,8 @@ const { DebuffAPI } = require('./debuffs');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
-// (иначе цикл загрузки модулей).
-let gameHelpers = null;
-function getGameHelpers() {
-    if (!gameHelpers) {
-        gameHelpers = require('../../utils/game-helpers');
-    }
-    return gameHelpers;
-}
+// (иначе цикл загрузки модулей). Общий загрузчик — utils/getGameHelpers.js.
+const { getGameHelpers } = require('../../utils/getGameHelpers');
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
@@ -107,23 +101,6 @@ async function runStatusCheck(client, playerId) {
 
 
 /**
- * Валидация item_id.
- *
- * Использует общий validateId из serverApi, который приводит
- * значение к числу и возвращает результат. Форма ответа
- * приведена к общей: { ok, value } | { ok: false, error, code }.
- *
- * @param {*} itemId проверяемый item_id
- * @returns {{ok: true, value: number}|{ok: false, error: string, code: string}}
- */
-function validateItemId(itemId) {
-    if (itemId === undefined || itemId === null || itemId === '') {
-        return { ok: false, error: 'Требуется item_id', code: 'MISSING_ITEM_ID' };
-    }
-    return validateId(itemId, 'item_id');
-}
-
-/**
  * Получение текущего состояния
  * GET /status → GET /api/game/status
  * Путь: / (корень внутри роутера)
@@ -202,7 +179,14 @@ router.post('/heal', async (req, res) => {
         
         // Валидация item_id если передан
         if (item_id !== undefined) {
-            const itemIdCheck = validateItemId(item_id);
+            if (item_id === null || item_id === '') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Требуется item_id',
+                    code: 'MISSING_ITEM_ID'
+                });
+            }
+            const itemIdCheck = validateId(item_id, 'item_id');
             if (!itemIdCheck.ok) {
                 return res.status(400).json({
                     success: false,
@@ -292,16 +276,20 @@ router.post('/heal', async (req, res) => {
                     
                     const newLevel = Math.max(0, currentLevel - healAmount);
                     
-                    // Обновляем как JSON объект
+                    // Обновляем ТОЛЬКО level, сохраняя expires_at/applied_at (jsonb_set)
                     await client.query(`
-                        UPDATE players SET radiation = $1 WHERE id = $2
-                    `, [JSON.stringify({ level: newLevel, expires_at: null, applied_at: null }), playerId]);
+                        UPDATE players SET radiation = jsonb_set(
+                            COALESCE(radiation, '{"level":0}'::jsonb),
+                            '{level}',
+                            to_jsonb($1)
+                        ) WHERE id = $2
+                    `, [newLevel, playerId]);
                     
                     message = 'Радиация -' + healAmount;
                     healed = true;
                 }
                 
-                    if (healed) {
+if (healed) {
                      // Расходуем ОДНУ штуку, а не весь стек.
                      const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, resolvedItemIndex);
 
@@ -309,21 +297,23 @@ router.post('/heal', async (req, res) => {
                          `UPDATE players SET inventory = $1 WHERE id = $2`,
                          [JSON.stringify(updatedInventory), playerId]
                      );
-                     
-                     // Логируем действие
-                     await logPlayerAction(playerId, 'status_heal', {
-                         type,
-                         item_id: item.id ?? item_id ?? null,
-                         amount: healAmount
-                     }, client);
-                    
-                    return {
-                        success: true,
-                        message: message,
-                        item_used: item,
-                        quantity_left: quantityLeft
-                    };
-                }
+
+                     return {
+                         success: true,
+                         message: message,
+                         item_used: item,
+                         quantity_left: quantityLeft,
+                         log: {
+                             action: 'status_heal',
+                             playerId,
+                             data: {
+                                 type,
+                                 item_id: item.id ?? item_id ?? null,
+                                 amount: healAmount
+                             }
+                         }
+                     };
+                 }
                 
             } // 'broken' тип удалён - система переломов упразднена
             
@@ -333,6 +323,11 @@ router.post('/heal', async (req, res) => {
                 code: 'UNKNOWN_HEAL_TYPE'
             };
         });
+        
+        // Логируем ПОСЛЕ коммита транзакции
+        if (result.log) {
+            await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+        }
         
         res.json(result);
         

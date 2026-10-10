@@ -22,19 +22,13 @@ const { logger, handleError, safeJsonParse, unauthorized } = require('../../util
 // ==========================================
 
 /**
- * Призы колеса удачи (должны совпадать с клиентом)
+ * Призы колеса удачи — единый источник с клиентом (public/shared/equipment.js).
+ *
+ * Было: копия здесь с весами и копия в public/game.js без весов. Набор
+ * призов менялся в одном месте, а анимация клиента продолжала подсвечивать
+ * сектор, который сервер уже не выдаёт.
  */
-const WHEEL_PRIZES = [
-    { type: 'coins', value: 10, text: '10 монет', weight: 20 },
-    { type: 'coins', value: 25, text: '25 монет', weight: 15 },
-    { type: 'coins', value: 50, text: '50 монет', weight: 10 },
-    { type: 'coins', value: 100, text: '100 монет', weight: 5 },
-    { type: 'multiplier', value: 2, text: 'x2 к монетам', weight: 3 },
-    { type: 'energy', value: 20, text: '20 энергии', weight: 12 },
-];
-
-// Время между бесплатными вращениями (24 часа)
-const FREE_SPIN_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const { WHEEL_PRIZES, WHEEL_FREE_SPIN_COOLDOWN_MS: FREE_SPIN_COOLDOWN_MS } = require('../../public/shared/equipment.js');
 
 /**
  * Выбор приза на сервере (с весами)
@@ -438,32 +432,37 @@ router.post(['/purchase', '/'], async (req, res) => {
 router.get('/leaderboard/players', async (req, res) => {
     try {
         const sort = req.query.sort || 'level';
-        const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
-        
+        // P2: limit принудительно ограничиваем снизу. Было
+        // Math.min(parseInt(req.query.limit, 10) || 10, 50) — при limit=-5
+        // parseInt даёт -5 (не falsy, || не срабатывает), Math.min(-5, 50)
+        // даёт -5, и уходит `LIMIT -5` -> ошибка Postgres -> 500.
+        const rawLimit = parseInt(req.query.limit, 10);
+        const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10, 1), 50);
+
         // Определяем поле сортировки и дополнительные поля
         let orderBy, whereClause, selectFields;
-        
+
         switch (sort) {
             case 'strength':
                 orderBy = 'strength DESC';
                 whereClause = 'WHERE banned = false';
-                selectFields = 'telegram_id, username, level, strength';
+                selectFields = 'telegram_id, username, first_name, level, strength';
                 break;
             case 'bosses':
                 orderBy = 'bosses_killed DESC';
                 whereClause = 'WHERE banned = false AND bosses_killed > 0';
-                selectFields = 'telegram_id, username, level, bosses_killed';
+                selectFields = 'telegram_id, username, first_name, level, bosses_killed';
                 break;
             case 'pvp':
                 orderBy = 'pvp_wins DESC';
                 whereClause = 'WHERE banned = false AND (pvp_wins > 0 OR pvp_losses > 0)';
-                selectFields = 'telegram_id, username, level, pvp_wins, pvp_losses';
+                selectFields = 'telegram_id, username, first_name, level, pvp_wins, pvp_losses';
                 break;
             case 'level':
             default:
                 orderBy = 'level DESC, experience DESC';
                 whereClause = 'WHERE banned = false';
-                selectFields = 'telegram_id, username, level, strength, experience';
+                selectFields = 'telegram_id, username, first_name, level, strength, experience';
                 break;
         }
         
@@ -482,6 +481,9 @@ router.get('/leaderboard/players', async (req, res) => {
                 rank: index + 1,
                 telegram_id: player.telegram_id,
                 username: player.username,
+                // P2: без first_name клиент показывал «Игрок» всем, у кого
+                // не заполнен username (а такое в Telegram — норма).
+                first_name: player.first_name || null,
                 level: player.level,
                 total_players: parseInt(player.total_players, 10)
             };
@@ -522,7 +524,9 @@ router.get('/leaderboard/players', async (req, res) => {
 // Получить топ кланов
 router.get('/leaderboard/clans', async (req, res) => {
     try {
-        const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+        // Тот же clamp, что и в /leaderboard/players: LIMIT -5 давал 500.
+        const rawLimit = parseInt(req.query.limit, 10);
+        const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10, 1), 50);
         
         const result = await query(
             `SELECT c.id,

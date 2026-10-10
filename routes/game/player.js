@@ -28,7 +28,21 @@ const equipmentRules = require('../../public/shared/equipment.js');
 
 
 // C-6: Whitelist разрешённых полей для обновления профиля
-const ALLOWED_UPDATE_FIELDS = ['username', 'first_name', 'last_name', 'avatar'];
+//
+// P2: 'avatar' убран. Колонки players.avatar нет в db/schema.js, поэтому
+// запрос с ней всегда падал на БД (42703) -> 500 вместо понятного ответа.
+// Вернуть поле можно вместе с миграцией, добавив колонку.
+const ALLOWED_UPDATE_FIELDS = ['username', 'first_name', 'last_name'];
+
+/**
+ * Тип/ограничения для каждого поля профиля.
+ * Значения из тела запроса без проверки уходили прямиком в UPDATE.
+ */
+const UPDATE_FIELD_RULES = {
+    username: { type: 'string', max: 64, nullable: true },
+    first_name: { type: 'string', max: 128, nullable: true },
+    last_name: { type: 'string', max: 128, nullable: true }
+};
 
 function filterAllowedUpdateFields(body) {
     const updates = {};
@@ -39,6 +53,34 @@ function filterAllowedUpdateFields(body) {
         }
     }
     return updates;
+}
+
+/**
+ * Проверка значений перед UPDATE: тип и длина.
+ * @param {Object} updates отфильтрованные поля
+ * @returns {{ok: true}|{ok: false, error: string}}
+ */
+function validateUpdateValues(updates) {
+    for (const [field, value] of Object.entries(updates)) {
+        const rule = UPDATE_FIELD_RULES[field];
+        if (!rule) continue;
+
+        if (value === null) {
+            if (!rule.nullable) {
+                return { ok: false, error: `Поле «${field}» не может быть пустым` };
+            }
+            continue;
+        }
+
+        if (typeof value !== rule.type) {
+            return { ok: false, error: `Поле «${field}» должно быть строкой` };
+        }
+
+        if (value.length > rule.max) {
+            return { ok: false, error: `Поле «${field}» слишком длинное (макс. ${rule.max})` };
+        }
+    }
+    return { ok: true };
 }
 
 /**
@@ -59,13 +101,20 @@ router.get(['/', '/profile'], async (req, res) => {
 
         // Пассивный реген здоровья при каждом заходе в профиль: иначе
         // игрок не видел бы восстановления, пока не зайдёт в поиск.
+        // P2: .catch(() => 0) глотал ошибку совсем — рассинхрон показанного
+        // и фактического HP оставался невидимым. Логируем причину.
         const updatedPlayer = await transaction(async (client) => {
             const locked = await client.query(
                 'SELECT id, health, max_health, last_hp_regen FROM players WHERE id = $1 FOR UPDATE',
                 [playerId]
             );
             return locked.rows[0] ? await regenerateHealth(client, locked.rows[0]) : 0;
-        }).catch(() => 0);
+        }).catch((err) => {
+            logger.warn('[player] Не удалось обновить реген здоровья в профиле', {
+                playerId, error: err && err.message
+            });
+            return 0;
+        });
         if (updatedPlayer > 0) {
             player.health = Math.min(Number(player.max_health || 0), Number(player.health || 0) + updatedPlayer);
         }
@@ -135,6 +184,14 @@ router.put('/update', async (req, res) => {
 
         if (fieldNames.length === 0) {
             return res.status(400).json({ error: 'Нет разрешённых полей для обновления' });
+        }
+
+        // P2: значения теперь проверяются по типу и длине ДО запроса.
+        // Раньше { username: 42 } или { first_name: { a: 1 } } уходили в UPDATE,
+        // pg падал с 22P02, и игрок получал «Ошибка обновления профиля».
+        const valuesCheck = validateUpdateValues(updates);
+        if (!valuesCheck.ok) {
+            return res.status(400).json({ success: false, error: valuesCheck.error, code: 'VALIDATION_ERROR' });
         }
 
         const setClauses = fieldNames.map((field, i) => `${field} = $${i + 2}`);
@@ -240,6 +297,12 @@ router.post('/buy-energy', async (req, res) => {
  */
 const DAILY_BONUS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const DAILY_BONUS_STREAK_LIMIT = 7;
+// Награда за первый день и прирост за каждую следующую серию (было инлайном
+// в формуле coins/stars ниже).
+const DAILY_BONUS_BASE_COINS = 25;
+const DAILY_BONUS_COINS_PER_DAY = 25;
+/** Каждый N-й день серии даёт звезду. */
+const DAILY_BONUS_STAR_EVERY = 3;
 
 router.post('/daily-bonus', async (req, res) => {
     try {
@@ -277,8 +340,8 @@ router.post('/daily-bonus', async (req, res) => {
             const streak = keepsStreak ? Number(player.daily_streak || 0) + 1 : 1;
             const cappedDay = Math.min(streak, DAILY_BONUS_STREAK_LIMIT);
 
-            const coins = 25 + (cappedDay - 1) * 25;
-            const stars = streak % 3 === 0 ? 1 : 0;
+            const coins = DAILY_BONUS_BASE_COINS + (cappedDay - 1) * DAILY_BONUS_COINS_PER_DAY;
+            const stars = streak % DAILY_BONUS_STAR_EVERY === 0 ? 1 : 0;
 
             await client.query(
                 `UPDATE players

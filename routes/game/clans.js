@@ -17,6 +17,33 @@ const { query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, wrap, logPlayerAction, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
 
 const crypto = require('crypto');
+// Единый источник игровых констант (общий с клиентом).
+const { CLAN_CREATE_COST, CLAN_DESCRIPTION_MAX, CLAN_NAME_MAX } = require('../../public/shared/equipment.js');
+
+/**
+ * Разбор булевой настройки из тела запроса.
+ *
+ * Boolean() тут был неверным: Boolean("false") === true, Boolean("0") === true,
+ * Boolean("no") === true. Клиент, отправляющий настройку строкой (форм-данные,
+ * query-строка, ручной запрос), получал клан публичным/открытым вопреки
+ * выбору игрока.
+ *
+ * @param {*} value значение из тела запроса
+ * @param {boolean} [def=true] значение по умолчанию, если распарсить не удалось
+ * @returns {boolean}
+ */
+function parseBoolSetting(value, def = true) {
+    if (value === undefined || value === null || value === '') return def;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+        const v = value.trim().toLowerCase();
+        if (v === 'false' || v === '0' || v === 'no' || v === 'off') return false;
+        if (v === 'true' || v === '1' || v === 'yes' || v === 'on') return true;
+        return def;
+    }
+    return Boolean(value);
+}
 
 function generateClanInviteCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -133,21 +160,34 @@ router.post('/clan/create', wrap(async (req, res) => {
 
     // is_open (приглашать по коду) и is_public (показывать в списке) —
     // РАЗНЫЕ настройки.
-    const isPublic = isPublicBody === undefined ? true : Boolean(isPublicBody);
-    const isOpen = isOpenBody === undefined ? true : Boolean(isOpenBody);
-    
+    //
+    // P2: Boolean() здесь было неверно: Boolean("false"), Boolean("0"),
+    // Boolean("no") — всё true. Клиент, присылающий настройку строкой,
+    // получал клан публичным/открытым вопреки выбору игрока. Теперь явное
+    // false / "false" / "0" / 0 / "no" считается false, всё остальное —
+    // приведением к boolean.
+    const isPublic = isPublicBody === undefined ? true : parseBoolSetting(isPublicBody, true);
+    const isOpen = isOpenBody === undefined ? true : parseBoolSetting(isOpenBody, true);
+
     // Валидация имени клана
-    const nameValidation = sanitizeName(name, 30);
+    const nameValidation = sanitizeName(name, CLAN_NAME_MAX);
     if (!nameValidation.valid) {
         return fail(res, nameValidation.error, nameValidation.code);
     }
-    
+
+    // P2: описание тоже проверяем. Было String(description).slice(0, 200),
+    // и объект {a:1} превращался в строку "[object Object]" в БД.
+    if (description !== undefined && description !== null && typeof description !== 'string') {
+        return fail(res, 'Описание должно быть строкой', 'INVALID_DESCRIPTION');
+    }
+    const safeDescription = typeof description === 'string' ? description.slice(0, CLAN_DESCRIPTION_MAX) : '';
+
     if (player.clan_id) {
         return fail(res, 'Вы уже состоите в клане', 'ALREADY_IN_CLAN');
     }
-    
-    if (player.coins < 1000) {
-        return fail(res, 'Нужно 1000 монет', 'NOT_ENOUGH_COINS');
+
+    if (player.coins < CLAN_CREATE_COST) {
+        return fail(res, `Нужно ${CLAN_CREATE_COST} монет`, 'NOT_ENOUGH_COINS');
     }
     
     const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
@@ -158,7 +198,7 @@ router.post('/clan/create', wrap(async (req, res) => {
         }
 
         // Проверяем монеты еще раз внутри транзакции
-        if (lockedPlayer.coins < 1000) {
+        if (lockedPlayer.coins < CLAN_CREATE_COST) {
             throw { message: ERROR_MESSAGES.INSUFFICIENT_COINS, code: 'INSUFFICIENT_COINS', statusCode: 400 };
         }
 
@@ -189,7 +229,7 @@ router.post('/clan/create', wrap(async (req, res) => {
                     `INSERT INTO clans (name, description, leader_id, created_at, is_open, is_public, invite_code)
                      VALUES ($1, $2, $3, NOW(), $4, $5, $6) RETURNING id`,
                     // leader_id — ВНУТРЕННИЙ players.id, а не telegram_id.
-                    [nameValidation.value, String(description).slice(0, 200), playerId, isOpen, isPublic, inviteCode]
+                    [nameValidation.value, safeDescription, playerId, isOpen, isPublic, inviteCode]
                 );
                 break;
             } catch (insertError) {
@@ -214,16 +254,16 @@ router.post('/clan/create', wrap(async (req, res) => {
         const clanId = insertResult.rows[0].id;
         
         await client.query(
-            `UPDATE players SET clan_id = $1, clan_role = 'leader', coins = coins - 1000 
+            `UPDATE players SET clan_id = $1, clan_role = 'leader', coins = coins - $3
              WHERE id = $2`,
-            [clanId, playerId]
+            [clanId, playerId, CLAN_CREATE_COST]
         );
 
         // Логируем создание клана
         await logPlayerAction(playerId, 'clan_create', {
             clan_id: clanId,
             clan_name: nameValidation.value,
-            cost: 1000
+            cost: CLAN_CREATE_COST
         }, client);
 
         return { message: `Клан "${nameValidation.value}" создан!`, clan: { id: clanId, name: nameValidation.value } };
