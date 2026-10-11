@@ -707,6 +707,70 @@ function resolveEquipmentSlot(item) {
         return Math.max(1, Math.floor(base * factor));
     }
 
+    /* ================= УРОН ОРУЖИЯ ПО КОНТЕКСТУ БОЯ =================
+     *
+     * Оружие с полем stats.boss_bonus бьёт сильнее боссов, а с полем
+     * stats.pvp_bonus — сильнее в PvP. Раньше это правило жило ДВЕЖДЫ:
+     *   - routes/game/bosses.js: getWeaponContextMultiplier() читал
+     *     boss_bonus, но НЕ применял stats.variance;
+     *   - db/pvp.js: инлайном читало pvp_bonus и применяло variance.
+     *
+     * Из-за этого одно и то же оружие вело себя по-разному: дробовик с
+     * разбросом ±25% давал случайный урон в PvP и детерминированный
+     * против боссов, а формула «1 + percent/100» была скопирована в оба
+     * файла и могла разъехаться при правке баланса.
+     */
+
+    /**
+     * Контексты боя, в которых оружие получает бонус.
+     */
+    const WEAPON_CONTEXTS = Object.freeze({ BOSS: 'boss', PVP: 'pvp' });
+
+    /**
+     * Множитель бонуса оружия для контекста: 1.4 при boss_bonus = 40.
+     *
+     * Процент ограничен 100: иначе «+500%» превращало бы оружие в
+     * одноударное убийство любого босса.
+     *
+     * @param {object|null} item оружие из экипировки
+     * @param {'boss'|'pvp'} context контекст боя
+     * @returns {number} множитель, 1 — если бонуса нет
+     */
+    function getWeaponContextMultiplier(item, context) {
+        if (!item || typeof item !== 'object') return 1;
+
+        const stats = (item.stats && typeof item.stats === 'object') ? item.stats : {};
+        const key = context === WEAPON_CONTEXTS.BOSS ? 'boss_bonus' : 'pvp_bonus';
+        const percent = Number(stats[key]) || 0;
+        if (percent <= 0) return 1;
+
+        return 1 + Math.min(100, percent) / 100;
+    }
+
+    /**
+     * Итоговый урон оружия: бонус за контекст боя, затем разброс.
+     *
+     * Разброс применяется ТОЛЬКО к урону оружия, не к базовому урону
+     * бойца: ±25% от всего урона ломали бы весь расчёт.
+     *
+     * Сумма бонуса и разброса одинакова для боя с боссом и PvP — раньше
+     * боссовый путь игнорировал stats.variance, и дробовик стрелял
+     * «всегда в цель» против боссов.
+     *
+     * @param {object|null} item оружие из экипировки
+     * @param {'boss'|'pvp'} context контекст боя
+     * @returns {number} урон оружия
+     */
+    function getWeaponDamageForContext(item, context) {
+        const base = getEffectiveStatValue(item, ['damage']);
+        if (base <= 0) return 0;
+
+        const stats = (item.stats && typeof item.stats === 'object') ? item.stats : {};
+        const bonus = getWeaponContextMultiplier(item, context);
+        return rollVarianceDamage(base * bonus, Number(stats.variance) || 0);
+    }
+
+
     /**
      * Значение характеристики с учётом улучшений, модификаций и прочности.
      * Сломанный предмет не даёт бонусов, пока его не отремонтируют.
@@ -1008,6 +1072,9 @@ function resolveEquipmentSlot(item) {
         calculateModificationCost,
         isModificationApplicable,
         rollVarianceDamage,
+        WEAPON_CONTEXTS,
+        getWeaponContextMultiplier,
+        getWeaponDamageForContext,
         collectSetPieceCounts,
         calculateSetBonuses
     };

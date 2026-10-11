@@ -130,10 +130,14 @@ function calculatePVPDamage(attacker, defender) {
     // Дальний бой даёт +25% урона в PvP (stats.pvp_bonus), а разброс
     // (stats.variance у дробовика и реактивной пушки) применяется только к
     // урону ОРУЖИЯ: разброс от всего урона бойца ломал бы расчёт.
-    const weapon = aEq.weapon;
-    const weaponBase = equipmentRules.getEffectiveStatValue(weapon, ['damage']);
-    const pvpBonus = 1 + Math.min(100, Number(weapon && weapon.stats && weapon.stats.pvp_bonus) || 0) / 100;
-    damage += equipmentRules.rollVarianceDamage(weaponBase * pvpBonus, Number(weapon && weapon.stats && weapon.stats.variance) || 0);
+    //
+    // Расчёт через общий equipmentRules.getWeaponDamageForContext — тот же,
+    // что в бою с боссом. Раньше формула бонуса была скопирована сюда
+    // инлайном и могла разъехаться с routes/game/bosses.js.
+    damage += equipmentRules.getWeaponDamageForContext(
+        aEq.weapon,
+        equipmentRules.WEAPON_CONTEXTS.PVP
+    );
 
     // Бонус сета атакующего (+15 урона за 4 части «Бандитского сета»).
     damage += Number(a.set_damage || 0);

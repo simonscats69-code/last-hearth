@@ -63,6 +63,19 @@ const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAMAGE_PER_KILL = 0.1;
 const KILL_DECAY_FACTOR = 0.1;
 
+/**
+ * Длительность вроде «8 ч» или «8 ч 30 мин» для подсказок в info.
+ * Без форматтера часы приходилось вписывать в текст руками, и подсказка
+ * расходилась с SOLO_FIGHT_DURATION_MS при смене баланса.
+ */
+function formatDuration(ms) {
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+    if (hours > 0 && minutes > 0) return `${hours} ч ${minutes} мин`;
+    if (hours > 0) return `${hours} ч`;
+    return `${minutes} мин`;
+}
+
 
 function validateBossId(bossId) {
     return Number.isInteger(bossId) && bossId > 0;
@@ -90,49 +103,35 @@ function calculateDamageBonus(bossId, masteries) {
 }
 
 /**
- * Спецбонус оружия по ситуации (stats.boss_bonus / stats.pvp_bonus).
- * 
- * Ближний бой (нож, бита, топор) даёт +40% урона по боссам.
- * Дальний бой даёт +25% урона в PvP.
- * 
- * @param {object} item оружие из инвентаря
- * @param {'boss'|'pvp'} context где применяется
- * @returns {number} множитель, например 1.4 или 1 (без бонуса)
+ * Урон бойца по боссу.
+ *
+ * Единственный путь атаки — кнопка «Атаковать» -> POST /attack-boss,
+ * урон считается только здесь. Бонус оружия за ближний бой и разброс
+ * (stats.variance) берутся из equipmentRules — того же модуля, что
+ * использует PvP, иначе дробовик давал бы случайный урон в PvP и
+ * детерминированный против боссов.
+ *
+ * @param {number} bossId босс, по которому бьём (нужен для мастерства)
+ * @param {object} player строка players (equipment, level)
+ * @param {Array} masteries boss_mastery игрока
+ * @param {object} setBonuses бонусы надетых сетов
+ * @returns {number} итоговый урон
  */
-function getWeaponContextMultiplier(item, context) {
-    if (!item || typeof item !== 'object') return 1;
-
-    const stats = (item.stats && typeof item.stats === 'object') ? item.stats : {};
-    const percent = Number(context === 'boss' ? stats.boss_bonus : stats.pvp_bonus) || 0;
-    if (percent <= 0) return 1;
-
-    return 1 + Math.min(100, percent) / 100;
-}
-
-/**
- * Разброс урона оружия (stats.variance, например ±25% у дробовика).
- * Применяется к урону ОРУЖИЯ, а не к базовому урону игрока: иначе разброс
- * ±25% от 200 урона босса ломал бы весь расчёт.
- */
-function applyWeaponVariance(item, damage) {
-    const stats = (item && item.stats && typeof item.stats === 'object') ? item.stats : {};
-    return equipmentRules.rollVarianceDamage(damage, Number(stats.variance) || 0);
-}
-
 function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
     const equipment = safeJsonParse(player.equipment, {});
 
     // Урон оружия с учётом прочности и улучшений: сломанный нож даёт 0,
     // улучшенный снайпер — на +80% к базовому урону.
-    const weapon = equipment.weapon;
-    const weaponDamage = equipmentRules.getEffectiveStatValue(weapon, ['damage']);
-    const weaponMultiplier = getWeaponContextMultiplier(weapon, 'boss');
+    const weaponDamage = equipmentRules.getWeaponDamageForContext(
+        equipment.weapon,
+        equipmentRules.WEAPON_CONTEXTS.BOSS
+    );
     const setDamage = Number(setBonuses.damage || 0);
     const killBonus = calculateDamageBonus(bossId, masteries);
     // Усиливаем базовую прогрессию, чтобы ранние боссы не были чрезмерно затянутыми.
     const levelDamage = Math.max(1, Number(player.level || 1));
     const baseDamage = 3 + (levelDamage * 2);
-    return Math.floor(baseDamage + killBonus + setDamage + weaponDamage * weaponMultiplier);
+    return Math.floor(baseDamage + killBonus + setDamage + weaponDamage);
 }
 
 /**
@@ -173,18 +172,14 @@ function calculateGrantedQuantity(totalQuantity, multiplier = 1) {
 }
 
 /**
- * Слоты экипировки, которые получают урон от босса.
- * Броня получает износ всегда, оружие — только если удар пришёл с оружием
- * (мощная атака) или когда босс отбил удар.
+ * Слоты экипировки, которые получают износ от ответного удара босса.
+ *
+ * Босс бьёт в ответ на ЛЮБУЮ атаку игрока, поэтому изнашивается всё
+ * надетое снаряжение, включая оружие в руках.
  */
-function equipmentSlotsToWear({ counterAttack, usedWeapon }) {
-    const slots = [];
-    if (usedWeapon || counterAttack) slots.push('weapon');
-    if (counterAttack) {
-        slots.push('body', 'head', 'hands', 'legs', 'boots', 'armor', 'helmet', 'accessory');
-    }
-    return slots;
-}
+const COUNTER_HIT_WEAR_SLOTS = [
+    'weapon', 'body', 'head', 'hands', 'legs', 'boots', 'armor', 'helmet', 'accessory'
+];
 
 /**
  * Ответный удар босса: урон игроку + износ экипировки.
@@ -196,9 +191,8 @@ function equipmentSlotsToWear({ counterAttack, usedWeapon }) {
  * @param {number} playerId
  * @param {object} boss строка bosses
  * @param {object} player текущее состояние игрока
- * @param {object} [options] { usedWeapon: boolean }
  */
-async function applyBossCounterHit(client, playerId, boss, player, options = {}) {
+async function applyBossCounterHit(client, playerId, boss, player) {
     const equipment = safeJsonParse(player.equipment, {});
     const damage = calculateBossCounterDamage(boss, player.max_health, equipment);
     if (damage <= 0) {
@@ -210,7 +204,7 @@ async function applyBossCounterHit(client, playerId, boss, player, options = {})
         client,
         playerId,
         equipment,
-        equipmentSlotsToWear({ counterAttack: true, usedWeapon: options.usedWeapon })
+        COUNTER_HIT_WEAR_SLOTS
     );
 
     // Урон и износ фиксируем одним UPDATE: здоровье после ответного удара
@@ -854,7 +848,11 @@ router.post('/start', async (req, res) => {
                             hp: boss.max_health,
                             max_hp: boss.max_health
                         },
-                        time_remaining_ms: SOLO_FIGHT_DURATION_MS
+                        time_remaining_ms: SOLO_FIGHT_DURATION_MS,
+                        // Длительность целиком: клиент показывает её в логе
+                        // боя. Раньше поле было только в GET /bosses, и после
+                        // прямого старта лог оставался без срока.
+                        fight_duration_ms: SOLO_FIGHT_DURATION_MS
                     }
                 }
             };
@@ -952,9 +950,12 @@ router.get('/', async (req, res) => {
                     fight_duration_ms: SOLO_FIGHT_DURATION_MS,
                     raid_duration_ms: MASS_FIGHT_DURATION_MS,
                     info: {
-                        solo: 'Соло-бой: старт через кнопку, 1 удар = 1 энергия, бой длится 8 часов.',
+                        // Длительность боя подставляем из константы: раньше
+                        // «8 часов» было вписано текстом, и при смене баланса
+                        // подсказка врала.
+                        solo: `Соло-бой: старт через кнопку, 1 удар = 1 энергия, бой длится ${formatDuration(SOLO_FIGHT_DURATION_MS)}.`,
                         mastery: 'Каждая победа над боссом увеличивает урон по нему и частично усиливает урон по следующим боссам.',
-                        raids: 'Массовый бой — отдельный режим на 8 часов. Награды и предметы делятся пропорционально урону, ключ получает только лидер.'
+                        raids: `Массовый бой — отдельный режим на ${formatDuration(MASS_FIGHT_DURATION_MS)}. Награды и предметы делятся пропорционально урону, ключ получает только лидер.`
                     }
                 }
             };
@@ -969,7 +970,9 @@ router.get('/', async (req, res) => {
 router.post('/attack-boss', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const bossId = Number(req.body?.boss_id);
-    // P2: guard на req.player (см. коммент. в /attack-with-weapon).
+    // P2: guard на req.player. Обычно гарантирован validatePlayer, но
+    // при прямом вызове роутера req.player может отсутствовать, и роутер
+    // отвечал 500 вместо 401.
     const playerId = req.player?.id;
 
     if (!playerId) {
@@ -1038,6 +1041,11 @@ router.post('/attack-boss', async (req, res) => {
                 mastery = killResult.mastery;
             }
 
+            // ОДИН плоский ответ, без вложенного data: {} — в нём раньше
+            // дублировались boss/damage/rewards/mastery/energy/health.
+            // После удаления второго пути атаки клиент читает только
+            // верхний уровень, поэтому дупль был мёртвым весом в каждом
+            // ответе удара.
             return {
                 status: 200,
                 body: {
@@ -1056,23 +1064,7 @@ router.post('/attack-boss', async (req, res) => {
                     // Ответный удар босса.
                     player_damage_taken: counterHit.damage,
                     player_health: counterHit.health,
-                    broken_equipment: counterHit.broken_slots,
-                    data: {
-                        boss: {
-                            id: bossId,
-                            hp: newHp,
-                            max_hp: activeBattle.boss.max_hp
-                        },
-                        damage,
-                        killed,
-                        rewards,
-                        mastery,
-                        energy_left: energyResult.rows[0].energy,
-                        last_energy_update: energyResult.rows[0].last_energy_update,
-                        damage_taken: counterHit.damage,
-                        health: counterHit.health,
-                        broken_equipment: counterHit.broken_slots,
-                    }
+                    broken_equipment: counterHit.broken_slots
                 }
             };
         });
@@ -1081,246 +1073,6 @@ router.post('/attack-boss', async (req, res) => {
     } catch (error) {
         if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'solo_attack');
-    }
-});
-
-/**
- * Атака босса с использованием оружия из инвентаря
- * Оружие тратится после использования
- * POST /bosses/attack-with-weapon
- */
-router.post('/attack-with-weapon', async (req, res) => {
-    // Валидация до открытия транзакции — как в остальных маршрутах боссов.
-    const bossId = Number(req.body?.boss_id);
-    const itemIndex = Number(req.body?.item_index);
-    // P2: req.player.id без guard. Обычно гарантирован validatePlayer, но
-    // при прямом вызове роутера (как у /api/leaderboard) req.player может
-    // отсутствовать, и роутер отвечал 500 вместо 401.
-    const playerId = req.player?.id;
-
-    if (!playerId) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
-    }
-
-    if (!validateBossId(bossId)) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-    }
-
-    if (!Number.isInteger(itemIndex) || itemIndex < 0) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный индекс предмета', code: 'INVALID_ITEM_INDEX' });
-    }
-
-    try {
-        const outcome = await transaction(async (client) => {
-            const validation = await validateSoloAttack(client, playerId, bossId);
-            if (validation.error) {
-                // Статус и тело приходят из validateSoloAttack: там разные
-                // отказы (нет боя, мёртв, мало энергии).
-                return { status: validation.status, body: validation.error };
-            }
-
-            const { activeBattle, player, activeBuffs, masteries } = validation;
-
-            const inventory = normalizeInventory(player.inventory);
-
-            if (itemIndex >= inventory.length) {
-                return {
-                    status: 400,
-                    body: {
-                        success: false,
-                        error: 'Предмет не найден в инвентаре',
-                        code: 'ITEM_NOT_FOUND'
-                    }
-                };
-            }
-
-            const weapon = inventory[itemIndex];
-
-            if (weapon.type !== 'weapon') {
-                return {
-                    status: 400,
-                    body: {
-                        success: false,
-                        error: 'Это не оружие',
-                        code: 'NOT_WEAPON'
-                    }
-                };
-            }
-
-            const weaponDamage = applyWeaponVariance(weapon,
-                equipmentRules.getEffectiveStatValue(weapon, ['damage']) * getWeaponContextMultiplier(weapon, 'boss'));
-            const weaponName = weapon.name;
-
-            // Сломанное оружие не бьёт. Проверка обязательна: бит за один удар 9
-            // урона при цене 45 строго хуже продажи — бой с оружием должен
-            // становиться выгодным по мере его использования.
-            const durabilityInfo = equipmentRules.getDurabilityInfo(weapon);
-            if (durabilityInfo.isBroken) {
-                return {
-                    status: 400,
-                    body: {
-                        success: false,
-                        error: 'Оружие сломано — отремонтируйте его',
-                        code: 'WEAPON_BROKEN',
-                        durability: durabilityInfo.current,
-                        max_durability: durabilityInfo.max
-                    }
-                };
-            }
-
-            // Износ: −1 прочности вместо удаления предмета.
-            const wornWeapon = equipmentRules.wearEquipment(weapon, 1);
-            inventory[itemIndex] = wornWeapon;
-
-            // Изношенное оружие фиксируем в объекте и в БД ДО расчёта ответного
-            // удара. Раньше здесь было две записи inventory в одной транзакции:
-            // своя копия в локальной переменной плюс UPDATE энергии со своей
-            // stale-копией, из-за чего износ оружия терялся.
-            player.inventory = inventory;
-            await client.query(
-                'UPDATE players SET inventory = $1 WHERE id = $2',
-                [JSON.stringify(inventory), playerId]
-            );
-
-            const boss = await getBossById(client, bossId);
-            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
-            const baseDamage = calculateDamage(bossId, player, masteries, setBonuses);
-            const damage = baseDamage + weaponDamage;
-            const energyCost = activeBuffs.free_energy ? 0 : 1;
-
-            const newHp = Math.max(0, activeBattle.boss.hp - damage);
-
-            // Ответный удар босса: урон и износ снаряжения одним UPDATE.
-            const counterHit = boss
-                ? await applyBossCounterHit(client, playerId, boss, player, { usedWeapon: true })
-                : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
-
-            await progressDailyTask(client, playerId, 'boss_damage', damage);
-
-            // См. комментарий выше про last_energy_update при атаке с оружием.
-            // Инвентарь здесь НЕ пишется: его последним писателем остаётся
-            // UPDATE износа оружия выше и UPDATE ответного удара — обе записи
-            // уже содержат актуальный инвентарь.
-            const energyResult = await client.query(`
-                UPDATE players
-                SET energy = GREATEST(0, energy - $1)
-                WHERE id = $2
-                RETURNING energy, max_energy, last_energy_update
-            `, [energyCost, playerId]);
-
-            await client.query(`
-                UPDATE player_boss_progress
-                SET current_hp = $1, last_attack = NOW()
-                WHERE player_id = $2 AND boss_id = $3
-            `, [newHp, playerId, bossId]);
-
-            let killed = false;
-            let rewards = null;
-            let mastery = masteries.find((m) => m.boss_id === bossId)?.kills || 0;
-
-            if (newHp <= 0) {
-                killed = true;
-                const killResult = await handleSoloBossKill(client, playerId, bossId, activeBuffs, masteries);
-                rewards = killResult.rewards;
-                mastery = killResult.mastery;
-            }
-
-            return {
-                status: 200,
-                body: {
-                    success: true,
-                    data: {
-                        boss_hp: newHp,
-                        boss_max_hp: activeBattle.boss.max_hp,
-                        damage: damage,
-                        weapon_used: weaponName,
-                        weapon_damage: weaponDamage,
-                        weapon_durability: wornWeapon.durability,
-                        weapon_max_durability: wornWeapon.max_durability,
-                        // Сломан ли ствол после удара: клиент выводит предупреждение
-                        // в лог боя, иначе прочность просто исчезала из ответа.
-                        weapon_broken: Number(wornWeapon.durability) <= 0,
-                        damage_taken: counterHit.damage,
-                        health: counterHit.health,
-                        broken_equipment: counterHit.broken_slots,
-                        // Автолечение — см. комментарий в /attack-boss: без этих
-                        // полей клиент не показывал, какое лекарство было выпито.
-                        energy: energyResult.rows[0]?.energy || 0,
-                        last_energy_update: energyResult.rows[0]?.last_energy_update || null,
-                        killed,
-                        rewards,
-                        mastery
-                    },
-                },
-                // Логирование вынесено наружу транзакции: раньше оно стояло
-                // между COMMIT и res.json, и его сбой приводил к откату уже
-                // закрытой транзакции.
-                log: { bossId, weaponName, weaponDamage, damage, newHp, killed }
-            };
-        });
-
-        if (outcome.log) {
-            logger.info(`[bosses] Атака с оружием`, {
-                playerId,
-                ...outcome.log
-            });
-        }
-
-        return res.status(outcome.status).json(outcome.body);
-    } catch (error) {
-        if (handleConnectionError(res, error)) return undefined;
-        return handleError(res, error, 'attack_with_weapon');
-    }
-});
-
-/**
- * Получение списка оружия игрока для атаки на босса
- * GET /bosses/weapons
- */
-router.get('/weapons', async (req, res) => {
-    try {
-        const outcome = await withClient(async (client) => {
-            const playerId = req.player.id;
-
-            const playerResult = await client.query(
-                'SELECT inventory FROM players WHERE id = $1',
-                [playerId]
-            );
-
-            const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
-
-            // Мощная атака доступна только с целым оружием: сломанное не бьёт,
-            // а стоило бы ровно столько же, сколько сейчас отображается.
-            const weapons = inventory
-                .map((item, index) => {
-                    if (item.type !== 'weapon') return null;
-
-                    const durability = equipmentRules.getDurabilityInfo(item);
-                    const weaponDamage = equipmentRules.getEffectiveStatValue(item, ['damage']);
-                    return {
-                        index,
-                        id: item.id,
-                        name: item.name,
-                        category: item.category || item.type || null,
-                        damage: weaponDamage,
-                        rarity: item.rarity || 'common',
-                        icon: item.icon || '🔪',
-                        durability: durability.current,
-                        max_durability: durability.max,
-                        is_broken: durability.isBroken
-                    };
-                })
-                .filter(Boolean);
-
-            return {
-                success: true,
-                weapons,
-                count: weapons.filter((weapon) => !weapon.is_broken).length
-            };
-        });
-        res.json(outcome);
-    } catch (error) {
-        return handleError(res, error, 'list_weapons');
     }
 });
 

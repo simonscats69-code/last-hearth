@@ -209,12 +209,16 @@ console.log('\n=== 6. Bosses: req.player guard ===');
 {
     const bo = fs.readFileSync('routes/game/bosses.js', 'utf8');
 
-    const guards = (bo.match(/return res\.status\(401\)\.json\(\{ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' \}\);/g) || []).length;
+    // Оба вида гарда: явный 401 и хелпер unauthorized() в /start.
+    // Второй боевой путь (/attack-with-weapon) удалён — вместе с ним
+    // ушёл один явный 401, поэтому считаем оба варианта.
+    const guards = (bo.match(/return res\.status\(401\)\.json\(\{ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' \}\);/g) || []).length
+        + (bo.match(/return unauthorized\(res,/g) || []).length;
     ok('401-гард добавлен в боевые роуты (>= 2)', guards >= 2, guards);
     ok('req.player.id заменён на req.player?.id в /attack-boss',
         /router\.post\('\/attack-boss'[\s\S]{0,400}?req\.player\?\.id/.test(bo));
-    ok('req.player.id заменён на req.player?.id в /attack-with-weapon',
-        /router\.post\('\/attack-with-weapon'[\s\S]{0,700}?req\.player\?\.id/.test(bo));
+    ok('единственный путь атаки: /attack-with-weapon удалён',
+        !/router\.post\('\/attack-with-weapon'/.test(bo));
 }
 
 // ============================================================================

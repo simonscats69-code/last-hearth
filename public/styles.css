@@ -203,11 +203,14 @@ input:checked + .slider:before {
 
 /* Улучшенные кнопки с эффектами (постапокалиптические) */
 .btn {
-    background: linear-gradient(180deg, #3a3025 0%, #2a2218 100%);
-    border: 1px solid #4a3f30;
+    /* Единый материал: металл + ржавые подтёки. Раньше фон был плоским
+       градиентом без фактуры, и кнопки выглядели пластиковыми. */
+    background-color: var(--metal-700);
+    background-image: var(--mat-streaks), linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(0, 0, 0, 0.18) 100%);
+    border: 1px solid var(--metal-400);
     color: var(--text-primary);
-    padding: 10px 20px;
-    border-radius: 3px;
+    padding: var(--btn-pad-y) var(--btn-pad-x);
+    border-radius: var(--radius-sm);
     /* Шрифт кнопок наследуется от документа. Раньше тут стоял
      * 'Courier New', из-за чего кнопки были шире соседнего текста
      * и выглядели другим интерфейсом. */
@@ -215,11 +218,31 @@ input:checked + .slider:before {
     font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 1px;
+    font-size: var(--text-sm);
     cursor: pointer;
-    transition: all 0.2s;
-    box-shadow: 
+    transition: transform 0.12s ease, box-shadow 0.18s ease,
+        background-color 0.18s ease, border-color 0.18s ease;
+    box-shadow:
         0 2px 4px rgba(0, 0, 0, 0.4),
         inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    /* Тап-таргет 44px (Apple HIG / Material): палец попадает без промаха
+       даже в бою, где кнопку жмут быстро и не глядя. */
+    min-height: var(--tap-min);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn:hover {
+    background-color: var(--metal-500);
+    border-color: var(--rust-400);
+}
+
+.btn:active {
+    transform: scale(0.96);
+    box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.5),
+        inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .btn:hover {
@@ -240,12 +263,18 @@ input:checked + .slider:before {
    Теперь цвет фона — тот же токен, а текст тёмный: 4.9–7.8 на обоих
    концах градиента. */
 .btn-primary {
-    background: linear-gradient(180deg, #7dbb6b 0%, #5c944f 100%);
+    background-color: var(--accent-green);
+    background-image: var(--mat-streaks), linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(0, 0, 0, 0.16) 100%);
     border-color: var(--accent-green);
     color: var(--bg-dark);
-    box-shadow: 
+    box-shadow:
         0 3px 10px rgba(106, 168, 90, 0.3),
         inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.btn-primary:hover {
+    border-color: var(--accent-green);
+    filter: brightness(1.1);
 }
 
 .btn-primary:hover {
@@ -366,6 +395,99 @@ input:checked + .slider:before {
      * всего документа; теперь это осознанный акцент, а не стиль по
      * умолчанию. */
     --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
+
+    /* ==================================================================
+     * ЕДИНЫЙ СТИЛЬ ИГРЫ — «ЖЕЛЕЗО И РЖАВЧИНА»
+     * ==================================================================
+     * Одна тема, без переключателей. Три материала: металл (корпуса,
+     * кнопки), ржавчина (акценты, границы), дерево (второстепенные
+     * панели, «доски»). Всё остальное — оттенки этих трёх.
+     *
+     * Площади поверхности идут от тёмного к светлому: чем выше уровень,
+     * тем ближе элемент к свету и к игроку.
+     * ================================================================== */
+
+    /* --- Материал: металл --- */
+    --metal-900: #14120f;         /* Самое тёмное: фон игры, утопленные блоки */
+    --metal-800: #1a1814;         /* Корпус экрана */
+    --metal-700: #2a2520;         /* Карточка */
+    --metal-600: #2f2921;         /* Карточка второго уровня */
+    --metal-500: #3d362c;         /* Панель, наведение */
+    --metal-400: #4a4235;         /* Рамка, грань */
+
+    /* --- Материал: ржавчина --- */
+    --rust-700: #5c2f0d;          /* Глубокая ржавчина */
+    --rust-500: #8b4513;          /* Основная ржавчина: рамки, заливки */
+    --rust-400: #b5651d;          /* Ржавчина яркая: наведение */
+    --rust-300: #d4a574;          /* Ржавчинный текст */
+
+    /* --- Материал: дерево --- */
+    --wood-700: #241a0e;          /* Тёмное дерево */
+    --wood-500: #3d2914;          /* Старое дерево: второстепенные панели */
+
+    /* --- Радиусы: ровно три значения на всю игру ---
+     * Раньше было пять разных систем (3/8/10/12/16px) — визуальный шум,
+     * из-за которого кнопка, карточка и слот выглядели тремя разными
+     * интерфейсами. Теперь: мелкое (кнопки, чипсы), среднее (карточки),
+     * крупное (панели, модалки). */
+    --radius-sm: 6px;
+    --radius-md: 12px;
+    --radius-lg: 18px;
+
+    /* --- Типографика: одна шкала ---
+     * Раньше размеры были разбросаны от 8px до 24px, и шрифты меньше 12px
+     * на телефоне не читались. Шкала clamp() держит минимум читаемым и
+     * позволяет крупным экранам не выглядеть игрушечными. */
+    --text-2xs: 10px;             /* подписи слотов (всегда мелкие) */
+    --text-xs: clamp(11px, 3vw, 12px);
+    --text-sm: clamp(12px, 3.4vw, 13px);
+    --text-base: clamp(13px, 3.8vw, 14px);
+    --text-md: clamp(14px, 4vw, 15px);
+    --text-lg: clamp(16px, 4.6vw, 18px);
+    --text-xl: clamp(18px, 5.2vw, 22px);
+    --text-2xl: clamp(22px, 6.4vw, 28px);
+
+    /* --- Размеры интерактивных элементов ---
+     * 44px — минимальная область нажатия по Apple HIG и Material.
+     * clamp() даёт больше на крупных экранах, не ломая телефон. */
+    --tap-min: clamp(44px, 8.5vh, 52px);      /* кнопки */
+    --slot-size: clamp(46px, 12vw, 60px);     /* слот экипировки */
+    --boss-icon: clamp(44px, 13vw, 76px);     /* иконка босса */
+    --btn-pad-y: clamp(10px, 2.2vh, 14px);
+    --btn-pad-x: clamp(14px, 4vw, 22px);
+
+    /* --- Материалы-текстуры (единый SVG-шум на всю игру) ---
+     * Одна текстура металла используется фоном, панелями и кнопками —
+     * поэтому интерфейс читается как один объект, а не как набор
+     * разноцветных плашек. */
+    --mat-noise: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.055"/></svg>');
+
+    /* Ржавые подтёки: вертикальные полосы неправильной ширины.
+       Накладываются поверх металла кнопок и панелей. */
+    --mat-streaks: repeating-linear-gradient(90deg,
+            transparent 0px,
+            rgba(139, 69, 19, 0.10) 1px,
+            transparent 3px,
+            rgba(181, 101, 29, 0.06) 5px,
+            transparent 9px);
+
+    /* Старое дерево: горизонтальные «доски» с трещинами. */
+    --mat-wood: repeating-linear-gradient(180deg,
+            rgba(0, 0, 0, 0) 0px,
+            rgba(0, 0, 0, 0.22) 1px,
+            rgba(0, 0, 0, 0) 3px,
+            rgba(0, 0, 0, 0) 9px,
+            rgba(90, 50, 20, 0.14) 10px,
+            rgba(0, 0, 0, 0) 12px,
+            rgba(0, 0, 0, 0) 31px,
+            rgba(0, 0, 0, 0.16) 32px,
+            rgba(0, 0, 0, 0) 34px);
+
+    /* Заклёпка: один Radial-gradient в точке угла. */
+    --mat-rivet: radial-gradient(circle at center,
+            rgba(255, 235, 200, 0.30) 0%,
+            rgba(140, 120, 90, 0.20) 45%,
+            rgba(0, 0, 0, 0.35) 100%);
 }
 
 /* Тем было две — тёмная и светлая, обе через data-theme. Удалены:
@@ -391,7 +513,9 @@ html, body {
      * Теперь базовый шрифт один и системный; моноширинный остался только
      * там, где показываются приборные данные (--font-mono ниже). */
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: 
+    background:
+        /* Тёплый виньет: края темнее центра — взгляд сам идёт к содержимому */
+        radial-gradient(ellipse 120% 90% at 50% 40%, rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0.55) 100%),
         linear-gradient(135deg, rgba(26, 24, 20, 0.95) 0%, rgba(45, 37, 20, 0.9) 100%),
         var(--texture-noise),
         repeating-linear-gradient(
@@ -406,6 +530,76 @@ html, body {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
     text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* Выделение текста — в палитре игры, а не системный синий */
+::selection {
+    background: rgba(181, 101, 29, 0.45);
+    color: #fff2dd;
+}
+::-moz-selection {
+    background: rgba(181, 101, 29, 0.45);
+    color: #fff2dd;
+}
+
+/* ==========================================================================
+ * МАТЕРИАЛЫ ЕДИНОГО СТИЛЯ — «ЖЕЛЕЗО И РЖАВЧИНА»
+ * ==========================================================================
+ * Вспомогательные классы, которые дают любой поверхности нужный материал.
+ * Раньше каждый экран оформлялся сам по себе: где-то был шум, где-то
+ * плоский цвет, где-то закругления другой системы.
+ *
+ * Комбинирование: mat-metal + mat-rivets, mat-panel + mat-rivets и т.д.
+ * Все слои прозрачные (opacity 0.05–0.22), поэтому материал читается
+ * только как фактура, не меняя базовый цвет.
+ * ======================================================================== */
+
+/* Старая ржавчина: вертикальные подтёки. Для кнопок и панелей. */
+.mat-metal {
+    background-image: var(--mat-streaks), var(--mat-noise);
+    background-blend-mode: normal, overlay;
+}
+
+/* Дерево: второстепенные панели (кланы, «доски» объявлений). */
+.mat-wood {
+    background-color: var(--wood-500);
+    background-image: var(--mat-wood), var(--mat-noise);
+    background-blend-mode: normal, overlay;
+}
+
+/* Заклёпки в четырёх углах — признак «сварённой из листа» панели. */
+.mat-rivets {
+    position: relative;
+}
+.mat-rivets::before,
+.mat-rivets::after {
+    content: '';
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--mat-rivet);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+}
+.mat-rivets::before { top: 6px; left: 6px; }
+.mat-rivets::after { top: 6px; right: 6px; }
+
+/* Трещины по краю: «битый» лист. Используется на карточках боссов. */
+.mat-cracked {
+    position: relative;
+}
+.mat-cracked::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><g fill="none" stroke="rgba(0,0,0,0.5)" stroke-width="0.9" stroke-linecap="round"><path d="M0 0 L18 44 L7 62 L26 120"/><path d="M120 0 L96 30 L108 58 L86 120"/><path d="M0 78 L30 92 L22 120"/><path d="M120 70 L92 88 L104 120"/></g></svg>');
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    opacity: 0.55;
+    mix-blend-mode: multiply;
 }
 
 #app {
@@ -658,9 +852,12 @@ html, body {
 }
 
 .journey-card {
-    background: linear-gradient(160deg, rgba(33, 28, 25, 0.96), rgba(24, 21, 19, 0.96));
+    /* background-color + background-image вместо shorthand background:
+       shorthand сбрасывал бы фактуру металла из общей секции карточек. */
+    background-color: rgba(28, 24, 21, 0.96);
+    background-image: linear-gradient(160deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.22) 100%);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 14px;
+    border-radius: var(--radius-md);
     padding: 14px;
     display: flex;
     flex-direction: column;
@@ -693,26 +890,63 @@ html, body {
     gap: 6px;
 }
 
+/* Полоски статов.
+   Материал: «врезанная в металл» канавка. Жёлоб берёт цвет утопленной
+   поверхности и внутреннюю тень — заливка читается уровнем ниже корпуса,
+   а не наклеенной плашкой сверху. */
 .stat-bar {
     position: relative;
     height: 24px;
-    background: #333;
-    border-radius: 12px;
+    background: var(--surface-sunken);
+    border-radius: var(--radius-md);
     overflow: hidden;
+    border: 1px solid var(--metal-400);
+    box-shadow:
+        inset 0 2px 5px rgba(0, 0, 0, 0.6),
+        0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .stat-bar .bar {
     height: 100%;
     transition: width 0.3s ease;
-    border-radius: 12px;
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+    position: relative;
+    /* Блик по всей заливке: та же «масляная» глубина, что у полосы HP
+       босса (.boss-hp-fill). Раньше заливка была плоским градиентом. */
+    overflow: hidden;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.22),
+        0 0 10px currentColor;
+}
+
+/* Двигающийся блик через заливку — признак «жидкости» в канавке.
+   currentColor наследует цвет заливки, поэтому тень светится тем же
+   оттенком и не требует отдельного правила на каждый цвет. */
+.stat-bar .bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg,
+            transparent 0%,
+            rgba(255, 255, 255, 0.22) 50%,
+            transparent 100%);
+    transform: translateX(-100%);
+    animation: bar-shine 3.2s ease-in-out infinite;
+}
+
+@keyframes bar-shine {
+    0% { transform: translateX(-100%); }
+    60%, 100% { transform: translateX(100%); }
 }
 
 .health-bar {
     background: linear-gradient(90deg, var(--health-color), #ff6b6b);
+    color: var(--health-color);
 }
 
 .energy-bar {
     background: linear-gradient(90deg, var(--energy-color), #ffd93d);
+    color: var(--energy-color);
 }
 
 /* Полоса опыта. Раньше градиент шёл из хардкода #9b59b6 в
@@ -720,6 +954,7 @@ html, body {
    два разных цвета на одной шкале. Теперь оба конца из палитры. */
 .exp-bar {
     background: linear-gradient(90deg, var(--accent-purple), var(--rarity-epic));
+    color: var(--accent-purple);
 }
 
 .bar-text {
@@ -727,14 +962,14 @@ html, body {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 12px;
+    font-size: var(--text-xs);
     font-weight: bold;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.9);
 }
 
 /* Секция локации */
 .location-card {
-    background: var(--bg-card);
+    background-color: var(--card-bg);
     border-radius: 16px;
     padding: 16px;
     display: flex;
@@ -834,17 +1069,61 @@ html, body {
 .action-btn {
     flex: 1;
     padding: 20px 16px;
-    border: none;
-    border-radius: 16px;
-    background: var(--bg-card);
+    /* Материал: металлическая плита с ржавыми подтёками. Раньше фон был
+       плоским var(--bg-card) — кнопка выглядела картонкой. */
+    background-color: var(--metal-700);
+    background-image: var(--mat-streaks);
+    border: 1px solid var(--metal-400);
+    border-radius: var(--radius-lg);
     color: var(--text-primary);
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    min-height: var(--tap-min);
+    font-size: var(--text-base);
+    transition: transform 0.12s ease, box-shadow 0.18s ease,
+        background-color 0.18s ease, border-color 0.18s ease;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.action-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+    background-color: var(--metal-500);
+    border-color: var(--rust-400);
+}
+
+.action-btn:active {
+    transform: scale(0.95) translateY(0);
+    background-color: var(--metal-500);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+
+.search-btn {
+    /* Главное действие экрана: кнопка «Искать» осталась единственной в
+       блоке действий, поэтому занимает всю ширину и читается как основная. */
+    background-color: var(--accent-green);
+    background-image: var(--mat-streaks), linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(0, 0, 0, 0.14) 100%);
+    flex: 1;
+    color: var(--metal-900);
+    box-shadow: 0 6px 20px rgba(76, 175, 80, 0.25);
+}
+
+.search-btn:hover {
+    background-color: var(--accent-green-bright);
+    border-color: var(--accent-green-bright);
+}
+
+.btn-icon {
+    font-size: 28px;
+}
+
+.btn-text {
+    font-size: var(--text-base);
+    font-weight: 600;
 }
 
 .action-btn:hover {
@@ -859,23 +1138,6 @@ html, body {
 }
 
 
-
-.search-btn {
-    /* Главное действие экрана: кнопка «Искать» осталась единственной в
-       блоке действий, поэтому занимает всю ширину и читается как основная. */
-    background: linear-gradient(135deg, var(--accent-green), var(--color-success));
-    flex: 1;
-    box-shadow: 0 6px 20px rgba(76, 175, 80, 0.25);
-}
-
-.btn-icon {
-    font-size: 28px;
-}
-
-.btn-text {
-    font-size: 14px;
-    font-weight: 600;
-}
 
 .btn-cost {
     font-size: 12px;
@@ -1065,10 +1327,10 @@ html, body {
 .extra-btn {
     padding: 12px 6px;
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--bg-card);
     color: var(--text-primary);
-    font-size: 11px;
+    font-size: var(--text-xs);
     line-height: 1.25;
     text-align: center;
     cursor: pointer;
@@ -1078,6 +1340,7 @@ html, body {
     justify-content: center;
     gap: 4px;
     position: relative;
+    min-height: var(--tap-min);
     transition: background 0.2s, border-color 0.2s, transform 0.1s;
 }
 
@@ -1096,12 +1359,15 @@ html, body {
     bottom: 0;
     left: 0;
     right: 0;
-    background: var(--bg-header);
+    /* Материал: тёмный металл + ржавые подтёки. Навигация — это «приваренная
+       панель» внизу корпуса, поэтому берёт ту же фактуру, что и шапка. */
+    background-color: var(--bg-header);
+    background-image: var(--mat-streaks);
     display: flex;
     justify-content: space-around;
     align-items: stretch;
     padding: 4px 0;
-    border-top: 1px solid var(--border-color);
+    border-top: 1px solid var(--metal-400);
     box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.45);
     z-index: 100;
 }
@@ -1116,11 +1382,19 @@ html, body {
     justify-content: center;
     gap: 2px;
     flex: 1;
-    min-height: 52px;
+    min-height: var(--tap-min);
     padding: 4px 2px;
     cursor: pointer;
     position: relative;
-    transition: color 0.2s;
+    border-radius: var(--radius-sm);
+    transition: color 0.2s, background-color 0.2s;
+}
+
+/* Отклик при наведении: раньше не было вообще — на десктопе кнопка
+   навигации выглядела неинтерактивной. */
+.nav-btn:hover {
+    color: var(--rust-300);
+    background-color: rgba(255, 255, 255, 0.04);
 }
 
 .nav-btn .nav-icon {
@@ -1166,24 +1440,47 @@ html, body {
 
 /* Экраны (общие стили) */
 .screen-header {
-    background: var(--bg-header);
+    /* Материал: тёмный металл с ржавыми подтёками — шапка читается как
+       несъёмная панель корпуса, а не как отдельная плашка. */
+    background-color: var(--bg-header);
+    background-image: var(--mat-streaks);
     padding: 16px;
     display: flex;
     align-items: center;
     gap: 16px;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--metal-400);
     position: sticky;
     top: 0;
     z-index: 10;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
 .back-btn {
     background: none;
-    border: none;
+    border: 1px solid transparent;
     color: var(--accent-green);
-    font-size: 16px;
+    font-size: var(--text-md);
     cursor: pointer;
-    padding: 8px;
+    padding: var(--btn-pad-y) 12px;
+    min-height: var(--tap-min);
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--radius-sm);
+    /* Отклик был только у нажатия на десктопе, а на телефоне кнопка
+       выглядела мёртвой: нет ни hover, ни transition. */
+    transition: color 0.18s ease, background-color 0.18s ease,
+        border-color 0.18s ease, transform 0.12s ease;
+}
+
+.back-btn:hover {
+    color: var(--accent-green-bright);
+    background-color: rgba(106, 168, 90, 0.12);
+    border-color: rgba(106, 168, 90, 0.35);
+}
+
+.back-btn:active {
+    transform: scale(0.95);
+    background-color: rgba(106, 168, 90, 0.22);
 }
 
 .screen-header h2 {
@@ -1257,8 +1554,13 @@ html, body {
     min-height: 16px;
 }
 
+/* Кнопка «Перейти» на карте. Это .btn map-travel-btn, поэтому базовые
+   min-height/transition/material уже приходят от .btn. Раньше здесь стоял
+   собственный min-height: 40px, который ПЕРЕБИВАЛ вниз 44px из .btn —
+   единственное место в коде, где тап-таргет понижался. */
 .map-travel-btn {
-    min-height: 40px;
+    width: 100%;
+    margin-top: 8px;
 }
 
 
@@ -1270,27 +1572,38 @@ html, body {
 }
 
 .filter-btn {
-    padding: 6px 12px;
-    font-size: 11px;
+    padding: 8px 14px;
+    font-size: var(--text-xs);
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 15px;
+    border-radius: var(--radius-md);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: all 0.2s ease;
+    min-height: var(--tap-min);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.12s;
 }
 
 .filter-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--metal-500);
     color: #fff;
-    transform: translateY(-1px);
+    border-color: var(--rust-400);
+}
+
+.filter-btn:active {
+    transform: scale(0.96);
 }
 
 .filter-btn.active {
-    background: linear-gradient(135deg, var(--accent-blue), #35566f);
-    border-color: var(--accent-blue);
+    /* Ржавчина вместо синей стали: единый материал на все активные
+       состояния интерфейса. */
+    background-color: var(--rust-500);
+    background-image: var(--mat-streaks);
+    border-color: var(--rust-400);
     color: #fff;
-    box-shadow: 0 0 12px rgba(74, 144, 217, 0.4);
+    box-shadow: 0 0 12px rgba(181, 101, 29, 0.4);
 }
 
 .inv-sort {
@@ -1480,18 +1793,27 @@ html, body {
 }
 .inv-mode-btn {
     padding: 8px 10px;
-    font-size: 12px;
+    font-size: var(--text-xs);
     font-family: inherit;
     color: var(--text-secondary);
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: all 0.2s ease;
+    min-height: var(--tap-min);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.12s ease;
 }
 .inv-mode-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+}
+/* Отклик на нажатие: раньше его не было — на телефоне режимы переключались
+   без всякой обратной связи. */
+.inv-mode-btn:active {
+    transform: scale(0.96);
 }
 .inv-mode-btn.active {
     background: var(--accent-green);
@@ -1501,6 +1823,11 @@ html, body {
 .inv-mode-btn[data-inv-mode="sell"].active {
     background: var(--accent-orange);
     border-color: var(--accent-orange);
+}
+.inv-mode-btn[data-inv-mode="drop"].active {
+    background: var(--rust-500);
+    border-color: var(--rust-400);
+    color: #fff;
 }
 
 /* Цена продажи в режиме «Продать» */
@@ -2129,10 +2456,30 @@ html, body {
     flex: 1;
     padding: 12px;
     border: 1px solid #444;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--bg-card);
     color: var(--text-secondary);
     cursor: pointer;
+    min-height: var(--tap-min);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    /* Раньше у вкладок не было ни hover, ни active, ни transition: в
+       мобильном WebView (где нет наведения) вкладка выглядела мёртвой. */
+    transition: background 0.2s ease, color 0.2s ease,
+        border-color 0.2s ease, transform 0.12s ease;
+}
+
+.shop-tab:hover {
+    background: var(--metal-500);
+    color: var(--text-primary);
+    border-color: var(--rust-400);
+}
+
+.shop-tab:active {
+    transform: scale(0.96);
 }
 
 .shop-tab.active {
@@ -2257,7 +2604,7 @@ html, body {
 .shop-item-card {
     display: flex;
     align-items: center;
-    background: var(--bg-card);
+    background-color: var(--card-bg);
     border-radius: 12px;
     padding: 12px;
     gap: 12px;
@@ -2459,16 +2806,38 @@ html, body {
     flex: 1;
     padding: 12px;
     border: 1px solid #444;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--bg-card);
     color: var(--text-secondary);
     cursor: pointer;
+    min-height: var(--tap-min);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    /* Как и у shop-tab: без hover/active/transition вкладка выглядела
+       неинтерактивной, особенно на телефоне. */
+    transition: background 0.2s ease, color 0.2s ease,
+        border-color 0.2s ease, transform 0.12s ease;
+}
+
+.rating-tab:hover {
+    background: var(--metal-500);
+    color: var(--text-primary);
+    border-color: var(--rust-400);
+}
+
+.rating-tab:active {
+    transform: scale(0.96);
 }
 
 .rating-tab.active {
-    background: var(--accent-blue);
+    /* Ржавчина — тот же материал, что у активных фильтров и режимов. */
+    background-color: var(--rust-500);
+    background-image: var(--mat-streaks);
     color: white;
-    border-color: var(--accent-blue);
+    border-color: var(--rust-400);
 }
 
 .rating-list {
@@ -3441,7 +3810,7 @@ html, body {
 
 /* ---------- Общие карточки статистики (PvP-статы и др.) ---------- */
 .stat-card {
-    background: var(--bg-card);
+    background-color: var(--card-bg);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 12px;
     padding: 12px;
@@ -3942,7 +4311,6 @@ html, body {
     box-shadow: 0 4px 16px rgba(106, 27, 154, 0.5);
 }
 
-/* ---------- Рейды (вкладка "Массовый" на экране боссов) ---------- */
 /* ---------- Рейды (вкладка «Массовый» на экране боссов) ---------- */
 #raids-list {
     display: flex;
@@ -4209,7 +4577,7 @@ html, body {
 }
 
 .achievement-card {
-    background: var(--bg-card);
+    background-color: var(--card-bg);
     border-radius: 12px;
     padding: 16px;
     margin-bottom: 12px;
@@ -4231,7 +4599,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-dark);
+    background-color: var(--card-bg);
     border-radius: 12px;
 }
 
@@ -4264,7 +4632,7 @@ html, body {
 .achievement-card .progress-bar {
     flex: 1;
     height: 8px;
-    background: var(--bg-dark);
+    background-color: var(--card-bg);
     border-radius: 4px;
     overflow: hidden;
 }
@@ -4296,7 +4664,7 @@ html, body {
 .achievement-card .reward-item {
     font-size: 12px;
     padding: 4px 8px;
-    background: var(--bg-dark);
+    background-color: var(--card-bg);
     border-radius: 4px;
 }
 
@@ -4312,7 +4680,7 @@ html, body {
 }
 
 .achievement-card .claim-btn:disabled {
-    background: var(--bg-dark);
+    background-color: var(--card-bg);
     color: var(--text-secondary);
     cursor: not-allowed;
 }
@@ -4608,7 +4976,7 @@ html, body {
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    background: var(--card-bg);
+    background-color: var(--card-bg);
     border: 1px solid var(--border-color);
     border-left: 3px solid var(--rarity-common);
     border-radius: 10px;
@@ -4630,9 +4998,12 @@ html, body {
 .item-card.rarity-legendary{ border-left-color: var(--rarity-legendary); }
 
 .boss-card {
-    background: var(--card-bg);
+    /* background-color, а не shorthand background: shorthand сбрасывает
+       background-image, которым группа карточек ниже добавляет фактуру
+       металла (ржавые подтёки + шум). */
+    background-color: var(--card-bg);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     padding: 12px;
     margin-bottom: 10px;
 }
@@ -4709,6 +5080,151 @@ html, body {
 .modal:focus-visible .modal-content {
     outline: 2px solid var(--accent-yellow);
     outline-offset: -2px;
+}
+
+/* ==========================================================================
+ * ЕДИНЫЙ МАТЕРИАЛ КАРТОЧЕК — «ЖЕЛЕЗО И РЖАВЧИНА»
+ * ==========================================================================
+ * Один блок для всех карточек игры вместо того, чтобы каждая правила свой
+ * фон и свою систему скруглений. Здесь только ФАКТУРА и отклик — цвета
+ * редкости, рамки состояний и размеры остаются у своих классов ниже.
+ *
+ * background-image (а не background) специально: он не перебивает
+ * background-color, который задают классы редкости (.rarity-epic и т.п.).
+ * ======================================================================== */
+
+.journey-card,
+.item-card,
+.boss-card,
+.clan-card,
+.achievement-card,
+.stat-card,
+.shop-item-card,
+.reward-item,
+.clan-stat,
+.inv-capacity,
+.location-card {
+    background-image: var(--mat-streaks), var(--mat-noise);
+    background-blend-mode: normal, overlay;
+    border-radius: var(--radius-md);
+    transition: transform 0.14s ease, box-shadow 0.2s ease,
+        border-color 0.2s ease, background-color 0.2s ease;
+}
+
+/* Кликабельные карточки получают отклик. Раньше его не было совсем:
+   на телефоне по карточке босса или товара нельзя было понять, что она
+   нажимается — визуальной обратной связи не существовало. */
+.boss-card,
+.item-card,
+.shop-item-card,
+.clan-card,
+.achievement-card,
+.journey-card,
+.stat-card,
+.reward-item {
+    cursor: pointer;
+}
+
+.boss-card:hover,
+.item-card:hover,
+.shop-item-card:hover,
+.journey-card:hover,
+.stat-card:hover,
+.reward-item:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    border-color: var(--rust-400);
+}
+
+/* Нажатие: тач-устройства не имеют hover, поэтому :active — единственная
+   обратная связь. Все интерактивные элементы игры обязаны его иметь. */
+.boss-card:active,
+.item-card:active,
+.shop-item-card:active,
+.clan-card:active,
+.achievement-card:active,
+.journey-card:active,
+.stat-card:active,
+.reward-item:active,
+.inventory-slot:active,
+.equipment-slot:active {
+    transform: scale(0.98);
+}
+
+/* Карточки, в которые играть НЕЛЬЗЯ, курсор обычный: не обманываем игрока. */
+.clan-stat,
+.inv-capacity,
+.location-card {
+    cursor: default;
+}
+
+/* Карточка босса: «сваренный из листа» корпус с заклёпками по углам.
+   Заклёпки рисуем сами — псевдоэлементы ::before/::after у карточки
+   могут понадобиться под содержимое. */
+.boss-card {
+    position: relative;
+    box-shadow:
+        0 3px 10px rgba(0, 0, 0, 0.4),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.boss-card::before,
+.boss-card::after {
+    content: '';
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--mat-rivet);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+}
+.boss-card::before { top: 7px; left: 7px; }
+.boss-card::after { top: 7px; right: 7px; }
+
+/* Награды в модалках: рамка была одной линией без фона — строка выглядела
+   как обычный текст, а не как выданная игроку ценность. */
+.reward-item {
+    background-color: var(--metal-600);
+    border: 1px solid var(--metal-400);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+}
+
+.reward-item.loss {
+    border-color: rgba(179, 64, 46, 0.55);
+    color: var(--accent-red);
+}
+
+/* Статистика клана — плита с ржавой кромкой. */
+.clan-stat {
+    background-color: var(--metal-600);
+    border: 1px solid var(--metal-400);
+    padding: 10px 12px;
+}
+
+/* Единая типографика для всех карточек: подписи через шкалу. */
+.journey-label,
+.clan-stat .stat-label,
+.stat-card .stat-label {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+}
+
+.journey-value,
+.stat-card .stat-value,
+.clan-stat .stat-value {
+    font-size: var(--text-lg);
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--text-primary);
+}
+
+.journey-desc {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
 }
 
 

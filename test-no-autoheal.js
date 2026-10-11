@@ -123,7 +123,9 @@ ok('в loadBosses player_max_energy ?? 50',
 ok('дефолт в HTML = 50/50, а не 100/100',
     /id="energy-text">⚡ 50\/50</.test(gameSrc));
 ok('в бою дефолт энергии = 50/50',
-    /id="boss-energy-text">50\/50</.test(gameSrc));
+    /id="player-energy-display">50\/50</.test(gameSrc));
+ok('дубль энергии на экране боя убран (boss-energy-text нет)',
+    !/id="boss-energy-text"/.test(gameSrc));
 ok('серверный recalcEnergy тоже считает по 50',
     /max_energy \|\| 50/.test(fs.readFileSync('utils/game-helpers.js', 'utf8')));
 

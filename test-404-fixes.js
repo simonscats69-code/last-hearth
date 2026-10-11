@@ -134,13 +134,15 @@ const ok = (name, cond, extra) => {
     // упоминаются намеренно, как пояснение что было.
     const srcRaw = fs.readFileSync('public/game.js', 'utf8');
     const src = srcRaw.split(/\r?\n/).filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-    // Точная проверка вызова, а не подстроки: /attack-with-weapon и
-    // /attack-boss — валидные маршруты, они начинаются с той же строки.
+    // Точная проверка вызова, а не подстроки: /attack-boss — единственный
+    // путь атаки босса (удар идёт через надетое оружие), второй путь
+    // /attack-with-weapon удалён вместе с экраном выбора оружия.
     ok('в коде game.js нет вызова apiRequest(\'/api/game/bosses/attack\')',
         !/apiRequest\(\s*['"`]\/api\/game\/bosses\/attack['"`]/.test(src));
-    ok('валиные /attack-with-weapon и /attack-boss на месте',
-        /apiRequest\(\s*['"`]\/api\/game\/bosses\/attack-with-weapon['"`]/.test(src) &&
+    ok('единственный путь атаки /attack-boss на месте',
         /apiRequest\(\s*['"`]\/api\/game\/bosses\/attack-boss['"`]/.test(src));
+    ok('второго пути атаки /attack-with-weapon нет',
+        !/apiRequest\(\s*['"`]\/api\/game\/bosses\/attack-with-weapon['"`]/.test(src));
     ok('в коде нет вызова `/rating/${type}`', !/apiRequest\(`\/rating\/\$\{type\}`\)/.test(src));
     ok('в коде нет /api/achievements/progress', !src.includes('/api/achievements/progress'));
     ok('в коде нет /api/achievements/claim', !src.includes('/api/achievements/claim'));

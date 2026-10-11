@@ -3,6 +3,29 @@
  * Общие функции, используемые во всей игре
  */
 
+/**
+ * Отладочный флаг: логи пишутся в консоль только когда включён.
+ *
+ * Включается в консоли браузера/WebView: `GAME_DEBUG = true` (переменная
+ * глобальная, поэтому присваивание работает без window.).
+ * Включить на время загрузки: `?debug` в адресе страницы.
+ *
+ * В production флаг выключен, поэтому отладочные console.log из боевого кода
+ * не засоряют вывод и не показывают внутренности игры.
+ *
+ * `console.error` и `console.warn` НЕ переводятся на этот флаг: это реальные
+ * проблемы (неудачный запрос, сломанный ответ), они должны быть видны всегда.
+ */
+let GAME_DEBUG = (typeof window !== 'undefined' && window.GAME_DEBUG === true)
+    || (typeof location !== 'undefined' && /[?&]debug\b/.test(location.search));
+
+/**
+ * Отладочный лог. Флаг читается в момент вызова, поэтому его можно
+ * переключить из консоли на живом приложении: `GAME_DEBUG = true`.
+ */
+function gameLog(...args) {
+    if (GAME_DEBUG) console.log(...args);
+}
 
 
 /**
@@ -36,7 +59,7 @@ function getTelegramId() {
         const id = tg.initDataUnsafe?.user?.id;
         // Используем != null для проверки на null/undefined (включая 0)
         if (id != null) {
-            console.log('[getTelegramId] Got ID from SDK:', id);
+            gameLog('[getTelegramId] Got ID from SDK:', id);
             return String(id);
         }
     }
@@ -47,7 +70,7 @@ function getTelegramId() {
         try {
             const user = JSON.parse(new URLSearchParams(initData).get('user') || '{}');
             if (user?.id != null) {
-                console.log('[getTelegramId] Got ID from hash:', user.id);
+                gameLog('[getTelegramId] Got ID from hash:', user.id);
                 return String(user.id);
             }
         } catch (e) {
@@ -130,7 +153,6 @@ function hapticSelection() {
         tg.HapticFeedback.selectionChanged();
     }
 }
-
 
 
 /**
@@ -297,10 +319,6 @@ function getPlayerEmoji(level) {
     if (level >= 5) return '🗡️';
     return '👤';
 }
-
-
-
-
 
 
 // Функции, у которых нет внутренних вызовов, оставлены в глобальной
@@ -590,14 +608,14 @@ function getInitData() {
     // 1. Основной источник: SDK Telegram (инжектится клиентом или telegram-web-app.js)
     const fromTelegram = window.Telegram?.WebApp?.initData || null;
     if (fromTelegram) {
-        console.log('[getInitData] Got initData from Telegram SDK');
+        gameLog('[getInitData] Got initData from Telegram SDK');
         return fromTelegram;
     }
 
     // 2. Фоллбэк: fragment прямой ссылки (если SDK не загрузился)
     const fromHash = getInitDataFromHash();
     if (fromHash) {
-        console.log('[getInitData] initData взят из fragment ссылки');
+        gameLog('[getInitData] initData взят из fragment ссылки');
         return fromHash;
     }
 
@@ -606,6 +624,54 @@ function getInitData() {
     // пройти инициализацию без Telegram вообще.
     console.warn('[getInitData] Telegram WebApp initData отсутствует');
     return null;
+}
+
+/**
+ * Смещение времени сервера относительно часов клиента (мс).
+ *
+ * Зачем: регенерация энергии считается от метки `last_energy_update`,
+ * которую ставит сервер СВОИМИ часами. Если часы клиента спешат на 10 минут,
+ * игрок видел бы энергию, которой на сервере ещё нет; если отстают — не
+ * видел восстановленную вовсе (кнопка атаки оставалась выключенной).
+ *
+ * Смещение берётся из стандартного заголовка Date каждого ответа сервера.
+ * Значение сглаживается: сетевые задержки дают погрешность в доли секунды,
+ * а резкие скачки одного ответа не должны дёргать интерфейс.
+ */
+let serverTimeOffsetMs = 0;
+
+/**
+ * Записать смещение из заголовка Date ответа.
+ * @param {Response} response объект ответа fetch
+ */
+function recordServerTimeOffset(response) {
+    try {
+        const dateHeader = response?.headers?.get?.('date');
+        if (!dateHeader) return;
+
+        const serverTime = Date.parse(dateHeader);
+        if (!Number.isFinite(serverTime)) return;
+
+        // Смещение = серверное время минус локальное. Сглаживаем: берём
+        // середину между старым и новым значением, чтобы одиночный ответ
+        // с аномальной задержкой не сдвигал все расчёты.
+        const observed = serverTime - Date.now();
+        const sane = Math.abs(observed) < 24 * 60 * 60 * 1000; // сутки — предел
+        if (sane) {
+            serverTimeOffsetMs = (serverTimeOffsetMs + observed) / 2;
+        }
+    } catch {
+        // Заголовок может быть недоступен (CORS, мок) — расчёт продолжит
+        // работать на локальных часах, как и раньше.
+    }
+}
+
+/**
+ * Текущее время по часам сервера.
+ * @returns {number} ms since epoch
+ */
+function getNow() {
+    return Date.now() + serverTimeOffsetMs;
 }
 
 /**
@@ -661,7 +727,7 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
         : '';
     const url = `${API_BASE}${normalizedEndpoint.startsWith('/') ? '' : '/'}${normalizedEndpoint}${queryString}`;
 
-    console.log('[apiRequest]', method, url, 'retries:', retries, 'silent:', silent);
+    gameLog('[apiRequest]', method, url, 'retries:', retries, 'silent:', silent);
 
     // Получаем initData для авторизации
     const initData = getInitData();
@@ -742,6 +808,12 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
 
             const { response, data } = result;
 
+            // Запоминаем смещение времени сервера: регенерация энергии
+            // считается от метки last_energy_update, которую ставит сервер
+            // СВОИМИ часами. Клиент, у которого часы спешат или отстают,
+            // рисовал неверную энергию и мог навсегда потерять кнопку атаки.
+            recordServerTimeOffset(response);
+
             if (!response.ok) {
                 const serverMessage = data?.error || data?.message || `HTTP error! status: ${response.status}`;
                 const httpError = new Error(serverMessage);
@@ -772,7 +844,7 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                 apiRequest._serviceStartingAttempts = 0;
             }
 
-            console.log('[apiRequest] Success:', method, url);
+            gameLog('[apiRequest] Success:', method, url);
             return data;
         } catch (error) {
             console.error('[apiRequest] Error:', method, url, error.message);
@@ -1064,6 +1136,25 @@ const gameState = {
     // Текущий босс
     currentBoss: null,
 
+    // Длительность боя с боссом (мс), приходит из fight_duration_ms.
+    // null — сервер ещё не сообщал; лог боя тогда не показывает срок.
+    bossFightDurationMs: null,
+
+    // id активных интервалов. Раньше жили на window (gameState.bossFightTimerId,
+    // gameState.pvpCooldownTimerId): любая часть кода могла случайно перезатереть
+    // чужой таймер, и это не отловилось бы ни одним тестом.
+    bossFightTimerId: null,
+    pvpCooldownTimerId: null,
+
+    // Кэш фона карты города: звёзды, силуэты зданий и размеры, для которых
+    // они рассчитаны. Пересчитывается при изменении размера canvas.
+    cityBackground: {
+        stars: null,
+        buildings: null,
+        width: 0,
+        height: 0
+    },
+
     // Данные клана
     clan: null,
 
@@ -1239,10 +1330,14 @@ const actionLocks = {
     buyEnergy: false,
     wheelSpin: false,
     sellItem: false,
-    searchLoot: false,
-    attackBoss: false,
+    loadProfile: false,
+    checkPlayerStatus: false,
     loadBosses: false
 };
+
+// Промис текущей загрузки профиля (см. loadProfile). Не даёт двум
+// параллельным loadProfile() перезаписать state вразнобой.
+let loadProfileInFlight = null;
 
 /** Через сколько мс принудительно снимать блокировку */
 const ACTION_LOCK_TIMEOUT_MS = 30000;
@@ -1446,7 +1541,53 @@ const Templates = {
     empty(message = 'Пусто') {
         return `<div class="empty-message">${escapeHtml(message)}</div>`;
     },
-    
+
+    // Карточка числовой статистики (иконка + значение + подпись).
+    // Шаблон добавлен потому что блок повторялся 4 раза подряд в карточке
+    // клана и 9 раз на экране профиля: правка подписи в одном месте молча
+    // расходилась с остальными.
+    statCard(icon, value, label) {
+        return `
+                <div class="stat-card">
+                    <span class="stat-icon">${escapeHtml(icon)}</span>
+                    <span class="stat-value">${escapeHtml(value)}</span>
+                    <span class="stat-label">${escapeHtml(label)}</span>
+                </div>`;
+    },
+
+    // Строка награды в модалке/карточке (эмодзи + текст).
+    // Вариант 'loss' красит строку в красный для проигранных боёв.
+    rewardItem(text, variant = '') {
+        const cls = variant ? ` ${escapeAttribute(variant)}` : '';
+        return `<div class="reward-item${cls}">${escapeHtml(text)}</div>`;
+    },
+
+    // Строка статистики клана (казна, участники, бонус добычи).
+    // Отдельный шаблон от statCard: у клановой статистики свои CSS-классы
+    // (.clan-stat вместо .stat-card), но разметка внутри совпадает.
+    clanStat(icon, value, label) {
+        return `
+                <div class="clan-stat">
+                    <span class="stat-icon">${escapeHtml(icon)}</span>
+                    <span class="stat-value">${escapeHtml(value)}</span>
+                    <span class="stat-label">${escapeHtml(label)}</span>
+                </div>`;
+    },
+
+    // Слот снаряжения в бою с боссом.
+    // Раньше 7 слотов (голова/тело/руки/ноги/сапоги/оружие/аксессуар) были
+    // вписаны в generateScreens копипастой: любая правка разметки слота
+    // требовала семи одинаковых правок.
+    equipmentFightSlot(slot, icon, label, title = '') {
+        return `
+                                    <div class="equipment-slot" data-slot="${escapeAttribute(slot)}"${title ? ` title="${escapeAttribute(title)}"` : ''}>
+                                        <span class="slot-icon">${icon}</span>
+                                        <span class="slot-name">${escapeHtml(label)}</span>
+                                        <div class="slot-item" data-slot="${escapeAttribute(slot)}"></div>
+                                        <div class="slot-durability" data-slot="${escapeAttribute(slot)}"></div>
+                                    </div>`;
+    },
+
     // Слот инвентаря
     inventorySlot(item) {
         const itemActionId = item.index ?? item.id;
@@ -1963,7 +2104,6 @@ const SCREENS = [
     'inventory',      // Инвентарь
     'bosses',         // Боссы
     'boss-fight',     // Бой с боссом
-    'weapon-select',  // Выбор оружия
     'clan',           // Клан
     'clans-list',     // Список кланов
     'clan-create',    // Создание клана
@@ -2053,6 +2193,11 @@ function onScreenOpen(screenName) {
                 if (typeof renderLocations === 'function') {
                     setTimeout(renderLocations, 100);
                 }
+                // Поворот телефона и ресайз: без этого после смены
+                // ориентации круги локаций остаются на старых координатах.
+                if (typeof initCityMapResize === 'function') {
+                    initCityMapResize();
+                }
             }).catch((mapError) => {
                 console.error('Не удалось загрузить локации для карты:', mapError);
                 const mapEl = document.getElementById('city-map');
@@ -2067,10 +2212,6 @@ function onScreenOpen(screenName) {
 
         case 'inventory':
             safeAsync('inventory', loadInventory());
-            break;
-
-        case 'weapon-select':
-            safeAsync('weapon-select', loadWeapons());
             break;
 
         case 'bosses':
@@ -2271,7 +2412,14 @@ async function startBossFight(boss, timeRemainingMs = null) {
         if (result.success) {
             // Запускаем бой
             const bossData = result.data || result;
-            renderBossFightScreen(bossData, bossData.time_remaining_ms || timeRemainingMs);
+            const bossInfo = bossData.boss || bossData;
+            // Длительность боя из ответа сервера — чтобы лог не показывал
+            // захардкоженное «8 часов», если баланс поменяют.
+            const fightDurationMs = bossData.fight_duration_ms ?? gameState.bossFightDurationMs;
+            if (typeof fightDurationMs === 'number' && fightDurationMs > 0) {
+                gameState.bossFightDurationMs = fightDurationMs;
+            }
+            renderBossFightScreen(bossInfo, bossData.time_remaining_ms || timeRemainingMs);
             playSound('boss_start');
         } else {
             showModal('⚠️ Ошибка', result.error || result.message || 'Не удалось начать бой');
@@ -2337,7 +2485,7 @@ async function waitForServerReady(maxWait = 30000) {
             if (response.ok) {
                 const data = await response.json();
                 if (data.status === 'ready') {
-                    console.log('[waitForServerReady] Сервер готов');
+                    gameLog('[waitForServerReady] Сервер готов');
                     return;
                 }
             }
@@ -2348,7 +2496,7 @@ async function waitForServerReady(maxWait = 30000) {
             }
         } catch (err) {
             // Сетевая ошибка — сервер может ещё не слушать порт
-            console.log('[waitForServerReady] Сервер недоступен, ждём...');
+            gameLog('[waitForServerReady] Сервер недоступен, ждём...');
         }
 
         await new Promise(resolve => setTimeout(resolve, pollInterval));
@@ -2384,7 +2532,7 @@ async function waitForServerReady(maxWait = 30000) {
 async function waitForTelegramWebApp(maxWait = 5000) {
     const startTime = Date.now();
     
-    console.log('[waitForTelegramWebApp] Starting wait, maxWait:', maxWait);
+    gameLog('[waitForTelegramWebApp] Starting wait, maxWait:', maxWait);
     
     return new Promise((resolve, reject) => {
         // Данные доступны либо из SDK Telegram, либо из fragment прямой ссылки
@@ -2394,7 +2542,7 @@ async function waitForTelegramWebApp(maxWait = 5000) {
         
         // Если уже загружен - сразу успех
         if (isReady()) {
-            console.log('[waitForTelegramWebApp] Already ready');
+            gameLog('[waitForTelegramWebApp] Already ready');
             resolve();
             return;
         }
@@ -2402,7 +2550,7 @@ async function waitForTelegramWebApp(maxWait = 5000) {
         // Функция проверки
         const check = () => {
             if (isReady()) {
-                console.log('[waitForTelegramWebApp] Ready after', Date.now() - startTime, 'ms');
+                gameLog('[waitForTelegramWebApp] Ready after', Date.now() - startTime, 'ms');
                 resolve();
                 return;
             }
@@ -2471,24 +2619,24 @@ async function initGame() {
     window.addEventListener('unhandledrejection', unhandledRejectionHandler);
 
     try {
-        console.log('[initGame] Starting initialization...');
+        gameLog('[initGame] Starting initialization...');
 
         // Ждём готовности сервера: пока БД не инициализирована, /api/game/*
         // отвечает 503. Опрашиваем /ready (без auth) чтобы не конфликтовать
         // с withTimeout в дальнейших apiRequest.
-        console.log('[initGame] Waiting for server to be ready...');
+        gameLog('[initGame] Waiting for server to be ready...');
         const loadingText = document.querySelector('.loading-text');
         if (loadingText) loadingText.textContent = 'Ожидание сервера...';
         await waitForServerReady(30000);
-        console.log('[initGame] Server is ready');
+        gameLog('[initGame] Server is ready');
 
         // Ждём пока загрузится Telegram WebApp.
         // В production отсутствие Telegram — фатально: продолжать нельзя,
         // иначе запросы уйдут без валидного initData.
         try {
-            console.log('[initGame] Waiting for Telegram WebApp...');
+            gameLog('[initGame] Waiting for Telegram WebApp...');
             await waitForTelegramWebApp();
-            console.log('[initGame] Telegram WebApp ready');
+            gameLog('[initGame] Telegram WebApp ready');
         } catch (waitError) {
             console.error('[initGame] Telegram WebApp не загрузился:', waitError);
             renderInitError(
@@ -2501,14 +2649,14 @@ async function initGame() {
         
         // Инициализируем Telegram WebApp
         if (window.Telegram?.WebApp) {
-            console.log('[initGame] Calling WebApp.ready() and expand()');
+            gameLog('[initGame] Calling WebApp.ready() and expand()');
             window.Telegram.WebApp.ready();
             window.Telegram.WebApp.expand();
         }
         
-        console.log('[initGame] Getting Telegram ID...');
+        gameLog('[initGame] Getting Telegram ID...');
         const telegramId = getTelegramId();
-        console.log('[initGame] Telegram ID:', telegramId);
+        gameLog('[initGame] Telegram ID:', telegramId);
         if (!telegramId) {
             renderInitError('😿', 'Ошибка', 'Не удалось определить пользователя Telegram. Откройте игру через бота @LastHearthBot');
             return;
@@ -2517,9 +2665,9 @@ async function initGame() {
         // Подписанные initData обязательны (в production — всегда).
         // localStorage НЕ используется: initData имеет auth_date и протухает,
         // поэтому сохранённая копия — это не валидный вход.
-        console.log('[initGame] Getting initData...');
+        gameLog('[initGame] Getting initData...');
         const initData = getInitData();
-        console.log('[initGame] initData present:', !!initData);
+        gameLog('[initGame] initData present:', !!initData);
         if (!initData) {
             renderInitError('😿', 'Ошибка авторизации', 'Откройте игру через бота @LastHearthBot');
             return;
@@ -2529,13 +2677,13 @@ async function initGame() {
         // наружу), чтобы падение перерисовки не выглядело как провал операции.
         // Отдельные try/catch здесь были лишними и никогда не срабатывали.
         // Сервер валидирует игрока через middleware validatePlayer на всех роутах.
-        console.log('[initGame] Loading profile...');
+        gameLog('[initGame] Loading profile...');
         await withTimeout(loadProfile(), 15000, 'Таймаут загрузки профиля');
-        console.log('[initGame] Profile loaded, player:', !!gameState.player);
+        gameLog('[initGame] Profile loaded, player:', !!gameState.player);
         
-        console.log('[initGame] Loading locations...');
+        gameLog('[initGame] Loading locations...');
         await withTimeout(loadLocations(), 15000, 'Таймаут загрузки локаций');
-        console.log('[initGame] Locations loaded');
+        gameLog('[initGame] Locations loaded');
 
         // Проверяем, успешно ли загрузился профиль
         if (!gameState.player) {
@@ -2544,7 +2692,7 @@ async function initGame() {
             return;
         }
 
-        console.log('[initGame] Profile OK, showing main screen...');
+        gameLog('[initGame] Profile OK, showing main screen...');
         // Показываем основной контейнер: в index.html он скрыт (display: none),
         // чтобы до окончания инициализации игрок не видел полупустой интерфейс
         const gameContent = document.getElementById('game-content');
@@ -2557,7 +2705,7 @@ async function initGame() {
 
         // Скрываем экран загрузки
         hideLoadingScreen();
-        console.log('[initGame] Initialization complete!');
+        gameLog('[initGame] Initialization complete!');
 
         // Запускаем обновление энергии
         safeSetInterval(updateEnergyDisplay, 60000); // Каждую минуту
@@ -2605,9 +2753,15 @@ function setInventoryState(rawItems) {
 }
 
 /**
+/**
  * Загрузка профиля игрока
  * API возвращает { success, data: { player, achievements, progress, inventory, equipment, active_buffs } }
  * @returns {Promise<boolean>} true если профиль загружен успешно, false при ошибке
+ *
+ * Защита от гонки: параллельные вызовы loadProfile() перезаписывали
+ * gameState.player/inventory/equipment вразнобой, и более медленный ответ
+ * откатывал состояние назад. Теперь второй параллельный вызов не начинает
+ * новый запрос, а дожидается результата первого.
  */
 async function loadProfile() {
     // Сбрасываем кэш ДО запроса: gameApi кэширует GET на 30 секунд, и после
@@ -2615,6 +2769,25 @@ async function loadProfile() {
     // устаревшие монеты/XP/инвентарь даже при явном loadProfile()
     invalidateCache('profile');
 
+    // Уже идёт загрузка — дожидаемся её вместо второго параллельного запроса.
+    if (loadProfileInFlight) {
+        return loadProfileInFlight;
+    }
+
+    loadProfileInFlight = loadProfileUncached()
+        .finally(() => {
+            loadProfileInFlight = null;
+        });
+
+    return loadProfileInFlight;
+}
+
+/**
+ * Тело loadProfile() без защиты от параллельного вызова.
+ * Вызывается только через loadProfile().
+ * @returns {Promise<boolean>}
+ */
+async function loadProfileUncached() {
     // Функция НЕ бросает исключение наружу. Раньше await apiRequest стоял
     // здесь без try/catch, и реджекция улетала в catch вызывающего кода.
     // Так как loadProfile() вызывается ПОСЛЕ успешной мутации (продажа,
@@ -2725,7 +2898,11 @@ function getEffectivePlayerStatus() {
         const lastUpdateTime = new Date(status.last_energy_update).getTime();
 
         if (Number.isFinite(lastUpdateTime)) {
-            const elapsedTicks = Math.floor((Date.now() - lastUpdateTime) / ENERGY_REGEN_INTERVAL_MS);
+            // Время берём с сервера, а не с часов устройства: метку
+            // last_energy_update поставил сервер, и сравнивать её с
+            // локальным Date.now() — верный способ получить неверную
+            // энергию при разъехавшихся часах.
+            const elapsedTicks = Math.floor((getNow() - lastUpdateTime) / ENERGY_REGEN_INTERVAL_MS);
 
             if (elapsedTicks > 0) {
                 const restored = Math.min(elapsedTicks, maxEnergy - currentEnergy);
@@ -2805,14 +2982,14 @@ function renderEnergyIndicators() {
         mainEnergyBar.style.width = `${percent}%`;
     }
 
-    const bossEnergyText = document.getElementById('boss-energy-text');
-    if (bossEnergyText) {
-        bossEnergyText.textContent = `${Math.floor(currentEnergy)}/${maxEnergy}`;
-    }
-
-    // Пишем и в панель игрока слева: она тоже есть в разметке боя, но
-    // раньше оставалась с дефолтом "100/100" и противоречила нижней
-    // полосе, где показывалось реальное значение.
+    // Пишем в панель игрока слева — единственное место, где энергия
+    // видна в бою. Раньше она оставалась с дефолтом "100/100" и
+    // противоречила нижней полосе боя.
+    //
+    // Дубль на экране боя убран: раньше энергия показывалась и слева
+    // (player-energy-display), и внизу (boss-energy-text). Осталась панель
+    // игрока — там энергия соседствует с HP, — а мигающий «−1» после
+    // удара живёт в этой же строке (energy-used-inline).
     const playerEnergyText = document.getElementById('player-energy-display');
     if (playerEnergyText) {
         playerEnergyText.textContent = `${Math.floor(currentEnergy)}/${maxEnergy}`;
@@ -3523,7 +3700,10 @@ function renderActiveBuffs(buffs = {}) {
     list.innerHTML = activeBuffs.map(([effect, buff]) => {
         const meta = buffMeta[effect] || { icon: '✨', label: effect };
         const expiresAt = new Date(buff?.expires_at || buff?.expiresAt || buff?.expires || 0).getTime();
-        const minutesLeft = Math.max(1, Math.ceil((expiresAt - Date.now()) / 60000));
+        // Сравниваем с серверным временем: срок действия баффа поставил
+        // сервер, и при разъехавшихся часах игрок видел бы неверный
+        // остаток (вплоть до «0м» на только что купленном баффе).
+        const minutesLeft = Math.max(1, Math.ceil((expiresAt - getNow()) / 60000));
 
         return `
             <div class="active-buff-pill">
@@ -3770,7 +3950,7 @@ function pruneExpiredBuffs() {
     const buffs = gameState.buffs;
     if (!buffs || typeof buffs !== 'object') return;
 
-    const now = Date.now();
+    const now = getNow();
     for (const [effect, buff] of Object.entries(buffs)) {
         const expiresAt = new Date(
             buff?.expires_at || buff?.expires || 0
@@ -3782,18 +3962,39 @@ function pruneExpiredBuffs() {
 }
 
 /**
- * Проверка статуса игрока (переломы, инфекции)
+ * Проверка статуса игрока (переломы, инфекции).
+ *
+ * Вызывается по таймеру раз в 10 минут (initGame), но может прийти и в
+ * момент активного действия: поиска лута, покупки, атаки босса. Внутри
+ * зовёт loadProfile(), который перезаписывает gameState.player, inventory
+ * и equipment. Если это совпадало с поиском лута, только что найденный
+ * предмет затирался устаревшим инвентарём с сервера.
+ *
+ * Поэтому проверка идёт под своей блокировкой actionLocks и не начинает
+ * работу, если сейчас идёт действие, меняющее инвентарь.
  */
 async function checkPlayerStatus() {
     if (!gameState.player) return;
-    
+
+    // Если сейчас идёт действие с инвентарём — не лезем с перезаписью
+    // профиля. Своя проверка всё равно сработает на следующем тике таймера.
+    // loadProfile сюда не входит: у него своя защита от параллельных вызовов
+    // (loadProfileInFlight), и ожидание её не должно отменять саму проверку.
+    const blockingActions = ['searchLoot', 'useItem', 'dropItem', 'sellItem', 'buyCoinItem', 'buyStarItem', 'attackBoss'];
+    const busyWithInventory = blockingActions.some(name => actionLocks[name]);
+    if (busyWithInventory) {
+        return;
+    }
+
+    if (!lockAction('checkPlayerStatus')) return;
+
     try {
         const result = await apiRequest('/api/game/status/check', {
             method: 'POST',
             body: {}
         });
         const payload = result?.data || result;
-        
+
         if (payload.died) {
             // Игрок умер
             showModal(
@@ -3802,7 +4003,7 @@ async function checkPlayerStatus() {
             );
             return;
         }
-        
+
         // Модалка заражения убрана: инфекции объединены с радиацией, поэтому
         // зона показывает одно уведомление об изменении radiation.
 
@@ -3818,6 +4019,8 @@ async function checkPlayerStatus() {
         if (!isManualAbort) {
             console.warn('[checkPlayerStatus] Не удалось проверить статус:', error);
         }
+    } finally {
+        unlockAction('checkPlayerStatus');
     }
 }
 
@@ -4623,6 +4826,14 @@ async function loadBosses() {
         gameState.bossesInfo = data?.info || null;
         gameState.activeBattle = data?.active_battle || null;
 
+        // Длительность боя приходит с сервера (SOLO_FIGHT_DURATION_MS).
+        // Идет на resume-ветке выше, поэтому читаем field ДО неё: там
+        // buildActiveBattleResponse уже упаковал его в active_battle.
+        const fightDurationMs = data?.fight_duration_ms;
+        if (typeof fightDurationMs === 'number' && fightDurationMs > 0) {
+            gameState.bossFightDurationMs = fightDurationMs;
+        }
+
         // Обновляем информацию об энергии игрока.
         // Фоллбэк 50 совпадает со схемой БД; прежде был 100, и при отсутствии
         // поля панель показывала завышенный максимум.
@@ -4892,9 +5103,37 @@ async function renderPlayerEquipmentInBossFight() {
     }
 }
 
+/**
+ * Человекочитаемая длительность боя из gameState.bossFightDurationMs.
+ *
+ * Источник — fight_duration_ms из ответа сервера (главный экран боссов).
+ * Если сервер поле не прислал, возвращаем запасной текст без конкретики,
+ * чтобы не врать числом: раньше здесь был захардкоженный «8 часов»,
+ * который расходился с реальной настройкой.
+ */
+function getBossFightDurationLabel() {
+    const ms = Number(gameState.bossFightDurationMs);
+    if (!Number.isFinite(ms) || ms <= 0) return '';
+
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+
+    if (hours > 0 && minutes > 0) return `Бой длится ${hours} ч ${minutes} мин.`;
+    if (hours > 0) return `Бой длится ${hours} ч.`;
+    return `Бой длится ${minutes} мин.`;
+}
+
 function renderBossFightScreen(boss, timeRemainingMs = null) {
+    // Защита от некорректных данных: если boss не передан или не объект
+    if (!boss || typeof boss !== 'object') {
+        console.error('renderBossFightScreen: некорректные данные босса', boss);
+        return;
+    }
+
     gameState.currentBoss = boss;
-    gameState.bossFightEndTime = timeRemainingMs ? Date.now() + timeRemainingMs : null;
+    // Серверное время: time_remainingMs пришёл от сервера, и смещение
+    // локальных часов не должно сдвигать конец боя.
+    gameState.bossFightEndTime = timeRemainingMs ? getNow() + timeRemainingMs : null;
     const isFreeAttack = Boolean(gameState.buffs?.free_energy);
     
     const bossName = document.getElementById('boss-name');
@@ -4903,11 +5142,10 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
     const bossHealthBar = document.getElementById('boss-health-bar');
     const fightLog = document.getElementById('fight-log');
     const bossTimer = document.getElementById('boss-fight-timer');
-    const bossTimerText = document.getElementById('boss-timer-text');
     
-    if (bossName) bossName.textContent = boss.name;
+    if (bossName) bossName.textContent = boss.name || 'Неизвестный босс';
     if (bossIcon) {
-        bossIcon.textContent = boss.icon;
+        bossIcon.textContent = boss.icon || '👹';
         bossIcon.classList.remove('damage-shake');
     }
 
@@ -4939,14 +5177,17 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
         bossHealthBar.style.width = `${Math.max(0, Math.min(100, (currentBossHp / maxBossHp) * 100))}%`;
     }
     if (fightLog) {
+        // Длительность берём из данных сервера (fight_duration_ms), а не
+        // хардкодом «8 часов»: раньше при смене баланса в bosses.js текст
+        // лога продолжал обещать старое время.
         fightLog.innerHTML = `
             <p class="fight-start">🎯 Бой с <strong>${escapeHtml(boss.name)}</strong> начался!</p>
-            <p>${isFreeAttack ? 'Бафф активен: атаки не тратят энергию.' : '1 удар = 1 энергия.'} Бой длится 8 часов.</p>
+            <p>${isFreeAttack ? 'Бафф активен: атаки не тратят энергию.' : '1 удар = 1 энергия.'} ${getBossFightDurationLabel()}</p>
         `;
     }
     
     // Показываем/скрываем таймер
-    if (bossTimer && bossTimerText) {
+    if (bossTimer) {
         if (gameState.bossFightEndTime) {
             bossTimer.style.display = 'flex';
             updateBossFightTimer();
@@ -5049,14 +5290,17 @@ function updateBossFightTimer() {
     if (!timerText || !gameState.bossFightEndTime) return;
 
     const stopTimer = () => {
-        if (window.bossFightTimerId) {
-            safeClearInterval(window.bossFightTimerId);
-            window.bossFightTimerId = null;
+        if (gameState.bossFightTimerId) {
+            safeClearInterval(gameState.bossFightTimerId);
+            gameState.bossFightTimerId = null;
         }
     };
 
     const updateTimer = () => {
-        const now = Date.now();
+        // Серверное время: bossFightEndTime вычислен из time_remaining_ms,
+        // который прислал сервер, и при локальных часах с смещением таймер
+        // показывал бы неверный остаток.
+        const now = getNow();
         const remaining = gameState.bossFightEndTime - now;
         
         if (remaining <= 0) {
@@ -5079,187 +5323,17 @@ function updateBossFightTimer() {
     updateTimer();
 
     // Если время уже истекло до запуска таймера — интервал не нужен вовсе
-    if (gameState.bossFightEndTime <= Date.now()) return;
+    if (gameState.bossFightEndTime <= getNow()) return;
 
-    window.bossFightTimerId = safeSetInterval(updateTimer, 1000);
-}
-
-/**
- * Загрузка списка оружия игрока
- */
-async function loadWeapons() {
-    try {
-        const result = await apiRequest('/api/game/bosses/weapons');
-        
-        if (result.success) {
-            renderWeapons(result.weapons);
-        } else {
-            showNotification('Ошибка загрузки оружия', 'error');
-        }
-    } catch (error) {
-        console.error('Load weapons error:', error);
-        showNotification(clientErrorMessage(error, 'Ошибка загрузки оружия'), 'error');
-    }
-}
-
-/**
- * Отрисовка списка оружия
- */
-function renderWeapons(weapons) {
-    const list = document.getElementById('weapon-list');
-    if (!list) return;
-    
-    list.innerHTML = '';
-    
-    if (!weapons || weapons.length === 0) {
-        list.innerHTML = '<div class="empty-message">У вас нет оружия в инвентаре</div>';
-        return;
-    }
-    
-    // Состояние фильтров
-    const filterState = {
-        type: 'all',      // 'all', 'melee', 'ranged'
-        minDamage: 0,
-        maxDurability: 100,
-        onlyUsable: false
-    };
-    
-    // Создаем панель фильтров
-    const filterPanel = document.createElement('div');
-    filterPanel.className = 'weapon-filter-panel';
-    filterPanel.innerHTML = `
-        <div class="filter-row">
-            <label>Тип:</label>
-            <select id="filter-type" class="filter-select">
-                <option value="all">Все типы</option>
-                <option value="melee">🗡️ Ближний бой</option>
-                <option value="ranged">🏹 Дальний бой</option>
-            </select>
-        </div>
-        <div class="filter-row">
-            <label>Мин. урон:</label>
-            <input type="number" id="filter-min-damage" class="filter-input" min="0" placeholder="0">
-            <label>Макс. износ:</label>
-            <input type="number" id="filter-max-durability" class="filter-input" min="0" max="100" placeholder="100%">
-            <label class="filter-checkbox">
-                <input type="checkbox" id="filter-only-usable"> Только рабочее
-            </label>
-        </div>
-    `;
-    list.appendChild(filterPanel);
-    
-    // Создаем контейнер для списка оружия
-    const weaponsContainer = document.createElement('div');
-    weaponsContainer.id = 'weapons-container';
-    list.appendChild(weaponsContainer);
-    
-    // Функция фильтрации
-    function applyFilters() {
-        filterState.type = document.getElementById('filter-type').value;
-        filterState.minDamage = parseInt(document.getElementById('filter-min-damage').value, 10) || 0;
-        filterState.maxDurability = parseInt(document.getElementById('filter-max-durability').value, 10) || 100;
-        filterState.onlyUsable = document.getElementById('filter-only-usable').checked;
-        
-        renderFilteredWeapons();
-    };
-    
-    // Функция рендера отфильтрованного списка
-    function renderFilteredWeapons() {
-        const filtered = weapons.filter(w => {
-            if (filterState.type !== 'all' && w.category !== filterState.type) return false;
-            if (Number(w.damage || 0) < filterState.minDamage) return false;
-            
-            // window.EquipmentShared, а не голый EquipmentShared: guard `? :`
-            // защищает только от отсутствующего СВОЙСТВА, но не от необъявленного
-            // идентификатора — ReferenceError падал всё равно.
-            const sharedRules = window.EquipmentShared;
-            const durability = sharedRules && sharedRules.getDurabilityInfo ?
-                sharedRules.getDurabilityInfo({max_durability: w.max_durability, durability: w.durability})
-                : {current: w.durability, max: w.max_durability, isBroken: !w.durability || w.durability <= 0};
-            
-            if (filterState.onlyUsable && (durability.isBroken || (durability.current / durability.max * 100) > filterState.maxDurability)) return false;
-            if (!durability.isBroken && (durability.current / durability.max * 100) > filterState.maxDurability) return false;
-            
-            return true;
-        });
-        
-        const container = document.getElementById('weapons-container');
-        if (!container) return;
-        container.innerHTML = '';
-        
-        if (!filtered || filtered.length === 0) {
-            container.innerHTML = '<div class="empty-message">Нет оружия, соответствующего фильтрам</div>';
-            return;
-        }
-        
-        for (const weapon of filtered) {
-            const item = document.createElement('div');
-            item.className = `weapon-item ${weapon.is_broken ? 'is-broken' : ''}`;
-            item.dataset.index = weapon.index;
-            
-            // window.EquipmentShared по той же причине, что и выше.
-            const sharedRules = window.EquipmentShared;
-            const durabilityInfo = sharedRules && sharedRules.getDurabilityInfo ?
-                sharedRules.getDurabilityInfo({max_durability: weapon.max_durability, durability: weapon.durability})
-                : {current: weapon.durability, max: weapon.max_durability, isBroken: !weapon.durability || weapon.durability <= 0};
-            
-            const durabilityText = durabilityInfo.isBroken
-                ? '⚠️ сломано — отремонтируйте'
-                : (durabilityInfo.current < durabilityInfo.max
-                    ? `🔧 ${Number(durabilityInfo.current)}/${Number(durabilityInfo.max)}`
-                    : '');
-            
-            const rangeLabel = weapon.category === 'melee'
-                ? '<div class="weapon-tag melee">ближний бой · +40% к боссам</div>'
-                : '<div class="weapon-tag ranged">дальний бой · +25% в PvP</div>';
-            
-            const itemEl = document.createElement('div');
-            itemEl.className = `weapon-item ${weapon.is_broken ? 'is-broken' : ''}`;
-            itemEl.dataset.index = weapon.index;
-            
-            itemEl.innerHTML = `
-                <span class="weapon-icon">${escapeHtml(weapon.icon)}</span>
-                <div class="weapon-info">
-                    <div class="weapon-name">${escapeHtml(weapon.name)}</div>
-                    <div class="weapon-damage">Урон: +${Number(weapon.damage) || 0}</div>
-                    ${durabilityText ? `<div class="weapon-durability">${escapeHtml(durabilityText)}</div>` : ''}
-                    ${rangeLabel}
-                </div>
-                <span class="weapon-rarity ${escapeAttribute(weapon.rarity)}">${escapeHtml(weapon.rarity)}</span>
-            `;
-            
-            if (weapon.is_broken) {
-                itemEl.classList.add('disabled');
-            } else {
-                itemEl.addEventListener('click', () => attackWithWeapon(weapon.index));
-            }
-            list.appendChild(itemEl);
-        }
-    };
-    
-    // Добавляем слушатели фильтров
-    setTimeout(() => {
-        const typeSelect = document.getElementById('filter-type');
-        const minDamageInput = document.getElementById('filter-min-damage');
-        const maxDurabilityInput = document.getElementById('filter-max-durability');
-        const onlyUsableCheckbox = document.getElementById('filter-only-usable');
-        
-        if (typeSelect) typeSelect.addEventListener('change', applyFilters);
-        if (minDamageInput) minDamageInput.addEventListener('input', applyFilters);
-        if (maxDurabilityInput) maxDurabilityInput.addEventListener('input', applyFilters);
-        if (onlyUsableCheckbox) onlyUsableCheckbox.addEventListener('change', applyFilters);
-    }, 0);
-    
-    // Начальный рендер
-    applyFilters();
+    gameState.bossFightTimerId = safeSetInterval(updateTimer, 1000);
 }
 
 /**
  * Общая вступительная проверка атаки по боссу.
  *
- * `lockAction` здесь НЕ используется осознанно: и attackBoss(), и
- * attackWithWeapon() работают с actionLocks.attackBoss и обязаны снимать
- * её в own finally, иначе блокировка залипала бы после неудачного запроса.
+ * `lockAction` здесь НЕ используется осознанно: attackBoss() работает
+ * с actionLocks.attackBoss и обязан снимать её в own finally, иначе
+ * блокировка залипала бы после неудачного запроса.
  *
  * @returns {boolean} true — можно атаковать, false — атака отклонена
  */
@@ -5280,7 +5354,6 @@ function canStartBossAttack() {
 
 /**
  * Обновить полосу HP босса на экране боя.
- * Общая для обоих путей атаки: раздельные правки гарантированно разошлись бы.
  */
 function updateBossHealthUi(bossHp, bossMaxHp) {
     const hpPercent = Math.max(0, Math.min(100, (Number(bossHp) / Number(bossMaxHp)) * 100));
@@ -5298,11 +5371,8 @@ function updateBossHealthUi(bossHp, bossMaxHp) {
 }
 
 /**
- * Общая часть «босс убит» для обоих путей атаки.
- *
- * Раньше дублировалась почти целиком: анимации, сброс currentBattle,
- * отложенная перезагрузка списка боссов и обновление профиля. Различались
- * только количество конфетти и то, что обычная атака чистит RenderCache.
+ * Общая часть «босс убит»: анимации, сброс боя, перезагрузка списка
+ * боссов и профиля.
  *
  * @param {object} rewards - rewards из ответа сервера
  * @param {number|null} mastery - мастерство (null = не показывать)
@@ -5340,100 +5410,6 @@ function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound
 }
 
 /**
- * Атака босса с использованием оружия из инвентаря
- */
-async function attackWithWeapon(itemIndex) {
-    if (!canStartBossAttack()) return;
-
-    try {
-        const result = await apiRequest('/api/game/bosses/attack-with-weapon', {
-            method: 'POST',
-            body: { 
-                boss_id: gameState.currentBoss.id,
-                item_index: itemIndex
-            }
-        });
-        
-        const log = document.getElementById('fight-log');
-        
-        if (result.success) {
-            showDamageAnimation();
-            
-            if (log) {
-                const damageText = document.createElement('p');
-                damageText.className = 'damage';
-                // weapon_used приходит с сервера — экранируем
-                damageText.innerHTML = `<span class="hit">⚔️</span> Использовал <strong>${escapeHtml(result.data.weapon_used)}</strong>! Нанёс <strong>${Number(result.data.damage) || 0}</strong> урона!`;
-                log.appendChild(damageText);
-
-                // Износ оружия виден сразу после удара: без этой строки игрок
-                // не понимает, зачем заглядывать в мастерскую.
-                const maxDurability = Number(result.data.weapon_max_durability) || 0;
-                if (maxDurability > 0) {
-                    const left = Number(result.data.weapon_durability) || 0;
-                    const wearText = document.createElement('p');
-                    wearText.className = 'damage';
-                    const tone = result.data.weapon_broken || left === 0
-                        ? ' <strong style="color:var(--color-danger-bright)">сломано — отремонтируй</strong>'
-                        : left <= Math.ceil(maxDurability * 0.2)
-                            ? ' <strong style="color:var(--energy-color)">почти сломано</strong>'
-                            : '';
-                    wearText.innerHTML = `🔧 Прочность оружия: ${left}/${maxDurability}${tone}`;
-                    log.appendChild(wearText);
-                }
-
-                log.scrollTop = log.scrollHeight;
-            }
-            
-            updateBossHealthUi(result.data.boss_hp, result.data.boss_max_hp);
-
-            appendCounterDamageToLog(result.data);
-            updatePlayerHealthUi(result.data.health);
-            warnAboutBrokenEquipment(result.data.broken_equipment);
-
-            syncPlayerEnergyState(
-                result.data.energy,
-                gameState.player?.status?.max_energy,
-                result.data.last_energy_update || null
-            );
-            refreshPlayerEnergyUI();
-
-            const attackBtn = document.getElementById('attack-boss-btn');
-            if (attackBtn) {
-                attackBtn.textContent = gameState.buffs?.free_energy
-                    ? '⚔️ Атаковать (бесплатно)'
-                    : '⚔️ Атаковать (1 ⚡)';
-            }
-            
-            if (result.data.killed) {
-                onBossDefeated(result.data.rewards, result.data.mastery ?? null, 120, false);
-            } else {
-                // Прочность оружия изменилась — инвентарь на сервере уже обновлён
-                loadInventory().catch((invError) => {
-                    console.error('Не удалось обновить инвентарь после атаки оружием:', invError);
-                });
-            }
-        } else {
-            showNotification(result.error || 'Ошибка атаки', 'error');
-        }
-        
-    } catch (error) {
-        console.error('Attack with weapon error:', error);
-        showNotification(clientErrorMessage(error, 'Ошибка атаки'), 'error');
-    } finally {
-        actionLocks.attackBoss = false;
-    }
-}
-
-/**
- * Открытие экрана выбора оружия
- */
-async function openWeaponSelect() {
-    await loadWeapons();
-    showScreen('weapon-select');
-}
-
-/**
  * Атака босса - один клик = одна атака = -1 энергия
  * Обновляем HP босса, показываем анимацию урона, обрабатываем убийство
  */
@@ -5458,8 +5434,12 @@ async function attackBoss() {
         const log = document.getElementById('fight-log');
         
         if (result.success) {
-            // Показываем анимацию урона
-            showDamageAnimation();
+            // Показываем анимацию урона.
+            // Урон передаём: без него showDamageAnimation трясёт иконку,
+            // но не показывает всплывающее «−24». В рейдовой атаке
+            // (attackRaid) число показывается, здесь почему-то нет —
+            // из-за этого в соло не видно, сколько именно снято.
+            showDamageAnimation(Number(result.damage_dealt) || 0);
             
             if (log) {
                 const damageText = document.createElement('p');
@@ -5486,7 +5466,7 @@ async function attackBoss() {
             syncPlayerEnergyState(
                 result.player_energy,
                 result.player_max_energy ?? gameState.player?.status?.max_energy,
-                result.last_energy_update ?? result.data?.last_energy_update ?? null
+                result.last_energy_update
             );
             refreshPlayerEnergyUI();
 
@@ -5535,11 +5515,23 @@ async function attackBoss() {
  * Ответный урон босса в лог боя.
  *
  * Раньше босс не бил в ответ (колонка bosses.damage не использовалась), и
- * игрок не знал, что здоровье вообще можно потерять в бою.
- * @param {object} payload - ответ /attack-boss или /attack-with-weapon
+/**
+ * Ответный удар босса в лог боя.
+ *
+ * Имена полей берём из ПЛОСКОГО ответа /attack-boss (player_damage_taken /
+ * player_health). Старые damage_taken/health/data.* оставлены фоллбэком:
+ * ответ рейда (/raid/:id/attack) всё ещё присылает damage_taken внутри
+ * data, и эта же функция может получить его.
+ *
+ * @param {object} payload ответ /attack-boss
  */
 function appendCounterDamageToLog(payload) {
-    const taken = Number(payload?.damage_taken ?? payload?.data?.damage_taken ?? 0);
+    const taken = Number(
+        payload?.player_damage_taken
+        ?? payload?.damage_taken
+        ?? payload?.data?.damage_taken
+        ?? 0
+    );
     if (taken <= 0) return;
 
     const log = document.getElementById('fight-log');
@@ -5555,7 +5547,11 @@ function appendCounterDamageToLog(payload) {
     // лечение теперь только ручное, поэтому в логе нечего автоматическое
     // сообщать. Ответный урон игрок видит строкой выше.
 
-    if (Number(payload?.health ?? payload?.data?.health ?? 0) <= 0) {
+    // player_health — остаток HP после удара. Если сервер его не прислал,
+    // проверка «погиб» не срабатывает: неизвестное здоровье нельзя трактовать
+    // как смерть. Раньше фоллбэк давал 0, и `0 <= 0` давало ложную смерть.
+    const healthLeft = payload?.player_health ?? payload?.health ?? payload?.data?.health;
+    if (healthLeft !== undefined && healthLeft !== null && Number(healthLeft) <= 0) {
         showModal('💀 Вы погибли', 'Здоровье кончилось. Используйте аптечку, чтобы продолжить бой.', 'error');
     }
 }
@@ -5619,18 +5615,23 @@ function showDamageAnimation(damage) {
         const damageText = document.createElement('div');
         damageText.className = 'damage-text';
         damageText.textContent = `-${damage}`;
-        damageText.style.cssText = `
-            position: absolute;
-            color: var(--accent-red);
-            font-size: 24px;
-            font-weight: bold;
-            animation: fadeUp 1s ease-out forwards;
-            pointer-events: none;
-        `;
-        
+        // Оформление — в styles.css (.damage-text): инлайновые style дублировались
+        // между местами вызова, а keyframes fadeUp отсутствовал, и число
+        // просто висело в углу контейнера без анимации.
+
+        // Позиционируем относительно ИКОНКИ босса, чтобы число всплывало
+        // над ним. Раньше элемент добавлялся в .boss-fight-container с
+        // position:absolute и без top/left — он появлялся в левом верхнем
+        // углу экрана боя, а не над боссом.
+        const anchor = bossIcon || document.querySelector('.combatant.boss-side');
         const bossContainer = document.querySelector('.boss-fight-container');
-        if (bossContainer) {
+        if (anchor && bossContainer) {
             bossContainer.appendChild(damageText);
+            // После appendChild доступны реальные размеры элемента.
+            const anchorRect = anchor.getBoundingClientRect();
+            const containerRect = bossContainer.getBoundingClientRect();
+            damageText.style.left = `${anchorRect.left - containerRect.left + anchorRect.width / 2}px`;
+            damageText.style.top = `${anchorRect.top - containerRect.top - 8}px`;
             setTimeout(() => damageText.remove(), 1000);
         }
     }
@@ -5710,26 +5711,10 @@ function renderClanScreen(data) {
             </div>
             ${clan.description ? `<p class="clan-description">${escapeHtml(clan.description)}</p>` : ''}
             <div class="clan-stats">
-                <div class="clan-stat">
-                    <span class="stat-icon">👥</span>
-                    <span class="stat-value">${Number(clan.members_count || 0)}</span>
-                    <span class="stat-label">Участников</span>
-                </div>
-                <div class="clan-stat">
-                    <span class="stat-icon">💰</span>
-                    <span class="stat-value">${clanCoins}</span>
-                    <span class="stat-label">Казна</span>
-                </div>
-                <div class="clan-stat">
-                    <span class="stat-icon">✨</span>
-                    <span class="stat-value">${clan.loot_bonus}%</span>
-                    <span class="stat-label">Бонус добычи</span>
-                </div>
-                <div class="clan-stat">
-                    <span class="stat-icon">📈</span>
-                    <span class="stat-value">${totalDonated}</span>
-                    <span class="stat-label">Пожертвовано всего</span>
-                </div>
+                ${Templates.clanStat('👥', Number(clan.members_count || 0), 'Участников')}
+                ${Templates.clanStat('💰', clanCoins, 'Казна')}
+                ${Templates.clanStat('✨', `${clan.loot_bonus}%`, 'Бонус добычи')}
+                ${Templates.clanStat('📈', totalDonated, 'Пожертвовано всего')}
             </div>
         </div>
         
@@ -7289,17 +7274,17 @@ function handlePVPBattleEnd(result) {
     if (result.winner && result.winner.id === gameState.player?.id) {
         if (rewardsContent) {
             rewardsContent.innerHTML = `
-                <div class="reward-item">💰 +${Number(result.rewards?.coins) || 0} монет</div>
-                <div class="reward-item">📦 ${result.rewards?.item ? 'Получен предмет' : 'Без предмета'}</div>
-                <div class="reward-item">⭐ +${Number(result.rewards?.experience) || 0} опыта</div>
+                ${Templates.rewardItem(`💰 +${Number(result.rewards?.coins) || 0} монет`)}
+                ${Templates.rewardItem(`📦 ${result.rewards?.item ? 'Получен предмет' : 'Без предмета'}`)}
+                ${Templates.rewardItem(`⭐ +${Number(result.rewards?.experience) || 0} опыта`)}
             `;
         }
         playSound('loot');
     } else {
         if (rewardsContent) {
             rewardsContent.innerHTML = `
-                <div class="reward-item loss">Вы проиграли бой</div>
-                <div class="reward-item loss">Телепортированы в безопасную зону</div>
+                ${Templates.rewardItem('Вы проиграли бой', 'loss')}
+                ${Templates.rewardItem('Телепортированы в безопасную зону', 'loss')}
             `;
         }
     }
@@ -7368,9 +7353,9 @@ async function loadPVPStats() {
                     const diff = expiresAt - now;
                     if (diff <= 0) {
                         cooldownDiv.style.display = 'none';
-                        if (window.pvpCooldownTimerId) {
-                            safeClearInterval(window.pvpCooldownTimerId);
-                            window.pvpCooldownTimerId = null;
+                        if (gameState.pvpCooldownTimerId) {
+                            safeClearInterval(gameState.pvpCooldownTimerId);
+                            gameState.pvpCooldownTimerId = null;
                         }
                         return;
                     }
@@ -7380,13 +7365,13 @@ async function loadPVPStats() {
                 };
                 
                 updateTimer();
-                if (window.pvpCooldownTimerId) safeClearInterval(window.pvpCooldownTimerId);
-                window.pvpCooldownTimerId = safeSetInterval(updateTimer, 1000);
+                if (gameState.pvpCooldownTimerId) safeClearInterval(gameState.pvpCooldownTimerId);
+                gameState.pvpCooldownTimerId = safeSetInterval(updateTimer, 1000);
             } else if (cooldownDiv) {
                 cooldownDiv.style.display = 'none';
-                if (window.pvpCooldownTimerId) {
-                    safeClearInterval(window.pvpCooldownTimerId);
-                    window.pvpCooldownTimerId = null;
+                if (gameState.pvpCooldownTimerId) {
+                    safeClearInterval(gameState.pvpCooldownTimerId);
+                    gameState.pvpCooldownTimerId = null;
                 }
             }
             
@@ -7461,7 +7446,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // Основные кнопки
         document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
         document.getElementById('map-travel-btn')?.addEventListener('click', travelToSelectedLocation);
-        document.getElementById('boss-fight-inventory-btn')?.addEventListener('click', () => openWeaponSelect());
         document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
         document.getElementById('market-btn')?.addEventListener('click', () => showScreen('market'));
         document.getElementById('wheel-btn')?.addEventListener('click', openWheel);
@@ -7627,7 +7611,35 @@ document.addEventListener('click', (event) => {
  * Создаёт контейнеры экранов (.screen) в #game-content
  * Каждый экран: <div class="screen" id="main-screen">...</div>
  * Вызывается перед initGame()
+ *
+ * Раньше это была одна функция на 640 строк: разметка всех 16 экранов
+ * вплотную друг к другу. Правка любого экрана требовала прокрутки через
+ * весь файл, а опечатка в HTML ломала инициализацию всей игры.
+ *
+ * Теперь каждый экран — отдельная функция-генератор HTML, а generateScreens
+ * только собирает их в список. Порядок экранов и результирующий HTML
+ * сохранены дословно.
  */
+const SCREEN_BUILDERS = Object.freeze([
+    'mainScreenHtml',
+    'mapScreenHtml',
+    'inventoryScreenHtml',
+    'bossesScreenHtml',
+    'bossFightScreenHtml',
+    'clanScreenHtml',
+    'clansListScreenHtml',
+    'clanCreateScreenHtml',
+    'clanChatScreenHtml',
+    'shopScreenHtml',
+    'marketScreenHtml',
+    'wheelScreenHtml',
+    'ratingScreenHtml',
+    'pvpPlayersScreenHtml',
+    'pvpFightScreenHtml',
+    'pvpStatsScreenHtml',
+    'achievementsScreenHtml'
+]);
+
 function generateScreens() {
     const gameContent = document.getElementById('game-content');
     if (!gameContent) return;
@@ -7635,12 +7647,36 @@ function generateScreens() {
     // Удаляем старые screen'ы, если есть (кроме навигации)
     gameContent.querySelectorAll('.screen').forEach(el => el.remove());
 
-    // Шаблон экрана для основных разделов.
-    // Раньше здесь были шаблоны fullScreen(id, title) и subScreen(id, title),
-    // но их использовала лишь вёрстка экрана выбора оружия. Она описана
-    // литералом выше: subScreen не давал указать внутренние блоки
-    // (weapon-list, damage-preview), из-за чего экран оставался пустым.
-    const screensHtml = `
+    // Собираем экраны через генераторы. Проверка на функцию — страховка:
+    // если генератор не объявлен (опечатка в имени из списка выше), экран
+    // пропускается, а не роняет всю инициализацию.
+    const screensHtml = SCREEN_BUILDERS
+        .map(name => (typeof window[name] === 'function' || orGlobal(name)) ? window[name]() : '')
+        .filter(Boolean)
+        .join('\n');
+
+    gameContent.insertAdjacentHTML('beforeend', screensHtml + modalHtml());
+}
+
+/**
+ * Доступ к top-level функции по имени.
+ *
+ * Генераторы объявлены как `function name() {}` в той же области, поэтому
+ * доступны напрямую; хелпер нужен, чтобы список SCREEN_BUILDERS остался
+ * строчками (иначе пришлось бы тащить ссылки до их объявления).
+ */
+function orGlobal(name) {
+    return typeof globalThis[name] === 'function' ? globalThis[name] : null;
+}
+
+/* ==========================================================================
+ * ЭКРАНЫ — разметка, по одному генератору на экран.
+ * Каждый возвращает HTML-строку своего .screen. Порядок блоков в выходе
+ * совпадает с исходным порядком экранов в generateScreens.
+ * ======================================================================== */
+
+function mainScreenHtml() {
+    return `
         <!-- Главный экран -->
         <div class="screen active" id="main-screen">
             <div id="main-content">
@@ -7795,7 +7831,11 @@ function generateScreens() {
                 </section>
             </div>
         </div>
+    `;
+}
 
+function mapScreenHtml() {
+    return `
         <!-- Карта -->
         <div class="screen" id="map-screen">
             <div class="screen-header">
@@ -7808,7 +7848,7 @@ function generateScreens() {
                          а раньше тап сразу уводил в зону — игрок шёл туда,
                          не видя ни радиации, ни риска. -->
                     <div class="map-location-info" id="map-location-info" style="display:none"></div>
-                    <button class="btn map-travel-btn" id="map-travel-btn" style="display:none;width:100%;margin-top:8px">
+                    <button class="btn map-travel-btn" id="map-travel-btn" style="display:none">
                         Перейти
                     </button>
                 </div>
@@ -7821,7 +7861,11 @@ function generateScreens() {
                 <div class="location-risk-hint" id="location-risk-hint">Выберите локацию для просмотра рисков</div>
             </div>
         </div>
+    `;
+}
 
+function inventoryScreenHtml() {
+    return `
         <!-- Инвентарь -->
         <div class="screen" id="inventory-screen">
             <div class="screen-header">
@@ -7866,7 +7910,11 @@ function generateScreens() {
                 <div class="inventory-grid" id="inventory-grid"></div>
             </div>
         </div>
+    `;
+}
 
+function bossesScreenHtml() {
+    return `
         <!-- Боссы -->
         <div class="screen" id="bosses-screen">
             <div class="screen-header">
@@ -7886,7 +7934,11 @@ function generateScreens() {
                 <div id="raids-list" style="display:none"></div>
             </div>
         </div>
+    `;
+}
 
+function bossFightScreenHtml() {
+    return `
         <!-- Бой с боссом -->
         <div class="screen" id="boss-fight-screen">
             <div class="screen-header">
@@ -7907,60 +7959,35 @@ function generateScreens() {
                                 </div>
                                 <div class="stat-row">
                                     <span class="stat-label">⚡</span>
-                                    <span class="stat-value" id="player-energy-display">100/100</span>
+                                    <!-- Энергия показывается ТОЛЬКО здесь: дубль
+                                         внизу экрана (fight-energy-display) убран,
+                                         чтобы освободить вертикаль на телефоне.
+                                         energy-used-inline — мигающий «−1» после удара. -->
+                                    <span class="stat-value" id="player-energy-display">50/50</span>
+                                    <span class="energy-used-inline" id="boss-energy-used"></span>
                                 </div>
                             </div>
                         </div>
                         
-                        <!-- Слоты экипировки (RPG-style) -->
+                        <!-- Слоты экипировки (RPG-style).
+                             Каждый слот идёт через Templates.equipmentFightSlot:
+                             раньше семь слотов были вписаны копипастой, и слот
+                             обуви («Сапоги») был подписан «Ноги» — тот же ярлык,
+                             что и у штанов, потому что правка одной копии не
+                             досталась остальным. -->
                         <div class="equipment-slots player-equipment" id="player-equipment-slots">
-                            <div class="equipment-slot" data-slot="head" title="Шлем">
-                                <span class="slot-icon">🪖</span>
-                                <span class="slot-name">Голова</span>
-                                <div class="slot-item" data-slot="head"></div>
-                                <div class="slot-durability" data-slot="head"></div>
+${Templates.equipmentFightSlot('head', '🪖', 'Голова', 'Шлем')}
+                            <div class="equipment-row">
+${Templates.equipmentFightSlot('body', '🧥', 'Тело', 'Нагрудник')}
+${Templates.equipmentFightSlot('hands', '🧤', 'Руки', 'Перчатки')}
                             </div>
                             <div class="equipment-row">
-                                <div class="equipment-slot" data-slot="body" title="Нагрудник">
-                                    <span class="slot-icon">🧥</span>
-                                    <span class="slot-name">Тело</span>
-                                    <div class="slot-item" data-slot="body"></div>
-                                    <div class="slot-durability" data-slot="body"></div>
-                                </div>
-                                <div class="equipment-slot" data-slot="hands" title="Перчатки">
-                                    <span class="slot-icon">🧤</span>
-                                    <span class="slot-name">Руки</span>
-                                    <div class="slot-item" data-slot="hands"></div>
-                                    <div class="slot-durability" data-slot="hands"></div>
-                                </div>
+${Templates.equipmentFightSlot('legs', '👖', 'Ноги', 'Ноги')}
+${Templates.equipmentFightSlot('boots', '🥾', 'Сапоги', 'Сапоги')}
                             </div>
                             <div class="equipment-row">
-                                <div class="equipment-slot" data-slot="legs" title="Ноги">
-                                    <span class="slot-icon">👖</span>
-                                    <span class="slot-name">Ноги</span>
-                                    <div class="slot-item" data-slot="legs"></div>
-                                    <div class="slot-durability" data-slot="legs"></div>
-                                </div>
-                                <div class="equipment-slot" data-slot="boots" title="Сапоги">
-                                    <span class="slot-icon">🥾</span>
-                                    <span class="slot-name">Ноги</span>
-                                    <div class="slot-item" data-slot="boots"></div>
-                                    <div class="slot-durability" data-slot="boots"></div>
-                                </div>
-                            </div>
-                            <div class="equipment-row">
-                                <div class="equipment-slot" data-slot="weapon" title="Оружие">
-                                    <span class="slot-icon">⚔️</span>
-                                    <span class="slot-name">Оружие</span>
-                                    <div class="slot-item" data-slot="weapon"></div>
-                                    <div class="slot-durability" data-slot="weapon"></div>
-                                </div>
-                                <div class="equipment-slot" data-slot="accessory" title="Аксессуар">
-                                    <span class="slot-icon">🧭</span>
-                                    <span class="slot-name">Аксес.</span>
-                                    <div class="slot-item" data-slot="accessory"></div>
-                                    <div class="slot-durability" data-slot="accessory"></div>
-                                </div>
+${Templates.equipmentFightSlot('weapon', '⚔️', 'Оружие', 'Оружие')}
+${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксессуар')}
                             </div>
                         </div>
                     </div>
@@ -7992,36 +8019,17 @@ function generateScreens() {
                 <!-- Лог боя -->
                 <div class="fight-log" id="fight-log"></div>
                 
-                <!-- Энергия и действия -->
-                <div class="fight-energy-display">
-                    <span class="energy-label">⚡ Энергия:</span>
-                    <span id="boss-energy-text">50/50</span>
-                    <span class="energy-used" id="boss-energy-used"></span>
-                </div>
-                
                 <div class="boss-actions">
                     <button class="btn attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать</button>
                     <div class="attack-progress-container" id="attack-progress-container" style="display:none"></div>
-                    <button class="btn weapon-btn" id="boss-fight-inventory-btn">🔧 Выбрать оружие</button>
                 </div>
             </div>
         </div>
+    `;
+}
 
-        <!-- Выбор оружия -->
-        <div class="screen" id="weapon-select-screen">
-            <div class="screen-header">
-                <button class="back-btn" data-screen="boss-fight">← Назад</button>
-                <h2>🔪 Выбор оружия</h2>
-            </div>
-            <div class="weapon-select-content">
-                <!-- Текст про «исчезнет из инвентаря» остался от старой механики,
-                     где мощная атака стирала оружие целиком. Теперь оружие
-                     изнашивается на 1 прочность и чинится в мастерской. -->
-                <p class="weapon-info">Выберите оружие для удара. Оно потратит 1 единицу прочности (чинится в мастерской).</p>
-                <div class="weapon-list" id="weapon-list"></div>
-            </div>
-        </div>
-
+function clanScreenHtml() {
+    return `
         <!-- Клан -->
         <div class="screen" id="clan-screen">
             <div class="screen-header">
@@ -8029,7 +8037,11 @@ function generateScreens() {
             </div>
             <div class="screen-content" id="clan-content"></div>
         </div>
+    `;
+}
 
+function clansListScreenHtml() {
+    return `
         <!-- Список кланов -->
         <div class="screen" id="clans-list-screen">
             <div class="screen-header">
@@ -8044,7 +8056,11 @@ function generateScreens() {
                 <div class="clans-list" id="clans-list"></div>
             </div>
         </div>
+    `;
+}
 
+function clanCreateScreenHtml() {
+    return `
         <!-- Создание клана -->
         <div class="screen" id="clan-create-screen">
             <div class="screen-header">
@@ -8069,7 +8085,11 @@ function generateScreens() {
                 <button class="btn btn-primary" id="create-clan-btn">Создать клан</button>
             </div>
         </div>
+    `;
+}
 
+function clanChatScreenHtml() {
+    return `
         <!-- Чат клана -->
         <div class="screen" id="clan-chat-screen">
             <div class="screen-header">
@@ -8084,7 +8104,11 @@ function generateScreens() {
                 </div>
             </div>
         </div>
+    `;
+}
 
+function shopScreenHtml() {
+    return `
         <!-- Магазин (Stars) -->
         <div class="screen" id="shop-screen">
             <div class="screen-header">
@@ -8099,13 +8123,17 @@ function generateScreens() {
                 <div class="shop-items" id="shop-items"></div>
             </div>
         </div>
+    `;
+}
 
+function marketScreenHtml() {
+    // Заголовок совпадает с кнопкой на главном экране. Раньше экран за монеты
+    // назывался «Магазин», как и экран за звёзды, — два разных
+    // магазина с одинаковым названием.
+    return `
         <!-- Магазин за монеты -->
         <div class="screen" id="market-screen">
             <div class="screen-header">
-                // Заголовок совпадает с кнопкой на главном экране. Раньше экран за монеты
-                // назывался «Магазин», как и экран за звёзды, — два разных
-                // магазина с одинаковым названием.
                 <h2>🛒 Рынок</h2>
                 <span class="shop-coins-balance">🪙 <strong id="shop-coins-balance">0</strong></span>
             </div>
@@ -8120,7 +8148,11 @@ function generateScreens() {
                 <div class="shop-items shop-items-list" id="shop-items-list"></div>
             </div>
         </div>
+    `;
+}
 
+function wheelScreenHtml() {
+    return `
         <!-- Колесо удачи -->
         <div class="screen" id="wheel-screen">
             <div class="screen-header">
@@ -8142,7 +8174,11 @@ function generateScreens() {
                 </div>
             </div>
         </div>
+    `;
+}
 
+function ratingScreenHtml() {
+    return `
         <!-- Рейтинг -->
         <div class="screen" id="rating-screen">
             <div class="screen-header">
@@ -8156,7 +8192,11 @@ function generateScreens() {
                 <div class="rating-list" id="rating-list"></div>
             </div>
         </div>
+    `;
+}
 
+function pvpPlayersScreenHtml() {
+    return `
         <!-- PvP игроки -->
         <div class="screen" id="pvp-players-screen">
             <div class="screen-header">
@@ -8170,7 +8210,11 @@ function generateScreens() {
                 <button class="btn" id="pvp-refresh-btn">🔄 Обновить</button>
             </div>
         </div>
+    `;
+}
 
+function pvpFightScreenHtml() {
+    return `
         <!-- PvP бой -->
         <div class="screen" id="pvp-fight-screen">
             <div class="screen-header">
@@ -8210,8 +8254,11 @@ function generateScreens() {
                 </div>
             </div>
         </div>
+    `;
+}
 
-        <!-- PvP статистика -->
+function pvpStatsScreenHtml() {
+    return `
         <div class="screen" id="pvp-stats-screen">
             <div class="screen-header">
                 <button class="back-btn" data-screen="pvp-players">← Назад</button>
@@ -8219,52 +8266,30 @@ function generateScreens() {
             </div>
             <div class="pvp-stats-content" id="pvp-stats-content">
                 <div class="pvp-stats-grid">
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-rating-value">1000</span>
-                        <span class="stat-label">Рейтинг</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-wins">0</span>
-                        <span class="stat-label">Побед</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-losses">0</span>
-                        <span class="stat-label">Поражений</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-streak">0</span>
-                        <span class="stat-label">Текущая серия</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-max-streak">0</span>
-                        <span class="stat-label">Лучшая серия</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-damage-dealt">0</span>
-                        <span class="stat-label">Урона нанесено</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-damage-taken">0</span>
-                        <span class="stat-label">Урона получено</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-coins-lost">0</span>
-                        <span class="stat-label">Потеряно монет</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-value" id="pvp-items-lost">0</span>
-                        <span class="stat-label">Потеряно предметов</span>
-                    </div>
+${Templates.statCard('', '<span id="pvp-rating-value">1000</span>', 'Рейтинг')}
+${Templates.statCard('', '<span id="pvp-wins">0</span>', 'Побед')}
+${Templates.statCard('', '<span id="pvp-losses">0</span>', 'Поражений')}
+${Templates.statCard('', '<span id="pvp-streak">0</span>', 'Текущая серия')}
+${Templates.statCard('', '<span id="pvp-max-streak">0</span>', 'Лучшая серия')}
+${Templates.statCard('', '<span id="pvp-damage-dealt">0</span>', 'Урона нанесено')}
+${Templates.statCard('', '<span id="pvp-damage-taken">0</span>', 'Урона получено')}
+${Templates.statCard('', '<span id="pvp-coins-lost">0</span>', 'Потеряно монет')}
+${Templates.statCard('', '<span id="pvp-items-lost">0</span>', 'Потеряно предметов')}
                 </div>
                 <div class="pvp-cooldown" id="pvp-cooldown" style="display:none">
                     <span>⏱️ Кулдаун: </span>
                     <span id="pvp-cooldown-timer">0:00</span>
                 </div>
-                <h3>Последние бои</h3>
-                <div class="pvp-recent-matches-list" id="pvp-recent-matches-list"></div>
             </div>
-        </div>
 
+            <h3>Последние бои</h3>
+            <div class="pvp-recent-matches-list" id="pvp-recent-matches-list"></div>
+        </div>
+    `;
+}
+
+function achievementsScreenHtml() {
+    return `
         <!-- Достижения -->
         <div class="screen" id="achievements-screen">
             <div class="screen-header">
@@ -8275,11 +8300,15 @@ function generateScreens() {
                 <div class="achievements-list" id="achievements-list"></div>
             </div>
         </div>
-
     `;
+}
 
-    // Добавляем модальное окно и уведомления после экранов
-    const modalsHtml = `
+/**
+ * Модальное окно. Единственный экран, который не входит в SCREEN_BUILDERS:
+ * вставляется вместе с ними, но живёт отдельной функцией.
+ */
+function modalHtml() {
+    return `
         <!-- Модальное окно -->
         <div class="modal" id="modal" style="display:none">
             <div class="modal-content">
@@ -8289,8 +8318,6 @@ function generateScreens() {
             </div>
         </div>
     `;
-
-    gameContent.insertAdjacentHTML('beforeend', screensHtml + modalsHtml);
 }
 
 /**
@@ -9157,7 +9184,6 @@ async function buyCoinItem(itemId, triggerButton = null) {
  */
 
 
-
 /**
  * Класс ParticleSystem - управление визуальными эффектами
  * Улучшенная версия с защитой от утечек памяти
@@ -9390,30 +9416,457 @@ function showSparks(x, y, count = 15) {
 }
 
 
+/* ==========================================================================
+ * КАРТА ГОРОДА — ПОЛНАЯ ПЕРЕРАБОТКА
+ * ==========================================================================
+ *
+ * Что было сломано:
+ *
+ * 1. КРУГИ ЛОКАЦИЙ ВЫХОДИЛИ ЗА ПРЕДЕЛЫ КАРТЫ.
+ *    `radius = 40 + (i * 35)` — радиус рос линейно на 35px за локацию.
+ *    При canvas 340×380 центр (170,190), и уже 4-я локация оказывалась на
+ *    x=280 (при радиусе круга 30 — край 310, впритык), 5-я на y=335
+ *    (низ 365 при высоте 380), 6-я на x=356 — ЗА пределом 340. Locаций
+ *    больше пяти обрезались насовсем.
+ *
+ * 2. РАДИУС КЛИКА НЕ СОВПАДАЛ С ОТРИСОВКОЙ.
+ *    В gameState.locationPositions писался radius: 30, а drawLocation
+ *    рисует 35 при наведении. Край подсвеченного круга не реагировал.
+ *
+ * 3. НЕ БЫЛО DPR — НА RETINA КАРТА МЫЛЬНАЯ.
+ *    canvas 350×400 CSS сжимает до 340px, но внутреннее разрешение
+ *    остаётся 350. На DPR 2 рисуем в 700×800, а показываем в 350×400 —
+ *    иначе линии и текст «плавают».
+ *
+ * 4. ДОРОГИ — ПУНКТИРНЫЕ ЛИНИИ, СОЕДИНЯЮЩИЕ ВСЁ ПОДРЯД.
+ *    setLineDash([5,10]) серым #646464 соединял locations[i] с [i+1] по
+ *    порядку списка, а не по географии. Выглядело как чертёж, не как
+ *    разрушенная трасса.
+ *
+ * 5. КЛИК СЧИТАЛСЯ С УЧЁТОМ НЕТОЧНОГО scaleX.
+ *    `width / rect.width` без DPR давал промахи на retina-экранах.
+ *
+ * Теперь: единый модуль с раскладкой по границам, DPR, дорогами-трассами
+ * и согласованными радиусами отрисовки/клика.
+ * ======================================================================== */
 
+/** Стабильные цвета материалов — те же токены, что в CSS. */
+const MAP_COLORS = Object.freeze({
+    metal900: '#14120f',
+    metal800: '#1a1814',
+    metal700: '#2a2520',
+    metal400: '#4a4235',
+    rust500: '#8b4513',
+    rust400: '#b5651d',
+    rust300: '#d4a574',
+    road: 'rgba(74, 66, 53, 0.55)',
+    roadEdge: 'rgba(0, 0, 0, 0.45)',
+    locked: '#3a352e',
+    unlockedA: '#6b96bd',
+    unlockedB: '#35566f',
+    rim: '#8fbde8',
+    rimLocked: '#5a5348'
+});
+
+/** Радиус круга локации в логических пикселях (общий для отрисовки и клика). */
+const MAP_LOCATION_RADIUS = 30;
+/** Радиус увеличенного круга при наведении/выборе. */
+const MAP_LOCATION_RADIUS_ACTIVE = 36;
 
 /**
- * Общие данные канвы карты: контекст, размеры и список локаций.
- * renderLocations() и redrawMap() нуждались в одинаковой прологовой
- * части, которая раньше была скопирована в обе.
+ * Пересчитать канву под физическое разрешение экрана.
+ *
+ * Ставит canvas.width/height с учётом devicePixelRatio, поэтому на retina
+ * линии не мылят. Логические размеры (CSS-пиксели) читаются из
+ * getBoundingClientRect — их и используют все расчёты раскладки.
+ *
+ * @param {HTMLCanvasElement} canvas
+ * @returns {{ctx: CanvasRenderingContext2D, width: number, height: number}}
  */
 function readMapCanvas(canvas) {
-    return {
-        ctx: canvas.getContext('2d'),
-        width: canvas.width,
-        height: canvas.height,
-        locations: gameState.locations || []
-    };
+    const rect = canvas.getBoundingClientRect();
+    // Запас на случай, когда экран скрыт (rect = 0): берём attribute-размер.
+    const cssWidth = rect.width || Number(canvas.getAttribute('width')) || 340;
+    const cssHeight = rect.height || Number(canvas.getAttribute('height')) || 380;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+    const physicalWidth = Math.round(cssWidth * dpr);
+    const physicalHeight = Math.round(cssHeight * dpr);
+
+    // Меняем размер только при реальном изменении: присвоение canvas.width
+    // (даже тем же значением) сбрасывает контекст и чистит рисунок.
+    if (canvas.width !== physicalWidth || canvas.height !== physicalHeight) {
+        canvas.width = physicalWidth;
+        canvas.height = physicalHeight;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+        // Дальше все координаты — в CSS-пикселях, поэтому масштабируем
+        // контекст один раз. Без этого на DPR 2 круг уезжал бы вдвое.
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    return { ctx, width: cssWidth, height: cssHeight };
+}
+
+/**
+ * Расчёт позиций локаций так, чтобы ВСЕ круги гарантированно влезали.
+ *
+ * Заменяет `radius = 40 + i*35`, который обрезал локации с 4–5-й.
+ * Теперь радиус ограничен половиной минимальной стороны минус запас
+ * под круг и его подпись, а угол распределяет локации по кругу.
+ *
+ * Зазор защищает от наложения кругов друг на друга: если после раскладки
+ * две локации ближе чем 2*радиус, они раздвигаются по радиусу.
+ *
+ * @param {number} count - количество локаций
+ * @param {number} width - ширина в логических пикселях
+ * @param {number} height - высота в логических пикселях
+ * @returns {Array<{x: number, y: number}>}
+ */
+function calculateLocationPositions(count, width, height) {
+    if (!count || count < 1) return [];
+
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // Зазор от края: круг + его радиационное свечение + подпись уровня.
+    const margin = MAP_LOCATION_RADIUS + 14;
+    const maxRadius = Math.max(
+        MAP_LOCATION_RADIUS,
+        Math.min(width, height) / 2 - margin
+    );
+
+    // Первая локация — в центре (убежище игрока), остальные кольцом.
+    // При многих локациях кольцо расширяется до предельного радиуса.
+    const positions = [];
+    for (let i = 0; i < count; i++) {
+        if (i === 0) {
+            positions.push({ x: centerX, y: centerY });
+            continue;
+        }
+
+        // Распределяем кольцо равномерно, начиная с «севера».
+        const angle = ((i - 1) / (count - 1)) * Math.PI * 2 - Math.PI / 2;
+        // Первое кольцо ближе к центру, чтобы не упираться в край сразу.
+        const radius = count === 2
+            ? maxRadius * 0.55
+            : maxRadius * (0.6 + 0.4 * (((i - 1) % Math.max(1, count - 2)) / Math.max(1, count - 2)));
+
+        positions.push({
+            x: centerX + Math.cos(angle) * radius,
+            y: centerY + Math.sin(angle) * radius
+        });
+    }
+
+    return clampPositionsToBounds(positions, width, height);
+}
+
+/**
+ * Подтянуть позиции внутрь границ и раздвинуть наложившиеся круги.
+ *
+ * @param {Array<{x:number,y:number}>} positions
+ * @param {number} width
+ * @param {number} height
+ * @returns {Array<{x:number,y:number}>}
+ */
+function clampPositionsToBounds(positions, width, height) {
+    const minX = MAP_LOCATION_RADIUS + 2;
+    const minY = MAP_LOCATION_RADIUS + 2;
+    const maxX = width - MAP_LOCATION_RADIUS - 2;
+    const maxY = height - MAP_LOCATION_RADIUS - 2;
+    const minDist = MAP_LOCATION_RADIUS * 2 + 4;
+
+    // Клампим каждый круг в границы (учитывает случай узкой/низкой канвы).
+    for (const p of positions) {
+        p.x = Math.min(Math.max(p.x, minX), Math.max(minX, maxX));
+        p.y = Math.min(Math.max(p.y, minY), Math.max(minY, maxY));
+    }
+
+    // Раздвигаем наложения: 6 проходов хватает, потому что кругов мало.
+    for (let pass = 0; pass < 6; pass++) {
+        let moved = false;
+
+        for (let i = 0; i < positions.length; i++) {
+            for (let j = i + 1; j < positions.length; j++) {
+                const dx = positions[j].x - positions[i].x;
+                const dy = positions[j].y - positions[i].y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist < minDist && dist > 0.001) {
+                    const push = (minDist - dist) / 2;
+                    const ux = dx / dist;
+                    const uy = dy / dist;
+                    positions[i].x -= ux * push;
+                    positions[i].y -= uy * push;
+                    positions[j].x += ux * push;
+                    positions[j].y += uy * push;
+                    moved = true;
+                }
+            }
+        }
+
+        // После раздвигания снова загоняем в границы.
+        if (moved) {
+            for (const p of positions) {
+                p.x = Math.min(Math.max(p.x, minX), Math.max(minX, maxX));
+                p.y = Math.min(Math.max(p.y, minY), Math.max(minY, maxY));
+            }
+        }
+    }
+
+    return positions;
+}
+
+/**
+ * Рисует фон карты: ночное небо, звёзды, силуэты города, земля.
+ *
+ * Материалы едины с CSS: --noise сейчас не используется (шум на канве
+ * дорог стоит per-pixel), вместо него — ржавые подтёки на силуэтах.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} width
+ * @param {number} height
+ */
+function drawCityBackground(ctx, width, height) {
+    const bg = gameState.cityBackground;
+    const prevWidth = bg.width;
+    const prevHeight = bg.height;
+    const sizeChanged = prevWidth !== width || prevHeight !== height;
+
+    if (!bg.stars || sizeChanged) {
+        bg.stars = [];
+        for (let i = 0; i < 60; i++) {
+            bg.stars.push({
+                x: Math.random() * width,
+                y: Math.random() * height * 0.45,
+                size: Math.random() * 1.4 + 0.3,
+                twinkle: Math.random() * Math.PI * 2
+            });
+        }
+    }
+
+    if (!bg.buildings || sizeChanged) {
+        bg.buildings = [];
+        let x = -20;
+        while (x < width + 20) {
+            const w = 22 + Math.random() * 46;
+            bg.buildings.push({
+                x,
+                w,
+                h: 40 + Math.random() * 140
+            });
+            x += w + 4 + Math.random() * 18;
+        }
+    }
+
+    bg.width = width;
+    bg.height = height;
+
+    // Ночное небо: сверху темнее, у горизонта теплее (ржавая дымка).
+    const sky = ctx.createLinearGradient(0, 0, 0, height);
+    sky.addColorStop(0, MAP_COLORS.metal900);
+    sky.addColorStop(0.55, MAP_COLORS.metal800);
+    sky.addColorStop(1, '#2f2820');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, width, height);
+
+    // Звёзды. Мерцание — только если анимации не отключены.
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const t = reduceMotion ? 0 : performance.now() / 1000;
+    ctx.fillStyle = 'rgba(255, 240, 214, 0.55)';
+    for (const star of bg.stars) {
+        const flicker = reduceMotion ? 1 : 0.6 + 0.4 * Math.sin(t * 1.6 + star.twinkle);
+        ctx.globalAlpha = flicker;
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Силуэты города у горизонта.
+    for (const b of bg.buildings) {
+        ctx.fillStyle = MAP_COLORS.metal900;
+        ctx.fillRect(b.x, height - b.h, b.w, b.h);
+
+        // Ржавые подтёки на «стенах» — та же фактура, что у кнопок.
+        ctx.fillStyle = 'rgba(139, 69, 19, 0.10)';
+        ctx.fillRect(b.x, height - b.h, 2, b.h);
+        ctx.fillRect(b.x + b.w - 3, height - b.h, 3, b.h);
+
+        // Окна: единичные тёплые точки, не сетка.
+        ctx.fillStyle = 'rgba(212, 165, 116, 0.22)';
+        for (let wy = height - b.h + 10; wy < height - 12; wy += 16) {
+            for (let wx = b.x + 5; wx < b.x + b.w - 5; wx += 12) {
+                if ((wx + wy) % 7 < 2) {
+                    ctx.fillRect(wx, wy, 3, 5);
+                }
+            }
+        }
+    }
+
+    // Земля.
+    const ground = ctx.createLinearGradient(0, height - 90, 0, height);
+    ground.addColorStop(0, '#241f19');
+    ground.addColorStop(1, MAP_COLORS.metal900);
+    ctx.fillStyle = ground;
+    ctx.fillRect(0, height - 90, width, 90);
+
+    // Радиационное свечение от центра — как в UI (--radiation-color).
+    const cx = width / 2;
+    const cy = height / 2;
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(width, height) * 0.55);
+    glow.addColorStop(0, 'rgba(57, 255, 20, 0.055)');
+    glow.addColorStop(1, 'rgba(57, 255, 20, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, width, height);
+}
+
+/**
+ * Дороги от центра к каждой локации.
+ *
+ * Заменяет пунктир `setLineDash([5,10])` между соседями списка: теперь
+ * дорога идёт из центра (убежища) к локации, как настоящая трасса —
+ * с тёмной кромкой, светлым полотном и ржавыми трещинами.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array<{x:number,y:number}>} positions
+ */
+function drawRoads(ctx, positions) {
+    if (positions.length < 2) return;
+
+    const center = positions[0];
+
+    ctx.lineCap = 'round';
+
+    for (let i = 1; i < positions.length; i++) {
+        const target = positions[i];
+
+        // Ломаная трасса вместо прямой: две промежуточные точки со
+        // случайным смещением, чтобы дороги не выглядели линейкой.
+        const mid1 = {
+            x: center.x + (target.x - center.x) * 0.33 + (Math.random() - 0.5) * 28,
+            y: center.y + (target.y - center.y) * 0.33 + (Math.random() - 0.5) * 28
+        };
+        const mid2 = {
+            x: center.x + (target.x - center.x) * 0.66 + (Math.random() - 0.5) * 28,
+            y: center.y + (target.y - center.y) * 0.66 + (Math.random() - 0.5) * 28
+        };
+
+        // Тёмная кромка (разрушенные обочины).
+        ctx.strokeStyle = MAP_COLORS.roadEdge;
+        ctx.lineWidth = 7;
+        ctx.beginPath();
+        ctx.moveTo(center.x, center.y);
+        ctx.lineTo(mid1.x, mid1.y);
+        ctx.lineTo(mid2.x, mid2.y);
+        ctx.lineTo(target.x, target.y);
+        ctx.stroke();
+
+        // Полотно.
+        ctx.strokeStyle = MAP_COLORS.road;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(center.x, center.y);
+        ctx.lineTo(mid1.x, mid1.y);
+        ctx.lineTo(mid2.x, mid2.y);
+        ctx.lineTo(target.x, target.y);
+        ctx.stroke();
+
+        // Разметка: короткие ржавые штрихи по центру полотна.
+        ctx.strokeStyle = 'rgba(139, 69, 19, 0.30)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 8]);
+        ctx.beginPath();
+        ctx.moveTo(center.x, center.y);
+        ctx.lineTo(target.x, target.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+}
+
+/**
+ * Рисует одну локацию: свечение, круг, обводка, иконка, уровень.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} loc локация
+ * @param {{x:number,y:number}} pos
+ * @param {boolean} isHovered подсвечена (наведение или выбор)
+ */
+function drawLocation(ctx, loc, pos, isHovered = false) {
+    const radius = isHovered ? MAP_LOCATION_RADIUS_ACTIVE : MAP_LOCATION_RADIUS;
+    const unlocked = Boolean(loc.unlocked);
+
+    // Радиационное свечение: у открытых — холодное, у закрытых — металл.
+    const glow = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, radius + 16);
+    glow.addColorStop(0, unlocked ? 'rgba(122, 170, 214, 0.32)' : 'rgba(90, 83, 72, 0.28)');
+    glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, radius + 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Корпус круга: градиент «выпуклый металл» с верхним светом.
+    const grad = ctx.createRadialGradient(pos.x - radius * 0.35, pos.y - radius * 0.4, 0, pos.x, pos.y, radius);
+    if (unlocked) {
+        grad.addColorStop(0, MAP_COLORS.unlockedA);
+        grad.addColorStop(1, MAP_COLORS.unlockedB);
+    } else {
+        grad.addColorStop(0, '#4a443a');
+        grad.addColorStop(1, MAP_COLORS.locked);
+    }
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Тень внутрь круга — «вдавленный» диск, а не наклейка.
+    const inner = ctx.createRadialGradient(pos.x, pos.y, radius * 0.2, pos.x, pos.y, radius);
+    inner.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    inner.addColorStop(1, 'rgba(0, 0, 0, 0.35)');
+    ctx.fillStyle = inner;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Обводка. У подсвеченной — ржавая, как у всех активных состояний UI.
+    ctx.strokeStyle = isHovered ? MAP_COLORS.rust400 : (unlocked ? MAP_COLORS.rim : MAP_COLORS.rimLocked);
+    ctx.lineWidth = isHovered ? 3 : 2;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Иконка локации.
+    ctx.font = `${isHovered ? 26 : 22}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(loc.icon || '📍', pos.x, pos.y - 2);
+
+    // Требуемый уровень у закрытых локаций — вместо неинформативного
+    // приглушённого серого круга, по которому непонятно, когда откроется.
+    const required = Number(loc.required_level ?? loc.min_level ?? 1);
+    if (!unlocked && required > 1) {
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(224, 122, 110, 0.95)';
+        ctx.fillText(`${required} ур.`, pos.x, pos.y + radius - 6);
+    }
+
+    // Подпись текущей локации игрока.
+    if (Number(gameState.player?.current_location_id) === Number(loc.id)) {
+        ctx.font = 'bold 9px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(126, 231, 135, 0.95)';
+        ctx.fillText('ВЫ ЗДЕСЬ', pos.x, pos.y - radius - 6);
+    }
 }
 
 /**
  * Рисует карту целиком: фон, дороги, локации.
  *
- * Единственная реализация отрисовки. Раньше renderLocations() и
- * redrawMap() каждая содержали свою копию (ctx/clearRect/фон/позиции/
- * дороги/локации) — правка, например, нового слоя карты попадала
- * только в одну из них, и карта выглядела по-разному при первом рендере
- * и при наведении мыши.
+ * Единственная реализация отрисовки (renderLocations и redrawMap обе идут
+ * сюда). Радиусы клика синхронизированы с отрисовкой: hoveredLoc из
+ * paintCityMap даёт увеличенный круг, и запись в locationPositions берёт
+ * тот же размер, поэтому край подсвеченного круга реагирует на тап.
  *
  * @param {Object|null} hoveredLoc - локация под курсором (для подсветки)
  */
@@ -9421,7 +9874,9 @@ function paintCityMap(hoveredLoc) {
     const canvas = document.getElementById('city-map');
     if (!canvas) return;
 
-    const { ctx, width, height, locations } = readMapCanvas(canvas);
+    const { ctx, width, height } = readMapCanvas(canvas);
+    const locations = gameState.locations || [];
+    if (!ctx) return;
 
     ctx.clearRect(0, 0, width, height);
     drawCityBackground(ctx, width, height);
@@ -9429,109 +9884,112 @@ function paintCityMap(hoveredLoc) {
     const positions = calculateLocationPositions(locations.length, width, height);
     drawRoads(ctx, positions);
 
+    // Запоминаем позиции для клика — радиус как у отрисовки.
+    gameState.locationPositions = {};
     locations.forEach((loc, index) => {
         const pos = positions[index];
         const isHovered = Boolean(hoveredLoc && hoveredLoc.id === loc.id);
         drawLocation(ctx, loc, pos, isHovered);
+
+        gameState.locationPositions[loc.id] = {
+            x: pos.x,
+            y: pos.y,
+            // Раньше был захардкожен 30, а круг при наведении рос до 35:
+            // край подсвеченной локации не принимал тап.
+            radius: isHovered ? MAP_LOCATION_RADIUS_ACTIVE : MAP_LOCATION_RADIUS
+        };
     });
 }
 
 /**
- * Отрисовка локаций на Canvas карте
+ * Отрисовка локаций на канве + установка обработчиков ввода.
+ *
+ * Считает одноразовую привязку: при повторном вызове (смена экрана,
+ * resize) слушатели навешиваются заново, поэтому сначала снимаем старые
+ * присвоением null — канва одна, и дублировать обработчики нельзя.
  */
 function renderLocations() {
     const canvas = document.getElementById('city-map');
     if (!canvas) return;
 
-    const { width, height, locations } = readMapCanvas(canvas);
-
-    // Сохраняем позиции для кликов
-    gameState.locationPositions = {};
-    const positions = calculateLocationPositions(locations.length, width, height);
-    locations.forEach((loc, index) => {
-        const pos = positions[index];
-        gameState.locationPositions[loc.id] = { x: pos.x, y: pos.y, radius: 30 };
-    });
-
+    renderLocations._bound = renderLocations._bound || null;
     paintCityMap(null);
 
-    // Обработчик клика по карте
-    canvas.onclick = (e) => {
+    const handlePick = (clientX, clientY) => {
         const rect = canvas.getBoundingClientRect();
-        const scaleX = width / rect.width;
-        const scaleY = height / rect.height;
-        const x = (e.clientX - rect.left) * scaleX;
-        const y = (e.clientY - rect.top) * scaleY;
-        
-        // Проверяем клик по локациям
+        if (!rect.width || !rect.height) return;
+
+        // Координаты клиента — в CSS-пикселях канвы. Все расчёты раскладки
+        // тоже в CSS-пикселях (readMapCanvas масштабирует ctx по DPR),
+        // поэтому приведение сводится к одному вычитанию. Раньше здесь был
+        // scaleX/scaleY от canvas.width, что на retina давало двойной промах.
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+
+        const locations = gameState.locations || [];
+        let picked = null;
         for (const loc of locations) {
             const pos = gameState.locationPositions[loc.id];
             if (!pos || pos.radius === undefined) continue;
-            
-            const dist = Math.sqrt((x - pos.x) ** 2 + (y - pos.y) ** 2);
-            
-            if (dist < pos.radius) {
-                // Тап по локации теперь ВЫБИРАЕТ её и показывает детали,
-                // а не переводит сразу. Причина: игра идёт в мобильном
-                // Telegram WebView, где наведения мыши нет — игрок тапал по
-                // зоне и уезжал в неё, не увидев ни радиации, ни инфекции,
-                // ни риска. Переход — явной кнопкой.
-                selectMapLocation(loc);
-                return;
-            }
-        }
-    };
-    
-    // Обработчик движения мыши (подсветка)
-    //
-    // Две оптимизации против «карта сама ездит под курсором»:
-    // 1) DOM обновляется только при СМЕНЕ локации под курсором;
-    // 2) canvas перерисовывается не чаще одного раза на кадр (requestAnimationFrame),
-    //    а не на каждое событие mousemove — раньше это были десятки полных
-    //    отрисовок в секунду.
-    canvas.onmousemove = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = width / rect.width;
-        const scaleY = height / rect.height;
-        const x = (e.clientX - rect.left) * scaleX;
-        const y = (e.clientY - rect.top) * scaleY;
-
-        let hoveredLoc = null;
-        for (const loc of locations) {
-            const pos = gameState.locationPositions[loc.id];
-            if (!pos || pos.radius === undefined) continue;
-
-            const dist = Math.sqrt((x - pos.x) ** 2 + (y - pos.y) ** 2);
-            if (dist < pos.radius) {
-                hoveredLoc = loc;
+            const dist = Math.hypot(x - pos.x, y - pos.y);
+            if (dist <= pos.radius) {
+                picked = loc;
                 break;
             }
         }
 
-        const hoveredId = hoveredLoc ? Number(hoveredLoc.id) : 0;
-        if (hoveredId !== hoveredMapLocationId) {
-            hoveredMapLocationId = hoveredId;
-            // Общая функция для наведения и тапа: раньше эти ветки расходились,
-            // и палец на телефоне не показывал детали вообще.
-            selectMapLocation(hoveredLoc);
-            scheduleMapRepaint(hoveredLoc);
+        const pickedId = picked ? Number(picked.id) : 0;
+        if (pickedId !== hoveredMapLocationId) {
+            hoveredMapLocationId = pickedId;
+            selectMapLocation(picked);
+            scheduleMapRepaint(picked);
         }
     };
 
-    canvas.onmouseleave = () => {
-        const infoEl = document.getElementById('map-location-info');
-        if (infoEl) infoEl.style.display = 'none';
-        const travelBtn = document.getElementById('map-travel-btn');
-        if (travelBtn) {
-            travelBtn.style.display = 'none';
-            delete travelBtn.dataset.locationId;
-        }
-        const nameEl = document.querySelector('.map-location-name');
-        if (nameEl) nameEl.textContent = 'Выберите локацию';
+    // Снимаем прежние слушатели: иначе после повторного renderLocations
+    // (например, после resize) один тап обрабатывался бы дважды.
+    if (renderLocations._cleanup) renderLocations._cleanup();
 
+    const onClick = (e) => handlePick(e.clientX, e.clientY);
+    const onMouseMove = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        let under = null;
+        for (const loc of gameState.locations || []) {
+            const pos = gameState.locationPositions[loc.id];
+            if (!pos) continue;
+            if (Math.hypot(x - pos.x, y - pos.y) <= pos.radius) {
+                under = loc;
+                break;
+            }
+        }
+
+        const underId = under ? Number(under.id) : 0;
+        if (underId !== hoveredMapLocationId) {
+            hoveredMapLocationId = underId;
+            selectMapLocation(under);
+            scheduleMapRepaint(under);
+        }
+    };
+
+    const onMouseLeave = () => {
         hoveredMapLocationId = 0;
         lastSelectedMapLocationId = 0;
         scheduleMapRepaint(null);
+    };
+
+    canvas.addEventListener('click', onClick);
+    canvas.addEventListener('mousemove', onMouseMove);
+    canvas.addEventListener('mouseleave', onMouseLeave);
+
+    renderLocations._cleanup = () => {
+        canvas.removeEventListener('click', onClick);
+        canvas.removeEventListener('mousemove', onMouseMove);
+        canvas.removeEventListener('mouseleave', onMouseLeave);
+        renderLocations._cleanup = null;
     };
 }
 
@@ -9566,188 +10024,29 @@ function redrawMap(hoveredLoc) {
 }
 
 /**
- * Расчёт позиций локаций на карте
- * @param {number} count - количество локаций
- * @param {number} width - ширина canvas
- * @param {number} height - высота canvas
- * @returns {Array} массив позиций
+ * Перерисовать карту при изменении размера окна/повороте экрана.
+ *
+ * Раньше ресайз не обрабатывался вовсе: канва сохраняла старые координаты
+ * локаций, и после поворота телефона круги оказывались за пределами
+ * видимой области.
  */
-function calculateLocationPositions(count, width, height) {
-    const positions = [];
-    const centerX = width / 2;
-    const centerY = height / 2;
-    
-    // Располагаем локации от центра к краям по кругу
-    for (let i = 0; i < count; i++) {
-        const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
-        const radius = 40 + (i * 35);
-        positions.push({
-            x: centerX + Math.cos(angle) * radius,
-            y: centerY + Math.sin(angle) * radius
-        });
-    }
-    
-    return positions;
+function initCityMapResize() {
+    if (initCityMapResize._bound) return;
+    initCityMapResize._bound = true;
+
+    let resizeTimer = null;
+    const onResize = () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            const canvas = document.getElementById('city-map');
+            if (!canvas) return;
+            renderLocations();
+        }, 120);
+    };
+
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
 }
-
-/**
- * Рисуем фон карты (постапокалиптический город)
- * @param {CanvasRenderingContext2D} ctx - контекст canvas
- * @param {number} width - ширина
- * @param {number} height - высота
- */
-function drawCityBackground(ctx, width, height) {
-    // Инициализируем или переинициализируем позиции при изменении размера
-    if (!window.cityBackgroundStars || !window.cityBackgroundWidth || window.cityBackgroundWidth !== width || window.cityBackgroundHeight !== height) {
-        window.cityBackgroundStars = [];
-        for (let i = 0; i < 50; i++) {
-            window.cityBackgroundStars.push({
-                x: Math.random() * width,
-                y: Math.random() * height * 0.4,
-                size: Math.random() * 1.5
-            });
-        }
-        window.cityBackgroundWidth = width;
-        window.cityBackgroundHeight = height;
-    }
-    if (!window.cityBackgroundBuildings || !window.cityBackgroundWidth || window.cityBackgroundWidth !== width || window.cityBackgroundHeight !== height) {
-        window.cityBackgroundBuildings = [];
-        for (let i = 0; i < 15; i++) {
-            window.cityBackgroundBuildings.push({
-                x: Math.random() * width,
-                w: 20 + Math.random() * 40,
-                h: 50 + Math.random() * 150
-            });
-        }
-        window.cityBackgroundWidth = width;
-    }
-
-    // Градиент неба
-    //
-    // Раньше здесь стояла старая синяя палитра (#1a1a2e / #16213e /
-    // #0f0f23) — та же, что была в инлайновых стилях загрузочного экрана.
-    // Она же тянулась из удалённых блоков тем, где --bg-card
-    // переопределялся серым. Пока интерфейс был тёплым коричневым, а фон
-    // под ним синим, это читалось как два разных приложения в одном.
-    // Теперь фон берёт те же тёплые тона, что и --bg-dark / --bg-secondary,
-    // а ночь осталась ночью: сверху темнее, у горизонта теплее.
-    const skyGrad = ctx.createLinearGradient(0, 0, 0, height);
-    skyGrad.addColorStop(0, '#16130f');
-    skyGrad.addColorStop(0.5, '#241f19');
-    skyGrad.addColorStop(1, '#2f2820');
-    ctx.fillStyle = skyGrad;
-    ctx.fillRect(0, 0, width, height);
-
-    // Звёзды
-    ctx.fillStyle = 'rgba(255, 240, 214, 0.5)';
-    window.cityBackgroundStars.forEach(star => {
-        ctx.beginPath();
-        ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
-        ctx.fill();
-    });
-
-    // Контуры зданий (силуэты)
-    ctx.fillStyle = '#100e0c';
-    window.cityBackgroundBuildings.forEach(building => {
-        ctx.fillRect(building.x, height - building.h, building.w, building.h);
-    });
-    
-    // Земля
-    const groundGrad = ctx.createLinearGradient(0, height - 80, 0, height);
-    groundGrad.addColorStop(0, '#241f19');
-    groundGrad.addColorStop(1, '#14120f');
-    ctx.fillStyle = groundGrad;
-    ctx.fillRect(0, height - 80, width, 80);
-    
-    // Радиационное свечение от центра. Зелёный совпадает с
-    // --radiation-color (#39ff14) — то же зелёное свечение, что и в UI.
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const radGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 200);
-    radGrad.addColorStop(0, 'rgba(57, 255, 20, 0.05)');
-    radGrad.addColorStop(1, 'rgba(57, 255, 20, 0)');
-    ctx.fillStyle = radGrad;
-    ctx.fillRect(0, 0, width, height);
-}
-
-/**
- * Рисуем дороги между локациями
- * @param {CanvasRenderingContext2D} ctx - контекст canvas
- * @param {Array} positions - позиции локаций
- */
-function drawRoads(ctx, positions) {
-    ctx.strokeStyle = 'rgba(100, 100, 100, 0.3)';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([5, 10]);
-    
-    for (let i = 0; i < positions.length - 1; i++) {
-        ctx.beginPath();
-        ctx.moveTo(positions[i].x, positions[i].y);
-        ctx.lineTo(positions[i + 1].x, positions[i + 1].y);
-        ctx.stroke();
-    }
-    
-    // Дорога от низа экрана к первой локации
-    if (positions.length > 0) {
-        ctx.beginPath();
-        ctx.moveTo(ctx.canvas.width / 2, ctx.canvas.height - 30);
-        ctx.lineTo(positions[0].x, positions[0].y);
-        ctx.stroke();
-    }
-    
-    ctx.setLineDash([]);
-}
-
-/**
- * Рисуем локацию на карте
- * @param {CanvasRenderingContext2D} ctx - контекст canvas
- * @param {Object} loc - данные локации
- * @param {Object} pos - позиция на карте
- * @param {boolean} isHovered - подсветка при наведении
- */
-function drawLocation(ctx, loc, pos, isHovered = false) {
-    const radius = isHovered ? 35 : 30;
-    
-    // Радиационное свечение
-    const radGrad = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, radius + 15);
-    // Заблокированная локация — не серый, а тёмный металл палитры:
-    // серый #444/#666 на тёплом фоне выглядел как чужеродное пятно.
-    const glowColor = loc.unlocked ? 'rgba(122, 170, 214, 0.4)' : 'rgba(90, 83, 72, 0.35)';
-    radGrad.addColorStop(0, glowColor);
-    radGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = radGrad;
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, radius + 15, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Основной круг
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
-    
-    if (loc.unlocked) {
-        // Сталь из палитры (--accent-blue #4a6b8a), осветлённая для читаемости
-        const grad = ctx.createRadialGradient(pos.x - 10, pos.y - 10, 0, pos.x, pos.y, radius);
-        grad.addColorStop(0, '#6b96bd');
-        grad.addColorStop(1, '#35566f');
-        ctx.fillStyle = grad;
-    } else {
-        ctx.fillStyle = '#3a352e';
-    }
-    ctx.fill();
-    
-    // Рамка
-    ctx.strokeStyle = loc.unlocked ? '#8fbde8' : '#5a5348';
-    ctx.lineWidth = isHovered ? 3 : 2;
-    ctx.stroke();
-    
-    // Иконка
-    ctx.font = isHovered ? '24px serif' : '20px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(loc.icon, pos.x, pos.y);
-}
-
-
 
 
 // Функции частиц
@@ -9762,7 +10061,6 @@ window.redrawMap = redrawMap;
  * ============================================
  * Управление CSS анимациями и визуальными эффектами
  */
-
 
 
 /**
@@ -9817,7 +10115,11 @@ function hideModal() {
     // Очищаем обработчики при закрытии
     if (modalClose) {
         modalClose.onclick = null;
-        modalClose.removeEventListener('click', () => hideModal());
+        // ЗДЕСЬ БЫЛ БАГ: removeEventListener('click', () => hideModal()) с НОВОЙ
+        // функцией-обёрткой никогда ничего не удаляет — removeEventListener
+        // сравнивает ссылки, а не тела. Строка выглядела как очистка, но только
+        // снимала onclick. Слушатель из openModalElement() и так одноразовый
+        // ({ once: true }), поэтому снимать его вручную не требуется вовсе.
     }
     modal.onclick = null;
     
@@ -9890,26 +10192,41 @@ function showNotification(message, type = 'info', duration = 3000) {
 }
 
 /**
+ * Корневой контейнер для полноэкранных эффектов.
+ *
+ * Возвращает `#game-content` — контейнер игры, который index.html прячет
+ * до конца инициализации. Раньше обе функции эффектов искали НЕСУЩЕСТВУЮЩИЙ
+ * `#app` и падали на `document.body`. Для `showDamageEffect` это был реальный
+ * баг: damageFlash меняет background-color, и красная вспышка накрывала всю
+ * страницу вместе с модальными окнами.
+ *
+ * `document.body` остаётся только как fallback на случай вызова до постройки DOM.
+ */
+function getEffectsRootElement() {
+    return document.getElementById('game-content') || document.body;
+}
+
+/**
  * Визуальный эффект при получении лута
  * @param {Object} item - данные предмета
  */
 function showLootAnimation(item) {
-    const app = document.getElementById('app') || document.body;
+    const root = getEffectsRootElement();
 
     const lootEl = document.createElement('div');
     lootEl.className = 'loot-animation';
-    
+
     const iconEl = document.createElement('div');
     iconEl.className = 'loot-icon';
     iconEl.textContent = item.icon || '📦';
     lootEl.appendChild(iconEl);
-    
+
     const nameEl = document.createElement('div');
     nameEl.className = 'loot-name';
     nameEl.textContent = item.name || 'Предмет';
     lootEl.appendChild(nameEl);
 
-    app.appendChild(lootEl);
+    root.appendChild(lootEl);
     lootEl.style.animation = 'slideUp 1s ease-out forwards';
 
     setTimeout(() => {
@@ -9918,17 +10235,34 @@ function showLootAnimation(item) {
 }
 
 /**
- * Визуальный эффект при получении урона
+ * Визуальный эффект при получении урона.
+ *
+ * Две правки:
+ * 1. Цель — игровой контейнер (getEffectsRootElement), а не document.body.
+ * 2. Быстрый повтор больше не ломает анимацию: раньше каждый вызов ставил
+ *    свой setTimeout сброса, и срабатывание ПЕРВОГО снимало анимацию второго.
+ *    Теперь таймер сбрасывается, а класс damage-flash снимается по
+ *    animationend — анимацию можно перезапустить без ручных таймеров.
  */
-function showDamageEffect() {
-    // #app в разметке нет (корневой контейнер — #game-content),
-    // поэтому падаем на body, как и showLootAnimation.
-    const app = document.getElementById('app') || document.body;
-    if (!app) return;
+let damageEffectTimerId = null;
 
-    app.style.animation = 'damageFlash 0.3s';
-    setTimeout(() => {
-        app.style.animation = '';
+function showDamageEffect() {
+    const root = getEffectsRootElement();
+    if (!root) return;
+
+    // Снимаем предыдущий сброс: иначе он погасит новую вспышку.
+    if (damageEffectTimerId !== null) {
+        clearTimeout(damageEffectTimerId);
+        damageEffectTimerId = null;
+    }
+
+    root.style.animation = 'none';
+    void root.offsetWidth; // force reflow для перезапуска анимации
+    root.style.animation = 'damageFlash 0.3s';
+
+    damageEffectTimerId = setTimeout(() => {
+        damageEffectTimerId = null;
+        root.style.animation = '';
     }, 300);
 }
 
@@ -9999,7 +10333,6 @@ function updateBalanceDisplay(newCoins) {
         if (gameState?.player) gameState.player.coins = Number(newCoins);
     }
 }
-
 
 
 // =============================================================================
