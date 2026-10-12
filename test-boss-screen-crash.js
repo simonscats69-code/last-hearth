@@ -88,8 +88,12 @@ const ok = (n, c, e) => {
     // 1. Старт боя
     console.log('\n=== 1. POST /api/game/bosses/start ===');
     let r = await call('POST', '/api/game/bosses/start', { boss_id: 1 });
+    // Сервер отдаёт текст ошибки в поле `error` (не `message`), поэтому
+    // проверяем оба: иначе тест падал всякий раз, когда у игрока в БД
+    // оставался активный бой с прошлого запуска.
+    const startErrText = (r.json && (r.json.message || r.json.error)) || '';
     ok('start -> 200 или «уже есть активный бой» (не 404)',
-        r.status === 200 || (r.json && /активн/i.test(r.json.message || '')),
+        r.status === 200 || /активн/i.test(startErrText),
         r.status + ' ' + r.text);
 
     // 2. GET /bosses — данные экрана

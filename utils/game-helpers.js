@@ -435,8 +435,25 @@ const equipmentRules = require('../public/shared/equipment.js');
  * @param {object} equipment экипировка игрока
  * @returns {Promise<Record<string, number>>}
  */
-async function getSetBonuses(equipment) {
-    const sets = await query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
+/**
+ * Бонусы надетых сетов предметов.
+ *
+ * @param {Object} equipment - экипировка игрока (JSON из players.equipment)
+ * @param {Object} [client] - клиент транзакции, если вызов идёт внутри неё.
+ *   Без него `query()` берёт ОТДЕЛЬНОЕ соединение из пула, и внутри
+ *   transaction() это значит два удерживаемых соединения на один старт боя
+ *   поверх FOR UPDATE на строке игрока. С client запрос идёт по соединению
+ *   транзакции.
+ * @returns {Promise<Object>} бонусы сетов
+ */
+async function getSetBonuses(equipment, client = null) {
+/* item_sets меняется только миграциями, поэтому SELECT дешёвый; главная
+     цена была во втором соединении пула, а не в самом чтении.
+     client — объект с методом .query (не функция), поэтому его вызов
+     отличается от глобального query(). */
+    const sets = client
+        ? await client.query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id')
+        : await query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
     return equipmentRules.calculateSetBonuses(equipment, (sets.rows || []).map((row) => ({
         id: row.id,
         bonus_2: safeParseJson(row.bonus_2, {}),

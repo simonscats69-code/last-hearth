@@ -1174,12 +1174,11 @@ const gameState = {
     // Уже показанные анлоки локаций
     seenUnlockedLocations: [],
 
-    // Инсайты для главного экрана
+    // Инсайты для блока рекомендации на главном экране
     mainInsights: {
         loadedAt: 0,
         bosses: [],
-        achievements: [],
-        achievementStats: null
+        achievements: []
     }
 };
 
@@ -1513,10 +1512,10 @@ const Templates = {
                     <span class="boss-icon">${escapeHtml(boss.icon || '👹')}</span>
                     <span class="boss-name">${escapeHtml(boss.name)}</span>
                 </div>
-                <div class="boss-hp-bar">
-                    <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
+                <div class="battle-health">
+                    <div class="battle-health-fill" style="width: ${hpPercent}%"></div>
                 </div>
-                <div class="boss-hp-text">${Number(boss.current_hp)}/${Number(boss.max_hp)} HP</div>
+                <div class="battle-health-text">${Number(boss.current_hp)}/${Number(boss.max_hp)} HP</div>
                 <button class="btn attack-btn" data-attack-boss>Атаковать</button>
             </div>
         `;
@@ -1873,6 +1872,8 @@ function showConfirmDialog(message, options = {}) {
 
     // Снимаем возможное предыдущее содержимое (например, форму пожертвования)
     modalMessage.innerHTML = '';
+    // HTML-окно: pre-line с прошлого текстового showModal снять.
+    modalMessage.classList.remove('has-newlines');
     modalTitle.textContent = title;
 
     const textNode = document.createElement('div');
@@ -2108,9 +2109,12 @@ const SCREENS = [
     'clans-list',     // Список кланов
     'clan-create',    // Создание клана
     'clan-chat',      // Чат клана
-    'shop',           // Магазин (Stars)
-    'market',         // Магазин за монеты
-    'wheel',          // Колесо удачи
+    // Торговля — один экран с под-табами (Рынок / Магазин / Колесо).
+    // Раньше здесь были три отдельных имени 'shop', 'market', 'wheel', но
+    // экраны слиты в один: showScreen() валидирует имя по этому списку и
+    // молча выходит, поэтому отсутствие 'trade' делало экран недоступным
+    // из всех точек входа (главная, карточка рекомендаций, колесо).
+    'trade',
     'rating',         // Рейтинг
     'pvp',            // PvP
     'pvp-players',    // PvP игроки
@@ -2221,9 +2225,14 @@ function onScreenOpen(screenName) {
             }
             break;
 
-        case 'shop':
-            // Открываем магазин (рендерим категорию)
-            openShop();
+        case 'trade':
+            // Экран «Торговля» с под-табами (Рынок/Магазин/Колесо).
+            // Грузим ТОЛЬКО активную панель: раньше здесь стреляли все три
+            // загрузчика сразу, а showScreen() не имеет раннего выхода
+            // «экран уже открыт», поэтому тап по под-табу перезапускал все
+            // три — два лишних fetch и полный ререндер списка в панели,
+            // которая была скрыта.
+            safeAsync('trade', loadTradePanel(activeTradeTab));
             break;
 
         case 'rating':
@@ -2242,20 +2251,12 @@ function onScreenOpen(screenName) {
             safeAsync('achievements', loadAchievements());
             break;
 
-        case 'market':
-            safeAsync('market', loadCoinShop());
-            break;
-
         case 'pvp-players':
             safeAsync('pvp-players', loadPVPGamePlayers());
             break;
 
         case 'pvp-stats':
             safeAsync('pvp-stats', loadPVPStats());
-            break;
-
-        case 'wheel':
-            safeAsync('wheel', loadWheelInfo());
             break;
 
         case 'clan-chat':
@@ -3007,13 +3008,23 @@ function refreshPlayerEnergyUI() {
 
 const MAIN_INSIGHTS_TTL_MS = 60 * 1000;
 
+/**
+ * Кэш данных для блока рекомендации на главном экране.
+ *
+ * Грузит список боссов и достижений с TTL 60 секунд. Раньше здесь же
+ * лежало поле achievementStats — оно записывалось, но никем не читалось:
+ * удалено.
+ *
+ * Карточки «Следующий босс» / «Следующая зона» удалены вместе с
+ * updateJourneyProgress(), но сами данные по-прежнему нужны: из них
+ * строится текст кнопки-рекомендации (getBossInsight/getAchievementInsight).
+ */
 function getMainInsightsStore() {
     if (!gameState.mainInsights) {
         gameState.mainInsights = {
             loadedAt: 0,
             bosses: [],
-            achievements: [],
-            achievementStats: null
+            achievements: []
         };
     }
 
@@ -3045,7 +3056,6 @@ async function refreshMainScreenInsights(force = false) {
         store.achievements = Array.isArray(achievementsResult.value?.progress)
             ? achievementsResult.value.progress
             : [];
-        store.achievementStats = achievementsResult.value?.stats || null;
     }
 
     store.loadedAt = Date.now();
@@ -3265,58 +3275,6 @@ function updateMainRecommendationUI(player) {
 }
 
 /**
- * Карточки целей: следующий босс и следующая зона.
- * Считаются из данных, которые сервер действительно отдаёт: списка боссов
- * (refreshMainScreenInsights кладёт его в mainInsights) и списка локаций.
- * Поле `player.journey` использовать нельзя: сервер его не отдаёт, и обе
- * карточки навсегда показывали бы заглушки «Нет цели»/«Все зоны открыты».
- */
-function updateJourneyProgress(player) {
-    const mainBossEl = document.getElementById('journey-main-boss');
-    const mainBossDescEl = document.getElementById('journey-main-boss-desc');
-    const nextZoneEl = document.getElementById('journey-next-zone');
-    const nextZoneDescEl = document.getElementById('journey-next-zone-desc');
-
-    // --- Следующий босс: первый, кого ещё не побеждали ---
-    const bosses = getMainInsightsStore().bosses;
-    const nextBoss = Array.isArray(bosses)
-        ? bosses.find((boss) => Number(boss.defeated_count || 0) === 0)
-        : null;
-
-    if (mainBossEl) {
-        mainBossEl.textContent = nextBoss ? nextBoss.name : 'Все побеждены';
-    }
-    if (mainBossDescEl) {
-        if (!nextBoss) {
-            mainBossDescEl.textContent = 'Финальный страж позади';
-        } else if (nextBoss.is_unlocked) {
-            mainBossDescEl.textContent = `Доступен · урон ${Number(nextBoss.current_damage) || 0}`;
-        } else {
-            const required = Number(nextBoss.required_keys) || 1;
-            const owned = Number(nextBoss.owned_keys) || 0;
-            mainBossDescEl.textContent = `Ключи: ${owned}/${required}`;
-        }
-    }
-
-    // --- Следующая зона: первая, на которую не хватает уровня ---
-    const level = Math.max(1, Number(player?.level) || 1);
-    const zones = Array.isArray(gameState.locations) ? gameState.locations : [];
-    const nextZone = zones.find((zone) => {
-        const required = Number(zone.required_level ?? zone.min_level ?? 1);
-        return required > level;
-    });
-
-    if (nextZoneEl) {
-        nextZoneEl.textContent = nextZone ? nextZone.name : 'Все зоны открыты';
-    }
-    if (nextZoneDescEl) {
-        nextZoneDescEl.textContent = nextZone
-            ? `Уровень ${Number(nextZone.required_level ?? nextZone.min_level) || 1} · риск ${Number(nextZone.danger_level) || 1}/7`
-            : 'Открыты самые опасные места';
-    }
-}
-
-/**
  * Правила экипировки и расчёт защиты — в public/shared/equipment.js,
  * том же файле, что читает сервер. Копия в браузере разъезжалась с
  * серверной: клиент показывал игроку одну защиту, а сервер начислял другую.
@@ -3435,7 +3393,6 @@ function updateMainScreenInsights(player) {
     if (!player) return;
 
     updateMainRecommendationUI(player);
-    updateJourneyProgress(player);
     updateZonePreparationUI(player);
 }
 
@@ -3451,7 +3408,8 @@ function handleMainGuidanceAction(action) {
             showScreen('bosses');
             break;
         case 'market':
-            showScreen('market');
+            // Рекомендация ведёт на рынок — теперь это под-таб «Торговли».
+            openTradeTab('market');
             break;
         case 'achievements':
             showScreen('achievements');
@@ -3805,29 +3763,41 @@ async function searchLoot() {
         if (result.success) {
             // Сбрасываем кэш рендеринга — инвентарь мог измениться
             RenderCache.clear();
-            
-            // Анимация лута если предмет найден
+
+            // Результат вылазки показываем ВСПЛЫВАЮЩИМ уведомлением, не модалкой.
+            //
+            // Раньше все три исхода (ключ / предмет / пусто) вызывали showModal.
+            // Поиск — частое действие и главная кнопка главного экрана, поэтому
+            // каждый вылазка требовала точного тапа по крестику: в Telegram
+            // WebView нет Esc, а модалка перекрывала экран. При этом
+            // showLootAnimation уже показывал имя предмета всплывающей плашкой,
+            // и информация дублировалась.
+            //
+            // Теперь: анимация лута остаётся (эмоция находки), а текст уходит
+            // в уведомление, которое само исчезает. Длительность зависит от
+            // важности: ключ — редкое событие, даём 5 секунд прочитать.
             if (result.found_key) {
                 // Ключ босса хранится в boss_keys, а не в инвентаре:
                 // сервер присылает его отдельным полем found_key.
                 showLootAnimation(result.found_key);
-                showModal(
-                    '🗝️ Найден ключ!',
-                    `${result.found_key.name} — откроет бой с боссом «${result.found_key.boss_name}».`
+                showNotification(
+                    `🗝️ Найден ключ от «${result.found_key.boss_name}»! Открой боссов, чтобы начать бой.`,
+                    'loot',
+                    5000
                 );
                 playSound('loot');
                 invalidateCache('bosses');
             } else if (result.found_item) {
                 showLootAnimation(result.found_item);
-                showModal(
-                    '🎉 Предмет найден!',
-                    `Вы нашли: ${result.found_item.name} (${result.found_item.rarity})`
+                showNotification(
+                    `🎉 Найден: ${result.found_item.name} (${result.found_item.rarity})`,
+                    'loot',
+                    3500
                 );
             } else {
-                showModal(
-                    '🔍 Поиск',
-                    'Ничего не найдено. Попробуйте ещё раз!'
-                );
+                // Пустая вылазка — штатное событие, поэтому короткое уведомление
+                // без звука и без активного цвета.
+                showNotification('🔍 Ничего не найдено', 'empty', 2000);
             }
             
             // Обновляем энергию в UI
@@ -4561,6 +4531,127 @@ async function sellItem(itemIndex, quantity = null) {
 /**
  * Отрисовка инвентаря
  */
+/**
+ * Главный стат предмета одной строкой — для слота инвентаря.
+ *
+ * Раньше слот показывал только иконку, имя, количество и редкость: что
+ * предмет ДАЁТ, было неизвестно до надевания или использования. Теперь под
+ * именем виден самый важный эффект, поэтому выбор предмета осмысленный.
+ *
+ * Приоритет: самый заметный для выживания эффект первым. Урон оружия —
+ * главная прогрессия боя, поэтому он выше лечения.
+ *
+ * @param {object} item предмет инвентаря
+ * @returns {string|null} HTML строки или null, если статов нет
+ */
+function getItemPrimaryStat(item) {
+    const stats = (item && typeof item.stats === 'object' && item.stats) || {};
+
+    const damage = Number(stats.damage) || 0;
+    const defense = Number(stats.defense) || 0;
+    const heal = Number(stats.healing || stats.health) || 0;
+    const energy = Number(stats.energy) || 0;
+    const contaminationCure = Number(stats.radiation_cure || stats.infection_cure) || 0;
+    const contaminationResist = Number(stats.radiation_resist || stats.infection_resist) || 0;
+
+    // repair/materials не статы — их не показываем как эффект.
+    if (damage > 0) return `<span class="item-primary-stat stat-damage">⚔️ ${damage}</span>`;
+    if (defense > 0) return `<span class="item-primary-stat stat-defense">🛡️ ${defense}</span>`;
+    if (heal > 0) return `<span class="item-primary-stat stat-heal">❤️ ${heal}</span>`;
+    if (contaminationCure > 0) return `<span class="item-primary-stat stat-cure">☢️ −${contaminationCure}</span>`;
+    if (contaminationResist > 0) return `<span class="item-primary-stat stat-resist">☢️ +${contaminationResist}</span>`;
+    if (energy > 0) return `<span class="item-primary-stat stat-energy">⚡ ${energy}</span>`;
+    return null;
+}
+
+/**
+ * Полная карточка предмета в модальном окне.
+ *
+ * Собирает всё, что известно о предмете: статы (через существующий
+ * renderItemStats), прочность и улучшения для снаряжения, цену продажи,
+ * можно ли надеть. Вызывается кнопкой ⓘ в углу слота инвентаря.
+ *
+ * @param {object} item предмет инвентаря
+ */
+function showItemDetailCard(item) {
+    if (!item) return;
+
+    const modal = document.getElementById('modal');
+    const title = document.getElementById('modal-title');
+    const message = document.getElementById('modal-message');
+    if (!modal || !title || !message) return;
+
+    const name = item.name || 'Предмет';
+    const rarityLabel = RARITY_LABELS[item.rarity] || item.rarity || '';
+    const amount = Number(item.quantity || item.count || 1);
+    const isEquippable = isEquippableInventoryItem(item);
+    const sellPrice = Number(item.sell_price || 0);
+
+    title.textContent = `${item.icon || '📦'} ${name}`;
+
+    // Статы через общий рендерер — тот же, что показывается в магазине.
+    // Он возвращает HTML со <br>, поэтому вставляем как есть.
+    const statsHtml = renderItemStats(item.stats || {});
+
+    // Прочность и улучшение — только для снаряжения (у расходников их нет).
+    const durabilityBlock = (item.durability !== undefined && Number(item.max_durability) > 0)
+        ? (() => {
+            const durability = Math.max(0, Number(item.durability) || 0);
+            const max = Number(item.max_durability) || 0;
+            const percent = max > 0 ? Math.round((durability / max) * 100) : 0;
+            // Три состояния: сломано / на исходе / норм. Порог тот же, что
+            // у getDurabilityInfo на сервере — иначе игрок увидит одно в
+            // карточке, а сервер посчитает износ по-другому.
+            const stateClass = durability <= 0 ? 'broken' : (percent <= 25 ? 'critical' : (percent <= 60 ? 'low' : 'ok'));
+            const stateLabel = durability <= 0 ? 'Сломано' : (percent <= 25 ? 'Почти сломано' : (percent <= 60 ? 'Износ' : 'Исправно'));
+            const upgrade = Number(item.upgrade_level) || 0;
+
+            return `
+                <div class="item-detail-row">
+                    <span class="item-detail-label">🔧 Прочность</span>
+                    <span class="item-detail-value">${durability}/${max} (${percent}%) <em class="dur-${stateClass}">${stateLabel}</em>${upgrade > 0 ? ` · <em class="dur-ok">улучшение +${upgrade}</em>` : ''}</span>
+                </div>`;
+        })()
+        : '';
+
+    let rows = '';
+    if (statsHtml) {
+        rows += `
+            <div class="item-detail-row item-detail-stats">
+                <span class="item-detail-label">✨ Даёт</span>
+                <span class="item-detail-value">${statsHtml}</span>
+            </div>`;
+    }
+    rows += durabilityBlock;
+    rows += `
+        <div class="item-detail-row">
+            <span class="item-detail-label">📦 Количество</span>
+            <span class="item-detail-value">${amount} шт.</span>
+        </div>
+        <div class="item-detail-row">
+            <span class="item-detail-label">🎯 Применение</span>
+            <span class="item-detail-value">${isEquippable ? 'Можно надеть (снаряжение)' : 'Можно использовать'}</span>
+        </div>`;
+    if (sellPrice > 0) {
+        rows += `
+            <div class="item-detail-row">
+                <span class="item-detail-label">💰 Продажа</span>
+                <span class="item-detail-value">${sellPrice * amount} 🪙</span>
+            </div>`;
+    }
+
+    // Разметка блочная: pre-line с прошлого текстового окна снять,
+    // иначе пробелы в карточке превратятся в переводы строк.
+    message.classList.remove('has-newlines');
+    message.innerHTML = `
+        <div class="item-detail-card">
+            <div class="item-detail-rarity rarity-${escapeAttribute(item.rarity || 'common')}">${escapeHtml(rarityLabel)}</div>
+            ${rows}
+        </div>`;
+
+    openModalElement(modal);
+}
+
 function renderInventory(items) {
     const grid = document.getElementById('inventory-grid');
     if (!grid) return;
@@ -4593,20 +4684,40 @@ function renderInventory(items) {
         slot.classList.toggle('is-sell-mode', isSellMode);
         slot.classList.toggle('is-unsellable', isSellMode && !canSell);
 
+        // Главный стат одной строкой: что предмет даёт, видно без надевания.
+        // В режиме продажи его место занимает цена — иначе оба числа спорят
+        // за единственную свободную строку слота.
+        const primaryStat = isSellMode ? null : getItemPrimaryStat(item);
+
         slot.dataset.index = item.index;
         slot.innerHTML = `
             <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
             <span class="item-name">${escapeHtml(name)}</span>
+            ${primaryStat || ''}
             ${amount > 1 ? `<span class="item-count">${amount}</span>` : ''}
             ${isSellMode
                 ? `<span class="item-sell-price">${canSell ? `💰 ${sellPrice * amount}` : 'нельзя'}</span>`
                 : `<span class="item-rarity-label">${escapeHtml(rarityLabel)}</span>`}
+            <button type="button" class="item-info-btn" aria-label="Подробнее о предмете: ${escapeAttribute(name)}">ⓘ</button>
         `;
         slot.setAttribute('role', 'button');
         slot.setAttribute('tabindex', '0');
         slot.setAttribute('aria-label', isSellMode
             ? `${name}. Продать за ${sellPrice * amount} монет`
             : `${name}. ${rarityLabel}. ${isEquippable ? 'Нажмите чтобы надеть' : 'Нажмите чтобы использовать'}`);
+
+        // Кнопка «Подробнее» (ⓘ) открывает карточку предмета.
+        //
+        // stopPropagation ОБЯЗАТЕЛЕН: кнопка лежит внутри слота, и без него
+        // тап по ⓘ запускал бы действие предмета — надевал или продавал его,
+        // вместо того чтобы просто показать описание.
+        const infoBtn = slot.querySelector('.item-info-btn');
+        if (infoBtn) {
+            infoBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                showItemDetailCard(item);
+            });
+        }
 
         // Клик: в режиме продажи — продажа, иначе использование/экипировка.
         // Отдельный переключатель вместо long-press: long-press ненадёжен
@@ -4683,6 +4794,7 @@ function showStackSellDialog(item, amount, unitPrice) {
     title.textContent = '💰 Продажа: ' + escapeHtml(item.name || 'предмет');
     
     // Создаем контент с полем ввода количества
+    message.classList.remove('has-newlines');
     message.innerHTML = `
         <div class="sell-dialog">
             <p class="sell-dialog-info">В стопке <strong>${amount}</strong> шт. по <strong>${unitPrice} 🪙</strong> за шт.</p>
@@ -4967,10 +5079,10 @@ function renderBosses(bosses) {
             <div class="boss-info">
                 <div class="boss-name">${escapeHtml(boss.name)}</div>
                 <div class="boss-desc">${escapeHtml(boss.description || '')}</div>
-                <div class="boss-hp-bar">
-                    <div class="boss-hp-fill" style="width: ${hpPercent}%"></div>
+                <div class="battle-health">
+                    <div class="battle-health-fill" style="width: ${hpPercent}%"></div>
                 </div>
-                <div class="boss-hp-text">${formatNumber(currentHp)} / ${formatNumber(maxHp)} HP</div>
+                <div class="battle-health-text">${formatNumber(currentHp)} / ${formatNumber(maxHp)} HP</div>
                 <div class="boss-mastery">Побеждено: ${defeatedCount}</div>
                 <div class="boss-damage">Урон по боссу: ${currentDamage}</div>
                 ${boss.damage_percent ? `<div class="boss-counter">Ответный удар: ~${boss.damage_percent}% здоровья (защита снижает)</div>` : ''}
@@ -4980,7 +5092,7 @@ function renderBosses(bosses) {
                     ${boss.id > 1 ? `<span class="keys-needed">нужно ${keysRequired} ключей</span>` : '<span class="keys-needed">первый босс без ключей</span>'}
                 </div>
             </div>
-            <div class="boss-actions">
+            <div class="battle-actions">
                 ${isUnlocked && canStartSolo
                     ? `<button class="attack-btn start-solo-btn" data-boss-id="${boss.id}">⚔️ Начать бой</button>`
                     : `<button class="attack-btn disabled" disabled>🔒 Соло-бой недоступен</button>`}
@@ -5169,6 +5281,40 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
 
     const playerEnergyEl = document.getElementById('player-energy-display');
     if (playerEnergyEl) playerEnergyEl.textContent = `${playerEnergy}/${playerMaxEnergy}`;
+
+    // Уровень игрока: на телефоне имя и уровень в одну строку не влезают,
+    // поэтому уровень — отдельной подписью под именем.
+    const playerLevelEl = document.getElementById('player-level-display');
+    if (playerLevelEl) {
+        const level = Math.max(1, Number(player.level) || 1);
+        playerLevelEl.textContent = `Уровень ${level}`;
+    }
+
+    // Свой урон по боссу. Источник — current_damage в ответе /start
+    // (та же calculateDamage, что рисует список боссов). Без него игрок
+    // снимал 40, потом 12 и не понимал, почему цифры разные.
+    const playerDamageEl = document.getElementById('player-damage-display');
+    if (playerDamageEl) {
+        const initialDamage = Number(boss.current_damage);
+        if (Number.isFinite(initialDamage) && initialDamage > 0) {
+            playerDamageEl.textContent = `${initialDamage} урона`;
+        } else {
+            // Сервер не прислал урон: лучше честный прочерк, чем догадка.
+            playerDamageEl.textContent = '—';
+        }
+    }
+
+    // Ответный удар босса: процент от текущего здоровья игрока.
+    const bossCounterEl = document.getElementById('boss-counter-label');
+    if (bossCounterEl) {
+        const percent = Number(boss.damage_percent);
+        if (Number.isFinite(percent) && percent > 0) {
+            bossCounterEl.textContent = `Ответный удар: ~${percent}% HP`;
+            bossCounterEl.style.display = '';
+        } else {
+            bossCounterEl.style.display = 'none';
+        }
+    }
 
     const currentBossHp = boss.hp ?? boss.health ?? boss.max_health;
     const maxBossHp = boss.max_hp ?? boss.max_health;
@@ -5454,6 +5600,16 @@ async function attackBoss() {
             // Обновляем HP босса
             updateBossHealthUi(result.boss_hp, result.boss_max_hp);
 
+            // Обновляем «Ваш урон»: сервер считал его той же calculateDamage,
+            // что и первый удар, поэтому после удара показываем фактическое
+            // число. Бафы и улучшения меняют его между ударами — раньше это
+            // было не видно до конца боя.
+            const damageDealt = Number(result.damage_dealt);
+            if (Number.isFinite(damageDealt) && damageDealt > 0) {
+                const playerDamageEl = document.getElementById('player-damage-display');
+                if (playerDamageEl) playerDamageEl.textContent = `${damageDealt} урона`;
+            }
+
             appendCounterDamageToLog(result);
             updatePlayerHealthUi(result.player_health);
             warnAboutBrokenEquipment(result.broken_equipment);
@@ -5620,10 +5776,12 @@ function showDamageAnimation(damage) {
         // просто висело в углу контейнера без анимации.
 
         // Позиционируем относительно ИКОНКИ босса, чтобы число всплывало
-        // над ним. Раньше элемент добавлялся в .boss-fight-container с
-        // position:absolute и без top/left — он появлялся в левом верхнем
-        // углу экрана боя, а не над боссом.
-        const anchor = bossIcon || document.querySelector('.combatant.boss-side');
+        // над ним. Fallback — сторона врага общего компонента боя
+        // (.battle-participant--enemy): старый селектор .combatant.boss-side
+        // удалён вместе с переводом боя на .battle-*, и в рейдовом потоке,
+        // где #boss-icon отсутствует, fallback возвращал null и всплывающий
+        // урон не добавлялся вовсе.
+        const anchor = bossIcon || document.querySelector('.battle-participant--enemy');
         const bossContainer = document.querySelector('.boss-fight-container');
         if (anchor && bossContainer) {
             bossContainer.appendChild(damageText);
@@ -6025,7 +6183,10 @@ function showClanMembersModal(members) {
     const modal = document.getElementById('modal');
 
     if (modalTitle) modalTitle.textContent = 'Участники клана';
-    if (modalMessage) modalMessage.innerHTML = html;
+    if (modalMessage) {
+        modalMessage.classList.remove('has-newlines');
+        modalMessage.innerHTML = html;
+    }
     openModalElement(modal);
 }
 
@@ -6089,24 +6250,23 @@ function showDonateDialog() {
 
     // Сумма подставляется числом (Number выше гарантирует), но идёт
     // через escapeAttribute для единообразия с остальной разметкой.
-    // Обёртка с white-space: normal обязательна: у #modal-message стоит
-    // pre-line (для текстовых сообщений), и без сброса отступы в шаблоне
-    // превратились бы в видимые пробелы.
+    // Инлайновых white-space больше нет: pre-line на #modal-message
+    // включается только для текстовых окон (showModal + '\n'), поэтому
+    // разметка не нуждается в ручном сбросе.
+    modalMessage.classList.remove('has-newlines');
     modalMessage.innerHTML = `
-        <div style="white-space:normal">
-            <p style="text-align:center;margin-bottom:12px">Введи сумму в монетах</p>
+        <div class="donate-dialog">
+            <p class="donate-dialog-title">Введи сумму в монетах</p>
             <input
                 id="donate-amount-input"
+                class="donate-amount-input"
                 type="number"
                 inputmode="numeric"
                 min="1"
                 max="${escapeAttribute(String(maxCoins))}"
                 step="1"
-                placeholder="Например, 100"
-                style="width:100%;padding:12px;border-radius:10px;background:rgba(0,0,0,.35);
-                       border:1px solid var(--border-color);color:var(--text-primary);
-                       font-size:16px;text-align:center">
-            <p style="margin-top:10px;font-size:13px;color:var(--text-secondary)">
+                placeholder="Например, 100">
+            <p class="donate-dialog-available">
                 Доступно: ${formatNumber(maxCoins)} 🪙
             </p>
         </div>
@@ -6213,7 +6373,10 @@ function showClanSettings() {
     const modal = document.getElementById('modal');
     
     if (modalTitle) modalTitle.textContent = 'Настройки клана';
-    if (modalMessage) modalMessage.innerHTML = html;
+    if (modalMessage) {
+        modalMessage.classList.remove('has-newlines');
+        modalMessage.innerHTML = html;
+    }
     openModalElement(modal);
 }
 
@@ -6907,18 +7070,108 @@ async function filterAchievements(category) {
 /**
  * Отрисовка списка достижений
  */
+/**
+ * Размер награды достижения для сортировки «по ценности».
+ *
+ * Звёзды и монеты несопоставимы напрямую (звезда — премиальная валюта за
+ * реальные деньги), поэтому сначала сравниваем звёзды, и только при
+ * равенстве — монеты. Так «5 звёзд» встаёт выше «9999 монет», а не тонет
+ * в них: потерять звёзды игроку неприятнее.
+ *
+ * reward с сервера приходит объектом, но старые записи могли сохраниться
+ * строкой — парсим оба варианта.
+ *
+ * @param {object} ach достижение
+ * @returns {{stars: number, coins: number}}
+ */
+function getAchievementRewardWeight(ach) {
+    let reward = ach?.reward;
+    if (typeof reward === 'string') {
+        try {
+            reward = JSON.parse(reward);
+        } catch {
+            reward = null;
+        }
+    }
+
+    return {
+        stars: Number(reward?.stars) || 0,
+        coins: Number(reward?.coins) || 0
+    };
+}
+
+/**
+ * Группа достижения для порядка вывода:
+ *   1 — выполнено, награда НЕ получена (нужно нажать «Получить») — вверх
+ *   2 — в процессе — по проценту
+ *   3 — выполнено и награда получена — вниз
+ *
+ * @param {object} ach
+ * @returns {number} номер группы
+ */
+function getAchievementGroup(ach) {
+    if (ach?.completed && !ach?.reward_claimed) return 1;
+    if (ach?.completed) return 3;
+    return 2;
+}
+
+/**
+ * Сортировка достижений для экрана достижений.
+ *
+ * Раньше список шёл в порядке ответа сервера (`ORDER BY a.category, a.id`),
+ * и игрок не видел, что уже можно забрать: готовые награды терялись среди
+ * невыполненных.
+ *
+ * Порядок:
+ *   1. Выполнено, награда не получена — сверху, по ценности (звёзды, монеты)
+ *   2. В процессе — по проценту выполнения (ближе к концу выше)
+ *   3. Выполнено и получено — внизу, по ценности
+ *
+ * @param {Array} achievements массив достижений с сервера
+ * @returns {Array} новый отсортированный массив (исходный не мутируется)
+ */
+function sortAchievementsForDisplay(achievements) {
+    if (!Array.isArray(achievements)) return [];
+
+    const byRewardDesc = (a, b) => {
+        const ra = getAchievementRewardWeight(a);
+        const rb = getAchievementRewardWeight(b);
+        if (rb.stars !== ra.stars) return rb.stars - ra.stars;
+        if (rb.coins !== ra.coins) return rb.coins - ra.coins;
+        // Тайбрейк по id: без него порядок равных по награде достижений
+        // зависел бы от реализации sort и мог меняться между рендерами.
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
+    };
+
+    return [...achievements].sort((a, b) => {
+        const groupA = getAchievementGroup(a);
+        const groupB = getAchievementGroup(b);
+        if (groupA !== groupB) return groupA - groupB;
+
+        // Внутри групп 1 и 3 — по ценности награды, в группе 2 — по проценту.
+        if (groupA === 2) {
+            return (Number(b.percent) || 0) - (Number(a.percent) || 0);
+        }
+        return byRewardDesc(a, b);
+    });
+}
+
 function renderAchievementsList(achievements) {
     const container = document.getElementById('achievements-list');
     if (!container) return;
-    
+
     if (!achievements || achievements.length === 0) {
         container.innerHTML = '<div class="empty-message">Нет достижений</div>';
         return;
     }
-    
+
+    // Сортируем: готовые к получению награды — вверх, в процессе — по
+    // проценту, уже полученные — вниз.
+    const sortedAchievements = sortAchievementsForDisplay(achievements);
+
     let html = '';
-    
-    for (const ach of achievements) {
+
+    for (const ach of sortedAchievements) {
         let reward;
         try {
             reward = typeof ach.reward === 'string' ? JSON.parse(ach.reward) : ach.reward;
@@ -7446,9 +7699,22 @@ document.addEventListener('DOMContentLoaded', () => {
         // Основные кнопки
         document.getElementById('search-btn')?.addEventListener('click', () => searchLoot());
         document.getElementById('map-travel-btn')?.addEventListener('click', travelToSelectedLocation);
-        document.getElementById('shop-btn')?.addEventListener('click', () => showScreen('shop'));
-        document.getElementById('market-btn')?.addEventListener('click', () => showScreen('market'));
-        document.getElementById('wheel-btn')?.addEventListener('click', openWheel);
+        // Торговля: один пункт главной ведёт на экран с под-табами.
+        // Старые shop-btn/market-btn/wheel-btn убраны — их место заняла
+        // одна кнопка «Торговля», раскрывающая нужную панель.
+        document.getElementById('trade-btn')?.addEventListener('click', () => openTradeTab('market'));
+
+        // Под-табы «Торговли»: переключают панели внутри уже открытого
+        // экрана. setTradeTab, а не openTradeTab — иначе каждый тап снова
+        // вызывал бы showScreen('trade') и перезагрузку всех панелей.
+        // Кнопки создаются один раз в generateScreens, поэтому bindClickOnce
+        // защищает от двойных слушателей при повторной инициализации.
+        document.querySelectorAll('.trade-tab').forEach(btn => {
+            bindClickOnce(btn, `trade-tab-${btn.dataset.tradeTab || 'market'}`, () => {
+                setTradeTab(btn.dataset.tradeTab || 'market');
+            });
+        });
+
         document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
         document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
         document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
@@ -7630,11 +7896,8 @@ const SCREEN_BUILDERS = Object.freeze([
     'clansListScreenHtml',
     'clanCreateScreenHtml',
     'clanChatScreenHtml',
-    'shopScreenHtml',
-    'marketScreenHtml',
-    'wheelScreenHtml',
-    'ratingScreenHtml',
-    'pvpPlayersScreenHtml',
+    'tradeScreenHtml',
+    'ratingScreenHtml',    'pvpPlayersScreenHtml',
     'pvpFightScreenHtml',
     'pvpStatsScreenHtml',
     'achievementsScreenHtml'
@@ -7696,15 +7959,15 @@ function mainScreenHtml() {
                     <!-- Полоски здоровья, энергии, опыта -->
                     <div class="player-stats">
                         <div class="stat-bar">
-                            <div class="bar health-bar" id="health-bar" style="width:100%"></div>
+                            <div class="bar health-bar" id="health-bar"></div>
                             <span class="bar-text" id="health-text">❤️ 100/100</span>
                         </div>
                         <div class="stat-bar">
-                            <div class="bar energy-bar" id="energy-bar" style="width:100%"></div>
+                            <div class="bar energy-bar" id="energy-bar"></div>
                             <span class="bar-text" id="energy-text">⚡ 50/50</span>
                         </div>
                         <div class="stat-bar">
-                            <div class="bar exp-bar" id="exp-bar" style="width:0%"></div>
+                            <div class="bar exp-bar" id="exp-bar"></div>
                             <span class="bar-text" id="exp-text">XP 0/500</span>
                         </div>
                     </div>
@@ -7778,9 +8041,10 @@ function mainScreenHtml() {
                     </button>
                 </section>
                 <section class="extra-actions">
-                    <button class="extra-btn" id="shop-btn">🏪 Магазин ⭐</button>
-                    <button class="extra-btn" id="market-btn">🛒 Рынок</button>
-                    <button class="extra-btn" id="wheel-btn">🎡 Колесо</button>
+                    <!-- Одна кнопка вместо трёх (Магазин/Рынок/Колесо): все три
+                         ведут в экран «Торговля» с под-табами. Раньше сетка 3×2
+                         тянула главный экран в длину. -->
+                    <button class="extra-btn" id="trade-btn">🛒 Торговля</button>
                     <button class="extra-btn" id="rating-btn">🏆 Рейтинг</button>
                     <button class="extra-btn" id="pvp-btn">⚔️ PvP</button>
                     <button class="extra-btn" id="achievements-btn">🎖️ Достижения</button>
@@ -7799,35 +8063,16 @@ function mainScreenHtml() {
                      которая уже содержит состояние, совет и кнопку действия. -->
 
                 <!-- Активные баффы -->
-                <div class="active-buffs-section" id="active-buffs-section" style="display:none;margin:0 16px 16px">
+                <div class="active-buffs-section" id="active-buffs-section" style="display:none">
                     <div class="active-buffs-header">Активные баффы</div>
                     <div class="active-buffs-list" id="active-buffs-list"></div>
                 </div>
 
                 <!-- Ежедневный бонус: виден только когда бонус доступен (updateDailyBonusUI) -->
-                <section class="daily-bonus-section" style="margin:0 16px 16px">
-                    <button class="btn daily-bonus-btn" id="daily-bonus-btn" style="display:none;width:100%">
+                <section class="daily-bonus-section">
+                    <button class="btn daily-bonus-btn" id="daily-bonus-btn" style="display:none">
                         🎁 Получить ежедневный бонус
                     </button>
-                </section>
-
-                <!-- Прогресс: только цели. Раньше здесь стояли ещё три карточки
-                     (Опыт / Боссы / Достижения) — они дублировали полосу опыта,
-                     карточку рекомендаций и отдельные экраны, из-за чего экран
-                     показывал одну и ту же мысль четыре раза. -->
-                <section class="journey-progress-section">
-                    <div class="journey-progress-grid">
-                        <div class="journey-card">
-                            <span class="journey-label">Следующий босс</span>
-                            <span class="journey-value" id="journey-main-boss">Нет цели</span>
-                            <span class="journey-desc" id="journey-main-boss-desc"></span>
-                        </div>
-                        <div class="journey-card">
-                            <span class="journey-label">Следующая зона</span>
-                            <span class="journey-value" id="journey-next-zone">Все открыты</span>
-                            <span class="journey-desc" id="journey-next-zone-desc"></span>
-                        </div>
-                    </div>
                 </section>
             </div>
         </div>
@@ -7947,12 +8192,13 @@ function bossFightScreenHtml() {
             </div>
             <div class="boss-fight-container">
                 <!-- Игрок слева, босс справа -->
-                <div class="battle-field">
+                <div class="battle-arena">
                     <!-- Игрок -->
-                    <div class="combatant player-side">
-                        <div class="combatant-info">
-                            <div class="combatant-name" id="player-name-display">Игрок</div>
-                            <div class="combatant-stats">
+                    <div class="battle-participant battle-participant--player">
+                        <div class="battle-participant-info">
+                            <div class="battle-participant-name" id="player-name-display">Игрок</div>
+                            <div class="battle-participant-meta" id="player-level-display"></div>
+                            <div class="battle-participant-stats">
                                 <div class="stat-row">
                                     <span class="stat-label">❤️</span>
                                     <span class="stat-value" id="player-hp-display">100/100</span>
@@ -7960,66 +8206,83 @@ function bossFightScreenHtml() {
                                 <div class="stat-row">
                                     <span class="stat-label">⚡</span>
                                     <!-- Энергия показывается ТОЛЬКО здесь: дубль
-                                         внизу экрана (fight-energy-display) убран,
-                                         чтобы освободить вертикаль на телефоне.
-                                         energy-used-inline — мигающий «−1» после удара. -->
+                                         внизу экрана убран, чтобы освободить
+                                         вертикаль. energy-used-inline — мигающий «−1». -->
                                     <span class="stat-value" id="player-energy-display">50/50</span>
                                     <span class="energy-used-inline" id="boss-energy-used"></span>
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Свой урон: из calculateDamage на сервере, обновляется
+                             после каждого удара. Без него игрок снимал 40, потом 12
+                             и не понимал почему. -->
+                        <div class="battle-participant-info">
+                            <div class="battle-participant-stats">
+                                <div class="stat-row">
+                                    <span class="stat-label">⚔️</span>
+                                    <span class="stat-value" id="player-damage-display">—</span>
+                                </div>
+                            </div>
+                        </div>
                         
                         <!-- Слоты экипировки (RPG-style).
+                             ДВА ряда: 7 слотов в четырёх рядах занимали больше
+                             места, чем блок босса с его HP — бой уходил под
+                             «шмот». Теперь верхний ряд — «голова/тело/руки»,
+                             нижний — «ноги/сапоги/оружие», аксессуар отдельно.
                              Каждый слот идёт через Templates.equipmentFightSlot:
                              раньше семь слотов были вписаны копипастой, и слот
                              обуви («Сапоги») был подписан «Ноги» — тот же ярлык,
-                             что и у штанов, потому что правка одной копии не
-                             досталась остальным. -->
+                             что и у штанов. -->
                         <div class="equipment-slots player-equipment" id="player-equipment-slots">
-${Templates.equipmentFightSlot('head', '🪖', 'Голова', 'Шлем')}
                             <div class="equipment-row">
+${Templates.equipmentFightSlot('head', '🪖', 'Голова', 'Шлем')}
 ${Templates.equipmentFightSlot('body', '🧥', 'Тело', 'Нагрудник')}
 ${Templates.equipmentFightSlot('hands', '🧤', 'Руки', 'Перчатки')}
                             </div>
                             <div class="equipment-row">
 ${Templates.equipmentFightSlot('legs', '👖', 'Ноги', 'Ноги')}
 ${Templates.equipmentFightSlot('boots', '🥾', 'Сапоги', 'Сапоги')}
+${Templates.equipmentFightSlot('weapon', '⚔️', 'Оружие', 'Оружие')}
                             </div>
                             <div class="equipment-row">
-${Templates.equipmentFightSlot('weapon', '⚔️', 'Оружие', 'Оружие')}
 ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксессуар')}
                             </div>
                         </div>
                     </div>
                     
                     <!-- Центр - VS -->
-                    <div class="battle-center">
-                        <div class="vs-label">VS</div>
-                        <div class="boss-timer" id="boss-fight-timer" style="display:none">
+                    <div class="battle-vs">
+                        <span class="battle-vs-label">VS</span>
+                        <div class="battle-timer" id="boss-fight-timer" style="display:none">
                             <span>⏱️</span>
                             <span id="boss-timer-text">00:00:00</span>
                         </div>
                     </div>
                     
                     <!-- Босс справа -->
-                    <div class="combatant boss-side">
+                    <div class="battle-participant battle-participant--enemy">
                         <div class="boss-fight-header">
                             <div class="boss-icon-large" id="boss-icon">👹</div>
                             <div class="boss-name-large" id="boss-name">Босс</div>
                         </div>
-                        <div class="boss-hp-section">
-                            <div class="boss-hp-bar">
-                                <div class="boss-hp-fill" id="boss-health-bar" style="width:100%"></div>
+                        <div class="battle-participant-health">
+                            <div class="battle-health">
+                                <div class="battle-health-fill" id="boss-health-bar"></div>
                             </div>
-                            <div class="boss-hp-text" id="boss-health-text">0/0</div>
+                            <div class="battle-health-text" id="boss-health-text">0/0</div>
                         </div>
+                        <!-- Ответный удар босса: сервер шлёт damage_percent,
+                             без него игрок не понимал, почему теряет здоровье. -->
+                        <div class="battle-participant-meta" id="boss-counter-label" style="display:none"></div>
                     </div>
                 </div>
-                
-                <!-- Лог боя -->
-                <div class="fight-log" id="fight-log"></div>
-                
-                <div class="boss-actions">
+
+                <!-- Лог боя (общий компонент .battle-log) -->
+                <div class="battle-log" id="fight-log"></div>
+
+                <div class="battle-actions">
                     <button class="btn attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать</button>
                     <div class="attack-progress-container" id="attack-progress-container" style="display:none"></div>
                 </div>
@@ -8027,7 +8290,6 @@ ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксесс
         </div>
     `;
 }
-
 function clanScreenHtml() {
     return `
         <!-- Клан -->
@@ -8107,75 +8369,80 @@ function clanChatScreenHtml() {
     `;
 }
 
-function shopScreenHtml() {
+/**
+ * Экран «Торговля».
+ *
+ * Собрал в один экран то, что раньше висело тремя отдельными кнопками на
+ * главном (Магазин ⭐ / Рынок / Колесо) и тремя отдельными экранами: главный
+ * листался на пять абзацев, а до «Рынка» нужно было проскроллить всё.
+ *
+ * Под-табы внутри экрана: Рынок за монеты, Магазин за звёзды, Колесо.
+ * Все три панели существуют в DOM одновременно и переключаются классом
+ * `.active` — так содержимое не пересоздаётся при каждом переключении,
+ * а id (shop-items, shop-items-list, wheel) остаются уникальными.
+ */
+function tradeScreenHtml() {
     return `
-        <!-- Магазин (Stars) -->
-        <div class="screen" id="shop-screen">
+        <div class="screen" id="trade-screen">
             <div class="screen-header">
-                <h2>🏪 Магазин</h2>
+                <button class="back-btn" data-screen="main">← Назад</button>
+                <h2>🛒 Торговля</h2>
             </div>
             <div class="screen-content">
-                <div class="shop-tabs">
-                    <button class="shop-tab active" data-tab="buffs">💪 Баффы</button>
-                    <button class="shop-tab" data-tab="minigames">🎮 Мини-игры</button>
-                    <button class="shop-tab" data-tab="cosmetics">✨ Косметика</button>
+                <div class="trade-tabs">
+                    <button class="trade-tab active" data-trade-tab="market">🪙 Рынок</button>
+                    <button class="trade-tab" data-trade-tab="shop">⭐ Магазин</button>
+                    <button class="trade-tab" data-trade-tab="wheel">🎡 Колесо</button>
                 </div>
-                <div class="shop-items" id="shop-items"></div>
-            </div>
-        </div>
-    `;
-}
 
-function marketScreenHtml() {
-    // Заголовок совпадает с кнопкой на главном экране. Раньше экран за монеты
-    // назывался «Магазин», как и экран за звёзды, — два разных
-    // магазина с одинаковым названием.
-    return `
-        <!-- Магазин за монеты -->
-        <div class="screen" id="market-screen">
-            <div class="screen-header">
-                <h2>🛒 Рынок</h2>
-                <span class="shop-coins-balance">🪙 <strong id="shop-coins-balance">0</strong></span>
-            </div>
-            <div class="screen-content">
-                <div class="shop-categories">
-                    <button class="shop-category-btn active" data-category="all">Все</button>
-                    <button class="shop-category-btn" data-category="weapon">⚔️ Оружие</button>
-                    <button class="shop-category-btn" data-category="armor">🛡️ Броня</button>
-                    <button class="shop-category-btn" data-category="medicine">💊 Медицина</button>
-                    <button class="shop-category-btn" data-category="food">🍞 Еда</button>
-                </div>
-                <div class="shop-items shop-items-list" id="shop-items-list"></div>
-            </div>
-        </div>
-    `;
-}
-
-function wheelScreenHtml() {
-    return `
-        <!-- Колесо удачи -->
-        <div class="screen" id="wheel-screen">
-            <div class="screen-header">
-                <button class="back-btn" data-screen="shop">← Назад</button>
-                <h2>🎡 Колесо удачи</h2>
-            </div>
-            <div class="screen-content">
-                <div class="wheel-container">
-                    <div class="wheel" id="wheel">
-                        <!-- Секторы и подписи рисует renderWheelSectors() из списка призов
-                     с сервера: раньше здесь стояли шесть захардкоженных
-                     подписей, которые разъезжались с реальными призами. -->
-                <div class="wheel-prizes"></div>
+                <!-- Рынок за монеты -->
+                <div class="trade-panel active" id="trade-panel-market">
+                    <div class="shop-balance">
+                        <span class="shop-coins-balance">🪙 <strong id="shop-coins-balance">0</strong></span>
                     </div>
-                    <button class="btn" id="wheel-free-btn">🎡 Бесплатно</button>
-                    <button class="btn" id="wheel-paid-btn">⭐ За 1 звезду</button>
-                    <p id="wheel-free-info">Загрузка...</p>
-                    <p id="wheel-paid-info">Платное вращение доступно всегда.</p>
+                    <div class="shop-categories">
+                        <button class="shop-category-btn active" data-category="all">Все</button>
+                        <button class="shop-category-btn" data-category="weapon">⚔️ Оружие</button>
+                        <button class="shop-category-btn" data-category="armor">🛡️ Броня</button>
+                        <button class="shop-category-btn" data-category="medicine">💊 Медицина</button>
+                        <button class="shop-category-btn" data-category="food">🍞 Еда</button>
+                    </div>
+                    <div class="shop-items shop-items-list" id="shop-items-list"></div>
+                </div>
+
+                <!-- Магазин за звёзды -->
+                <div class="trade-panel" id="trade-panel-shop">
+                    <div class="shop-balance">
+                        <span class="shop-stars-balance">⭐ <strong id="shop-stars-balance">0</strong></span>
+                    </div>
+                    <div class="shop-tabs">
+                        <button class="shop-tab active" data-tab="buffs">💪 Баффы</button>
+                        <button class="shop-tab" data-tab="minigames">🎮 Мини-игры</button>
+                        <button class="shop-tab" data-tab="cosmetics">✨ Косметика</button>
+                    </div>
+                    <div class="shop-items" id="shop-items"></div>
+                </div>
+
+                <!-- Колесо удачи -->
+                <div class="trade-panel" id="trade-panel-wheel">
+                    <div class="wheel-container">
+                        <div class="wheel" id="wheel">
+                            <!-- Сектора и подписи рисует renderWheelSectors() из списка призов
+                                 с сервера: раньше здесь стояли шесть захардкоженных
+                                 подписей, которые разъезжались с реальными призами. -->
+                            <div class="wheel-prizes"></div>
+                        </div>
+                        <button class="btn" id="wheel-free-btn">🎡 Бесплатно</button>
+                        <button class="btn" id="wheel-paid-btn">⭐ За 1 звезду</button>
+                        <p id="wheel-free-info">Загрузка...</p>
+                        <p id="wheel-paid-info">Платное вращение доступно всегда.</p>
+                    </div>
                 </div>
             </div>
         </div>
     `;
 }
+
 
 function ratingScreenHtml() {
     return `
@@ -8222,29 +8489,29 @@ function pvpFightScreenHtml() {
                 <h2>⚔️ PvP Бой</h2>
             </div>
             <div class="pvp-fight-container" id="pvp-fight-container">
-                <div class="pvp-battle-arena">
-                    <div class="pvp-combatant attacker">
-                        <div class="pvp-combatant-name" id="pvp-attacker-name">Вы</div>
-                        <div class="pvp-combatant-level" id="pvp-attacker-level">Уровень: 1</div>
-                        <div class="pvp-health-bar">
-                            <div class="pvp-health-fill" id="pvp-attacker-health" style="width:100%"></div>
+                <div class="battle-arena">
+                    <div class="battle-participant">
+                        <div class="battle-participant-name" id="pvp-attacker-name">Вы</div>
+                        <div class="battle-participant-meta" id="pvp-attacker-level">Уровень: 1</div>
+                        <div class="battle-health">
+                            <div class="battle-health-fill" id="pvp-attacker-health"></div>
                         </div>
-                        <div class="pvp-health-text" id="pvp-attacker-health-text">0/0</div>
+                        <div class="battle-health-text" id="pvp-attacker-health-text">0/0</div>
                     </div>
-                    <div class="pvp-vs">⚔️</div>
-                    <div class="pvp-combatant defender">
-                        <div class="pvp-combatant-name" id="pvp-defender-name">Противник</div>
-                        <div class="pvp-combatant-level" id="pvp-defender-level">Уровень: 1</div>
-                        <div class="pvp-health-bar">
-                            <div class="pvp-health-fill" id="pvp-defender-health" style="width:100%"></div>
+                    <div class="battle-vs">⚔️</div>
+                    <div class="battle-participant battle-participant--enemy">
+                        <div class="battle-participant-name" id="pvp-defender-name">Противник</div>
+                        <div class="battle-participant-meta" id="pvp-defender-level">Уровень: 1</div>
+                        <div class="battle-health">
+                            <div class="battle-health-fill" id="pvp-defender-health"></div>
                         </div>
-                        <div class="pvp-health-text" id="pvp-defender-health-text">0/0</div>
+                        <div class="battle-health-text" id="pvp-defender-health-text">0/0</div>
                     </div>
                 </div>
-                <div class="pvp-battle-log" id="pvp-battle-log">
+                <div class="battle-log" id="pvp-battle-log">
                     <p>⚔️ Приготовьтесь к бою!</p>
                 </div>
-                <div class="pvp-actions">
+                <div class="battle-actions">
                     <button class="btn attack-btn" id="pvp-attack-btn">👊 АТАКОВАТЬ</button>
                 </div>
                 <div class="pvp-rewards" id="pvp-rewards" style="display:none">
@@ -8356,6 +8623,23 @@ const SHOP_ITEMS = (() => {
 })();
 
 /**
+ * Обновить балансы обеих панелей «Торговли».
+ *
+ * Раньше на панели магазина звёздное поле (#shop-stars-balance) не
+ * обновлялось никем и навсегда оставалось «0», а класс .shop-stars-balance
+ * не был применён к элементу — правило в CSS висело мёртвым.
+ */
+function refreshTradeBalances() {
+    if (!gameState.player) return;
+
+    const coinsEl = document.getElementById('shop-coins-balance');
+    if (coinsEl) coinsEl.textContent = formatNumber(Number(gameState.player.coins) || 0);
+
+    const starsEl = document.getElementById('shop-stars-balance');
+    if (starsEl) starsEl.textContent = formatNumber(Number(gameState.player.stars) || 0);
+}
+
+/**
  * Открытие магазина (рендерит категорию)
  * Примечание: showScreen уже вызывается до этой функции,
  * поэтому здесь НЕ вызываем showScreen('shop') во избежание бесконечного цикла
@@ -8366,6 +8650,7 @@ function openShop() {
         initShopHandlers();
     }
     renderShopCategory('buffs');
+    refreshTradeBalances();
 }
 
 function formatMinutesRemaining(ms) {
@@ -8665,8 +8950,104 @@ function renderWheelSectors(palette) {
  * Открытие колеса удачи.
  * Данные подгружает onScreenOpen('wheel') — здесь только переход.
  */
+/**
+ * Активный под-таб «Торговли». Держим вне DOM, потому что onScreenOpen
+ * должен знать, какую панель грузить, ещё до того как классы расставятся.
+ * @type {'market'|'shop'|'wheel'}
+ */
+let activeTradeTab = 'market';
+
+/**
+ * Загрузить данные одной панели «Торговли».
+ *
+ * Вынесено из case 'trade', чтобы onScreenOpen не запускал все три
+ * загрузчика при каждом открытии экрана. Ленивая загрузка: панель грузится
+ * только когда её показывают.
+ *
+ * @param {'market'|'shop'|'wheel'} tab
+ */
+async function loadTradePanel(tab) {
+    switch (tab) {
+        case 'shop':
+            await openShop();
+            break;
+        case 'wheel':
+            await loadWheelInfo();
+            break;
+        case 'market':
+        default:
+            await loadCoinShop();
+            break;
+    }
+}
+
+/**
+ * Открыть экран «Торговля» на нужном под-табе.
+ *
+ * Заменяет три отдельные функции openShop/openMarket/openWheel, которые
+ * вызывали showScreen('shop'|'market'|'wheel'). Теперь все три панели
+ * живут в одном экране, а наружу нужен только выбор таба.
+ *
+ * @param {'market'|'shop'|'wheel'} tab начальный под-таб
+ */
+function openTradeTab(tab = 'market') {
+    // Неизвестный таб не листаем молча на первый: покажем рынок, но оставим
+    // след в консоли для отладки.
+    const wanted = ['market', 'shop', 'wheel'].includes(tab) ? tab : 'market';
+    if (!['market', 'shop', 'wheel'].includes(tab)) {
+        gameLog(`openTradeTab: неизвестный таб «${tab}», открываю рынок`);
+    }
+
+    // Ранний выход: showScreen() не проверяет, открыт ли уже этот экран, и
+    // каждый тап по под-табу заново запускал загрузку панели.
+    const tradeScreen = document.getElementById('trade-screen');
+    const alreadyOnTab = tradeScreen?.classList.contains('active')
+        && document.querySelector('.trade-panel.active')?.id === `trade-panel-${wanted}`;
+    if (alreadyOnTab) return;
+
+    // Если экран торговли уже открыт на другом табе — переключаем панели
+    // напрямую, без повторной загрузки данных.
+    const tradeAlreadyOpen = tradeScreen?.classList.contains('active');
+    if (tradeAlreadyOpen) {
+        setTradeTab(wanted);
+        return;
+    }
+
+    activeTradeTab = wanted;
+    showScreen('trade');
+}
+
+/**
+ * Переключить под-таб «Торговли» без открытия экрана заново.
+ *
+ * Данные грузит onScreenOpen через loadTradePanel(activeTradeTab) при показе
+ * экрана; при смене таба внутри уже открытого экрана — тоже лениво.
+ *
+ * @param {'market'|'shop'|'wheel'} tab
+ */
+function setTradeTab(tab) {
+    const wanted = ['market', 'shop', 'wheel'].includes(tab) ? tab : 'market';
+    if (activeTradeTab === wanted) return;
+
+    activeTradeTab = wanted;
+
+    document.querySelectorAll('.trade-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tradeTab === wanted);
+    });
+
+    document.querySelectorAll('.trade-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `trade-panel-${wanted}`);
+    });
+
+    // Грузим данные только что открытой панели.
+    safeAsync('trade', loadTradePanel(wanted));
+}
+
+/**
+ * Колесо удачи: открывается как под-таб экрана «Торговля».
+ */
 function openWheel() {
-    showScreen('wheel');
+    openTradeTab('wheel');
 }
 
 async function loadWheelInfo() {
@@ -10079,6 +10460,15 @@ function showModal(title, message, type = 'info') {
 
     modalTitle.textContent = title;
     modalMessage.textContent = message;
+
+    // Текстовое окно: переносим строки ТОЛЬКО если автор их поставил.
+    //
+    // Раньше pre-line висел на #modal-message всегда, и любая HTML-модалка
+    // (карточка предмета, участники клана, диалог продажи) расползалась:
+    // на блочной разметке pre-line превращает каждый пробел в '\n'.
+    // Костылём было перечисление тегов для сброса — хрупко и неполно.
+    // Теперь pre-line включается точечно, только для текстовых окон.
+    modalMessage.classList.toggle('has-newlines', typeof message === 'string' && message.includes('\n'));
 
     // Сбрасываем класс типа (openModalElement добавит .active)
     modal.className = 'modal';

@@ -807,6 +807,18 @@ router.post('/start', async (req, res) => {
                 };
             }
 
+            // Урон игрока по этому боссу — та же calculateDamage, что в
+            // /attack-boss и в списке боссов. Считаем на старте, чтобы клиент
+            // показал «Ваш урон» в бою ДО первого удара: раньше число
+            // появлялось только после него.
+            //
+            // client передаём в getSetBonuses: без него функция берёт второе
+            // соединение из пула, и на время расчёта ходим с двумя
+            // соединениями при FOR UPDATE на строке players.
+            const masteries = await getBossMasteries(client, playerId);
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}), client);
+            const currentDamage = calculateDamage(bossId, player, masteries, setBonuses);
+
             // Списанное число запоминаем ВНУТРИ транзакции: повторный
             // запрос к БД после COMMIT мог вернуть другое значение, а его
             // сбой приводил бы к ошибке уже начатого боя со списанными
@@ -846,7 +858,18 @@ router.post('/start', async (req, res) => {
                             name: boss.name,
                             icon: boss.icon,
                             hp: boss.max_health,
-                            max_hp: boss.max_health
+                            max_hp: boss.max_health,
+                            // Текущий урон игрока по этому боссу — та же
+                            // calculateDamage, что в списке боссов и в
+                            // /attack-boss. Нужен, чтобы клиент показал
+                            // «Ваш урон» ДО первого удара.
+                            current_damage: currentDamage,
+                            // Ответный удар в процентах здоровья игрока.
+                            // Колонка называется `damage` (db/schema.js:217):
+                            // `boss.damage_percent` всегда undefined, из-за чего
+                            // подпись на клиенте оставалась скрытой. Тот же
+                            // маппинг, что в списке боссов (bosses.js:939).
+                            damage_percent: Number(boss.damage) || 0
                         },
                         time_remaining_ms: SOLO_FIGHT_DURATION_MS,
                         // Длительность целиком: клиент показывает её в логе
