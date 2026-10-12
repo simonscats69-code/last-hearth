@@ -852,6 +852,10 @@ html, body {
    а не наклеенной плашкой сверху. */
 .stat-bar {
     position: relative;
+    /* isolation: isolate — свой stacking context. Нужен, чтобы z-index: 2
+       у .bar-text срабатывал относительно этой полоски, а не «утекал» во
+       внешний контекст и не зависел от соседей. */
+    isolation: isolate;
     height: 24px;
     background: var(--surface-sunken);
     border-radius: var(--radius-md);

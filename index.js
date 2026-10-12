@@ -223,20 +223,73 @@ app.use((req, res, next) => {
 const indexHtmlPath = path.join(__dirname, 'public', 'index.html');
 let indexHtmlTemplate = null;
 
-// Версия статики для кэш-бастинга (?v=...): считается по содержимому game.js,
+// Версия статики для кэш-бастинга (?v=...): считается по СОДЕРЖИМОМУ game.js,
 // styles.css и shared/equipment.js. shared/equipment.js обязателен в списке —
 // иначе правка общих правил экипировки не сбросит кэш у клиента, и браузер
 // достанет старую копию (у статики Cache-Control 1 час).
+//
+// ЗДЕСЬ БЫЛ БАГ: версия считалась ОДИН раз при старте сервера и никогда не
+// пересчитывалась. После правки CSS или game.js без перезапуска процесса
+// assetVersion оставался старым -> URL ?v= со старым хэшем -> браузер
+// полчаса-час отдавал закэшированную старую копию, и правки «не появлялись».
+//
+// Теперь при каждой отдаче index.html сверяем mtime файлов (statSync, не
+// чтение) и пересчитываем хэш только при реальном изменении. Нагрузка —
+// три statSync на запрос HTML, сам хэш считается только после правки.
+const ASSET_FILES = ['game.js', 'styles.css', 'shared/equipment.js'];
+
 let assetVersion = 'dev';
-try {
-    const hash = crypto.createHash('sha1');
-    for (const file of ['game.js', 'styles.css', 'shared/equipment.js']) {
-        hash.update(fs.readFileSync(path.join(__dirname, 'public', file)));
+let assetMtimes = new Map();
+
+function computeAssetVersion() {
+    try {
+        const hash = crypto.createHash('sha1');
+        const mtimes = new Map();
+
+        for (const file of ASSET_FILES) {
+            const full = path.join(__dirname, 'public', file);
+            const stat = fs.statSync(full);
+            hash.update(fs.readFileSync(full));
+            mtimes.set(file, Number(stat.mtimeMs) || Number(stat.mtime) || 0);
+        }
+
+        assetVersion = hash.digest('hex').slice(0, 10);
+        assetMtimes = mtimes;
+    } catch (e) {
+        // Не смогли прочитать файлы — хэш от времени: лучше лишний раз
+        // сбросить кэш клиента, чем навсегда оставить старую версию.
+        assetVersion = Date.now().toString(36);
+        assetMtimes = new Map();
+        logger.warn('[index] Не удалось вычислить версию статики, использую timestamp:', e.message);
     }
-    assetVersion = hash.digest('hex').slice(0, 10);
-} catch (e) {
-    assetVersion = Date.now().toString(36);
-    logger.warn('[index] Не удалось вычислить версию статики, использую timestamp:', e.message);
+}
+
+computeAssetVersion();
+
+/**
+ * Версия статики с проверкой изменений файлов.
+ *
+ * statSync трёх файлов дешевле, чем чтение и хэширование на каждый запрос,
+ * поэтому чтение делаем только когда mtime реально изменилось.
+ *
+ * @returns {string} хэш статики
+ */
+function getAssetVersion() {
+    try {
+        for (const file of ASSET_FILES) {
+            const full = path.join(__dirname, 'public', file);
+            const stat = fs.statSync(full);
+            const mtime = Number(stat.mtimeMs) || Number(stat.mtime) || 0;
+            if (assetMtimes.get(file) !== mtime) {
+                computeAssetVersion();
+                break;
+            }
+        }
+    } catch {
+        // Файл временно недоступен (правка/перемещение) — отдаём то, что есть.
+        // Следующий запрос пересчитает.
+    }
+    return assetVersion;
 }
 
 function sendIndexHtml(res) {
@@ -250,7 +303,7 @@ function sendIndexHtml(res) {
         res.set('Cache-Control', 'no-store');
         res.send(indexHtmlTemplate
             .replace(/\{\{nonce\}\}/g, res.locals.nonce || '')
-            .replace(/\{\{assetVersion\}\}/g, assetVersion)
+            .replace(/\{\{assetVersion\}\}/g, getAssetVersion())
             // DEV-флаг авторизации для клиента. Клиент по нему решает,
             // допустим ли фиктивный telegram_id/initData. Флаг ставится
             // ТОЛЬКО по явному DEV_MODE=true — в production (где NODE_ENV

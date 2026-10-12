@@ -5546,12 +5546,29 @@ function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound
     gameState.currentBoss = null;
     gameState.activeBattle = null;
 
-    // Блокировку loadBosses держим до конца перезагрузки списка.
-    actionLocks.loadBosses = true;
+    // Сразу выходим из боя и показываем список боссов.
+    //
+    // ЗДЕСЬ БЫЛ ГЛАВНЫЙ БАГ «бой не завершается»: раньше перед setTimeout
+    // вручную ставилось actionLocks.loadBosses = true, но loadBosses()
+    // БЕРЁТ ЭТУ ЖЕ блокировку (game.js:4935) и при true мгновенно выходит:
+    //     if (!lockAction('loadBosses')) return;   // <- true -> return
+    // Из-за этого экран боя НИКОГДА не переключался на список: игрок оставался
+    // на арене с убитым боссом и живой кнопкой «Атаковать», а поверх висело
+    // уведомление «Подождите, выполняется другое действие...» — это и было
+    // «победил, потом непонятно что». Дальше игрок жал Назад и начинал бой
+    // заново. `return` случался ДО try/finally, поэтому unlockAction тоже не
+    // срабатывал — блокировка висела до аварийного таймера (30 секунд).
+    //
+    // Теперь выход из боя не зависит от блокировки: showScreen сам грузит
+    // список (case 'bosses'), а отложенный loadBosses его освежает.
+    showScreen('bosses');
+    switchBossesTab('solo');
+
     setTimeout(() => {
+        // Освежаем список: босс повержён, ключи и HP могли измениться.
+        // Блокировку НЕ трогаем — loadBosses разберётся сама.
         loadBosses().catch((loadError) => {
             console.error('Boss reload error:', loadError);
-            actionLocks.loadBosses = false;
         });
     }, 2200);
 
