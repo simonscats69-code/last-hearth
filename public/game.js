@@ -2296,7 +2296,9 @@ function renderMain() {
         const expProgress = player.exp_progress || { current: player.experience || 0, needed: player.level * 500, percent: 0 };
         const percent = Math.min(100, expProgress.percent || Math.floor((expProgress.current / expProgress.needed) * 100));
         expBar.style.width = percent + '%';
-        expText.textContent = `${expProgress.current}/${expProgress.needed}`;
+        // Метка XP, а не ⭐: звёздочка в UI занята премиальной валютой
+        // (currency-badge stars), и опыт с тем же символом путал игрока.
+        expText.textContent = `XP ${expProgress.current}/${expProgress.needed}`;
     }
 
     // Обновляем текущую локацию
@@ -2975,7 +2977,9 @@ function renderEnergyIndicators() {
 
     const mainEnergyText = document.getElementById('energy-text');
     if (mainEnergyText) {
-        mainEnergyText.textContent = `${Math.floor(currentEnergy)}/${maxEnergy}`;
+        // Иконка в самом тексте: раньше писало только "12/50", поэтому
+        // рядом с HP и опытом непонятно было, что это за число.
+        mainEnergyText.textContent = `⚡ ${Math.floor(currentEnergy)}/${maxEnergy}`;
     }
 
     const mainEnergyBar = document.getElementById('energy-bar');
@@ -3443,7 +3447,10 @@ function updateProfileUI(player) {
     const healthText = document.getElementById('health-text');
     const healthBar = document.getElementById('health-bar');
     if (healthText) {
-        healthText.textContent = `${status.health || 0}/${status.max_health || 100}`;
+        // Иконка в самом тексте: подпись должна читаться и без полоски.
+        // Раньше писалось только "80/100", и отдельная иконка из разметки
+        // затиралась этим textContent.
+        healthText.textContent = `❤️ ${status.health || 0}/${status.max_health || 100}`;
     }
     if (healthBar) {
         healthBar.style.width = `${((status.health || 0) / (status.max_health || 100)) * 100}%`;
