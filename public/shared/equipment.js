@@ -628,6 +628,28 @@ function resolveEquipmentSlot(item) {
     }
 
     /**
+     * Состояние прочности для UI: CSS-класс и подпись.
+     *
+     * Пороги раньше были размазаны по двум местам с разными числами:
+     * карточка предмета в «Вещах» (25/60) и слот в бою (20/50). Один и тот
+     * же предмет при 22% прочности в бою читался как «Износ», а в карточке —
+     * как «Почти сломано».
+     *
+     * Here — единственный источник: ключ используется и как CSS-класс,
+     * и для выбора подписи вызвавшим кодом.
+     *
+     * @param {number} percent оставшаяся прочность в процентах (0..100)
+     * @returns {{state: 'broken'|'critical'|'low'|'ok'}} ключ состояния
+     */
+    function getDurabilityState(percent) {
+        const ratio = Math.max(0, Math.min(100, Number(percent) || 0));
+        if (ratio <= 0) return { state: 'broken' };
+        if (ratio <= 25) return { state: 'critical' };
+        if (ratio <= 60) return { state: 'low' };
+        return { state: 'ok' };
+    }
+
+    /**
      * Уровень модификации предмета.
      * Значение хранится в item.modifications[key] как число (уровень 1..3).
      */
@@ -1059,6 +1081,7 @@ function resolveEquipmentSlot(item) {
         getUpgradeMultiplier,
         isEquipmentItem,
         getDurabilityInfo,
+        getDurabilityState,
         getEffectiveStatValue,
         calculateDefenseTotal,
         calculateEquipmentLuckBonus,

@@ -439,21 +439,22 @@ const equipmentRules = require('../public/shared/equipment.js');
  * Бонусы надетых сетов предметов.
  *
  * @param {Object} equipment - экипировка игрока (JSON из players.equipment)
- * @param {Object} [client] - клиент транзакции, если вызов идёт внутри неё.
- *   Без него `query()` берёт ОТДЕЛЬНОЕ соединение из пула, и внутри
- *   transaction() это значит два удерживаемых соединения на один старт боя
- *   поверх FOR UPDATE на строке игрока. С client запрос идёт по соединению
- *   транзакции.
+ * @param {Object} [client] - клиент активной транзакции. Все продакшн-вызовы
+ *   идут внутри transaction()/withClient() и передают его: иначе глобальный
+ *   query() берёт ОТДЕЛЬНОЕ соединение из пула, и пока транзакция держит
+ *   FOR UPDATE на строке игрока, удерживаются два соединения (пул max 20).
  * @returns {Promise<Object>} бонусы сетов
  */
-async function getSetBonuses(equipment, client = null) {
-/* item_sets меняется только миграциями, поэтому SELECT дешёвый; главная
-     цена была во втором соединении пула, а не в самом чтении.
-     client — объект с методом .query (не функция), поэтому его вызов
-     отличается от глобального query(). */
-    const sets = client
-        ? await client.query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id')
-        : await query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
+async function getSetBonuses(equipment, client) {
+    // client — объект с методом .query (не функция), поэтому вызов отличается
+    // от глобального query(). Параметр обязателен: ветки-фолбэка без client
+    // не осталось (все вызовы передают его), а мёртвая ветка перестала бы
+    // покрываться тестами и тихо устарела.
+    if (!client) {
+        throw new Error('getSetBonuses: требуется client транзакции — иначе берётся второе соединение пула');
+    }
+
+    const sets = await client.query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
     return equipmentRules.calculateSetBonuses(equipment, (sets.rows || []).map((row) => ({
         id: row.id,
         bonus_2: safeParseJson(row.bonus_2, {}),

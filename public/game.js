@@ -4602,21 +4602,28 @@ function showItemDetailCard(item) {
 
     // Прочность и улучшение — только для снаряжения (у расходников их нет).
     const durabilityBlock = (item.durability !== undefined && Number(item.max_durability) > 0)
-        ? (() => {
+        ?         (() => {
             const durability = Math.max(0, Number(item.durability) || 0);
             const max = Number(item.max_durability) || 0;
             const percent = max > 0 ? Math.round((durability / max) * 100) : 0;
-            // Три состояния: сломано / на исходе / норм. Порог тот же, что
-            // у getDurabilityInfo на сервере — иначе игрок увидит одно в
-            // карточке, а сервер посчитает износ по-другому.
-            const stateClass = durability <= 0 ? 'broken' : (percent <= 25 ? 'critical' : (percent <= 60 ? 'low' : 'ok'));
-            const stateLabel = durability <= 0 ? 'Сломано' : (percent <= 25 ? 'Почти сломано' : (percent <= 60 ? 'Износ' : 'Исправно'));
+            // Пороги — из EquipmentShared.getDurabilityState, единые со слотом
+            // в бою. Раньше здесь были свои 25/60 против боевых 20/50.
+            const state = (window.EquipmentShared?.getDurabilityState
+                ? window.EquipmentShared.getDurabilityState(percent).state
+                : (percent <= 0 ? 'broken' : (percent <= 25 ? 'critical' : (percent <= 60 ? 'low' : 'ok'))));
+            const stateLabels = {
+                broken: 'Сломано',
+                critical: 'Почти сломано',
+                low: 'Износ',
+                ok: 'Исправно'
+            };
+            const stateLabel = stateLabels[state];
             const upgrade = Number(item.upgrade_level) || 0;
 
             return `
                 <div class="item-detail-row">
                     <span class="item-detail-label">🔧 Прочность</span>
-                    <span class="item-detail-value">${durability}/${max} (${percent}%) <em class="dur-${stateClass}">${stateLabel}</em>${upgrade > 0 ? ` · <em class="dur-ok">улучшение +${upgrade}</em>` : ''}</span>
+                    <span class="item-detail-value">${durability}/${max} (${percent}%) <em class="dur-${state}">${stateLabel}</em>${upgrade > 0 ? ` · <em class="dur-ok">улучшение +${upgrade}</em>` : ''}</span>
                 </div>`;
         })()
         : '';
@@ -4659,9 +4666,58 @@ function showItemDetailCard(item) {
     openModalElement(modal);
 }
 
+/**
+ * Делегированный обработчик кнопки «Подробнее» (ⓘ) в «Вещах».
+ *
+ * Раньше на каждый слот вешался свой слушатель внутри renderInventory — то
+ * есть 100 querySelector + 100 addEventListener на каждый ререндер (а он
+ * происходит на каждый фильтр, режим, действие с предметом). Здесь один
+ * слушатель на контейнер: работает и после полной пересборки сетки, потому
+ * что узлы создаются заново, а обработчик живёт на гриде.
+ *
+ * stopPropagation обязателен: кнопка лежит ВНУТРИ слота, и без него тап по ⓘ
+ * срабатывал бы как действие предмета (надеть / продать / разобрать).
+ */
+function registerInventoryInfoHandler() {
+    const grid = document.getElementById('inventory-grid');
+    if (!grid || grid.dataset.infoHandler === '1') return;
+    grid.dataset.infoHandler = '1';
+
+    // ТРЕТИЙ аргумент true = фаза ЗАХВАТА, и это принципиально.
+    //
+    // Кнопка ⓘ — ПОТОМОК слота, а действие activate висит на самом слоте
+    // (slot.addEventListener('click', activate)). На фазе всплытия порядок
+    // такой: button -> slot (activate СРАБАТЫВАЕТ) -> grid. stopPropagation
+    // на grid лишь прекращает дальнейший подъём, но НЕ отменяет уже
+    // выполненный activate — поэтому тап по ⓘ надевал/продавал/разбирал
+    // предмет вместо показа описания.
+    //
+    // В фазе захвата событие идёт window -> grid -> slot -> button, то есть
+    // этот слушатель выполняется ДО activate, и stopPropagation реально
+    // до него не допускает. Старый код работал потому, что stopPropagation
+    // висел на самой кнопке (target-фаза).
+    grid.addEventListener('click', (event) => {
+        const btn = event.target?.closest?.('.item-info-btn');
+        if (!btn || !grid.contains(btn)) return;
+
+        // До activate: иначе «Подробнее» наденет предмет.
+        event.stopPropagation();
+
+        const index = Number(btn.dataset.index);
+        if (!Number.isFinite(index)) return;
+
+        const item = (gameState.inventory || []).find((entry) => Number(entry?.index) === index);
+        if (item) showItemDetailCard(item);
+    }, true);
+}
+
 function renderInventory(items) {
     const grid = document.getElementById('inventory-grid');
     if (!grid) return;
+
+    // Один раз на контейнер: обработчик кнопки ⓘ (см. registerInventoryInfoHandler).
+    registerInventoryInfoHandler();
+
     grid.innerHTML = '';
 
     const normalizedItems = Array.isArray(items) ? items : [];
@@ -4705,7 +4761,7 @@ function renderInventory(items) {
             ${isSellMode
                 ? `<span class="item-sell-price">${canSell ? `💰 ${sellPrice * amount}` : 'нельзя'}</span>`
                 : `<span class="item-rarity-label">${escapeHtml(rarityLabel)}</span>`}
-            <button type="button" class="item-info-btn" aria-label="Подробнее о предмете: ${escapeAttribute(name)}">ⓘ</button>
+            <button type="button" class="item-info-btn" data-index="${escapeAttribute(String(item.index))}" aria-label="Подробнее о предмете: ${escapeAttribute(name)}">ⓘ</button>
         `;
         slot.setAttribute('role', 'button');
         slot.setAttribute('tabindex', '0');
@@ -4713,18 +4769,16 @@ function renderInventory(items) {
             ? `${name}. Продать за ${sellPrice * amount} монет`
             : `${name}. ${rarityLabel}. ${isEquippable ? 'Нажмите чтобы надеть' : 'Нажмите чтобы использовать'}`);
 
-        // Кнопка «Подробнее» (ⓘ) открывает карточку предмета.
+        // Кнопка «Подробнее» (ⓘ) обрабатывается ДЕЛЕГИРОВАНИЕМ на #inventory-grid
+        // (registerInventoryInfoHandler ниже), а не слушателем на каждый слот:
+        // renderInventory пересобирает сеть с нуля при каждом фильтре, режиме и
+        // действии, так что на 100 слотов это были 100 querySelector + 100
+        // слушателей на рендер.
         //
-        // stopPropagation ОБЯЗАТЕЛЕН: кнопка лежит внутри слота, и без него
-        // тап по ⓘ запускал бы действие предмета — надевал или продавал его,
+        // stopPropagation там же ОБЯЗАТЕЛЕН: кнопка лежит внутри слота, и без
+        // него тап по ⓘ запускал бы действие предмета — надевал или продавал его,
         // вместо того чтобы просто показать описание.
-        const infoBtn = slot.querySelector('.item-info-btn');
-        if (infoBtn) {
-            infoBtn.addEventListener('click', (event) => {
-                event.stopPropagation();
-                showItemDetailCard(item);
-            });
-        }
+        // data-index на кнопке связывает её со слотом, из которого берётся item.
 
         // Клик: в режиме продажи — продажа, иначе использование/экипировка.
         // Отдельный переключатель вместо long-press: long-press ненадёжен
@@ -5205,10 +5259,13 @@ async function renderPlayerEquipmentInBossFight() {
             // Прочность
             if (durabilityEl) {
                 const percent = Math.round((durability.current / Math.max(1, durability.max)) * 100);
-                let barClass = 'slot-durability-bar';
-                if (percent <= 0) barClass += ' broken';
-                else if (percent <= 20) barClass += ' critical';
-                else if (percent <= 50) barClass += ' low';
+    let barClass = 'slot-durability-bar';
+    // Пороги из единого EquipmentShared.getDurabilityState — те же, что в
+    // карточке предмета «Вещей». Раньше здесь были свои 20/50 против 25/60,
+    // и один предмет в бою читался «Износ», в карточке — «Почти сломано».
+    barClass += ' ' + (rules?.getDurabilityState
+        ? rules.getDurabilityState(percent).state
+        : (percent <= 0 ? 'broken' : (percent <= 25 ? 'critical' : (percent <= 60 ? 'low' : 'ok'))));
                 
                 durabilityEl.innerHTML = `<div class="${barClass}" style="width: ${percent}%"></div>`;
                 durabilityEl.title = `Прочность: ${durability.current}/${durability.max} (${percent}%)`;
@@ -5559,18 +5616,17 @@ function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound
     // заново. `return` случался ДО try/finally, поэтому unlockAction тоже не
     // срабатывал — блокировка висела до аварийного таймера (30 секунд).
     //
-    // Теперь выход из боя не зависит от блокировки: showScreen сам грузит
-    // список (case 'bosses'), а отложенный loadBosses его освежает.
+    // Теперь выход из боя не зависит от блокировки.
+    //
+    // showScreen('bosses') -> onScreenOpen('bosses') сам вызывает loadBosses(),
+    // поэтому второго отложенного вызова НЕТ: он давал второй полный GET и
+    // второй renderBosses (сброс скролла), а хуже — loadBosses принудительно
+    // переключает экран в любой ветке, так что если игрок за 2.2 с успевал
+    // начать новый бой, отложенный вызов затирал ему лог (fightLog.innerHTML)
+    // и ре-клонировал кнопку атаки; если уходил на главный/Вещи — возвращал
+    // его обратно в список боссов.
     showScreen('bosses');
     switchBossesTab('solo');
-
-    setTimeout(() => {
-        // Освежаем список: босс повержён, ключи и HP могли измениться.
-        // Блокировку НЕ трогаем — loadBosses разберётся сама.
-        loadBosses().catch((loadError) => {
-            console.error('Boss reload error:', loadError);
-        });
-    }, 2200);
 
     // После убийства изменились монеты/XP/ключи/инвентарь/мастерство —
     // RenderCache.clean() чистит только UI-кэш, данные обновляет только сервер.
@@ -5795,9 +5851,10 @@ function showDamageAnimation(damage) {
         const damageText = document.createElement('div');
         damageText.className = 'damage-text';
         damageText.textContent = `-${damage}`;
-        // Оформление — в styles.css (.damage-text): инлайновые style дублировались
-        // между местами вызова, а keyframes fadeUp отсутствовал, и число
-        // просто висело в углу контейнера без анимации.
+        // Оформление и анимация — в styles.css (.damage-text + @keyframes fadeUp).
+        // Раньше стили писались инлайном через cssText, а keyframes fadeUp
+        // отсутствовал: число урона просто висело в углу контейнера.
+        // Позицию (left/top) считает JS ниже относительно .boss-fight-container.
 
         // Позиционируем относительно ИКОНКИ босса, чтобы число всплывало
         // над ним. Fallback — сторона врага общего компонента боя
@@ -8656,11 +8713,31 @@ const SHOP_ITEMS = (() => {
 function refreshTradeBalances() {
     if (!gameState.player) return;
 
-    const coinsEl = document.getElementById('shop-coins-balance');
-    if (coinsEl) coinsEl.textContent = formatNumber(Number(gameState.player.coins) || 0);
+    const coins = formatNumber(Number(gameState.player.coins) || 0);
+    const stars = formatNumber(Number(gameState.player.stars) || 0);
 
+    // Панель «Рынок».
+    const coinsEl = document.getElementById('shop-coins-balance');
+    if (coinsEl) coinsEl.textContent = coins;
+
+    // Панель «Магазин».
     const starsEl = document.getElementById('shop-stars-balance');
-    if (starsEl) starsEl.textContent = formatNumber(Number(gameState.player.stars) || 0);
+    if (starsEl) starsEl.textContent = stars;
+
+    // Шапки: без них после покупки за звёзды баланс на главном экране
+    // и в «Вещах» оставался старым до следующего loadProfile.
+    const mainCoinsEl = document.getElementById('main-coins-value');
+    if (mainCoinsEl) mainCoinsEl.textContent = coins;
+
+    const mainStarsEl = document.getElementById('main-stars-value');
+    if (mainStarsEl) mainStarsEl.textContent = stars;
+
+    // «Вещи»: инвентарь показывает обе валюты.
+    const invCoinsEl = document.getElementById('inv-coins');
+    if (invCoinsEl) invCoinsEl.textContent = coins;
+
+    const invStarsEl = document.getElementById('inv-stars');
+    if (invStarsEl) invStarsEl.textContent = stars;
 }
 
 /**
@@ -9037,22 +9114,25 @@ function openTradeTab(tab = 'market') {
         return;
     }
 
-    activeTradeTab = wanted;
+    // Классы переставляем ДО showScreen, чтобы DOM совпадал с activeTradeTab
+    // (экраны создаются один раз в generateScreens и переживают showScreen).
+    // showScreen('trade') -> onScreenOpen('trade') сам загрузит нужную панель,
+    // поэтому loadTradePanel здесь НЕ вызываем.
+    syncTradeTabClasses(wanted);
     showScreen('trade');
 }
 
 /**
- * Переключить под-таб «Торговли» без открытия экрана заново.
+ * Переставить классы под-табов и панелей «Торговли».
  *
- * Данные грузит onScreenOpen через loadTradePanel(activeTradeTab) при показе
- * экрана; при смене таба внутри уже открытого экрана — тоже лениво.
+ * Выделено из setTradeTab: экраны создаются один раз в generateScreens и
+ * переживают showScreen, поэтому без синхронизации после «Торговля → Колесо →
+ * Назад → Торговля» в DOM оставалась активной прошлая панель, а данные грузились
+ * в скрытую.
  *
- * @param {'market'|'shop'|'wheel'} tab
+ * @param {'market'|'shop'|'wheel'} wanted целевой под-таб
  */
-function setTradeTab(tab) {
-    const wanted = ['market', 'shop', 'wheel'].includes(tab) ? tab : 'market';
-    if (activeTradeTab === wanted) return;
-
+function syncTradeTabClasses(wanted) {
     activeTradeTab = wanted;
 
     document.querySelectorAll('.trade-tab').forEach(btn => {
@@ -9062,6 +9142,21 @@ function setTradeTab(tab) {
     document.querySelectorAll('.trade-panel').forEach(panel => {
         panel.classList.toggle('active', panel.id === `trade-panel-${wanted}`);
     });
+}
+
+/**
+ * Переключить под-таб «Торговли» внутри уже открытого экрана.
+ *
+ * Данные грузит onScreenOpen через loadTradePanel(activeTradeTab) при показе
+ * экрана; при смене таба внутри уже открытого экрана — тоже лениво.
+ *
+ * @param {'market'|'shop'|'wheel'} tab целевой под-таб
+ */
+function setTradeTab(tab) {
+    const wanted = ['market', 'shop', 'wheel'].includes(tab) ? tab : 'market';
+    if (activeTradeTab === wanted) return;
+
+    syncTradeTabClasses(wanted);
 
     // Грузим данные только что открытой панели.
     safeAsync('trade', loadTradePanel(wanted));
@@ -9478,6 +9573,11 @@ async function buyStarItem(itemId, triggerButton = null) {
             RenderCache.clear();
             await loadCoinShop();
             await loadInventory();
+            // Балансы панели «Магазин» и шапки: без этого #shop-stars-balance
+            // оставался старым после покупки за звёзды — loadCoinShop правит
+            // только #shop-coins-balance, а main-stars-value обновляется лишь
+            // на следующем loadProfile.
+            refreshTradeBalances();
         } else {
             showNotification(response?.error || 'Не удалось купить за звёзды', 'error');
         }

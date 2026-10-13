@@ -502,7 +502,10 @@ router.post('/attack-hit', async (req, res) => {
             const attackerEq = normalizeEquipment(attacker.equipment);
             const defenderEq = normalizeEquipment(defender.equipment);
             // Бонус сета атакующего (урон) — считаем один раз для обоих.
-            const attackerSetBonuses = await getSetBonuses(attackerEq);
+            // client передан: transaction() уже держит FOR UPDATE на pvp_battles
+            // и двух players, второй вызов через query() брал бы ещё одно
+            // соединение пула (max 20).
+            const attackerSetBonuses = await getSetBonuses(attackerEq, client);
             let damage = pvp.calculatePVPDamage(
                 { ...attacker, equipment: attackerEq, set_damage: attackerSetBonuses.damage || 0 },
                 { ...defender, equipment: defenderEq }

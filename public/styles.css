@@ -1314,7 +1314,11 @@ html, body {
 /* Дополнительные кнопки */
 .extra-actions {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    /* 2 колонки, а не 3: кнопок стало 4 (Торговля/Рейтинг/PvP/Достижения)
+       после слияния Магазина+Рынка+Колеса в один экран. С 3 колонками
+       последняя кнопка оставалась одна во втором ряду — сетка «дырявая»,
+       а главный экран, который собирались сокращать, висел на ряд длиннее. */
+    grid-template-columns: repeat(2, 1fr);
     gap: 8px;
 }
 
@@ -2421,6 +2425,31 @@ html, body {
     40% { transform: translateX(10px); }
     60% { transform: translateX(-5px); }
     80% { transform: translateX(5px); }
+}
+
+/* Всплывающее «−24» над боссом (showDamageAnimation).
+   Позицию (left/top) задаёт JS относительно иконки босса — здесь только
+   оформление. Раньше этого правила не было вовсе: без position:absolute
+   инлайновые left/top к static-элементу не применялись, и число урона
+   становилось обычной строкой в flex-колонке, сдвигая вёрстку экрана боя. */
+.damage-text {
+    position: absolute;
+    z-index: 20;
+    color: var(--accent-red);
+    font-size: 24px;
+    font-weight: 700;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+    /* Анимация живёт здесь, а не в JS: раньше duration передавалась строкой в
+       cssText вместе с остальными стилями, и число урона оставалось без
+       keyframes. translate(-50%) центрирует по X относительно заданного left. */
+    animation: fadeUp 1s ease-out forwards;
+}
+
+@keyframes fadeUp {
+    0% { opacity: 0; transform: translate(-50%, 10px) scale(0.8); }
+    20% { opacity: 1; transform: translate(-50%, 0) scale(1.1); }
+    100% { opacity: 0; transform: translate(-50%, -40px) scale(1); }
 }
 
 /* Стили для мастерства боссов */
@@ -3992,6 +4021,10 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: 14px;
+    /* Точка отсчёта для всплывающего урона (.damage-text, position:absolute):
+       JS считает left/top от getBoundingClientRect() этого контейнера.
+       Без relative позиция уезжала бы к ближайшему позиционированному предку. */
+    position: relative;
 }
 
 /* --- Поле боя ---

@@ -908,7 +908,7 @@ router.get('/', async (req, res) => {
             for (const m of masteries) masteryMap[m.boss_id] = m.kills;
 
             const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
-            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}), client);
 
             // Ключ выдаёт ПРЕДЫДУЩИЙ босс, поэтому требование к боссу N — это
             // keys_required босса N-1, а не самого N: иначе цифры в UI не
@@ -1021,7 +1021,10 @@ router.post('/attack-boss', async (req, res) => {
 
             const { activeBattle, player, activeBuffs, masteries } = validation;
             const boss = await getBossById(client, bossId);
-            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+            // client передан: внутри transaction() с FOR UPDATE на players
+            // второй вызов через глобальный query() брал бы второе соединение
+            // пула (max 20) — при >10 боях пул исчерпывался и писал 500.
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}), client);
             const damage = calculateDamage(bossId, player, masteries, setBonuses);
             const newHp = Math.max(0, activeBattle.boss.hp - damage);
             const energyCost = activeBuffs.free_energy ? 0 : 1;
@@ -1472,7 +1475,7 @@ router.post('/raid/:id/attack', async (req, res) => {
             }
 
             const masteries = await getBossMasteries(client, playerId);
-            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}));
+            const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}), client);
             const damage = calculateDamage(raid.boss_id, player, masteries, setBonuses);
             const newHp = Math.max(0, raid.current_health - damage);
             const newTotalDamage = session.damage_dealt + damage;

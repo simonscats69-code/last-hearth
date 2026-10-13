@@ -238,8 +238,13 @@ let indexHtmlTemplate = null;
 // три statSync на запрос HTML, сам хэш считается только после правки.
 const ASSET_FILES = ['game.js', 'styles.css', 'shared/equipment.js'];
 
+// Как часто сверять mtime файлов (мс). Окно кэша версии: см. getAssetVersion.
+const ASSET_CHECK_INTERVAL_MS = 2000;
+
 let assetVersion = 'dev';
 let assetMtimes = new Map();
+let lastAssetCheckAt = 0;
+let lastAssetFallbackAt = 0;
 
 function computeAssetVersion() {
     try {
@@ -249,18 +254,42 @@ function computeAssetVersion() {
         for (const file of ASSET_FILES) {
             const full = path.join(__dirname, 'public', file);
             const stat = fs.statSync(full);
-            hash.update(fs.readFileSync(full));
+            const content = fs.readFileSync(full);
+            // Защита от неатомарной записи: при деплое «в месте» (cp/git pull
+            // без rename) mtime может обновиться на частично записанном файле.
+            // Такой хэш уехал бы клиентам как ?v=, и браузер закэшировал бы
+            // на час обрезанный game.js.
+            // Проверяем размер: stat.size читается ДО чтения, так что при
+            // совпадении содержимое либо было стабильным, либо дописано после
+            // чтения — но mtime тогда тоже стал бы больше записанного.
+            if (content.length !== Number(stat.size)) {
+                throw new Error(`${file}: размер изменился во время чтения (${content.length} != ${stat.size})`);
+            }
+            hash.update(content);
             mtimes.set(file, Number(stat.mtimeMs) || Number(stat.mtime) || 0);
         }
 
         assetVersion = hash.digest('hex').slice(0, 10);
         assetMtimes = mtimes;
     } catch (e) {
-        // Не смогли прочитать файлы — хэш от времени: лучше лишний раз
-        // сбросить кэш клиента, чем навсегда оставить старую версию.
-        assetVersion = Date.now().toString(36);
-        assetMtimes = new Map();
-        logger.warn('[index] Не удалось вычислить версию статики, использую timestamp:', e.message);
+        // Не смогли прочитать файлы. Две вещи, которых здесь быть НЕ должно:
+        //
+        // 1. НЕ обнулять assetMtimes. Раньше здесь стояло
+        //    `assetMtimes = new Map()`, и при недоступном файле проверка
+        //    `assetMtimes.get(file) !== mtime` снова оказывалась истинной —
+        //    пересчёт на каждый HTML-запрос, а каждый пересчёт давал новый
+        //    timestamp. Итог: бесконечный cache-busting (?v= менялся на каждой
+        //    отдаче), клиент перекачивал game.js + styles.css на каждый вход
+        //    и флушил logger.warn.
+        // 2. Timestamp-fallback только с backoff: без cooldown одна
+        //    незаписанная правка означала бы новый ?v= постоянно.
+        const now = Date.now();
+        if (now - lastAssetFallbackAt >= ASSET_CHECK_INTERVAL_MS) {
+            lastAssetFallbackAt = now;
+            assetVersion = Date.now().toString(36);
+            logger.warn('[index] Не удалось вычислить версию статики, использую timestamp:', e.message);
+        }
+        // assetMtimes и assetVersion сохраняем — пока отдаём последнюю рабочую версию.
     }
 }
 
@@ -269,12 +298,22 @@ computeAssetVersion();
 /**
  * Версия статики с проверкой изменений файлов.
  *
- * statSync трёх файлов дешевле, чем чтение и хэширование на каждый запрос,
- * поэтому чтение делаем только когда mtime реально изменилось.
+ * TTL-кэш: statSync НЕ чаще раза в ASSET_CHECK_INTERVAL_MS. Причина — sendIndexHtml
+ * работает и как SPA-fallback для любого GET с Accept: text/html, то есть
+ * через него идут боты, превью-ссылки Telegram и перезагрузки; синхронный
+ * statSync в обработчике каждого такого запроса блокировал бы event loop.
+ * Окно в 2 секунды не мешает разработке: правку видно сразу после Ctrl+F5,
+ * а случайный лишний stat при частом фладе невозможен.
  *
  * @returns {string} хэш статики
  */
 function getAssetVersion() {
+    const now = Date.now();
+    if (now - lastAssetCheckAt < ASSET_CHECK_INTERVAL_MS) {
+        return assetVersion;
+    }
+    lastAssetCheckAt = now;
+
     try {
         for (const file of ASSET_FILES) {
             const full = path.join(__dirname, 'public', file);

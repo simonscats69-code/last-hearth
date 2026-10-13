@@ -309,7 +309,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
             // Бонусы сетов: heal_bonus (процент к лечению) и energy_bonus
             // (плоская прибавка к энергии). Без них Медицинский сет был
             // просто набором дорогих вещей без преимущества.
-            const setBonuses = await getSetBonuses(safeJsonParse(player.rows[0].equipment, {}));
+            const setBonuses = await getSetBonuses(safeJsonParse(player.rows[0].equipment, {}), client);
 
             if (stats.healing || stats.health) {
                 const baseHeal = Number(stats.healing || stats.health || 0);
