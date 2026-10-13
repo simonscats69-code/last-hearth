@@ -99,34 +99,15 @@ async function checkRateLimit(identifier, maxRequests = 1000, windowMs = 60000) 
 
 /**
  * Middleware для rate limiting на основе БД.
- * Заменяет in-memory rateLimitMap для работы в кластере.
- * 
- * @param {Object} options - { maxRequests, windowMs, keyGenerator }
+ *
+ * ЗДЕСЬ БЫЛ МЁРТВЫЙ ЭКСПОРТ: существовала функция createRateLimitMiddleware
+ * (примерно 25 строк), которая ни разу не была вызвана — вообще нигде.
+ * Реальный rate-limit идёт двумя путями: прямой вызов checkRateLimit внутри
+ * telegramAuthMiddleware (serverApi.js:529) и создания лимитеров express-rate-limit
+ * в routes/game/index.js. Удалено вместе с комментарием-описанием, потому что
+ * незаметная альтернатива маскировала единственный живой путь и ломалась бы
+ * при рефакторе checkRateLimit.
  */
-function createRateLimitMiddleware(options = {}) {
-    const maxRequests = options.maxRequests || 1000;
-    const windowMs = options.windowMs || 60000;
-    const keyGenerator = options.keyGenerator || ((req) => req.ip);
-    
-    return async function rateLimitMiddleware(req, res, next) {
-        const identifier = keyGenerator(req);
-        const { allowed, remaining, resetAt } = await checkRateLimit(identifier, maxRequests, windowMs);
-        
-        res.set('X-RateLimit-Limit', maxRequests);
-        res.set('X-RateLimit-Remaining', remaining);
-        res.set('X-RateLimit-Reset', Math.ceil(resetAt / 1000));
-        
-        if (!allowed) {
-            return res.status(429).json({ 
-                error: 'Too many requests', 
-                code: 'RATE_LIMIT_EXCEEDED',
-                retryAfter: Math.ceil((resetAt - Date.now()) / 1000)
-            });
-        }
-        
-        next();
-    };
-}
 
 // Настройка логгера (директория логов, форматы, транспорты, обработчик
 // ошибок самого логгера) переехала в utils/log.js вместе с
@@ -699,9 +680,9 @@ module.exports = {
     // Идемпотентность
     idempotencyMiddleware,
 
-    // Rate limiting (БД-based)
-    checkRateLimit,
-    createRateLimitMiddleware,
+    // Rate limiting: экспорт убран. checkRateLimit используется ТОЛЬКО внутри
+    // этого файла (telegramAuthMiddleware:529) — наружу функция не нужна, и
+    // verify-dead-exports.js показывал её как мёртвый экспорт.
 
     // PlayerHelper для bosses.js и других модулей
     PlayerHelper: {

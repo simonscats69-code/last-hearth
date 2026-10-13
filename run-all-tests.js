@@ -1,10 +1,14 @@
 /**
- * Единый прогон всех тестовых харнессов проекта.
+ * Единый прогон всех тестовых харнесов проекта.
  * Использование: node run-all-tests.js
  *
  * Харнессы мокают зависимости и вызывают настоящие обработчики роутов,
  * поэтому проверяют не только синтаксис, но и области видимости, порядок
  * параметров SQL и побочные эффекты.
+ *
+ * Также прогоняет scripts/verify-*.js. ЗДЕСЬ БЫЛА ДЫРА: раньше собирались
+ * только test-*.js, поэтому падение verify-скрипта (например verify-rules,
+ * который умеет выходить с кодом 1) в общем прогоне выглядело зелёным.
  */
 const { execFileSync } = require('child_process');
 const path = require('path');
@@ -13,6 +17,13 @@ const fs = require('fs');
 // Список берём с диска, чтобы новые тесты не приходилось добавлять вручную.
 const harnesses = fs.readdirSync(__dirname)
     .filter(f => /^test-.*\.js$/.test(f))
+    .sort();
+
+// Проверочные скрипты: они не печатают «ИТОГ», зато возвращают exit code,
+// поэтому судим по коду возврата.
+const verifiers = fs.readdirSync(path.join(__dirname, 'scripts'))
+    .filter(f => /^verify-.*\.js$/.test(f))
+    .map(f => path.join('scripts', f))
     .sort();
 
 let totalPassed = 0;
@@ -49,8 +60,29 @@ for (const h of harnesses) {
     }
 }
 
+// Проверочные скрипты. Некоторые (verify-messages) требуют аргумент-каталог,
+// вне прогона они бесполезны — их пропускаем.
+const VERIFIERS_NEEDING_ARGS = new Set(['scripts/verify-messages.js']);
+
+for (const v of verifiers) {
+    if (VERIFIERS_NEEDING_ARGS.has(v.replace(/\\/g, '/'))) continue;
+    try {
+        execFileSync(process.execPath, [path.join(__dirname, v)], { encoding: 'utf8', stdio: 'pipe' });
+    } catch (e) {
+        if (/Укажите|использование|Usage/i.test(String(e.stdout || ''))) continue; // требует аргументы
+        failed.push(v);
+        console.log('FAIL ' + v + ' [exit ' + (typeof e.status === 'number' ? e.status : 1) + ']');
+        String(e.stdout || '').split(/\r?\n/)
+            .filter(l => /РАСХОЖ|✗|problems|ИТОГ/i.test(l))
+            .slice(0, 5)
+            .forEach(l => console.log('   ' + l.trim()));
+    }
+}
+
 console.log('');
-console.log('Харнессов: ' + harnesses.length + ', пройдено тестов: ' + totalPassed + ', упало: ' + totalFailed);
+const verifiersRun = verifiers.filter(v => !VERIFIERS_NEEDING_ARGS.has(v.replace(/\\/g, '/'))).length;
+console.log('Харнесов: ' + harnesses.length + ' + проверок: ' + verifiersRun +
+    ' (' + VERIFIERS_NEEDING_ARGS.size + ' требуют аргументов), пройдено тестов: ' + totalPassed + ', упало: ' + totalFailed);
 if (failed.length) {
     console.log('Проблемные: ' + failed.join(', '));
     process.exit(1);

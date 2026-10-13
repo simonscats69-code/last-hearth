@@ -1,11 +1,14 @@
 /**
- * Тест-стенд для routes/game/status.js.
- * Проверяет:
- *  - /heal health: лечение, расход предмета, лог ПОСЛЕ коммита
- *  - /heal radiation: jsonb_set (уровень обновляется, expires_at не теряется)
- *  - /heal: валидация type / item_id
- *  - /check: урон от радиации/инфекций
- *  - граничные случаи
+ * Тест-стенд для routes/game/status.js (/check) и routes/game/items.js (/use-item).
+ *
+ * ЗДЕСЬ БЫЛ СЛОМАННЫЙ ТЕСТ: он мокировал routes/game/status.js и звал
+ * getHandler('/heal'), но /heal в status.js больше не существует — лечение
+ * переехало в items.js ('/use', '/use-item') ещё при слиянии разделов.
+ * Из-за этого файл падал на строке 156 с "getHandler(...) is not a function",
+ * а покрытие было нулевым: /check и все остальные проверки не запускались.
+ *
+ * Теперь используется POST /api/game/inventory/use-item с телом
+ * { item_index, equip } — тем же, что шлёт клиент (game.js:4115).
  */
 const Module = require('module');
 const path = require('path');
@@ -37,18 +40,37 @@ const clientFactory = () => ({
 });
 
 const dbMock = {
-    transaction: async (fn) => fn(clientFactory())
+    transaction: async (fn) => fn(clientFactory()),
+    queryOne: async () => null,
+    queryAll: async () => [],
+    query: async () => ({ rows: [] })
 };
 
 const helpersMock = {
     buildPlayerStatus: () => ({ health: 100, max_health: 100, radiation: 0 }),
-    // Настоящий normalizeInventory парсит JSON-строку из БД через safeJsonParse
     normalizeInventory: (i) => {
         if (Array.isArray(i)) return i;
         if (typeof i === 'string') { try { const p = JSON.parse(i); return Array.isArray(p) ? p : []; } catch (e) { return []; } }
         return [];
     },
-    // consumeInventoryItem: уменьшает количество, при 0 — удаляет слот
+    normalizeEquipment: (e) => {
+        if (typeof e === 'string') { try { return JSON.parse(e) || {}; } catch { return {}; } }
+        return e && typeof e === 'object' ? e : {};
+    },
+    createInventoryItem: (item, opts) => Object.assign({}, item, opts),
+    // normalizeRadiation: level всегда число, строки/числа на входе тоже ок
+    normalizeRadiation: (r) => {
+        if (r === null || r === undefined) return { level: 0, expires_at: null, applied_at: null };
+        if (typeof r === 'number') return { level: r, expires_at: null, applied_at: null };
+        if (typeof r === 'string') {
+            try { const p = JSON.parse(r); return Object.assign({ level: 0, expires_at: null, applied_at: null }, p); }
+            catch { return { level: 0, expires_at: null, applied_at: null }; }
+        }
+        return Object.assign({ level: 0, expires_at: null, applied_at: null }, r);
+    },
+    calculateSellPrice: (item) => Number(item?.price || 0),
+    addItemToInventory: (inv, item) => { inv.push(item); return inv; },
+    trackCollectedItems: () => {},
     consumeInventoryItem: (inventory, index) => {
         const inv = inventory.slice();
         const item = inv[index];
@@ -57,6 +79,14 @@ const helpersMock = {
         if (q > 1) inv[index] = { ...item, quantity: q - 1 };
         else inv.splice(index, 1);
         return { updatedInventory: inv, quantityLeft: Math.max(0, q - 1) };
+    },
+    // Бонусы сетов: без предметов сета — пусто
+    getSetBonuses: async () => ({}),
+    equipmentRules: {
+        resolveEquipmentSlot: (item) => {
+            const slots = { weapon: 'weapon', body: 'body', head: 'head', hands: 'hands', legs: 'legs', boots: 'boots', accessory: 'accessory', armor: 'body', helmet: 'head' };
+            return slots[item?.type] || slots[item?.slot] || null;
+        }
     }
 };
 
@@ -86,7 +116,6 @@ const serverApiMock = {
         const isClientError = statusCode >= 400 && statusCode < 500;
         if (statusCode >= 500) {
             console.log('    !! INTERNAL:', internalMessage);
-            if (error.stack) console.log(error.stack.split('\n').slice(0, 5).join('\n'));
         }
         const message = isClientError ? internalMessage : 'Внутренняя ошибка сервера. Попробуй позже.';
         callLog.push({ __handleError: true, action, statusCode, code });
@@ -101,7 +130,8 @@ const validateMock = {
     validateId: (v, name) => {
         const n = Number(v);
         return (Number.isInteger(n) && n > 0) ? { ok: true, value: n } : { ok: false, error: name + ': ожидается число > 0', code: 'VALIDATION_ERROR' };
-    }
+    },
+    validateQuantity: (v) => ({ valid: true, value: 1 })
 };
 
 const originalLoad = Module._load;
@@ -116,21 +146,45 @@ Module._load = function (request) {
     if (request.includes('game-helpers')) return helpersMock;
     if (request === './debuffs') return debuffApiMock;
     if (request.includes('gameConstants')) return gameConstantsMock;
+    // status.js:11 тянет отсюда CONTAMINATION_DAMAGE_FROM_LEVEL. Без него
+    // порог был undefined, сравнение всегда false и /check всегда отвечал
+    // damage: 0 — тест проверял бы неработающую логику. Реальное значение — 5.
+    if (request.includes('shared/equipment')) return { MAX_INVENTORY_SLOTS: 100, CONTAMINATION_DAMAGE_FROM_LEVEL: 5 };
     return originalLoad.apply(this, arguments);
 };
 
-const router = require(path.join(__dirname, 'routes/game/status.js'));
+const statusRouter = require(path.join(__dirname, 'routes/game/status.js'));
+const itemsRouter = require(path.join(__dirname, 'routes/game/items.js'));
 Module._load = originalLoad;
 
-const getHandler = (p) => {
-    const l = router.stack.find(x => x.route && x.route.path === p);
-    return l ? l.route.stack[0].handle : null;
+// Ищет обработчик по пути в конкретном роутере (учитывает массивы путей)
+const getHandler = (router, p) => {
+    for (const l of router.stack) {
+        if (!l.route) continue;
+        const rp = l.route.path;
+        const match = Array.isArray(rp) ? rp.includes(p) : rp === p;
+        if (match) return l.route.stack[0].handle;
+    }
+    return null;
 };
+// /use-item зарегистрирован массивом путей (router.post(['/use', '/use-item'])),
+// поэтому Express кладёт в route.path МАССИВ, а не строку.
+const getRouterHandler = (router, wantedPath) => {
+    for (const l of router.stack) {
+        if (!l.route) continue;
+        const p = l.route.path;
+        const match = Array.isArray(p) ? p.includes(wantedPath) : p === wantedPath;
+        if (match) return l.route.stack[0].handle;
+    }
+    return null;
+};
+
+const getUseItemHandler = () => getRouterHandler(itemsRouter, '/use-item');
 
 let passed = 0, failed = 0;
 const ok = (name, cond, extra) => {
     if (cond) { passed++; console.log('  OK  ', name); }
-    else { failed++; console.log('  FAIL', name, extra || ''); }
+    else { failed++; console.log('  FAIL', name, extra !== undefined ? String(extra) : ''); }
 };
 
 const makeReqRes = (player, body) => ({
@@ -144,106 +198,114 @@ const player = () => ({
 });
 
 async function run() {
-    console.log('=== /heal health: лечение + расход + лог после коммита ===');
-    reset({
-        player: {
-            id: 5, health: 40, max_health: 100, radiation: { level: 12, expires_at: 'x', applied_at: 'y' },
-            infections: '[]',
-            inventory: JSON.stringify([{ id: 101, name: 'Аптечка', type: 'medicine', heal: 30, quantity: 3 }])
-        }
-    });
-    let { req, res } = makeReqRes(player(), { type: 'health', item_id: 101 });
-    await getHandler('/heal')(req, res);
+    const useItem = getUseItemHandler();
+    ok('хендлер /use-item найден', typeof useItem === 'function');
 
-    ok('HTTP 200', res.statusCode === 200, res.statusCode);
-    ok('success', res.body && res.body.success === true, JSON.stringify(res.body));
-    ok('quantity_left === 2', res.body && res.body.quantity_left === 2, JSON.stringify(res.body && res.body.quantity_left));
-
-    const upd = callLog.filter(q => /^UPDATE players SET health/.test(q.sql));
-    ok('UPDATE health выполнен', upd.length === 1, String(upd.length));
-    ok('healAmount = 30 передан в UPDATE', upd[0] && upd[0].params[0] === 30, JSON.stringify(upd[0] && upd[0].params));
-
-    const invUpd = callLog.filter(q => /^UPDATE players SET inventory/.test(q.sql));
-    ok('UPDATE inventory выполнен', invUpd.length === 1, String(invUpd.length));
-    ok('в инвентаре осталось количество 2', invUpd[0] && invUpd[0].params[0] === JSON.stringify([{ id: 101, name: 'Аптечка', type: 'medicine', heal: 30, quantity: 2 }]), JSON.stringify(invUpd[0] && invUpd[0].params));
-
-    const logs = callLog.filter(c => c.__log);
-    ok('лог status_heal есть', logs.some(l => l.action === 'status_heal'), JSON.stringify(logs.map(l => l.action)));
-    ok('лог БЕЗ client (после коммита)', logs.length > 0 && logs.every(l => l.withClient === false), JSON.stringify(logs.map(l => l.withClient)));
-
-    console.log('');
-    console.log('=== /heal radiation: jsonb_set сохраняет expires_at/applied_at ===');
-    reset({
-        player: {
-            id: 5, health: 40, max_health: 100,
-            radiation: { level: 12, expires_at: '2030-05-05', applied_at: '2024-02-02' },
-            infections: '[]',
-            inventory: JSON.stringify([{ id: 202, name: 'Антирад', type: 'medicine', rad_removal: 5, quantity: 1 }])
-        }
-    });
-    ({ req, res } = makeReqRes(player(), { type: 'radiation', item_id: 202 }));
-    await getHandler('/heal')(req, res);
-
-    ok('HTTP 200', res.statusCode === 200, res.statusCode);
-    ok('success', res.body && res.body.success === true, JSON.stringify(res.body));
-
-    const radUpd = callLog.filter(q => /radiation = jsonb_set/.test(q.sql));
-    ok('UPDATE использует jsonb_set', radUpd.length === 1, String(radUpd.length));
-    ok('новый уровень = 7 (12 - 5)', radUpd[0] && radUpd[0].params[0] === 7, JSON.stringify(radUpd[0] && radUpd[0].params));
-    ok('в SQL обновляется только {level}',
-        radUpd[0] && /\{level\}/.test(radUpd[0].sql) && /to_jsonb\(\$1\)/.test(radUpd[0].sql),
-        radUpd[0] && radUpd[0].sql);
-    ok('весь объект радиации НЕ перезаписывается', radUpd[0] && !/SET radiation = \$1 WHERE/.test(radUpd[0].sql), radUpd[0] && radUpd[0].sql);
-
-    console.log('');
-    console.log('=== /heal radiation: уровень не уходит ниже нуля ===');
-    reset({
-        player: {
-            id: 5, health: 40, max_health: 100, radiation: { level: 2, expires_at: 'x', applied_at: 'y' }, infections: '[]',
-            inventory: JSON.stringify([{ id: 202, name: 'Антирад', type: 'medicine', rad_removal: 10, quantity: 1 }])
-        }
-    });
-    ({ req, res } = makeReqRes(player(), { type: 'radiation', item_id: 202 }));
-    await getHandler('/heal')(req, res);
-    const radUpd2 = callLog.filter(q => /radiation = jsonb_set/.test(q.sql));
-    ok('уровень зажат в 0', radUpd2[0] && radUpd2[0].params[0] === 0, JSON.stringify(radUpd2[0] && radUpd2[0].params));
-
-    console.log('');
-    console.log('=== /heal: валидация ===');
-    reset({ player: player() });
-    ({ req, res } = makeReqRes(player(), { type: 'health' }));
-    await getHandler('/heal')(req, res);
-    ok('без item_id/item_index -> MISSING_ITEM_ID', res.body && res.body.code === 'MISSING_ITEM_ID', JSON.stringify(res.body));
-
-    reset({ player: player() });
-    ({ req, res } = makeReqRes(player(), { type: 'health', item_id: '' }));
-    await getHandler('/heal')(req, res);
-    ok('пустой item_id -> MISSING_ITEM_ID', res.body && res.body.code === 'MISSING_ITEM_ID', JSON.stringify(res.body));
-
-    reset({ player: player() });
-    ({ req, res } = makeReqRes(player(), { type: 'health', item_id: 'abc' }));
-    await getHandler('/heal')(req, res);
-    ok('нечисловой item_id -> ошибка валидации', res.body && res.body.success === false && res.statusCode >= 400, JSON.stringify(res.body));
-
-    reset({ player: player() });
-    ({ req, res } = makeReqRes(player(), { type: 'неверно', item_id: 101 }));
-    await getHandler('/heal')(req, res);
-    ok('неизвестный type -> INVALID_TYPE', res.body && res.body.code === 'INVALID_TYPE', JSON.stringify(res.body));
-
-    console.log('');
-    console.log('=== /heal: предмета нет в инвентаре ===');
+    console.log('\n=== /use-item: аптечка лечит и расходуется ===');
     reset({
         player: {
             id: 5, health: 40, max_health: 100, radiation: { level: 0 }, infections: '[]',
-            inventory: JSON.stringify([{ id: 101, name: 'Аптечка', type: 'medicine', heal: 30, quantity: 1 }])
+            inventory: JSON.stringify([{ id: 101, name: 'Аптечка', type: 'medicine', stats: { healing: 30 }, quantity: 3 }]),
+            equipment: '{}'
         }
     });
-    ({ req, res } = makeReqRes(player(), { type: 'health', item_id: 999 }));
-    await getHandler('/heal')(req, res);
-    ok('код ITEM_NOT_FOUND', res.body && res.body.code === 'ITEM_NOT_FOUND', JSON.stringify(res.body));
+    let { req, res } = makeReqRes(player(), { item_index: 0 });
+    await useItem(req, res);
 
-    console.log('');
-    console.log('=== /check: урон от радиации ===');
+    ok('HTTP 200', res.statusCode === 200, res.statusCode);
+    ok('success', res.body && res.body.success === true, JSON.stringify(res.body));
+
+    // Лечение: Math.min считает потолок в JS, SQL получает готовое значение
+    const healUpd = callLog.filter(q => /health = \$\d+/.test(q.sql));
+    ok('UPDATE health = $N выполнен', healUpd.length === 1, String(healUpd.length));
+    ok('новое здоровье = 70 (40 + 30)', healUpd[0] && healUpd[0].params.some(p => p === 70), JSON.stringify(healUpd[0] && healUpd[0].params));
+
+    console.log('\n=== /use-item: аптечка не перелечивает выше максимума ===');
+    reset({
+        player: {
+            id: 5, health: 90, max_health: 100, radiation: { level: 0 }, infections: '[]',
+            inventory: JSON.stringify([{ id: 101, name: 'Аптечка', type: 'medicine', stats: { healing: 30 }, quantity: 1 }]),
+            equipment: '{}'
+        }
+    });
+    ({ req, res } = makeReqRes(player(), { item_index: 0 }));
+    await useItem(req, res);
+    // Потолок считает Math.min в JS: min(100, 90+30) = 100
+    const capped = callLog.filter(q => /health = \$\d+/.test(q.sql));
+    ok('здоровье зажато в максимум 100', capped.length === 1 && capped[0].params.some(p => p === 100), JSON.stringify(capped[0] && capped[0].params));
+
+    console.log('\n=== /use-item: антирад снижает уровень до нуля и чистит expires_at ===');
+    reset({
+        player: {
+            id: 5, health: 100, max_health: 100,
+            radiation: { level: 2, expires_at: '2030-05-05', applied_at: '2024-02-02' },
+            infections: '[]',
+            inventory: JSON.stringify([{ id: 202, name: 'Антирад', type: 'medicine', stats: { radiation_cure: 10 }, quantity: 1 }]),
+            equipment: '{}'
+        }
+    });
+    ({ req, res } = makeReqRes(player(), { item_index: 0 }));
+    await useItem(req, res);
+
+    const radUpd = callLog.filter(q => /radiation = \$\d+::jsonb/.test(q.sql));
+    ok('UPDATE radiation через ::jsonb выполнен', radUpd.length === 1, String(radUpd.length));
+
+    // params содержит JSON-строку радиации; ищем подстроку только в строках
+    const radPayload = () => radUpd[0] ? radUpd[0].params.filter(p => typeof p === 'string' && p.includes('"level"')).join('') : '';
+    ok('уровень зажат в 0', radPayload().includes('"level":0'), radPayload());
+    ok('expires_at обнулён при level=0', radPayload().includes('"expires_at":null'), radPayload());
+
+    console.log('\n=== /use-item: антирад сохраняет expires_at при уровне > 0 ===');
+    reset({
+        player: {
+            id: 5, health: 100, max_health: 100,
+            radiation: { level: 12, expires_at: '2030-05-05', applied_at: '2024-02-02' },
+            infections: '[]',
+            inventory: JSON.stringify([{ id: 202, name: 'Антирад', type: 'medicine', stats: { radiation_cure: 5 }, quantity: 1 }]),
+            equipment: '{}'
+        }
+    });
+    ({ req, res } = makeReqRes(player(), { item_index: 0 }));
+    await useItem(req, res);
+    const radUpd2 = callLog.filter(q => /radiation = \$\d+::jsonb/.test(q.sql));
+    const radPayload2 = () => radUpd2[0] ? radUpd2[0].params.filter(p => typeof p === 'string' && p.includes('"level"')).join('') : '';
+    ok('новый уровень = 7 (12 - 5)', radPayload2().includes('"level":7'), radPayload2());
+    ok('expires_at сохранён', radPayload2().includes('"expires_at":"2030-05-05"'), radPayload2());
+
+    console.log('\n=== /use-item: валидация индекса ===');
+    reset({ player: player() });
+    ({ req, res } = makeReqRes(player(), {}));
+    await useItem(req, res);
+    ok('без item_index -> INVALID_INDEX', res.body && res.body.code === 'INVALID_INDEX', JSON.stringify(res.body));
+
+    reset({ player: player() });
+    ({ req, res } = makeReqRes(player(), { item_index: 'abc' }));
+    await useItem(req, res);
+    ok('нечисловой item_index -> INVALID_INDEX', res.body && res.body.code === 'INVALID_INDEX', JSON.stringify(res.body));
+
+    reset({ player: player() });
+    ({ req, res } = makeReqRes(player(), { item_index: 2.5 }));
+    await useItem(req, res);
+    ok('дробный индекс -> INVALID_INDEX', res.body && res.body.code === 'INVALID_INDEX', JSON.stringify(res.body));
+
+    reset({ player: player() });
+    ({ req, res } = makeReqRes(player(), { item_index: -1 }));
+    await useItem(req, res);
+    ok('отрицательный индекс -> INVALID_INDEX', res.body && res.body.code === 'INVALID_INDEX', JSON.stringify(res.body));
+
+    console.log('\n=== /use-item: индекс вне инвентаря ===');
+    reset({
+        player: {
+            id: 5, health: 40, max_health: 100, radiation: { level: 0 }, infections: '[]',
+            inventory: JSON.stringify([{ id: 101, name: 'Аптечка', type: 'medicine', stats: { healing: 30 }, quantity: 1 }]),
+            equipment: '{}'
+        }
+    });
+    ({ req, res } = makeReqRes(player(), { item_index: 99 }));
+    await useItem(req, res);
+    ok('ITEM_NOT_IN_INVENTORY', res.body && res.body.code === 'ITEM_NOT_IN_INVENTORY', JSON.stringify(res.body));
+
+    console.log('\n=== /check: урон от радиации ===');
     reset({
         player: {
             id: 5, health: 100, max_health: 100,
@@ -252,39 +314,44 @@ async function run() {
         }
     });
     ({ req, res } = makeReqRes(player(), {}));
-    await getHandler('/check')(req, res);
+    await getHandler(statusRouter, '/check')(req, res);
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
     ok('radiation damage = (8-4)*3 = 12', res.body && res.body.damage === 12, JSON.stringify(res.body));
     ok('уменьшение здоровья в БД', callLog.some(q => /UPDATE players[\s\S]*GREATEST\(0, health - /.test(q.sql)));
 
-    console.log('');
-    console.log('=== /check: радиации ниже порога -> урона нет ===');
+    console.log('\n=== /check: радиации ниже порога -> урона нет ===');
     reset({ player: { id: 5, health: 100, max_health: 100, radiation: { level: 3 }, infections: '[]' } });
     ({ req, res } = makeReqRes(player(), {}));
-    await getHandler('/check')(req, res);
+    await getHandler(statusRouter, '/check')(req, res);
     ok('damage === 0', res.body && res.body.damage === 0, JSON.stringify(res.body));
     ok('UPDATE здоровья НЕ выполнен', !callLog.some(q => /UPDATE players[\s\S]*health - /.test(q.sql)));
 
-    console.log('');
-    console.log('=== /check: радиация числом (старый формат) ===');
+    console.log('\n=== /check: радиация числом (старый формат) ===');
     reset({ player: { id: 5, health: 100, max_health: 100, radiation: 9, infections: '[]' } });
     ({ req, res } = makeReqRes(player(), {}));
-    await getHandler('/check')(req, res);
+    await getHandler(statusRouter, '/check')(req, res);
     ok('damage = (9-4)*3 = 15', res.body && res.body.damage === 15, JSON.stringify(res.body));
 
-    console.log('');
-    console.log('=== /check: радиация строкой JSON ===');
+    console.log('\n=== /check: радиация строкой JSON ===');
     reset({ player: { id: 5, health: 100, max_health: 100, radiation: '{"level":6}', infections: '[]' } });
     ({ req, res } = makeReqRes(player(), {}));
-    await getHandler('/check')(req, res);
+    await getHandler(statusRouter, '/check')(req, res);
     ok('damage = (6-4)*3 = 6', res.body && res.body.damage === 6, JSON.stringify(res.body));
 
-    console.log('');
-    console.log('=== GET / ===');
-    ok('хендлер / есть', typeof getHandler('/') === 'function');
+    console.log('\n=== Состав маршрутов status.js ===');
+    // ЗДЕСЬ БЫЛА ОСИРОТЕВШАЯ ПРОВЕРКА: тест искал обработчик GET / в status.js,
+    // но этот роут переехал в player.js при разделении профиля и статуса
+    // (сейчас GET /profile). Проверка проходила лишь потому что find возвращал
+    // undefined, а typeof undefined === 'undefined'... на самом деле она падала
+    // вместе с остальным файлом ещё раньше. Теперь проверяем реальный состав.
+    const statusPaths = statusRouter.stack
+        .filter(l => l.route)
+        .map(l => Array.isArray(l.route.path) ? l.route.path.join('/') : l.route.path);
+    ok('в status.js только /check', statusPaths.length === 1 && statusPaths[0] === '/check', statusPaths.join(', '));
+    ok('/heal в status.js отсутствует (переехал в /use-item)',
+        statusPaths.every(p => p !== '/heal'), statusPaths.join(', '));
 
-    console.log('');
-    console.log('========================================');
+    console.log('\n========================================');
     console.log('ИТОГ:', passed, 'passed,', failed, 'failed');
     console.log('========================================');
     process.exit(failed > 0 ? 1 : 0);

@@ -168,12 +168,13 @@ if (require.main === module) {
         });
 }
 
+// Публичный API — только то, что вызывается снаружи (index.js, db/migrate.js как
+// CLI, тесты). Три служебные функции (создание таблицы миграций, чтение
+// применённых и список файлов) используются ТОЛЬКО внутри этого файла и из
+// экспортов убраны: verify-dead-exports.js показывал их как мёртвые.
 module.exports = {
     runAllMigrations,
     runSchemaMigrations,
     runSqlMigrations,
-    runDataRepairs,
-    ensureMigrationsTable,
-    getAppliedMigrations,
-    getAvailableMigrations
+    runDataRepairs
 };

@@ -677,6 +677,72 @@ async function runMigrations() {
         END $do$
     `);
 
+    // Миграция: добрать пропущенные FK.
+    //
+    // ЗДЕСЬ БЫЛИ ДЫРЫ в ссылочной целостности: clan_chat.player_id,
+    // clan_applications.player_id, item_set_items.item_id были INTEGER NOT NULL
+    // БЕЗ REFERENCES, а players.clan_id — без ограничения (только индекс).
+    // Последствия: после удаления игрока в clan_chat/clan_applications оставались
+    // висячие строки; players.clan_id мог указывать на несуществующий клан;
+    // item_set_items.item_id — на удалённый предмет. При этом соседние
+    // pvp_battles.attacker_id/defender_id/winner_id FK уже имели.
+    //
+    // Все проверки идемпотентны через information_schema, поэтому на чистой БД
+    // (где constraint ещё нет) миграция просто создаст его.
+    const missingForeignKeys = [
+        {
+            constraint: 'fk_players_clan_id',
+            table: 'players',
+            column: 'clan_id',
+            references: 'clans(id)',
+            onDelete: 'ON DELETE SET NULL',
+            checkColumn: true
+        },
+        {
+            constraint: 'fk_clan_chat_player',
+            table: 'clan_chat',
+            column: 'player_id',
+            references: 'players(id)',
+            onDelete: 'ON DELETE CASCADE',
+            checkColumn: true
+        },
+        {
+            constraint: 'fk_clan_applications_player',
+            table: 'clan_applications',
+            column: 'player_id',
+            references: 'players(id)',
+            onDelete: 'ON DELETE CASCADE',
+            checkColumn: true
+        },
+        {
+            constraint: 'fk_item_set_items_item',
+            table: 'item_set_items',
+            column: 'item_id',
+            references: 'items(id)',
+            onDelete: 'ON DELETE CASCADE',
+            checkColumn: true
+        }
+    ];
+
+    for (const fk of missingForeignKeys) {
+        await queryTx(`
+            DO $do$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = '${fk.table}' AND column_name = '${fk.column}'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints
+                    WHERE constraint_name = '${fk.constraint}'
+                ) THEN
+                    ALTER TABLE ${fk.table}
+                    ADD CONSTRAINT ${fk.constraint}
+                    FOREIGN KEY (${fk.column}) REFERENCES ${fk.references} ${fk.onDelete};
+                END IF;
+            END $do$
+        `);
+    }
+
     // Миграции для bosses - доводим старые инсталляции до актуальной схемы
     await queryTx(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
     await queryTx(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS max_health INTEGER DEFAULT 100`);

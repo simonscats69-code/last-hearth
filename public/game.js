@@ -1828,6 +1828,31 @@ function bindClickOnce(element, key, handler) {
     element.setAttribute(attrName, 'true');
 }
 
+/**
+ * То же для `<select>` и `<input>`, но на событии `change`.
+ *
+ * ЗДЕСЬ БЫЛ БАГ: сортировка инвентаря вешалась через bindClickOnce, а `<select>`
+ * меняет значение нативным списком с событием `change`. `click` срабатывает при
+ * открытии, когда `element.value` ещё СТАРОЕ — сортировка применялась на
+ * следующий клик, то есть отставала на одно взаимодействие.
+ *
+ * @param {HTMLElement} element input/select
+ * @param {string} key уникальный ключ (как в bindClickOnce)
+ * @param {Function} handler обработчик
+ */
+function bindChangeOnce(element, key, handler) {
+    if (!element) return;
+
+    const safeKey = key.replace(/[^a-zA-Z0-9]/g, '_');
+    const attrName = `data-bound-${safeKey}`;
+    if (element.getAttribute(attrName) === 'true') {
+        return;
+    }
+
+    element.addEventListener('change', handler);
+    element.setAttribute(attrName, 'true');
+}
+
 
 // ============================================================================
 // ПОДТВЕРЖДЕНИЕ ОПАСНЫХ ДЕЙСТВИЙ
@@ -1979,12 +2004,36 @@ function confirmAction(message, price = 0, threshold = 5000) {
 // "загрузка -> активация SW -> перезагрузка" и игрок видит вечный лоадер.
 // Поэтому здесь только тихо снимаем возможные старые регистрации и чистим
 // их кэши — без регистрации и без перезагрузки страницы.
+//
+// Уборка точечная: снимаем только SW с нашим /sw.js и удаляем только кэши с
+// нашим префиксом last-hearth-. Чужие регистрации и кэши origin не трогаем.
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
+        // Чистим ТОЛЬКО своё.
+        //
+        // ЗДЕСЬ БЫЛА СЛИШКОМ ШИРОКАЯ УБОРКА: getRegistrations() снимал ВСЕ
+        // регистрации origin, а caches.keys() удалял ВСЕ кэши. Когда Mini App
+        // открыт рядом с другими приложениями того же origin, это могло задеть
+        // чужой service worker и его кэши (и давать 'no controller' там, где
+        // контроллер ещё нужен).
         navigator.serviceWorker.getRegistrations()
-            .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+            .then((registrations) => {
+                // Только SW с нашим /sw.js: чужие регистрации origin не трогаем.
+                const own = registrations.filter((registration) => {
+                    const url = registration.active?.scriptURL
+                        || registration.waiting?.scriptURL
+                        || registration.installing?.scriptURL
+                        || '';
+                    return url.endsWith('/sw.js');
+                });
+                return Promise.all(own.map((registration) => registration.unregister()));
+            })
             .then(() => (typeof caches !== 'undefined' ? caches.keys() : []))
-            .then((cacheNames) => Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName))))
+            .then((cacheNames) => {
+                // Только наш префикс: чужие кэши origin сохраняем.
+                const ownCaches = cacheNames.filter((name) => name.startsWith('last-hearth-'));
+                return Promise.all(ownCaches.map((cacheName) => caches.delete(cacheName)));
+            })
             .then(() => {
                 if (navigator.serviceWorker.controller) {
                     console.debug('[SW] Легаси-регистрации Service Worker сняты, кэши очищены');
@@ -1999,8 +2048,19 @@ if ('serviceWorker' in navigator) {
 // Дополнительная очистка при выгрузке страницы
 window.addEventListener('beforeunload', () => {
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        // Отправляем сообщение контроллеру для корректного завершения
-        navigator.serviceWorker.controller.postMessage({ type: 'SHUTDOWN' });
+        // Сообщение шлём ТОЛЬКО если контроллер — наш SW.
+        //
+        // ЗДЕСЬ БЫЛ БАГ: postMessage уходил в контроллер вслепую. Если это чужой
+        // service worker на том же origin, он получал незнакомое сообщение
+        // {type:'SHUTDOWN'} и мог уронить свой обработчик.
+        const controllerUrl = navigator.serviceWorker.controller.scriptURL || '';
+        if (controllerUrl.endsWith('/sw.js')) {
+            try {
+                navigator.serviceWorker.controller.postMessage({ type: 'SHUTDOWN' });
+            } catch {
+                // Контроллер мог выгрузиться между проверкой и отправкой.
+            }
+        }
     }
 });
 
@@ -3374,21 +3434,10 @@ function updateZonePreparationUI(player) {
     return zoneRisk;
 }
 
-function findBestPreparationItem(type) {
-    const inventory = Array.isArray(gameState.inventory) ? gameState.inventory : [];
-
-    // Заражение зоны лечится одним типом предметов: инфекции объединены с
-    // радиацией. Старые infection_cure читаем тоже — чтобы Антидот и всё
-    // остальное продолжало работать без миграции инвентарей.
-    if (type === 'infection' || type === 'radiation') {
-        return inventory.find(item => Number(
-            item?.stats?.radiation_cure || item?.stats?.infection_cure
-            || item?.rad_removal || item?.infection_cure || 0
-        ) > 0) || null;
-    }
-
-    return null;
-}
+// Функция findBestPreparationItem удалена: у неё было ровно одно вхождение в
+// файле — собственное определение. Панель подготовки зоны показывается
+// напрямую через zoneRisk (updateZonePreparationUI), поэтому поиск «лучшего
+// предмета» был мёртвым кодом.
 
 function syncUnlockedLocations(announce = false) {
     if (!Array.isArray(gameState.locations) || !gameState.locations.length || !gameState.player) {
@@ -4981,8 +5030,9 @@ function renderInventoryWithFilters(items) {
         filteredItems = filteredItems.filter((item) => getItemCategory(item) === currentInventoryFilter);
     }
     
-    // Сортировка предметов
-    const sortKey = typeof currentInventorySort !== 'undefined' ? currentInventorySort : 'id';
+    // Сортировка предметов.
+    // Дефолт — 'rarity': пункта "По ID" больше нет в селекте.
+    const sortKey = typeof currentInventorySort !== 'undefined' ? currentInventorySort : 'rarity';
     filteredItems.sort((a, b) => {
         switch (sortKey) {
             case 'name':
@@ -4995,9 +5045,14 @@ function renderInventoryWithFilters(items) {
             }
             case 'count':
                 return (b.quantity || b.count || 1) - (a.quantity || a.count || 1);
-            case 'id':
             default:
-                return (a.id || 0) - (b.id || 0);
+                // Неизвестный ключ — порядок как пришёл с сервера.
+                //
+                // ЗДЕСЬ БЫЛ скрытый no-op: раньше было `case 'id': default:`
+                // с `return (a.id || 0) - (b.id || 0)`, но у предметов инвентаря
+                // нет поля id (есть только index), поэтому при любом значении
+                // вне whitelisted-опций компаратор всегда давал 0.
+                return 0;
         }
     });
 
@@ -7056,7 +7111,10 @@ window.restoreEnergy = restoreEnergy;
 
 // Глобальные переменные для фильтрации и сортировки инвентаря
 let currentInventoryFilter = 'all';
-let currentInventorySort = 'id';
+// Дефолт "по редкости", а не "по ID": пункта "По ID" больше нет (у предметов
+// инвентаря нет поля id, сортировка была no-op). Редкость — самый полезный
+// для игрока порядок: легендарки сверху.
+let currentInventorySort = 'rarity';
 
 /** Режим клика по предмету: 'use' (использовать/надеть) или 'sell' (продать) */
 let currentInventoryMode = 'use';
@@ -7085,8 +7143,8 @@ function initInventoryControls() {
         if (sortSelect.value !== currentInventorySort) {
             sortSelect.value = currentInventorySort;
         }
-        bindClickOnce(sortSelect, 'inv-sort', () => {
-            currentInventorySort = sortSelect.value || 'id';
+        bindChangeOnce(sortSelect, 'inv-sort', () => {
+            currentInventorySort = sortSelect.value || 'rarity';
             renderInventoryWithFilters(gameState.inventory);
         });
     }
@@ -8236,13 +8294,17 @@ function mapScreenHtml() {
                         Перейти
                     </button>
                 </div>
-                <canvas id="city-map" width="350" height="400"></canvas>
+                <!-- Карта города. role="img" + aria-label: канва для скринридера —
+                     непрозрачный прямоугольник, без описания игрок «не видит»
+                     локации. tabindex="0" даёт фокус с клавиатуры. -->
+                <canvas id="city-map" width="350" height="400" role="img"
+                        aria-label="Карта города. Выберите локацию" tabindex="0"></canvas>
                 <div class="location-preparation" id="location-preparation-panel">
                     <span class="prep-pill risk">⚠️ <span id="location-risk-label">—</span></span>
                     <span class="prep-pill rad-def">🛡☢ <span id="location-rad-defense">0</span></span>
                     <span class="prep-pill inf-def">🛡🦠 <span id="location-inf-defense">0</span></span>
                 </div>
-                <div class="location-risk-hint" id="location-risk-hint">Выберите локацию для просмотра рисков</div>
+                <div class="location-risk-hint" id="location-risk-hint" aria-live="polite">Выберите локацию для просмотра рисков</div>
             </div>
         </div>
     `;
@@ -8277,7 +8339,11 @@ function inventoryScreenHtml() {
                         <label class="inv-sort">
                             <span class="inv-sort-label">Сортировка</span>
                             <select id="sort-select">
-                                <option value="id">По ID</option>
+                                <!-- Опции "По ID" здесь больше нет: у предметов
+                                     инвентаря вообще нет поля id (есть только
+                                     index, добавленный клиентом), поэтому пункт
+                                     был no-op — он ничего не сортировал, при этом
+                                     стоял первым и был выбран по умолчанию. -->
                                 <option value="rarity">По редкости</option>
                                 <option value="name">По названию</option>
                                 <option value="count">По количеству</option>
@@ -8308,14 +8374,22 @@ function bossesScreenHtml() {
                 <div class="bosses-info" id="bosses-info"></div>
                 <div class="boss-mode-toggle">
                     <span class="toggle-label">Соло</span>
-                    <label class="switch">
-                        <input type="checkbox" id="boss-mode-switch">
-                        <span class="slider"></span>
-                    </label>
+                        <!-- Переключатель режима боссов. aria-label обязателен:
+                             подписи «Соло» и «Массовый» — соседние <span>, а не
+                             содержимое <label>, поэтому скринридер объявлял бы
+                             просто «checkbox». Этот переключатель меняет всю
+                             видимую область экрана боссов. -->
+                        <label class="switch">
+                            <input type="checkbox" id="boss-mode-switch" role="switch"
+                                   aria-label="Режим боссов: соло или массовый бой">
+                            <span class="slider"></span>
+                        </label>
                     <span class="toggle-label">Массовый</span>
                 </div>
-                <div class="bosses-list" id="bosses-list"></div>
-                <div id="raids-list" style="display:none"></div>
+                <!-- aria-live: при переключении режима скринридер объявляет,
+                     какой список теперь показан (раньше смена была невидимой). -->
+                <div class="bosses-list" id="bosses-list" aria-live="polite"></div>
+                <div id="raids-list" style="display:none" aria-live="polite"></div>
             </div>
         </div>
     `;
@@ -10475,7 +10549,10 @@ function renderLocations() {
     const canvas = document.getElementById('city-map');
     if (!canvas) return;
 
-    renderLocations._bound = renderLocations._bound || null;
+    // Здесь была no-op строка `renderLocations._bound = renderLocations._bound || null`:
+    // она всегда присваивала null и нигде не читалась, создавая иллюзию
+    // одноразовой привязки. Настоящая защита от дублей — `renderLocations._cleanup`
+    // ниже: он снимает прежние слушатели перед новой привязкой.
     paintCityMap(null);
 
     const handlePick = (clientX, clientY) => {
@@ -10582,9 +10659,10 @@ function scheduleMapRepaint(hoveredLoc) {
  * Отрисовка живёт в paintCityMap(), здесь только передаём подсветку.
  * @param {Object} hoveredLoc - локация под курсором
  */
-function redrawMap(hoveredLoc) {
-    paintCityMap(hoveredLoc || null);
-}
+// Функция redrawMap удалена: последняя переработка карты обнулила её тело до
+// делегата в paintCityMap и одновременно убрала всех вызывающих, но саму
+// функцию и window.redrawMap оставила. Вызовов не было — только определение.
+// Отрисовка теперь идёт напрямую через paintCityMap / scheduleMapRepaint.
 
 /**
  * Перерисовать карту при изменении размера окна/повороте экрана.
@@ -10617,7 +10695,8 @@ window.showSparks = showSparks;
 window.particles = particles;
 
 // Функции карты
-window.redrawMap = redrawMap;
+// window.redrawMap удалён вместе с самой redrawMap: вызовов не было.
+
 /**
  * ============================================
  * АНИМАЦИИ (Animations)
@@ -11128,15 +11207,10 @@ function showBossVictorySummary(bossName, rewards = {}, mastery = null) {
     });
 }
 
-function showKeyRewardCelebration(keyName) {
-    showRewardCelebration({
-        icon: '🔑',
-        title: 'Ключ найден!',
-        subtitle: 'Ты сделал шаг к следующему боссу.',
-        lines: [keyName],
-        tone: 'key'
-    });
-}
+// Функция showKeyRewardCelebration удалена: единственный вызывающий (searchLoot,
+// показ 'Ключ найден') был убран при переходе на всплывающие уведомления поиска.
+// Экспорт window.showKeyRewardCelebration тоже убран. Ключ теперь показывается
+// через showNotification с длительностью 5 секунд.
 
 function showLocationUnlockCelebration(locationName) {
     showRewardCelebration({
@@ -11149,5 +11223,5 @@ function showLocationUnlockCelebration(locationName) {
 }
 
 // Экспорт функций для глобального доступа
-window.showKeyRewardCelebration = showKeyRewardCelebration;
+// window.showKeyRewardCelebration убран вместе с функцией (см. выше).
 window.showDamageEffect = showDamageEffect;

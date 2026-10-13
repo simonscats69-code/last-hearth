@@ -188,19 +188,68 @@ async function queryAll(sql, params = []) {
     }
 }
 
+/**
+ * Коды SQLSTATE, при которых транзакцию имеет смысл повторить.
+ *
+ * 40P01 — deadlock_detected: Postgres сам выбрал жертву и откатил её.
+ * 40001 — serialization_failure: конфликт на уровне изоляции.
+ *
+ * Оба случая — НЕ ошибка приложения, а способ Postgres разрешить конфликт:
+ * при повторной попытке транзакция обычно проходит. Без retry любой бой двух
+ * игроков, замокнувших строки в разном порядке (A->B и B->A), отдавал бы 500.
+ */
+const RETRYABLE_PG_CODES = new Set(['40P01', '40001']);
+
+/** Сколько раз повторять транзакцию при deadlock/serialization failure. */
+const TRANSACTION_RETRY_MAX = 3;
+/** Базовая задержка повтора (мс). Растёт экспоненциально: 50, 100, 200. */
+const TRANSACTION_RETRY_BASE_DELAY_MS = 50;
+
+/** Проверка, что ошибка — повторяемый конфликт транзакций. */
+function isRetryableTransactionError(error) {
+    return Boolean(error && RETRYABLE_PG_CODES.has(String(error.code)));
+}
+
+/** Задержка с джитфером, чтобы параллельные повторы не столкнулись снова. */
+function retryDelay(attempt) {
+    const base = TRANSACTION_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+    return base + Math.floor(Math.random() * base * 0.2);
+}
+
 async function transaction(fn) {
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const result = await fn(client);
-        await client.query('COMMIT');
-        return result;
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= TRANSACTION_RETRY_MAX; attempt++) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const result = await fn(client);
+            await client.query('COMMIT');
+            return result;
+        } catch (error) {
+            // ROLLBACK тоже может упасть (соединение уже мертво) — тогда
+            // исходная ошибка важнее, и именно её нужно пробросить.
+            try {
+                await client.query('ROLLBACK');
+            } catch {
+                // игнорируем: соединение всё равно уйдёт в release()
+            }
+
+            // Deadlock/serialization — повторяем с задержкой. Остальное — сразу наружу.
+            if (!isRetryableTransactionError(error) || attempt === TRANSACTION_RETRY_MAX) {
+                throw error;
+            }
+
+            lastError = error;
+            console.warn(`[db] Транзакция откачена (${error.code}), попытка ${attempt}/${TRANSACTION_RETRY_MAX}. Повторяю.`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay(attempt)));
+        } finally {
+            client.release();
+        }
     }
+
+    // Сюда доходим только если все попытки были повторяемыми.
+    throw lastError;
 }
 
 /**

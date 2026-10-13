@@ -64,6 +64,19 @@ async function initDatabase() {
         await seedDatabase();
         await seedAchievements();
 
+        // Кэш лута сбрасываем ПОСЛЕ сидов: он построен один раз при старте и
+        // без инвалидации продолжает возвращать старые/несуществующие id после
+        // правки каталога items. clearLootCache был мёртвым экспортом — теперь
+        // вызывается, и кэш пересобирается на актуальном каталоге.
+        try {
+            const lootCache = require('../utils/lootCache');
+            lootCache.clearLootCache();
+            logger.info('Кэш лута сброшен после сида — будет пересобран при первом поиске');
+        } catch (cacheError) {
+            // Кэш — оптимизация, его сбой не должен ронять инициализацию.
+            logger.warn('Не удалось сбросить кэш лута: ' + describeError(cacheError));
+        }
+
         return true;
     } catch (error) {
         logger.error(`Ошибка инициализации БД (${target}): ${describeError(error)}`);

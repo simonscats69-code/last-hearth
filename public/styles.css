@@ -5382,6 +5382,34 @@ html, body {
 .battle-log .hit { color: var(--accent-orange); animation: hit-pop 0.3s ease-out; }
 .battle-log .crit { color: var(--accent-yellow); font-weight: 700; text-shadow: 0 0 4px rgba(194, 148, 18, 0.6); }
 .battle-log .block { color: var(--accent-blue); }
+
+/* Строка старта боя: «Бой с X начался!».
+   Класс генерится в renderBossFightScreen, а правила не было — строка
+   выглядела обычной строкой лога без акцента. */
+.battle-log .fight-start {
+    color: var(--accent-yellow);
+    font-weight: 700;
+    text-align: center;
+    border-bottom: 1px solid var(--metal-400);
+    padding-bottom: 4px;
+    margin-bottom: 6px;
+}
+
+/* Прогресс мастерства: «Мастерство +N».
+   Тоже генерится JS-ом (onBossDefeated) и тоже было без правила — игрок не
+   видел прогресс среди обычных строк урона. */
+.battle-log .mastery-gain {
+    color: var(--accent-yellow);
+    font-weight: 700;
+    text-shadow: 0 0 6px rgba(194, 148, 18, 0.5);
+}
+
+/* Разделитель «VS» на арене. */
+.battle-vs-label {
+    font-size: var(--text-xl);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
 /* Итог боя (PvP): отдельная строка с победителем. */
 .battle-log .battle-result {
     color: var(--accent-yellow);
