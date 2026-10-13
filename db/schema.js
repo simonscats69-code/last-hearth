@@ -262,18 +262,17 @@ async function createTables() {
         );
     `);
 
-    // Таблица заявок в клан
-    await query(`
-        CREATE TABLE IF NOT EXISTS clan_applications (
-            id SERIAL PRIMARY KEY,
-            clan_id INTEGER REFERENCES clans(id) ON DELETE CASCADE,
-            player_id BIGINT NOT NULL,
-            player_name VARCHAR(255),
-            status VARCHAR(20) DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT NOW(),
-            UNIQUE(clan_id, player_id)
-        );
-    `);
+    // Таблица заявок в клан (clan_applications) УДАЛЕНА.
+    //
+    // Была только CREATE TABLE + три индекса + FK: ни одного SELECT/INSERT/
+    // UPDATE/DELETE во всём проекте. Заявок в клан как процесса не
+    // существует — вступление идёт сразу через is_open либо invite_code
+    // (routes/game/clans.js: /clan/join). Эндпоинтов application/apply/
+    // approve в роутере нет вовсе.
+    //
+    // Таблица в БД оставалась пустой (0 строк на момент удаления) и растиралась
+    // только схемой. Если когда-нибудь понадобится одобрение заявок — таблицу
+    // придётся создать заново вместе с логикой.
 
     // Таблица ключей от боссов
     await query(`
@@ -470,27 +469,15 @@ async function createTables() {
         );
     `);
 
-    // Таблица клановых боссов
-    await query(`
-        CREATE TABLE IF NOT EXISTS clan_bosses (
-            id SERIAL PRIMARY KEY,
-            clan_id INTEGER REFERENCES clans(id) ON DELETE CASCADE,
-            boss_name VARCHAR(100) NOT NULL,
-            boss_description TEXT,
-            boss_icon VARCHAR(10) DEFAULT '👹',
-            boss_level INTEGER NOT NULL,
-            max_health INTEGER NOT NULL,
-            current_health INTEGER NOT NULL,
-            damage INTEGER NOT NULL,
-            reward_experience INTEGER NOT NULL,
-            reward_coins INTEGER NOT NULL,
-            reward_stars INTEGER DEFAULT 0,
-            spawn_time TIMESTAMP DEFAULT NOW(),
-            killed_at TIMESTAMP,
-            is_active BOOLEAN DEFAULT true,
-            UNIQUE(clan_id, is_active)
-        );
-    `);
+    // Таблица клановых боссов (clan_bosses) УДАЛЕНА.
+    //
+    // Только CREATE TABLE, ни одного SELECT/INSERT/UPDATE/DELETE в проекте.
+    // Клановых боссов в игре нет: клан-механика ограничена казной, бонусом к
+    // добыче, чатом и участниками. Таблица была пустой (0 строк) и
+    // раздувала схему. UNIQUE(clan_id, is_active) со значением false вообще
+    // бессмысленен: в Postgres повторяющиеся NULL не конфликтуют, но is_active
+    // пришлось бы держать в единственном экземпляре.
+
     await query(`
         CREATE TABLE IF NOT EXISTS pvp_cooldowns (
             id SERIAL PRIMARY KEY,
@@ -502,20 +489,14 @@ async function createTables() {
         );
     `);
 
-    // Таблица сессий игроков
-    await query(`
-        CREATE TABLE IF NOT EXISTS player_sessions (
-            id SERIAL PRIMARY KEY,
-            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
-            session_token VARCHAR(255) NOT NULL,
-            ip_address VARCHAR(45),
-            user_agent TEXT,
-            created_at TIMESTAMP DEFAULT NOW(),
-            expires_at TIMESTAMP NOT NULL,
-            last_activity TIMESTAMP DEFAULT NOW(),
-            UNIQUE(player_id)
-        );
-    `);
+    // Таблица сессий (player_sessions) УДАЛЕНА.
+    //
+    // Только CREATE TABLE + три индекса, ни одного SELECT/INSERT/DELETE.
+    // Авторизация в Mini App идёт через validatePlayer по подписи
+    // initData (routes/game/index.js), а бот — через webhook и initData.
+    // Отдельные сессионные токены проекту не нужны, таблица была пустой.
+    // Колонка session_token с UNIQUE(player_id) подразумевала всего одну
+    // сессию на игрока, чего реальная многокомнатность Telegram ломает.
 
     // Таблица PvP сражений
     await query(`
@@ -557,18 +538,11 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_chat_clan ON clan_chat(clan_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_chat_created ON clan_chat(created_at DESC)`);
 
-    // Индексы для clan_applications
-    await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_clan ON clan_applications(clan_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_clan_applications_player ON clan_applications(player_id)`);
+    // Индексы для clan_applications и player_sessions удалены вместе с таблицами.
 
     // Индексы для pvp_cooldowns
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_player ON pvp_cooldowns(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_expires ON pvp_cooldowns(expires_at)`);
-
-    // Индексы для player_sessions
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_sessions_player ON player_sessions(player_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_sessions_token ON player_sessions(session_token)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_sessions_expires ON player_sessions(expires_at)`);
 
     // Индексы для pvp_battles
     await query(`CREATE INDEX IF NOT EXISTS idx_pvp_battles_attacker ON pvp_battles(attacker_id)`);
@@ -680,12 +654,13 @@ async function runMigrations() {
     // Миграция: добрать пропущенные FK.
     //
     // ЗДЕСЬ БЫЛИ ДЫРЫ в ссылочной целостности: clan_chat.player_id,
-    // clan_applications.player_id, item_set_items.item_id были INTEGER NOT NULL
+    // item_set_items.item_id были INTEGER NOT NULL
     // БЕЗ REFERENCES, а players.clan_id — без ограничения (только индекс).
-    // Последствия: после удаления игрока в clan_chat/clan_applications оставались
-    // висячие строки; players.clan_id мог указывать на несуществующий клан;
+    // Последствия: после удаления игрока в clan_chat оставались висячие
+    // строки; players.clan_id мог указывать на несуществующий клан;
     // item_set_items.item_id — на удалённый предмет. При этом соседние
     // pvp_battles.attacker_id/defender_id/winner_id FK уже имели.
+    // (clan_applications в списке был раньше, пока таблицу не удалили.)
     //
     // Все проверки идемпотентны через information_schema, поэтому на чистой БД
     // (где constraint ещё нет) миграция просто создаст его.
@@ -706,14 +681,9 @@ async function runMigrations() {
             onDelete: 'ON DELETE CASCADE',
             checkColumn: true
         },
-        {
-            constraint: 'fk_clan_applications_player',
-            table: 'clan_applications',
-            column: 'player_id',
-            references: 'players(id)',
-            onDelete: 'ON DELETE CASCADE',
-            checkColumn: true
-        },
+        // FK на clan_applications убран вместе с таблицей: заявок в клан как
+        // процесса нет, вступление сразу по is_open/invite_code.
+
         {
             constraint: 'fk_item_set_items_item',
             table: 'item_set_items',
