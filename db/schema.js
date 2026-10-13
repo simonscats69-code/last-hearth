@@ -1197,7 +1197,18 @@ async function seedDatabase() {
             INSERT INTO items (name, description, type, category, rarity, stackable, max_stack,
                                slot, set_id, stats, durability, max_durability, ammo_type, price, stars_price, icon)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-            ON CONFLICT (name, type) DO UPDATE SET
+            -- Арбитр конфликта = арбитр UNIQUE-констрейнта таблицы: (name, type, rarity).
+            --
+            -- ЗДЕСЬ БЫЛ БАГ ЧИСТОГО ДЕПЛОЯ: здесь стояло ON CONFLICT (name, type),
+            -- а createTables() объявляет UNIQUE(name, type, rarity) (строка 179).
+            -- Postgres требует, чтобы набор колонок в ON CONFLICT ПОЛНОСТЬЮ совпадал
+            -- с каким-либо уникальным индексом; частичного совпадения недостаточно.
+            -- После миграции (832-839) остаётся только items_name_type_rarity_key, и
+            -- сид падал с ошибкой 42P10 (нет подходящего уникального/исключающего
+            -- ограничения) -> initDatabase бросает -> процесс не стартует. На старой
+            -- БД это работало только потому, что в ней сохранился легаси-констрейнт
+            -- uq_items_name_type, которого нет ни в схеме, ни в миграциях.
+            ON CONFLICT (name, type, rarity) DO UPDATE SET
                 description = EXCLUDED.description,
                 category = EXCLUDED.category,
                 rarity = EXCLUDED.rarity,

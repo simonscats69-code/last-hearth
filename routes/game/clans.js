@@ -279,7 +279,7 @@ router.post('/clan/create', wrap(async (req, res) => {
 router.post('/clan/join', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
-    const { clan_id } = req.body;
+    const { clan_id, invite_code } = req.body;
     
     // Валидация ID клана.
     // Читаем .ok, а не .valid: serverApi.validateId возвращает { ok, ... },
@@ -308,7 +308,26 @@ router.post('/clan/join', wrap(async (req, res) => {
     if (clan.is_open !== true) {
         return fail(res, 'Клан закрытый', 'CLAN_CLOSED');
     }
-    
+
+    // Приглашение по коду.
+    //
+    // ЗДЕСЬ БЫЛ БАГ: invite_code генерировался (48), сохранялся с UNIQUE (229)
+    // и показывался членам (135), но НИКТО его не проверял при вступлении.
+    // clans.id — sequential INTEGER, is_open по умолчанию true, поэтому любой
+    // открытый клан присоединяем простым перебором id. Код приглашения был
+    // декоративной колонкой.
+    //
+    // Проверяем только когда код передан: без кода вход остаётся по is_open,
+    // как раньше (обратная совместимость с текущим клиентом, который код не
+    // шлёт). Когда клиент начнёт передавать код — включить обязательность.
+    if (invite_code !== undefined && invite_code !== null && String(invite_code).trim() !== '') {
+        const provided = String(invite_code).trim();
+        const expected = clan.invite_code ? String(clan.invite_code) : '';
+        if (!expected || provided !== expected) {
+            return fail(res, 'Неверный код приглашения', 'CLAN_INVITE_CODE_INVALID');
+        }
+    }
+
     if (Number(clan.members_count) >= 30) {
         return fail(res, 'Клан полный (макс. 30 участников)', 'CLAN_FULL');
     }

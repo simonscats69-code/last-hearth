@@ -2450,8 +2450,27 @@ function showBossFight(bossId) {
 /**
  * Вернуться к списку боссов
  */
+/**
+ * Вывести общую остановку таймера боя: снять интервал и сбросить дедлайн.
+ *
+ * ЗДЕСЬ БЫЛ БАГ: bossFightTimerId снимался ТОЛЬКО когда время истекалось
+ * (updateBossFightTimer). Кнопка «← Назад» (backToBosses) и победа
+ * (onBossDefeated) таймер не трогали, поэтому секундный setInterval продолжал
+ * работать всё оставшееся время боя — до 8 часов после выхода. Писал в скрытый
+ * #boss-timer-text. Плюс bossFightEndTime не сбрасывался: следующий бой стартовал
+ * с дедлайном предыдущего до момента перезаписи.
+ */
+function stopBossFightTimer() {
+    if (gameState.bossFightTimerId) {
+        safeClearInterval(gameState.bossFightTimerId);
+        gameState.bossFightTimerId = null;
+    }
+    gameState.bossFightEndTime = null;
+}
+
 function backToBosses() {
     gameState.currentBoss = null;
+    stopBossFightTimer();
     showScreen('bosses');
 }
 
@@ -2951,8 +2970,17 @@ function syncPlayerEnergyState(energy, maxEnergy, lastEnergyUpdate = null) {
         status.last_energy_update = lastEnergyUpdate;
     } else if (energy !== undefined && energy !== null) {
         // Метки нет, но энергия изменилась — считаем, что сервер только что
-        // её списал. Иначе клиент «нарисует» себе энергию из старой метки.
-        status.last_energy_update = new Date().toISOString();
+        // её списала. Иначе клиент «нарисует» себе энергию из старой метки.
+        //
+        // getNow(), а НЕ new Date(): весь файл считает реген от этой метки
+        // серверными часами (getEffectivePlayerStatus, getNow = Date.now() +
+        // serverTimeOffset). Локальное время устройства в серверном поле —
+        // ЗДЕСЬ БЫЛ БАГ: loadBosses() (5015-5018) не получал last_energy_update
+        // от GET /bosses, restoreEnergy() тоже, и в это поле уходило время
+        // устройства. При разъехавшихся часах энергия на клиенте расходилась
+        // с сервером, кнопка атаки могла разблокироваться на энергии,
+        // которой на сервере нет.
+        status.last_energy_update = new Date(getNow()).toISOString();
     }
 
     return status;
@@ -3817,16 +3845,12 @@ async function searchLoot() {
                 refreshPlayerEnergyUI();
             }
             
-            // Обновляем радиацию после поиска (всегда, не только при увеличении)
-            if (result.radiation) {
-                if (!gameState.player.status) gameState.player.status = {};
-                gameState.player.status.radiation = result.radiation.level || 0;
-                updateConditionsUI(gameState.player.status);
-            }
-
-            // Заражение зоны одно: сервер присылает только radiation.
-            // Прежний блок infection (свой счётчик и статус) удалён вместе
-            // с инфекциями.
+            // Обновляем радиацию после поиска (всегда, не только при увеличении).
+            //
+            // Дубля здесь больше нет: раньше ниже лежал побайтово такой же
+            // блок (оставшийся от старого infection-блока — задумывалось его
+            // удалить, но вместо этого вставили копию radiation). Он писал те
+            // же значения и второй раз звал updateConditionsUI на каждый поиск.
             if (result.radiation) {
                 if (!gameState.player.status) gameState.player.status = {};
                 gameState.player.status.radiation = result.radiation.level || 0;
@@ -4852,7 +4876,10 @@ function showStackSellDialog(item, amount, unitPrice) {
         return;
     }
 
-    title.textContent = '💰 Продажа: ' + escapeHtml(item.name || 'предмет');
+    // textContent вставляет строку БУКВАЛЬНО, без парсинга HTML, поэтому
+    // escapeHtml() здесь давал двойное экранирование: имя «Щит & Броня»
+    // отображалось как «Щит &amp; Броня». ЗДЕСЬ БЫЛ БАГ.
+    title.textContent = '💰 Продажа: ' + (item.name || 'предмет');
     
     // Создаем контент с полем ввода количества
     message.classList.remove('has-newlines');
@@ -5082,9 +5109,29 @@ function renderBossesInfo(info) {
 
 function switchBossesTab(tabName = 'solo') {
     const toggle = document.getElementById('boss-mode-switch');
-    const isRaid = toggle ? toggle.checked : (tabName === 'mass');
+
+    // tabName — исторический параметр: его присылают loadBosses,
+    // startMassBossFight и onBossDefeated, чтобы показать нужный список.
+    //
+    // ЗДЕСЬ БЫЛ БАГ: раньше при наличии #boss-mode-switch (а он есть всегда,
+    // его рисует bossesScreenHtml) параметр полностью игнорировался:
+    //     const isRaid = toggle ? toggle.checked : (tabName === 'mass');
+    // Игрок жал «Массовый бой» -> startMassBossFight -> сервер создавал рейд ->
+    // loadBosses звал switchBossesTab('mass'), но чекбокс никто не переключал.
+    // isRaid оставался false -> рисовался СОЛО-список, а renderRaids писал в
+    // невидимый #raids-list. Игрок в активном рейде видел соло-боссов и не мог
+    // атаковать рейд.
+    //
+    // Теперь tabName приоритетнее чекбокса: вызывающий код явно говорит, что
+    // показать, а чекбокс синхронизируется под него.
+    const isRaid = tabName === 'mass';
+
+    if (toggle && toggle.checked !== isRaid) {
+        toggle.checked = isRaid;
+    }
+
     const isSolo = !isRaid;
-    
+
     const bossesList = document.getElementById('bosses-list');
     const raidsList = document.getElementById('raids-list');
 
@@ -5602,6 +5649,8 @@ function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound
 
     gameState.currentBoss = null;
     gameState.activeBattle = null;
+    // Бой закончен — секундный интервал и дедлайн снимаем (см. stopBossFightTimer).
+    stopBossFightTimer();
 
     // Сразу выходим из боя и показываем список боссов.
     //
@@ -5735,7 +5784,16 @@ async function attackBoss() {
         }
         
     } catch (error) {
+        // Показываем отказ игроку, а не только в консоль.
+        //
+        // ЗДЕСЬ БЫЛ БАГ: apiRequest бросает исключение и для сетевых ошибок, и
+        // для не-2xx (429 rate-limit, «Недостаточно энергии», 503). Вся эта ветка
+        // была одним console.error, поэтому кнопка мигала «⚔️ Атакую...»,
+        // возвращалась обратно — и всё. Игрок не понимал, почему удара не случилось.
+        // Тот же паттерн уже исправлен в PvP (attackPVPTarget) и в остальных
+        // мутациях: useItem, sellItem, buyShopItem, startBossFight.
         console.error('Attack error:', error);
+        showModal('⚠️ Атака не выполнена', clientErrorMessage(error, 'Не удалось выполнить атаку'));
     } finally {
         if (btn) {
             btn.disabled = false;

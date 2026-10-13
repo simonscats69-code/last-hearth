@@ -547,7 +547,12 @@ router.post('/drop', async (req, res) => {
             // Мест может не хватить. Нужное считаем ДО удаления предмета, и при
             // нехватке мест бросаем ошибку: транзакция откатывается, и игрок
             // ничего не теряет.
-            const scrapYield = equipmentRules.calculateScrapYield(item, 1);
+            //
+            // dropQuantity, а не жёсткая 1: calculateScrapYield(item, quantity)
+            // масштабирует выход (factor = 1..5 от quantity). С единицей разбор
+            // стопки из 50 консервов удалял 50 предметов и начислял материалы
+            // за один — остальные молча уничтожались.
+            const scrapYield = equipmentRules.calculateScrapYield(item, dropQuantity);
             const materialNames = Object.keys(scrapYield);
             let materials = [];
             if (materialNames.length > 0) {

@@ -196,7 +196,12 @@ function requestMiddleware(req, res, next) {
             // Прямой импорт наверху файла: metrics.js не тянет serverApi,
             // поэтому циклической зависимости больше нет.
             try {
-                recordRequest(req.originalUrl || req.url || 'unknown', res.statusCode, duration);
+                // req.path БЕЗ query-строки. ЗДЕСЬ БЫЛА УТЕЧКА: с req.originalUrl
+                // ключ метрики включал query (?v=..., boss_id=...), а byEndpoint —
+                // plain object без LRU/TTL. Каждый уникальный URL (кэш-бастинг,
+                // боты с разными query) создавал запись НАВСЕГДА в памяти
+                // процесса и раздувал ответ GET /metrics.
+                recordRequest(req.path || req.url || 'unknown', res.statusCode, duration);
             } catch {
                 // метрики не должны ломать обработку запроса
             }

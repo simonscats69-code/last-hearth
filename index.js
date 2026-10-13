@@ -376,7 +376,14 @@ app.use(helmet({
             scriptSrc: [
                 "'self'",
                 (req, res) => `'nonce-${res.locals.nonce}'`,
-                'https://cdn.jsdelivr.net',
+                // telegram.org — для telegram-web-app.js.
+                //
+                // ЗДЕСЬ БЫЛА ДЫРА: в списке также был https://cdn.jsdelivr.net,
+                // хотя ни index.html, ни game.js не подключают с него ничего
+                // (grep по public/ даёт 0 совпадений). Allowlist целого хоста в
+                // script-src — постоянно открытый обход nonce-защиты: любой
+                // скрипт с этого CDN выполнится, если XSS-примитив найдётся.
+                // Если библиотека реально понадобится — точный путь + integrity.
                 'https://telegram.org'
             ],
             // script-src-attr: 'none', а не nonce.
@@ -545,6 +552,15 @@ app.get('/ready', healthLimiter, async (req, res) => {
 
 // Метрики сервера (только для админов)
 app.get('/metrics', telegramAuthMiddleware, (req, res) => {
+    // Guard: при TG_BOT_TOKEN не заданном и NODE_ENV !== 'production'
+    // telegramAuthMiddleware уходит в next() БЕЗ установки req.telegramUser
+    // (utils/serverApi.js:536-543). ЗДЕСЬ БЫЛ 500: String(req.telegramUser.id)
+    // на undefined бросал TypeError вместо 401. В .env NODE_ENV не задан, а в
+    // logs/combined.log были записи hasBotToken:false — ситуация реальная.
+    if (!req.telegramUser) {
+        return res.status(401).json({ error: 'Требуется авторизация' });
+    }
+
     const telegramId = String(req.telegramUser.id);
     
     if (!ADMIN_IDS.includes(telegramId)) {
@@ -637,7 +653,9 @@ function shutdown(signal) {
             } catch (err) {
                 logger.error('Ошибка закрытия БД:', err);
             }
-            process.exit(0);
+            // process.exitCode заранее выставлен при аварийном завершении
+            // (БД недоступна, fatal-ошибка) - код 1 говорит платформе о сбое.
+            process.exit(process.exitCode || 0);
         });
         setTimeout(() => {
             logger.error('Graceful shutdown не завершился, принудительный exit');
@@ -645,7 +663,7 @@ function shutdown(signal) {
         }, 10000);
     } else {
         logger.warn('SIGTERM получен до старта сервера');
-        process.exit(0);
+        process.exit(process.exitCode || 0);
     }
 }
 
@@ -662,8 +680,71 @@ function startHttpServer(port) {
     });
 }
 
+/**
+ * Проверка обязательной конфигурации при старте.
+ *
+ * Не роняет процесс (кроме критичных случаев) — insecure-состояния логируются
+ * громко, чтобы dev увидел их при рестарте, а не спустя часы отладки.
+ *
+ * @returns {{problems: string[], warnings: string[]}}
+ */
+function validateStartupConfig() {
+    const problems = [];
+    const warnings = [];
+
+    // TG_BOT_TOKEN: без него в NODE_ENV !== 'production'
+    // telegramAuthMiddleware уходит в next() БЕЗ req.telegramUser (см. #17).
+    if (!process.env.TG_BOT_TOKEN) {
+        if (process.env.NODE_ENV === 'production') {
+            problems.push('TG_BOT_TOKEN не задан в production: авторизация будет отвечать 500.');
+        } else {
+            warnings.push('TG_BOT_TOKEN не задан: авторизация пропускается (dev-режим). /metrics и админка ответят 401 вместо полезного ответа.');
+        }
+    }
+
+    // ADMIN_IDS: пустой список = все /api/admin/* молча 403.
+    if (ADMIN_IDS.length === 0) {
+        warnings.push('ADMIN_IDS пуст: все /api/admin/* будут отвечать 403. Проверь .env.');
+    }
+
+    // NODE_ENV: от него зависят security-решения в utils/serverApi.js
+    // (fail-closed auth) и уровень логирования.
+    if (!process.env.NODE_ENV) {
+        warnings.push("NODE_ENV не задан (ожидается 'production' или 'development').");
+    }
+
+    // База данных: DATABASE_URL читает db/database.js
+    if (!process.env.DATABASE_URL) {
+        warnings.push('DATABASE_URL не задан в env — используется значение по умолчанию из db/database.js.');
+    }
+
+    for (const w of warnings) logger.warn({ type: 'startup_config_warning', message: w });
+
+    if (problems.length > 0) {
+        for (const p of problems) logger.error({ type: 'startup_config_error', message: p });
+        // Критичные проблемы конфигурации — не стартуем: молча живой сервер
+        // без авторизации опаснее, чем упавший процесс, который перезапустится.
+        process.exitCode = 1;
+        handleFatalRuntimeError('startup_config_invalid', { problems });
+        return { problems, warnings };
+    }
+
+    return { problems, warnings };
+}
+
 async function startServer() {
     setLogger(logger);
+
+    // Громкая проверка конфигурации при старте.
+    //
+    // ЗДЕСЬ БЫЛА ТИХАЯ ПОЛОМКА: ADMIN_IDS парсился (строка 18) и никак не
+    // проверялся. При пустом значении ВСЕ /api/admin/* молча отвечают 403 даже
+    // легитимному админу, а предупреждения нет — выглядит как «доступ запрещён
+    // сервером». В проверенном .env NODE_ENV и ADMIN_IDS не заданы вовсе.
+    // Попутно ADMIN_IDS фиксируется здесь, а routes/admin.js:50 парсит env
+    // заново на каждый запрос — копии могут разойтись (dev переустановил env
+    // между рестартом и запросом).
+    validateStartupConfig();
 
     // HTTP-сервер стартует ПЕРВЫМ. За reverse-прокси Bothost приложение
     // обязано слушать порт как можно раньше: пока порт не открыт,
@@ -688,8 +769,12 @@ async function startServer() {
 
     // БД может быть временно недоступна при старте (DNS, сеть, холодный
     // старт Supabase) — повторяем подключение, прежде чем работать без БД.
-    const DB_INIT_ATTEMPTS = 3;
-    const DB_INIT_RETRY_DELAY_MS = 5000;
+const DB_INIT_ATTEMPTS = 3;
+const DB_INIT_RETRY_DELAY_MS = 5000;
+// Падать ли процессом, если БД так и не поднялась. По умолчанию ДА: иначе
+// healthcheck видит 200 и контейнер не перезапускается, а игра отвечает 503
+// вечно. EXIT_ON_DB_FAIL=false — только для ручного дебага.
+const EXIT_ON_DB_FAIL = process.env.EXIT_ON_DB_FAIL !== 'false';
     let databaseInitialized = false;
     for (let attempt = 1; attempt <= DB_INIT_ATTEMPTS; attempt++) {
         try {
@@ -722,10 +807,28 @@ async function startServer() {
     // отдельно; теперь причина видна сразу и в логах, и игроку.
     isDatabaseReady = databaseInitialized;
     if (!isDatabaseReady) {
+        // ЗДЕСЬ БЫЛ БАГ ДЕПЛОЯ: после всех неудачных попыток процесс продолжал
+        // жить. `/` (index.html) и `/health` отвечают 200 — пробник BotHost
+        // видит здоровье и НЕ перезапускает контейнер. Все /api/game/* отдают
+        // 503 SERVICE_STARTING до ручного рестарта, а isDatabaseReady не
+        // пересчитывается никогда. Игра мертва, но выглядит живой.
+        //
+        // Теперь падаем: платформа перезапустит контейнер и даст новое окно на
+        // БД. Отключается явно (EXIT_ON_DB_FAIL=false) для ручного дебага.
         logger.error({
             type: 'database_unavailable',
             message: `БД недоступна после ${DB_INIT_ATTEMPTS} попыток. Игровые маршруты отвечают 503 до перезапуска процесса.`
         });
+
+        if (EXIT_ON_DB_FAIL) {
+            logger.error('[index] Завершение процесса: БД недоступна (EXIT_ON_DB_FAIL=true).');
+            // handleFatalRuntimeError сам решает: если HTTP-сервер уже слушает —
+            // идёт graceful shutdown (пул, планировщик, бот), иначе процесс
+            // умирает через 100мс. Свой process.exit() здесь дал бы гонку с ним.
+            // exitCode=1 нужен, чтобы shutdown выше завершился кодом сбоя, а не 0.
+            process.exitCode = 1;
+            handleFatalRuntimeError('database_unavailable', { attempts: DB_INIT_ATTEMPTS });
+        }
     }
 
     try {

@@ -29,7 +29,7 @@ function getGameHelpers() {
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
-const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask } = helpers;
+const { normalizeInventory, getActiveBuffs, createInventoryItem, addItemToInventory, equipmentRules, getSetBonuses, wearEquipmentSlots, trackCollectedItems, progressDailyTask, recalcEnergy } = helpers;
 // Единый источник правды: тот же, что в world.js и items.js. Без проверки
 // лимита награда за босса довела бы инвентарь больше 100 слотов.
 const MAX_INVENTORY_SLOTS = require('../../public/shared/equipment.js').MAX_INVENTORY_SLOTS;
@@ -700,6 +700,18 @@ async function validateSoloAttack(client, playerId, bossId) {
     if (!player) {
         return { error: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' }, status: 404 };
     }
+
+    // Регенерация энергии от реально прошедшего времени — тем же вызовом,
+    // что в world.js:299 и pvp.js:338/481.
+    //
+    // ЗДЕСЬ БЫЛ БАГ: без recalcEnergy энергия в боссовом контуре только
+    // тратилась (GREATEST(0, energy - 1)) и никогда не начислялась. Игрок,
+    // воющий ТОЛЬКО с боссами, не восстановит энергию никогда — после
+    // исчерпания залипает на «Недостаточно энергии» до поиска в мире.
+    // recalcEnergy двигает last_energy_update ровно на восстановленное
+    // время, так что проверка ниже видит уже реальное значение.
+    await recalcEnergy(client, player);
+
     const activeBuffs = getActiveBuffs(player.buffs);
 
     if (!activeBuffs.free_energy && player.energy < 1) {
@@ -898,7 +910,15 @@ router.post('/start', async (req, res) => {
 router.get('/', async (req, res) => {
     logger.info('[bosses/get] Начало запроса', { playerId: req.player?.id });
     try {
-        const outcome = await withClient(async (client) => {
+        // transaction(), а НЕ withClient(): resolveActiveBattle чистит
+        // просроченное состояние (DELETE player_boss_progress -> DELETE
+        // boss_sessions -> UPDATE players ... active_boss_* = NULL), и в
+        // withClient эти три шага были ТРЕМЯ авто-коммитами на read-запросе.
+        // ЗДЕСЬ БЫЛ БАГ: падение на любом шаге после первого оставляло
+        // players.active_boss_id указывающим на удалённые строки — игрок
+        // получал «бой есть», который не resolve-ится, до следующего
+        // успешного прохода.
+        const outcome = await transaction(async (client) => {
             const playerId = req.player.id;
             logger.info('[bosses/get] Получение данных игрока', { playerId });
             const player = await getPlayerBaseState(client, playerId);
@@ -1459,6 +1479,9 @@ router.post('/raid/:id/attack', async (req, res) => {
             }
 
             const player = await getPlayerBaseState(client, playerId);
+            // Регенерация энергии — та же, что в соло-бою и в world/pvp:
+            // без неё после исчерпания энергии рейд тоже требовал поиска в мире.
+            await recalcEnergy(client, player);
             const activeBuffs = getActiveBuffs(player.buffs);
             if (!activeBuffs.free_energy && player.energy < 1) {
                 return {

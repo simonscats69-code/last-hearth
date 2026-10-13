@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
-const { logger, safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
+const { logger, safeJsonParse, handleError, logPlayerAction, validateId } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -479,15 +479,24 @@ router.post('/achievements/claim', async (req, res) => {
     try {
         const playerId = req.player?.id;
         const { achievement_id } = req.body || {};
-        
-        if (!achievement_id) {
-            return res.status(400).json({ success: false, error: 'Не указан ID достижения', code: 'MISSING_ACHIEVEMENT_ID' });
+
+        // Валидация типа ID, а не только «не пустой».
+        //
+        // ЗДЕСЬ БЫЛ БАГ: проверялось только `!achievement_id`, которое
+        // отсекает '' / null / 0, но пропускает 'abc' и '1.5'. Дальше
+        // Number(achievement_id) давал NaN / 1.5, claimAchievementReward
+        // отдавал это в `WHERE a.id = $2` и Postgres отвечал 22P02
+        // (invalid input syntax for integer) — 500 вместо 400.
+        // Тот же validateId уже используется в /clan/join и в serverApi.
+        const idCheck = validateId(achievement_id, 'ID достижения');
+        if (!idCheck.ok) {
+            return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
         }
-        
+
         const helpers = getGameHelpers();
         const { claimAchievementReward } = helpers;
-        
-        const result = await claimAchievementReward(playerId, Number(achievement_id));
+
+        const result = await claimAchievementReward(playerId, idCheck.value);
         
         res.json({ success: true, data: result });
     } catch (err) {

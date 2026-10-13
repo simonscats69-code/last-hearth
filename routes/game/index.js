@@ -296,13 +296,26 @@ router.use(validatePlayer);
 //
 // Эти лимиты обязаны стоять ПОСЛЕ validatePlayer: до него игрока ещё нет,
 // и keyGenerator по id не сработает. Собственный счётчик у каждого игрока.
+// Критические действия — отдельный счётчик (60/мин) на игрока, потому что
+// общий apiLimiter (150/мин) на них не смотрит как на трату ресурсов.
 router.use('/bosses/attack-boss', criticalActionLimiter);
-router.use('/bosses/attack-with-weapon', criticalActionLimiter);
 router.use(/^\/bosses\/raid\/\d+\/attack$/, criticalActionLimiter);
 router.use('/pvp/attack', criticalActionLimiter);
 router.use('/pvp/attack-hit', criticalActionLimiter);
-router.use('/minigames/wheel/spin', criticalActionLimiter);
-router.use('/minigames/purchase', purchaseLimiter);
+// Колесо: лимитер смонтирован на РЕАЛЬНЫЙ путь клиента (/wheel/spin), а не
+// только на внутренний /minigames/wheel/spin.
+//
+// ЗДЕСЬ БЫЛ БАГ: роутер миниигр подключается трижды — /minigames, /wheel и
+// /purchase (алиасы). Клиент зовёт /api/game/wheel/spin (game.js:9246) и
+// /api/game/purchase (game.js:8870), то есть внутри роутера путь — /wheel/spin
+// и /purchase. Префикс /minigames/... на них не матчится, поэтому
+// criticalActionLimiter и purchaseLimiter не применялись ВООБЩЕ.
+// Для /inventory/buy алиас уже продублирован (315-316) — wheel/purchase
+// просто пропустили.
+router.use('/wheel/spin', criticalActionLimiter);
+router.use('/purchase', purchaseLimiter);
+// ПОБОЧНО: лимитер на /bosses/attack-with-weapon удалён вместе с самим роутом
+// (единственный путь атаки — /attack-boss). Мёртвый mount оставался в коде.
 // Ремонт, улучшение и модификация — траты ресурсов, поэтому под лимитом покупок.
 router.use('/workshop/repair', purchaseLimiter);
 router.use('/workshop/upgrade', purchaseLimiter);
