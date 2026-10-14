@@ -249,7 +249,7 @@ async function applyBossCounterHit(client, playerId, boss, player, bossCurrentHp
     if (damage <= 0) {
         // Почти добитый босс не бьёт — но износ СНАРЯЖЕНИЯ всё равно идёт:
         // игрок продолжал махать оружием, работа шла. Иначе добивание
-        // станавливалось бы бесконечным и бесплатным по прочности.
+        // становилось бы бесконечным и бесплатным по прочности.
         const brokenSlots = wearEquipmentSlots(
             client,
             playerId,
@@ -257,9 +257,7 @@ async function applyBossCounterHit(client, playerId, boss, player, bossCurrentHp
             COUNTER_HIT_WEAR_SLOTS
         );
         await client.query(
-            `UPDATE players
-                SET equipment = $2::jsonb
-              WHERE id = $3`,
+            'UPDATE players SET equipment = $1::jsonb WHERE id = $2',
             [JSON.stringify(equipment), playerId]
         );
         return { damage: 0, health: Number(player.health || 0), broken_slots: brokenSlots };
