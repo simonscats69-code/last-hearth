@@ -1262,7 +1262,22 @@ router.post('/attack-boss', async (req, res) => {
                     // Ответный удар босса.
                     player_damage_taken: counterHit.damage,
                     player_health: counterHit.health,
-                    broken_equipment: counterHit.broken_slots
+                    broken_equipment: counterHit.broken_slots,
+                    // Ответный удар СЛЕДУЮЩЕГО удара — по уже уменьшенному
+                    // HP босса. Без этого подпись в бою показывала бы урон от
+                    // полного HP и не менялась весь бой, хотя смысл новой
+                    // формулы в том, что побитый босс бьёт слабее.
+                    counter_damage: calculateBossCounterDamage(
+                        boss,
+                        player.max_health,
+                        safeJsonParse(player.equipment, {}),
+                        { currentHealth: newHp, playerLevel: player.level }
+                    ),
+                    // Итоговая защита игрока: экипировка + 3 за уровень.
+                    // Без этого рост защиты с уровнем был бы не виден —
+                    // а именно на него жалуются («броня не защищает»).
+                    player_defense: equipmentRules.calculateDefenseTotal(safeJsonParse(player.equipment, {}))
+                        + equipmentRules.calculateLevelDefense(player.level)
                 }
             };
         });
@@ -1863,7 +1878,18 @@ router.post('/raid/:id/attack', async (req, res) => {
                         damage_taken: counterHit.damage,
                         health: counterHit.health,
                         broken_equipment: counterHit.broken_slots,
-                        player_energy: energyResult.rows[0]?.energy ?? player.energy,
+                        // Ответный удар следующего удара — по уже уменьшенному
+                        // HP босса, чтобы подпись в бою жила вместе с бойом.
+                        counter_damage: calculateBossCounterDamage(
+                            raidBoss,
+                            player.max_health,
+                            safeJsonParse(player.equipment, {}),
+                                { currentHealth: newHp, playerLevel: player.level }
+                            ),
+                            // Итоговая защита: экипировка + 3 за уровень.
+                            player_defense: equipmentRules.calculateDefenseTotal(safeJsonParse(player.equipment, {}))
+                                + equipmentRules.calculateLevelDefense(player.level),
+                            player_energy: energyResult.rows[0]?.energy ?? player.energy,
                         last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                         your_total_damage: newTotalDamage,
                         killed,

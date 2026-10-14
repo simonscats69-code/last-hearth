@@ -5814,6 +5814,10 @@ async function attackBoss() {
             }
 
             appendCounterDamageToLog(result);
+            // Ответный удар следующего удара: босс уже побит, поэтому бьёт
+            // слабее. Без обновления подпись застревала на значении от
+            // полного HP и весь смысл формулы был не виден в бою.
+            updateBossCounterLabel(result.counter_damage, result.player_defense);
             updatePlayerHealthUi(result.player_health);
             warnAboutBrokenEquipment(result.broken_equipment);
             
@@ -5921,6 +5925,41 @@ function appendCounterDamageToLog(payload) {
     const healthLeft = payload?.player_health ?? payload?.health ?? payload?.data?.health;
     if (healthLeft !== undefined && healthLeft !== null && Number(healthLeft) <= 0) {
         showModal('💀 Вы погибли', 'Здоровье кончилось. Используйте аптечку, чтобы продолжить бой.', 'error');
+    }
+}
+
+/**
+ * Обновить подпись «Ответный удар» из ответа сервера.
+ *
+ * Значение приходит посчитанным по ТЕКУЩЕМУ HP босса, поэтому по ходу боя
+ * оно убывает — это и есть механика «чем сильнее побит босс, тем слабее он
+ * бьёт». Раньше подпись бралась из карточки боя один раз и не менялась.
+ *
+ * Защиту показываем рядом: без этого её рост с уровнем не виден, а именно
+ * на невидимый рост и жалуются («броня не защищает»).
+ *
+ * @param {number} counterDamage урон следующего ответного удара
+ * @param {number} [playerDefense] итоговая защита игрока
+ */
+function updateBossCounterLabel(counterDamage, playerDefense) {
+    const value = Number(counterDamage);
+    if (!Number.isFinite(value) || value < 0) return;
+
+    const counterEl = document.getElementById('boss-counter-label');
+    if (!counterEl) return;
+
+    const defense = Number(playerDefense);
+    const defenseSuffix = Number.isFinite(defense) && defense > 0
+        ? ` · 🛡 ${defense}`
+        : '';
+
+    if (value > 0) {
+        counterEl.textContent = `Ответный удар: ~${value}${defenseSuffix}`;
+        counterEl.style.display = '';
+    } else {
+        // Босс уже не может ответить — подпись убираем, иначе висла бы с
+        // цифрой, которую игрок никогда не получит.
+        counterEl.style.display = 'none';
     }
 }
 
@@ -7112,6 +7151,10 @@ async function attackRaid(raidId) {
             // Обновляем UI рейда
             await loadRaids();
             renderRaids(gameState.raids);
+
+            // Ответный удар следующего удара — по уже побитому боссу.
+            // В рейде подпись живёт на том же элементе, что и в соло.
+            updateBossCounterLabel(data.counter_damage, data.player_defense);
             
             // После удара в рейде на сервере изменились энергия/урон, а после
             // убийства — монеты/XP/ключи. Профиль нужно перечитать, иначе
