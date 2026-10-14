@@ -176,10 +176,12 @@ function calculateGrantedQuantity(totalQuantity, multiplier = 1) {
  *
  * Босс бьёт в ответ на ЛЮБУЮ атаку игрока, поэтому изнашивается всё
  * надетое снаряжение, включая оружие в руках.
+ *
+ * Список берём из канона COMBAT_SLOTS, а не пишем руками: ручная копия
+ * отстала от канона ровно один раз (в ней оставался удалённый слот 'head'
+ * и не было 'face'), и износ по маскам/противогазам просто не начислялся.
  */
-const COUNTER_HIT_WEAR_SLOTS = [
-    'weapon', 'body', 'head', 'hands', 'legs', 'boots', 'armor', 'helmet', 'accessory'
-];
+const COUNTER_HIT_WEAR_SLOTS = equipmentRules.COMBAT_SLOTS;
 
 /**
  * Ответный удар босса: урон игроку + износ экипировки.

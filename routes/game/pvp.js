@@ -544,9 +544,12 @@ router.post('/attack-hit', async (req, res) => {
             const newHealth = Math.max(0, defender.health - damage);
 
             // Износ снаряжения: оружие атакующего и броня защитника.
+            // Список слотов — из канона COMBAT_SLOTS, а не ручная копия:
+            // ручной список отставал от канона (в нём оставался удалённый
+            // слот 'head' и не было 'face'), и маски с противогазами не
+            // изнашивались в PvP вообще.
             const attackerBroken = wearEquipmentSlots(client, attackerId, attackerEq, ['weapon']);
-            const defenderBroken = wearEquipmentSlots(client, defenderId, defenderEq,
-                ['body', 'head', 'hands', 'legs', 'boots', 'armor', 'helmet', 'accessory']);
+            const defenderBroken = wearEquipmentSlots(client, defenderId, defenderEq, equipmentRules.COMBAT_SLOTS);
 
             await client.query(`
                 UPDATE players

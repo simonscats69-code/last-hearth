@@ -1138,14 +1138,14 @@ async function seedDatabase() {
         // 3 из 9 слотов экипировки были пустыми. Новые предметы закрывают
         // слоты и одновременно собирают 4 сета (items.set_id + item_sets).
         { name: 'Кожаная куртка', description: 'Простая защита от холода и царапин', type: 'armor', category: 'body', rarity: 'common', slot: 'body', stats: { defense: 5, radiation_resist: 3 }, durability: 60, max_durability: 60, price: 60, icon: '🧥' },
-        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'body', rarity: 'rare', slot: 'armor', set_id: 1, stats: { radiation_resist: 10, defense: 25 }, durability: 150, max_durability: 150, price: 960, icon: '🦺' },
-        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'helmet', set_id: 1, stats: { defense: 10, radiation_resist: 5 }, durability: 90, max_durability: 90, price: 160, icon: '⛑️' },
+        { name: 'Бронежилет', description: 'Военный бронежилет', type: 'armor', category: 'armor', rarity: 'rare', slot: 'armor', set_id: 1, stats: { radiation_resist: 10, defense: 25 }, durability: 150, max_durability: 150, price: 960, icon: '🦺' },
+        { name: 'Армейская каска', description: 'Защита головы', type: 'armor', category: 'helmet', rarity: 'uncommon', slot: 'helmet', set_id: 1, stats: { defense: 10, radiation_resist: 5 }, durability: 90, max_durability: 90, price: 160, icon: '⛑️' },
         { name: 'Военные перчатки', description: 'Перчатки пехоты: защита рук', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 1, stats: { defense: 6 }, durability: 100, max_durability: 100, price: 120, icon: '🧤' },
         { name: 'Военные ботинки', description: 'Армейские ботинки: защита ног', type: 'armor', category: 'boots', rarity: 'uncommon', slot: 'boots', set_id: 1, stats: { defense: 8 }, durability: 100, max_durability: 100, price: 120, icon: '🥾' },
         { name: 'Рваные джинсы', description: 'Поношенные джинсы: минимальная защита, но лучше чем ничего', type: 'armor', category: 'legs', rarity: 'common', slot: 'legs', stats: { defense: 3 }, durability: 50, max_durability: 50, price: 340, icon: '👖' },
         { name: 'Армейские штаны', description: 'Стандартные военные штаны: хорошая защита ног', type: 'armor', category: 'legs', rarity: 'uncommon', slot: 'legs', set_id: 1, stats: { defense: 12 }, durability: 110, max_durability: 110, price: 1400, icon: '👖' },
         { name: 'Сталкерские штаны', description: 'Прочные штаны сталкера с усиленными накладками', type: 'armor', category: 'legs', rarity: 'rare', slot: 'legs', set_id: 3, stats: { defense: 18, radiation_resist: 8 }, durability: 140, max_durability: 140, price: 52000, icon: '👖' },
-        { name: 'Противогаз', description: 'Респиратор: защита от заражения зоной', type: 'armor', category: 'head', rarity: 'uncommon', slot: 'head', set_id: 2, stats: { radiation_resist: 30, }, durability: 100, max_durability: 100, price: 160, icon: '😷' },
+        { name: 'Противогаз', description: 'Респиратор: защита от заражения зоной', type: 'armor', category: 'face', rarity: 'uncommon', slot: 'face', set_id: 2, stats: { radiation_resist: 30, }, durability: 100, max_durability: 100, price: 160, icon: '😷' },
         { name: 'Медицинский халат', description: 'Халат полевого медика', type: 'armor', category: 'body', rarity: 'uncommon', slot: 'body', set_id: 2, stats: { defense: 4, radiation_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 240, icon: '🥼' },
         { name: 'Медицинские перчатки', description: 'Перчатки с антисептиком, стойкие к зоне', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 2, stats: { defense: 4, radiation_resist: 10, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 120, icon: '🧤' },
         { name: 'Медицинский рюкзак', description: 'Рюкзак с аптечками', type: 'armor', category: 'accessory', rarity: 'uncommon', slot: 'accessory', set_id: 2, stats: { defense: 3, radiation_resist: 5, heal_bonus: 10 }, durability: 90, max_durability: 90, price: 100, icon: '🎒' },
@@ -1154,7 +1154,7 @@ async function seedDatabase() {
         { name: 'Сталкерский пояс', description: 'Пояс с карго: повышает удачу', type: 'armor', category: 'accessory', rarity: 'rare', slot: 'accessory', set_id: 3, stats: { defense: 4, luck: 5, radiation_resist: 5 }, durability: 120, max_durability: 120, price: 400, icon: '🧭' },
         { name: 'Сталкерские перчатки', description: 'Перчатки с защитой от радиации', type: 'armor', category: 'hands', rarity: 'rare', slot: 'hands', set_id: 3, stats: { defense: 10, radiation_resist: 15 }, durability: 130, max_durability: 130, price: 480, icon: '🧤' },
         { name: 'Бандитская куртка', description: 'Куртка мародёра', type: 'armor', category: 'body', rarity: 'common', slot: 'body', set_id: 4, stats: { defense: 8 }, durability: 70, max_durability: 70, price: 60, icon: '🧥' },
-        { name: 'Бандитская бандана', description: 'Маска бандита', type: 'armor', category: 'head', rarity: 'common', slot: 'head', set_id: 4, stats: { defense: 4 }, durability: 60, max_durability: 60, price: 40, icon: '🥷' },
+        { name: 'Бандитская бандана', description: 'Маска бандита', type: 'armor', category: 'face', rarity: 'common', slot: 'face', set_id: 4, stats: { defense: 4 }, durability: 60, max_durability: 60, price: 40, icon: '🥷' },
         { name: 'Бандитские наручи', description: 'Наручи из подручных материалов', type: 'armor', category: 'hands', rarity: 'uncommon', slot: 'hands', set_id: 4, stats: { defense: 7 }, durability: 90, max_durability: 90, price: 120, icon: '🧤' },
         // Боеприпасы. Патроны — расходник для улучшения любого стрелкового оружия,
         // реактивные гранаты — только для реактивной пушки. Дорогие и редкие:
@@ -1223,7 +1223,7 @@ async function seedDatabase() {
         { name: 'Сыворотка мутанта', description: 'Мутантная сыворотка: энергия как у зверя', type: 'food', category: 'consumable', rarity: 'legendary', price: 50000, icon: '🧬', stats: { energy: 50 } },
         { name: 'Реаниматор', description: 'Полное восстановление здоровья из госзапаса', type: 'medicine', category: 'medicine', rarity: 'legendary', price: 40000, stars_price: 50, icon: '💉', stats: { health: 100 } },
         { name: 'Экзо-костюм', description: 'Тяжёлая броня из армейского склада', type: 'armor', category: 'body', rarity: 'epic', slot: 'body', stats: { defense: 50, radiation_resist: 30 }, durability: 300, max_durability: 300, price: 6000, stars_price: 60, icon: '🤖' },
-        { name: 'Броня стражей', description: 'Легендарная броня последнего убежища', type: 'armor', category: 'body', rarity: 'legendary', slot: 'body', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 60000, stars_price: 200, icon: '👑' }
+        { name: 'Броня стражей', description: 'Легендарная броня последнего убежища', type: 'armor', category: 'armor', rarity: 'legendary', slot: 'armor', stats: { defense: 80, radiation_resist: 50 }, durability: 500, max_durability: 500, price: 60000, stars_price: 200, icon: '👑' }
     ];
 
     // UPSERT, а не DO NOTHING. Именно из-за DO NOTHING на проде оставались
@@ -1649,6 +1649,24 @@ async function repairPlayerInventories() {
             repaired.push(mergeInventoryEntryWithCatalog(entry, row));
         }
 
+        // Обе проверки — let: перенос ключей слотов ниже добавляет предметы
+        // в инвентарь (проигравший в коллизии) уже после первичного сравнения.
+        let inventoryChanged = JSON.stringify(repaired) !== JSON.stringify(inventory);
+        let equipmentChanged = JSON.stringify(equipment) !== JSON.stringify(playerRow.equipment || {});
+
+        // Перенос ключей экипировки в актуальные слоты каталога.
+        //
+        // Смена слота в сиде (Противогаз 'head' → 'face', Бронежилет
+        // 'body' → 'armor') не двигает ключи у игроков: игрок продолжает
+        // носить предмет в удалённом слоте 'head'. Дальше normalizeEquipment
+        // (список слотов из equipment.js) выбросит этот ключ молча — предмет
+        // перестанет давать защиту и исчезнет из UI, а снять его будет нельзя
+        // (unequip не найдёт слот). Поэтому ключ переезжаем вместе с предметом.
+        //
+        // Коллизия (в старом и новом слоте оказались предметы одного места,
+        // например два Бронежилета) решается в пользу более прокачанного:
+        // второй уходит обратно в инвентарь, а не удаляется.
+        const remappedEquipment = {};
         for (const slot of Object.keys(equipment)) {
             const entry = equipment[slot];
             if (!entry || typeof entry !== 'object') {
@@ -1656,11 +1674,38 @@ async function repairPlayerInventories() {
                 continue;
             }
             const row = resolveCatalogRow(entry, catalog, byName);
-            equipment[slot] = row ? mergeInventoryEntryWithCatalog(entry, row) : entry;
+            const merged = row ? mergeInventoryEntryWithCatalog(entry, row) : entry;
+            // Каталог не знает слота (null) — ключ оставляем как есть.
+            const targetSlot = (row && row.slot) || slot;
+
+            const existing = remappedEquipment[targetSlot];
+            if (!existing) {
+                remappedEquipment[targetSlot] = merged;
+                continue;
+            }
+
+            const kept = preferStrongerItem(existing, merged);
+            const loser = kept === existing ? merged : existing;
+            remappedEquipment[targetSlot] = kept;
+            // Проигравший не должен пропасть: возвращаем в инвентарь.
+            repaired.push(loser);
         }
 
-        const inventoryChanged = JSON.stringify(repaired) !== JSON.stringify(inventory);
-        const equipmentChanged = JSON.stringify(equipment) !== JSON.stringify(playerRow.equipment || {});
+        if (JSON.stringify(remappedEquipment) !== JSON.stringify(equipment)) {
+            equipmentChanged = true;
+        }
+        for (const slot of Object.keys(equipment)) {
+            if (!remappedEquipment[slot]) delete equipment[slot];
+        }
+        for (const [slot, item] of Object.entries(remappedEquipment)) {
+            equipment[slot] = item;
+        }
+
+        // Последний шанс заметить правку: проигравший в коллизии уходит
+        // в инвентарь уже ПОСЛЕ первичного сравнения, поэтому пересчитываем.
+        if (JSON.stringify(repaired) !== JSON.stringify(inventory)) {
+            inventoryChanged = true;
+        }
 
         if (!inventoryChanged && !equipmentChanged && coins === 0 && keyGrants.size === 0) {
             continue;
@@ -1739,12 +1784,52 @@ function resolveCatalogRow(entry, catalog, byName) {
 }
 
 /**
+ * Какой из двух предметов оставить в слоте при коллизии.
+ *
+ * Коллизия возникает при переносе ключей: игрок носил Бронежилет в старом
+ * слоте 'body', а новый купленный — уже в 'armor'. Оба претендуют на одно
+ * место, и надо выбрать одного, а второго не удалить, а вернуть в инвентарь.
+ *
+ * Приоритет: уровень улучшения (его задаёт игрок и он невосполним), затем
+ * оставшаяся прочность, затем id каталога как детерминированный тайбрейк —
+ * миграция должна давать один и тот же результат при повторном запуске.
+ *
+ * @param {object} a первый предмет
+ * @param {object} b второй предмет
+ * @returns {object} победитель
+ */
+function preferStrongerItem(a, b) {
+    const score = (item) => ({
+        upgrade: Number(item && item.upgrade_level) || 0,
+        durability: Number(item && item.durability) || 0,
+        id: Number(item && item.id) || 0,
+        name: String((item && item.name) || '')
+    });
+
+    const first = score(a);
+    const second = score(b);
+
+    if (first.upgrade !== second.upgrade) return first.upgrade > second.upgrade ? a : b;
+    if (first.durability !== second.durability) return first.durability > second.durability ? a : b;
+    if (first.id !== second.id) return first.id > second.id ? a : b;
+    return first.name <= second.name ? a : b;
+}
+
+/**
  * Дописать в предмет игрока поля каталога, которых в нём нет.
  *
  * price и прочность берём ИЗ КАТАЛОГА, а не из записи игрока: старые записи
  * хранят цену и прочность первой версии сида (Бита 25/30 вместо 45/35), из-за
  * чего ремонт стоил бы не по каталожной цене, а изношенный предмет считался бы
  * «вечно новым». Уровень улучшения (upgrade_level) сохраняем: его задаёт игрок.
+ *
+ * Слот тоже берём ИЗ КАТАЛОГА, когда каталог его знает. Запись игрока — снимок
+ * каталога на момент покупки: после того как сид перевёл Противогаз с 'head' на
+ * 'face', а Бронежилет с 'body' на 'armor', старая запись продолжает тащить
+ * прежний слот. Если победит entry.slot, экипировка игрока остаётся в удалённом
+ * слоте 'head' — normalizeEquipment (COMBAT_SLOTS без 'head') её молча
+ * выбросит, и предмет станет невидимым и неснимаемым. Если каталог слота не
+ * знает (null), доверяем записи: у части оружия слот задаёт только игрок.
  */
 function mergeInventoryEntryWithCatalog(entry, row) {
     const hasStats = entry.stats && typeof entry.stats === 'object' && Object.keys(entry.stats).length > 0;
@@ -1766,11 +1851,11 @@ function mergeInventoryEntryWithCatalog(entry, row) {
         id: Number(row.id),
         name: entry.name || row.name,
         type: row.type,
-        category: entry.category || row.category || row.type,
+        category: row.category || entry.category || row.type,
         rarity: entry.rarity || row.rarity,
         icon: entry.icon || row.icon || '📦',
-        slot: entry.slot || row.slot || null,
-        set_id: entry.set_id || row.set_id || null,
+        slot: row.slot || entry.slot || null,
+        set_id: row.set_id || entry.set_id || null,
         price: Number(row.price) || 0,
         stats,
         durability,

@@ -84,8 +84,11 @@ const helpersMock = {
     getSetBonuses: async () => ({}),
     equipmentRules: {
         resolveEquipmentSlot: (item) => {
-            const slots = { weapon: 'weapon', body: 'body', head: 'head', hands: 'hands', legs: 'legs', boots: 'boots', accessory: 'accessory', armor: 'body', helmet: 'head' };
-            return slots[item?.type] || slots[item?.slot] || null;
+            // Канон public/shared/equipment.js: armor/helmet/face/body/hands/
+            // legs/boots/accessory/weapon. 'head' удалён (был алиасом helmet),
+            // 'face' — маски и противогазы.
+            const slots = { weapon: 'weapon', armor: 'armor', helmet: 'helmet', face: 'face', body: 'body', hands: 'hands', legs: 'legs', boots: 'boots', accessory: 'accessory' };
+            return slots[item?.slot] || slots[item?.type] || null;
         }
     }
 };

@@ -194,9 +194,13 @@ function calculateSellPrice(dbItem, inventoryItem) {
  * Проверяются вместе со слотом: колонка items.slot nullable,
  * и у части оружия она пустая — без проверки типа два одинаковых
  * меча слились бы в один слот.
+ *
+ * Набор повторяет слоты equipment.js (COMBAT_SLOTS) плюс 'equipment' —
+ * легаси-значение type у предметов, сохранённых до появления слотов.
+ * Слот 'head' из канона удалён (был алиасом 'helmet'), вместо него 'face'.
  */
 const EQUIPMENT_TYPES = new Set([
-    'weapon', 'armor', 'helmet', 'body', 'head',
+    'weapon', 'armor', 'helmet', 'face', 'body',
     'hands', 'legs', 'boots', 'accessory', 'equipment'
 ]);
 

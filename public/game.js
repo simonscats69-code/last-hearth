@@ -4101,7 +4101,7 @@ function isEquippableInventoryItem(item) {
     // экипируемым лишь weapon/armor/helmet: предмет с category 'body' и,
     // скажем, type 'gloves' он объявил бы неэкипируемым.
     const FALLBACK_COMBAT_SLOTS = [
-        'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory', 'weapon'
+        'armor', 'helmet', 'face', 'body', 'hands', 'legs', 'boots', 'accessory', 'weapon'
     ];
 
     // Порядок полей тот же, что в resolveEquipmentSlot.
@@ -4228,12 +4228,16 @@ function renderEquipment(equipment) {
     if (!root) return;
 
     const eq = (equipment && typeof equipment === 'object') ? equipment : {};
+    // Список слотов и подписи — из COMBAT_SLOTS общего файла
+    // (public/shared/equipment.js), порядок здесь свой, только для отображения.
+    // 'head' удалён из канона: он был алиасом 'helmet'. Лицо (маски,
+    // противогазы) переехало в отдельный слот 'face'.
     const slots = [
         ['weapon', '⚔️ Оружие'],
-        ['armor', '🛡️ Броня'],
         ['helmet', '🪖 Шлем'],
+        ['face', '😷 Лицо'],
+        ['armor', '🦺 Броня'],
         ['body', '🧥 Костюм'],
-        ['head', '🎽 Голова'],
         ['hands', '🧤 Руки'],
         ['legs', '👖 Ноги'],
         ['boots', '🥾 Обувь'],
@@ -5298,8 +5302,10 @@ async function renderPlayerEquipmentInBossFight() {
     // же надетом предмете (Unhandled promise rejection при открытии боя).
     const rules = window.EquipmentShared;
     
-    // Слоты в порядке отображения
-    const slots = ['head', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
+    // Слоты в порядке отображения. Все девять — те же, что и на экране
+    // «Снаряжение»: раньше здесь было только семь (без helmet/armor/face),
+    // и каска с бронежилетом просто не показывались в бою.
+    const slots = ['helmet', 'face', 'armor', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
     // Нормализация своими силами (серверной normalizeEquipment здесь нет):
     // оставляем только валидные объекты-предметы по списку слотов.
     const normalizedEquipment = {};
@@ -5310,16 +5316,22 @@ async function renderPlayerEquipmentInBossFight() {
         }
     }
     const slotNames = {
-        head: 'Голова',
-        body: 'Тело',
+        helmet: 'Шлем',
+        face: 'Лицо',
+        armor: 'Броня',
+        body: 'Костюм',
         hands: 'Руки',
         legs: 'Ноги',
-        boots: 'Ноги',
+        // Сапоги подписаны «Сапоги», а не «Ноги»: у штанов и у обуви был один
+        // ярлык, и в бою два слота выглядели как одно место.
+        boots: 'Сапоги',
         weapon: 'Оружие',
         accessory: 'Аксес.'
     };
     const slotIcons = {
-        head: '🪖',
+        helmet: '🪖',
+        face: '😷',
+        armor: '🦺',
         body: '🧥',
         hands: '🧤',
         legs: '👖',
@@ -8442,24 +8454,27 @@ function bossFightScreenHtml() {
                         <!-- Слоты экипировки (RPG-style).
                              ДВА ряда: 7 слотов в четырёх рядах занимали больше
                              места, чем блок босса с его HP — бой уходил под
-                             «шмот». Теперь верхний ряд — «голова/тело/руки»,
-                             нижний — «ноги/сапоги/оружие», аксессуар отдельно.
+                             «шмот». Теперь верхний ряд — «шлем/лицо/броня»,
+                             средний — «костюм/руки/ноги», нижний —
+                             «сапоги/оружие/аксессуар».
                              Каждый слот идёт через Templates.equipmentFightSlot:
                              раньше семь слотов были вписаны копипастой, и слот
                              обуви («Сапоги») был подписан «Ноги» — тот же ярлык,
                              что и у штанов. -->
                         <div class="equipment-slots player-equipment" id="player-equipment-slots">
                             <div class="equipment-row">
-${Templates.equipmentFightSlot('head', '🪖', 'Голова', 'Шлем')}
-${Templates.equipmentFightSlot('body', '🧥', 'Тело', 'Нагрудник')}
-${Templates.equipmentFightSlot('hands', '🧤', 'Руки', 'Перчатки')}
+${Templates.equipmentFightSlot('helmet', '🪖', 'Шлем', 'Каска')}
+${Templates.equipmentFightSlot('face', '😷', 'Лицо', 'Маска')}
+${Templates.equipmentFightSlot('armor', '🦺', 'Броня', 'Бронежилет')}
                             </div>
                             <div class="equipment-row">
-${Templates.equipmentFightSlot('legs', '👖', 'Ноги', 'Ноги')}
+${Templates.equipmentFightSlot('body', '🧥', 'Костюм', 'Куртка')}
+${Templates.equipmentFightSlot('hands', '🧤', 'Руки', 'Перчатки')}
+${Templates.equipmentFightSlot('legs', '👖', 'Ноги', 'Штаны')}
+                            </div>
+                            <div class="equipment-row">
 ${Templates.equipmentFightSlot('boots', '🥾', 'Сапоги', 'Сапоги')}
 ${Templates.equipmentFightSlot('weapon', '⚔️', 'Оружие', 'Оружие')}
-                            </div>
-                            <div class="equipment-row">
 ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксессуар')}
                             </div>
                         </div>

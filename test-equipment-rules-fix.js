@@ -43,7 +43,7 @@ function makeSandbox(opts = {}) {
             remove() { },
             addEventListener() { }, removeEventListener() { },
             querySelector(sel) {
-                // Поддержка [data-slot="head"], .slot-item, .slot-durability
+                // Поддержка [data-slot="helmet"], .slot-item, .slot-durability
                 const m = /\[data-slot="([^"]+)"\]/.exec(sel);
                 if (m) {
                     const slot = m[1];
@@ -67,8 +67,8 @@ function makeSandbox(opts = {}) {
         return el;
     };
 
-    // Контейнер слотов: 7 слотов экипировки
-    const slots = ['head', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
+    // Контейнер слотов: 9 слотов экипировки (канон COMBAT_SLOTS)
+    const slots = ['helmet', 'face', 'armor', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
     const slotEls = {};
     const container = mkEl('div');
     slots.forEach(s => { const e = mkEl('div'); e.dataset.slot = s; slotEls[s] = e; container.children.push(e); });
@@ -198,7 +198,8 @@ async function runRender(opts) {
             vm.runInContext('renderPlayerEquipmentInBossFight()', sandbox);
         } catch (e) { err = e; }
         ok('пустая экипировка: не бросает', err === null, err && err.message);
-        ok('слот остаётся empty', [...slotEls.head._cls].includes('empty'), [...slotEls.head._cls].join(','));
+        // Слот 'helmet' — первый в списке боя; слот 'head' из канона убран.
+        ok('слот остаётся empty', [...slotEls.helmet._cls].includes('empty'), [...slotEls.helmet._cls].join(','));
     }
 
     // --- Нет контейнера на странице ---------------------------------------

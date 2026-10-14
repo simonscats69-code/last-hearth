@@ -57,17 +57,22 @@ const ok = (n, c, e) => {
     };
 
     // ─── Мок надетой экипировки: все слоты, как на реальном аккаунте ───
+    // Слоты по канону (public/shared/equipment.js): armor/helmet/face/body/
+    // hands/legs/boots/accessory/weapon. Слот 'head' удалён — маски и
+    // противогазы переехали в 'face', каски живут в 'helmet'.
     const equipment = {
         weapon: { name: 'Нож', type: 'weapon', icon: '🔪', slot: 'weapon', durability: 40, max_durability: 50 },
-        body: { name: 'Бронежилет', type: 'body', icon: '🧥', slot: 'body', durability: 48, max_durability: 50 },
-        head: { name: 'Шлем', type: 'helmet', icon: '🪖', slot: 'head', durability: 48, max_durability: 50 },
-        hands: { name: 'Перчатки', type: 'hands', icon: '🧤', slot: 'hands', durability: 48, max_durability: 50 },
-        legs: { name: 'Штаны', type: 'legs', icon: '👖', slot: 'legs', durability: 48, max_durability: 50 },
-        boots: { name: 'Ботинки', type: 'boots', icon: '🥾', slot: 'boots', durability: 48, max_durability: 50 }
+        armor: { name: 'Бронежилет', type: 'armor', icon: '🦺', slot: 'armor', durability: 48, max_durability: 50 },
+        helmet: { name: 'Шлем', type: 'armor', icon: '🪖', slot: 'helmet', durability: 48, max_durability: 50 },
+        face: { name: 'Противогаз', type: 'armor', icon: '😷', slot: 'face', durability: 48, max_durability: 50 },
+        body: { name: 'Куртка', type: 'armor', icon: '🧥', slot: 'body', durability: 48, max_durability: 50 },
+        hands: { name: 'Перчатки', type: 'armor', icon: '🧤', slot: 'hands', durability: 48, max_durability: 50 },
+        legs: { name: 'Штаны', type: 'armor', icon: '👖', slot: 'legs', durability: 48, max_durability: 50 },
+        boots: { name: 'Ботинки', type: 'armor', icon: '🥾', slot: 'boots', durability: 48, max_durability: 50 }
     };
 
-    // Слоты, которые рисует экран боя
-    const slots = ['head', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
+    // Слоты, которые рисует экран боя (те же девять, что в renderEquipment)
+    const slots = ['helmet', 'face', 'armor', 'body', 'hands', 'legs', 'boots', 'weapon', 'accessory'];
 
     // ─── Лёгкий DOM-элемент, которого хватает renderPlayerEquipmentInBossFight ───
     const mkEl = (tag) => {
