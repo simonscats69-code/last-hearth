@@ -93,7 +93,9 @@ async function createTables() {
             updated_at TIMESTAMP DEFAULT NOW(),
             pvp_wins INTEGER DEFAULT 0,
             pvp_losses INTEGER DEFAULT 0,
-            pvp_draws INTEGER DEFAULT 0,
+            -- pvp_draws удалён из схемы: колонка есть в БД, но её никто не
+            -- читает и не пишет — ничьи в PvP нигде не считаются. Оставлена
+            -- была только в CREATE TABLE, из-за чего возвращалась на чистой БД.
             pvp_streak INTEGER DEFAULT 0,
             pvp_max_streak INTEGER DEFAULT 0,
             pvp_rating INTEGER DEFAULT 1000,
@@ -747,6 +749,20 @@ async function runMigrations() {
                 FOREIGN KEY (raid_id) REFERENCES raid_progress(id) ON DELETE SET NULL;
             END IF;
         END $do$
+    `);
+
+    // Миграция: rewards_earned в boss_sessions.
+    //
+    // ПРОВАЛ IF NOT EXISTS: колонка объявлена только внутри CREATE TABLE выше,
+    // а на существующей БД createTables() до неё не добирается. Прод создан
+    // вручную, поэтому колонки не было, и любой массовый бой падал с 500:
+    // роут /raid/start пишет rewards_earned в ON CONFLICT DO UPDATE SET,
+    // PostgreSQL отвечал 42703 «column does not exist», а handleError
+    // превращал это в INTERNAL_ERROR. ADD COLUMN IF NOT EXISTS идемпотентна,
+    // так что на чистой БД ничего не сделает.
+    await queryTx(`
+        ALTER TABLE boss_sessions
+        ADD COLUMN IF NOT EXISTS rewards_earned BOOLEAN DEFAULT false
     `);
 
     // Миграции для магазина Stars

@@ -407,19 +407,33 @@ async function regenerateHealth(client, player) {
 
 
 /**
- * Нормализация экипировки с валидацией слотов
+ * Нормализация экипировки с валидацией слотов.
+ *
+ * Слоты берём из public/shared/equipment.js — того же файла, что читает
+ * браузер: расхождение списков означало бы предметы, которые сервер
+ * считает «надетыми», а бой не учитывает.
+ *
+ * ВАЖНО: незнакомые слоты СОХРАНЯЕМ, а не выбрасываем. Раньше функция
+ * оставляла только COMBAT_SLOTS, и всё остальное молча терялось. Это
+ * стирало предметы: вызывающий код (unequip, PvP, мастерская) правит
+ * полученный объект и пишет его обратно в players.equipment, поэтому
+ * предмет в слоту, которого нет в текущем списке, исчезал из БД навсегда.
+ * Именно так пропала Армейская каска: слот 'head' убрали из канона, а
+ * игра держала каску в equipment.head.
+ *
+ * Неизвестный слот не участвует ни в защите, ни в износе (все расчёты
+ * идут по COMBAT_SLOTS), но предмет остаётся живым и переживает смену
+ * каталога — его можно будет снять или перенести миграцией.
  */
 function normalizeEquipment(raw) {
     const eq = safeParseJson(raw, {});
-    if (!eq || typeof eq !== 'object') return {};
+    if (!eq || typeof eq !== 'object' || Array.isArray(eq)) return {};
 
-    // Слоты берём из public/shared/equipment.js, того же файла, что читает
-    // браузер: расхождение списков означало бы предметы, которые сервер
-    // считает «надетыми», а бой не учитывает.
     const out = {};
-    for (const slot of equipmentRules.COMBAT_SLOTS) {
-        if (eq[slot] && typeof eq[slot] === 'object' && !Array.isArray(eq[slot])) {
-            out[slot] = eq[slot];
+    for (const slot of Object.keys(eq)) {
+        const item = eq[slot];
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+            out[slot] = item;
         }
     }
     return out;
