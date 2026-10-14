@@ -362,6 +362,33 @@ async function createTables() {
         ALTER TABLE boss_sessions
         ADD COLUMN IF NOT EXISTS rewards_earned BOOLEAN DEFAULT false
     `);
+
+    // Отложенные награды за рейд.
+    //
+    // Награда делится между ВСЕМИ участниками пропорционально урону, но
+    // начисляется она мгновенно и в транзакции того, кто нанёс смертельный
+    // удар. Остальные участники в этот момент могут быть офлайн — и раньше
+    // не узнавали о своей доле вообще: в ответе умирающего босса награда
+    // уходила только убийце. Теперь каждому участнику пишется строчка, а
+    // забирает он её при следующем открытии экрана боссов.
+    //
+    // raid_id без FK on purpose: строка рейда удаляется сразу после раздачи
+    // наград (raid_progress чистится), и связь оборвалась бы.
+    await query(`
+        CREATE TABLE IF NOT EXISTS raid_rewards (
+            id SERIAL PRIMARY KEY,
+            raid_id INTEGER NOT NULL,
+            boss_id INTEGER NOT NULL,
+            player_id BIGINT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            coins INTEGER NOT NULL DEFAULT 0,
+            experience INTEGER NOT NULL DEFAULT 0,
+            items JSONB NOT NULL DEFAULT '[]',
+            key_item_name VARCHAR(255),
+            claimed BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_raid_rewards_player ON raid_rewards(player_id, claimed)`);
     await query(`
         CREATE TABLE IF NOT EXISTS raid_progress (
             id SERIAL PRIMARY KEY,

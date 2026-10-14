@@ -5085,6 +5085,11 @@ async function loadBosses() {
         gameState.bossesInfo = data?.info || null;
         gameState.activeBattle = data?.active_battle || null;
 
+        // Награды за рейд, начисленные не последним ударом: сервер пишет их
+        // каждому участнику, а показывает здесь — иначе тот, кто бил не
+        // смертельным ударом, о своей доле не узнавал вообще.
+        await showPendingRaidRewards(data?.pending_raid_rewards);
+
         // Длительность боя приходит с сервера (SOLO_FIGHT_DURATION_MS).
         // Идет на resume-ветке выше, поэтому читаем field ДО неё: там
         // buildActiveBattleResponse уже упаковал его в active_battle.
@@ -6929,6 +6934,9 @@ async function loadRaids() {
         gameState.raids = data.raids || [];
         gameState.raidsParticipating = data.participating_raid_ids || [];
         gameState.participatingBossIds = data.participating_boss_ids || [];
+        // Показ отложенных наград — до return, иначе вызывающий код успеет
+        // отрисовать список раньше, чем игрок увидит свою долю.
+        await showPendingRaidRewards(data?.pending_raid_rewards);
         return data;
     } catch (error) {
         console.error('Ошибка загрузки рейдов:', error);
@@ -6936,6 +6944,51 @@ async function loadRaids() {
         gameState.raidsParticipating = [];
         gameState.participatingBossIds = [];
         return { raids: [], participating_boss_ids: [] };
+    }
+}
+
+/**
+ * Показать неполученные награды за рейд и забрать их.
+ *
+ * Начисляются они ВСЕМ участникам в транзакции того, кто нанёс смертельный
+ * удар, но в ответе того запроса награда есть только у убийцы. Остальные
+ * узнают о доле здесь — при следующем обращении к экрану боссов.
+ *
+ * @param {Array} pending - массив pending_raid_rewards с сервера
+ */
+async function showPendingRaidRewards(pending) {
+    if (!Array.isArray(pending) || pending.length === 0) return;
+
+    const totalCoins = pending.reduce((sum, r) => sum + Number(r?.coins || 0), 0);
+    const totalExp = pending.reduce((sum, r) => sum + Number(r?.experience || 0), 0);
+    const items = [];
+    const keyNames = [];
+    for (const reward of pending) {
+        if (Array.isArray(reward?.items)) items.push(...reward.items);
+        if (reward?.key_item_name) keyNames.push(reward.key_item_name);
+    }
+
+    // Профиль перечитываем ДО показа: иначе в попапе старые цифры.
+    try {
+        await loadProfile();
+    } catch (profileError) {
+        console.error('Не удалось обновить профиль после награды за рейд:', profileError);
+    }
+
+    const summary = {
+        coins: totalCoins,
+        experience: totalExp,
+        items,
+        key: keyNames.length > 0 ? { boss_name: keyNames[0] } : undefined
+    };
+    showBossVictorySummary?.('Рейдовый босс', summary, null);
+
+    // Гасим только после показа: если запрос уронить, награда всплывёт снова,
+    // но не потеряется из вида (см. пояснение в роуте /raid/rewards/claim).
+    try {
+        await apiRequest('/api/game/bosses/raid/rewards/claim', { method: 'POST' });
+    } catch (claimError) {
+        console.error('Не удалось забрать награду за рейд:', claimError);
     }
 }
 

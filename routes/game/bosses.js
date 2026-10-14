@@ -980,6 +980,10 @@ router.get('/', async (req, res) => {
             }
 
             const raids = await getActiveRaids(client, playerId);
+            // Отложенные награды за рейды: начисляются всем участникам, но
+            // увидеть их должен каждый. Без этого поля участник, бивший не
+            // последним ударом, не узнавал о своей доле.
+            const pendingRaidRewards = await getPendingRaidRewards(client, playerId);
 
             return {
                 success: true,
@@ -988,6 +992,7 @@ router.get('/', async (req, res) => {
                     raids: raids.raids,
                     participating_raid_ids: raids.participatingIds,
                     participating_boss_ids: raids.participatingBossIds,
+                    pending_raid_rewards: pendingRaidRewards,
                     player_energy: player.energy,
                     player_max_energy: player.max_energy,
                     player_level: player.level,
@@ -1009,6 +1014,73 @@ router.get('/', async (req, res) => {
     } catch (error) {
         if (handleConnectionError(res, error)) return;
         return handleError(res, error, 'boss_list');
+    }
+});
+
+async function getPendingRaidRewards(client, playerId) {
+    const result = await client.query(
+        `SELECT id, raid_id, boss_id, coins, experience, items, key_item_name, created_at
+           FROM raid_rewards
+          WHERE player_id = $1 AND claimed = false
+          ORDER BY created_at ASC`,
+        [playerId]
+    );
+    return result.rows.map((row) => ({
+        id: row.id,
+        raid_id: row.raid_id,
+        boss_id: row.boss_id,
+        coins: Number(row.coins || 0),
+        experience: Number(row.experience || 0),
+        items: Array.isArray(row.items) ? row.items : safeJsonParse(row.items, []),
+        key_item_name: row.key_item_name || null
+    }));
+}
+
+/**
+ * Пометить награды за рейды полученными и вернуть их содержимое.
+ *
+ * Отдельный вызов, а не «прочитал и сам погас»: /bosses дёргается на каждое
+ * открытие экрана, и если клиент упадёт между показом и погашением, игрок
+ * второй раз увидит попап — это лучше, чем не увидеть вовсе.
+ */
+router.post('/raid/rewards/claim', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) {
+            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+        }
+
+        const result = await transaction(async (client) => {
+            const pending = await getPendingRaidRewards(client, playerId);
+            if (pending.length === 0) return { claimed: [], rewards: [] };
+
+            const ids = pending.map((r) => r.id);
+            await client.query(
+                'UPDATE raid_rewards SET claimed = true WHERE id = ANY($1::int[])',
+                [ids]
+            );
+
+            return {
+                claimed: ids,
+                rewards: pending.map((r) => ({
+                    raid_id: r.raid_id,
+                    boss_id: r.boss_id,
+                    coins: r.coins,
+                    experience: r.experience,
+                    items: r.items,
+                    key_item_name: r.key_item_name
+                }))
+            };
+        });
+
+        await logPlayerAction(playerId, 'raid_rewards_claimed', {
+            count: result.claimed.length
+        });
+
+        return res.json({ success: true, data: result });
+    } catch (error) {
+        if (handleConnectionError(res, error)) return undefined;
+        return handleError(res, error, 'raid_rewards_claim');
     }
 });
 
@@ -1126,14 +1198,20 @@ router.post('/attack-boss', async (req, res) => {
 
 router.get('/raids', async (req, res) => {
     try {
+        const playerId = req.player?.id;
         const outcome = await withClient(async (client) => {
-            const raids = await getActiveRaids(client, req.player.id);
+            const raids = await getActiveRaids(client, playerId);
+            // Сюда же отдаём неполученные награды: /raids зовёт клиент после
+            // каждого удара по рейду, и это единственная точка, где участник
+            // узнаёт о своей доле, если добил босса не он.
+            const pendingRaidRewards = playerId ? await getPendingRaidRewards(client, playerId) : [];
             return {
                 success: true,
                 data: {
                     raids: raids.raids,
                     participating_raid_ids: raids.participatingIds,
-                    participating_boss_ids: raids.participatingBossIds
+                    participating_boss_ids: raids.participatingBossIds,
+                    pending_raid_rewards: pendingRaidRewards
                 }
             };
         });
@@ -1443,6 +1521,24 @@ router.post('/raid/:id/attack', async (req, res) => {
         const outcome = await transaction(async (client) => {
             const activeBattle = await resolveActiveBattle(client, playerId);
             if (!activeBattle || activeBattle.type !== 'mass' || activeBattle.raid_id !== raidId) {
+                // Рейд кончился, и его строка уже удалена — resolveActiveBattle
+                // сбросил active_raid_id. Раньше здесь всегда было «Вы не
+                // участвуете», хотя игрок участвовал и награду получил.
+                const raidExists = await client.query(
+                    `SELECT 1 FROM raid_progress
+                      WHERE id = $1 AND is_raid = true AND is_active = true AND expires_at > NOW()`,
+                    [raidId]
+                );
+                if (raidExists.rows.length === 0) {
+                    return {
+                        status: 400,
+                        body: {
+                            success: false,
+                            error: 'Этот массовый бой уже завершён. Награды за него смотрите в разделе боссов.',
+                            code: 'RAID_FINISHED'
+                        }
+                    };
+                }
                 return {
                     status: 400,
                     body: { success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' }
@@ -1551,14 +1647,57 @@ router.post('/raid/:id/attack', async (req, res) => {
                 const totalDamage = rewardParticipants.reduce((sum, row) => sum + Number(row.damage_dealt || 0), 0) || 1;
                 const participantIds = allParticipants.map((row) => row.player_id);
 
-                for (const participant of rewardParticipants) {
-                    const participantId = Number(participant.player_id);
-                    const share = Number(participant.damage_dealt || 0) / totalDamage;
-                    const coinsReward = Math.floor((raid.reward_coins || 0) * share);
-                    const participantBuffs = getActiveBuffs(participant.buffs);
-                    const baseExperienceReward = Math.floor((raid.reward_experience || 0) * share);
-                    const experienceReward = participantBuffs.exp_x2 ? baseExperienceReward * 2 : baseExperienceReward;
+                // Считаем доли ДО цикла: они нужны и для начисления, и для
+                // строчек в raid_rewards, чтобы обе стороны считали одно и то
+                // же. Участник без урона получает нулевую долю — его строчка
+                // всё равно пишется, иначе он не узнает, что рейд кончился.
+                // leader_id — INTEGER, но pg может отдать строкой; Number()
+                // страхует сравнение с participantId.
+                const leaderIdRaw = Number(raid.leader_id);
+                const shares = allParticipants.map((row) => {
+                    const dealt = Number(row.damage_dealt || 0);
+                    return {
+                        participantId: Number(row.player_id),
+                        dealt,
+                        share: dealt > 0 ? dealt / totalDamage : 0,
+                        buffs: row.buffs
+                    };
+                });
+                // Остаток от округления вниз достаётся самому результативному:
+                // Math.floor по долям суммарно даёт меньше награды босса, и
+                // разница из ниоткуда не взялась бы (на боссе с 50 опыта и
+                // тремя участниками терялось 1-2 единицы).
+                // Считаем от БАЗОВЫХ значений, без бафов: иначе exp_x2 у
+                // лидера сломал бы арифметику остатка.
+                const coinsPool = Number(raid.reward_coins || 0);
+                const expPool = Number(raid.reward_experience || 0);
+                const topDamager = shares.reduce((best, row) => (row.dealt > (best ? best.dealt : -1) ? row : best), null);
+                // Остаток уходит только если у кого-то реально есть урон.
+                // Иначе «топовым» оказался бы первый по списку участник с
+                // нулевым уроном и забрал бы весь пул: никто не бил, а награда
+                // всё равно кому-то досталась.
+                const hasRealDamage = Boolean(topDamager) && topDamager.dealt > 0;
+                const coinsRemainder = hasRealDamage
+                    ? Math.max(0, coinsPool - shares.reduce((s, r) => s + Math.floor(coinsPool * r.share), 0))
+                    : 0;
+                const expRemainder = hasRealDamage
+                    ? Math.max(0, expPool - shares.reduce((s, r) => s + Math.floor(expPool * r.share), 0))
+                    : 0;
+
+                let leaderKey = null;
+
+                for (const entry of shares) {
+                    const participantId = entry.participantId;
+                    const participantBuffs = getActiveBuffs(entry.buffs);
                     const lootMultiplier = participantBuffs.loot_x2 ? 2 : 1;
+
+                    const baseCoins = Math.floor(coinsPool * entry.share);
+                    const baseExp = Math.floor(expPool * entry.share);
+                    const isTopDamager = Boolean(topDamager) && topDamager.participantId === participantId;
+
+                    const coinsReward = baseCoins + (isTopDamager ? coinsRemainder : 0);
+                    let experienceReward = participantBuffs.exp_x2 ? baseExp * 2 : baseExp;
+                    if (isTopDamager && expRemainder > 0) experienceReward += expRemainder;
 
                     if (coinsReward > 0) {
                         await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [coinsReward, participantId]);
@@ -1568,7 +1707,12 @@ router.post('/raid/:id/attack', async (req, res) => {
                         await playerHelper.addExperience(participantId, experienceReward, client);
                     }
 
-                    const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, share * lootMultiplier);
+                    const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier);
+                    const isLeader = participantId === leaderIdRaw;
+
+                    if (isLeader) {
+                        leaderKey = await grantNextBossKey(client, participantId, raid.boss_id);
+                    }
 
                     if (participantId === playerId) {
                         rewards = {
@@ -1576,6 +1720,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                             experience: experienceReward,
                             items: grantedItems
                         };
+                        if (isLeader && leaderKey) rewards.key = leaderKey;
                     }
 
                     await client.query(
@@ -1590,14 +1735,28 @@ router.post('/raid/:id/attack', async (req, res) => {
                         'UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1',
                         [participantId]
                     );
-                }
 
-                // leader_id — INTEGER, pg отдаёт его числом, но raid_progress
-                // читается в разных местах; Number() здесь страхует от строки.
-                const leaderKey = await grantNextBossKey(client, Number(raid.leader_id), raid.boss_id);
-                if (playerId === Number(raid.leader_id) && leaderKey) {
-                    rewards = rewards || { coins: 0, experience: 0, items: [] };
-                    rewards.key = leaderKey;
+                    // Отложенная награда. Убийца свою долю уже видит в ответе
+                    // этого же запроса, поэтому его строчка сразу claimed=true
+                    // и второй раз не всплывёт. Остальные забирают при входе на
+                    // экран боссов — без этой записи участник, бивший в офлайне,
+                    // не узнавал о награде вообще.
+                    const keyName = (isLeader && leaderKey) ? (leaderKey.boss_name || null) : null;
+                    await client.query(
+                        `INSERT INTO raid_rewards
+                         (raid_id, boss_id, player_id, coins, experience, items, key_item_name, claimed)
+                         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
+                        [
+                            raidId,
+                            raid.boss_id,
+                            participantId,
+                            coinsReward,
+                            experienceReward,
+                            JSON.stringify(Array.isArray(grantedItems) ? grantedItems : []),
+                            keyName,
+                            participantId === playerId
+                        ]
+                    );
                 }
 
                 if (rewards && Array.isArray(rewards.items) && rewards.items.length === 0) {
