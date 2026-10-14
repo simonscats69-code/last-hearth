@@ -342,7 +342,26 @@ async function createTables() {
         );
     `);
 
-    // Таблица прогресса рейда
+    // Миграция: rewards_earned в boss_sessions.
+    //
+    // ПРОВАЛ IF NOT EXISTS: колонка объявлена только внутри CREATE TABLE выше,
+    // а на существующей БД createTables() CREATE TABLE IF NOT EXISTS не
+    // пересоздаёт — до колонок внутри он не добирается. Прод создан вручную,
+    // поэтому колонки не было, и любой массовый бой падал с 500: роут
+    // /raid/start пишет rewards_earned в ON CONFLICT DO UPDATE SET,
+    // PostgreSQL отвечал 42703 «column does not exist», а handleError
+    // превращал это в INTERNAL_ERROR.
+    //
+    // Стоит здесь, в createTables(), а не в runMigrations(): initDatabase()
+    // при старте вызывает только createTables + сиды, а runMigrations живёт
+    // отдельной командой `node db/migrate.js`. Пока правка лежала в
+    // runMigrations, деплой её не подхватывал.
+    // ADD COLUMN IF NOT EXISTS идемпотентен и неразрушающий, так что на чистой
+    // БД просто ничего не сделает.
+    await query(`
+        ALTER TABLE boss_sessions
+        ADD COLUMN IF NOT EXISTS rewards_earned BOOLEAN DEFAULT false
+    `);
     await query(`
         CREATE TABLE IF NOT EXISTS raid_progress (
             id SERIAL PRIMARY KEY,
@@ -749,20 +768,6 @@ async function runMigrations() {
                 FOREIGN KEY (raid_id) REFERENCES raid_progress(id) ON DELETE SET NULL;
             END IF;
         END $do$
-    `);
-
-    // Миграция: rewards_earned в boss_sessions.
-    //
-    // ПРОВАЛ IF NOT EXISTS: колонка объявлена только внутри CREATE TABLE выше,
-    // а на существующей БД createTables() до неё не добирается. Прод создан
-    // вручную, поэтому колонки не было, и любой массовый бой падал с 500:
-    // роут /raid/start пишет rewards_earned в ON CONFLICT DO UPDATE SET,
-    // PostgreSQL отвечал 42703 «column does not exist», а handleError
-    // превращал это в INTERNAL_ERROR. ADD COLUMN IF NOT EXISTS идемпотентна,
-    // так что на чистой БД ничего не сделает.
-    await queryTx(`
-        ALTER TABLE boss_sessions
-        ADD COLUMN IF NOT EXISTS rewards_earned BOOLEAN DEFAULT false
     `);
 
     // Миграции для магазина Stars
