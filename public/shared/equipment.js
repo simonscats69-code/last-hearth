@@ -273,6 +273,36 @@
     }
 
     /** +1 энергия за столько миллисекунд. Тот же интервал у сервера (recalcEnergy). */
+    /* ================= БРОНЯ И ЗАЩИТА =================
+     *
+     * Была процентная формула defense/(defense+100)*60. Из-за неё урон
+     * зависел от запаса HP игрока (считался процентом от max_health), а +1
+     * единица защиты давала доли процента, которые округление съедало
+     * целиком. Теперь защита забирает фиксированные HP
+     * (DEFENSE_ABSORPTION_PER_POINT), с потолком DEFENSE_CAP_PERCENT от
+     * входящего урона.
+     */
+
+    /** Потолок снижения брони: сколько % входящего урона защита может забрать */
+    const DEFENSE_CAP_PERCENT = 60;
+
+    /** Сколько защиты даёт каждый новый уровень игрока */
+    const DEFENSE_PER_PLAYER_LEVEL = 3;
+
+    /**
+     * Защита, накопленная уровнями (без экипировки).
+     * Каждый новый уровень даёт +3: считается от уровня, а не хранится
+     * колонкой — сохранённое значение разъехалось бы с уровнем при правке
+     * админкой или при создании игрока сразу с уровнем.
+     * @param {number} playerLevel текущий уровень игрока
+     * @returns {number} защита за уровни
+     */
+    function calculateLevelDefense(playerLevel) {
+        const level = Math.max(1, Math.floor(Number(playerLevel) || 1));
+        return (level - 1) * DEFENSE_PER_PLAYER_LEVEL;
+    }
+
+    /** +1 энергия за столько миллисекунд. Тот же интервал у сервере (recalcEnergy). */
     const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
 
     /* ================= ПОКУПКА ЭНЕРГИИ =================
@@ -857,19 +887,24 @@ function resolveEquipmentSlot(item) {
 
     /**
      * Снижение входящего урона защитой.
-     * Мягкий предел: 5 защиты ≈ 3%, 35 ≈ 15%, 100 ≈ 31%; к 60% кривая только
-     * приближается — броня не может обнулить урон.
+     *
+     * Убран Math.max(1, ...) — функция может вернуть 0. Пол урона решает
+     * вызывающая сторона: в PvP гарантирован минимум 1 (см. db/pvp.js),
+     * а ответный удар босса идёт БЕЗ пола. Иначе почти добитый босс с сырым
+     * уроном 0 всё равно бил бы на 1 — ровно это ломало договорённость «чем
+     * сильнее побит босс, тем слабее он бьёт».
+     *
      * @param {number} damage входящий урон
-     * @param {number} defense суммарная защита
-     * @returns {number} урон не меньше 1
+     * @param {number} defense защита
+     * @returns {number} итоговый урон (не меньше 0)
      */
     function applyDefenseReduction(damage, defense) {
-        const incoming = Math.max(0, Number(damage) || 0);
-        const defenseTotal = Math.max(0, Number(defense) || 0);
-        if (defenseTotal <= 0) return Math.max(1, Math.round(incoming));
+        const incoming = Math.max(0, Math.round(Number(damage) || 0));
+        const defenseTotal = Math.max(0, Math.floor(Number(defense) || 0));
+        if (defenseTotal <= 0) return incoming;
 
-        const reduction = Math.min(60, (defenseTotal / (defenseTotal + 100)) * 60);
-        return Math.max(1, Math.floor(incoming * (1 - reduction / 100)));
+        const reduction = Math.min(DEFENSE_CAP_PERCENT, (defenseTotal / (defenseTotal + 100)) * DEFENSE_CAP_PERCENT);
+        return Math.max(0, Math.floor(incoming * (1 - reduction / 100)));
     }
 
     /**
@@ -1074,6 +1109,9 @@ function resolveEquipmentSlot(item) {
         WHEEL_PRIZES,
         WHEEL_FREE_SPIN_COOLDOWN_MS,
         HEALTH_REGEN_CAP_RATIO,
+        DEFENSE_CAP_PERCENT,
+        DEFENSE_PER_PLAYER_LEVEL,
+        calculateLevelDefense,
         getHealthRegenCap,
         getRegenerableHealth,
         MAX_UPGRADE_LEVEL,

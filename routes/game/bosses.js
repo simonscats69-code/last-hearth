@@ -136,23 +136,67 @@ function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
 
 /**
  * Урон, который босс наносит игроку в ответ на удар.
- * 
- * bosses.damage — процент от max_health игрока за удар (3% у первого босса,
- * 15% у финального). Снижается защитой брони (мягкий предел 60%).
- * 
- * @param {object} boss строка bosses
- * @param {number} maxHealth максимум здоровья игрока
+ *
+ * Было: процент от max_health игрока. Из-за этого качать здоровье было
+ * бессмысленно — урон рос ровно настолько же, на сколько рос запас HP,
+ * и число survivable-ударов не менялось. Плюс весь урон боссов укладывался
+ * в 2–10 единиц, где 20% брони неотличимы от нуля.
+ *
+ * Стало: две независимые величины.
+ *
+ *   peak  = BOSS_COUNTER_BASE + bosses.level * BOSS_COUNTER_PER_LEVEL
+ *           пиковая сила удара босса — поздние боссы бьют больнее;
+ *   ratio = current_health / max_health
+ *           доля ОСТАВШЕГОСЯ здоровья. Чем сильнее босс побит, тем слабее
+ *           бьёт он: добивание безопаснее начала боя.
+ *
+ *   raw   = round(peak * ratio)   ->  у почти мёртвого босса выходит 0
+ *
+ * Защита = экипировка + 3 за каждый новый уровень игрока.
+ *
+ * @param {object} boss строка bosses (нужны level, max_health)
+ * @param {number} maxHealth максимальное здоровье игрока (не используется,
+ *        оставлено для совместимости вызовов)
  * @param {object} equipment экипировка игрока
- * @returns {number} урон (не меньше 1)
+ * @param {Object} [options]
+ * @param {number} [options.currentHealth] текущее HP босса; без него берётся
+ *        полное (нужно для карточки боя до первого удара)
+ * @param {number} [options.playerLevel] уровень игрока — даёт защиту
+ * @returns {number} урон (может быть 0)
  */
-function calculateBossCounterDamage(boss, maxHealth, equipment) {
-    const percent = Math.max(0, Number(boss && boss.damage) || 0);
-    if (percent <= 0) return 0;
+function calculateBossCounterDamage(boss, maxHealth, equipment, options = {}) {
+    const { currentHealth, playerLevel } = options;
 
-    const raw = Math.ceil((Math.max(1, Number(maxHealth) || 1) * percent) / 100);
-    const defense = equipmentRules.calculateDefenseTotal(equipment || {});
+    const bossLevel = Math.max(1, Math.floor(Number(boss && boss.level) || 1));
+    const bossMaxHealth = Math.max(1, Number(boss && boss.max_health) || 1);
+
+    // Пиковая сила удара: поздние боссы сильнее.
+    const peak = BOSS_COUNTER_BASE + bossLevel * BOSS_COUNTER_PER_LEVEL;
+
+    // Доля оставшегося здоровья. Без указания текущего HP считаем босс целым
+    // (карточка боя показывает худший случай).
+    const hasCurrent = Number.isFinite(Number(currentHealth));
+    const ratio = hasCurrent
+        ? Math.max(0, Math.min(1, Number(currentHealth) / bossMaxHealth))
+        : 1;
+
+    const raw = Math.round(peak * ratio);
+    // Почти мёртвый босс не бьёт ВООБЩЕ. Проверка до applyDefenseReduction,
+    // потому что броня здесь бессильна — бить уже нечем.
+    if (raw <= 0) return 0;
+
+    const equipmentDefense = equipmentRules.calculateDefenseTotal(equipment || {});
+    const levelDefense = equipmentRules.calculateLevelDefense(playerLevel);
+    const defense = equipmentDefense + levelDefense;
+
     return equipmentRules.applyDefenseReduction(raw, defense);
 }
+
+/** Базовая сила ответного удара босса */
+const BOSS_COUNTER_BASE = 3;
+
+/** Прибавка силы удара за каждый уровень босса */
+const BOSS_COUNTER_PER_LEVEL = 3;
 
 function getNextBossId(bossId) {
     return bossId + 1;
@@ -193,12 +237,32 @@ const COUNTER_HIT_WEAR_SLOTS = equipmentRules.COMBAT_SLOTS;
  * @param {number} playerId
  * @param {object} boss строка bosses
  * @param {object} player текущее состояние игрока
+ * @param {number} [bossCurrentHp] текущее HP босса. Без него босс считается
+ *        целым и бьёт на полную силу.
  */
-async function applyBossCounterHit(client, playerId, boss, player) {
+async function applyBossCounterHit(client, playerId, boss, player, bossCurrentHp) {
     const equipment = safeJsonParse(player.equipment, {});
-    const damage = calculateBossCounterDamage(boss, player.max_health, equipment);
+    const damage = calculateBossCounterDamage(boss, player.max_health, equipment, {
+        currentHealth: bossCurrentHp,
+        playerLevel: player.level
+    });
     if (damage <= 0) {
-        return { damage: 0, health: Number(player.health || 0), broken_slots: [] };
+        // Почти добитый босс не бьёт — но износ СНАРЯЖЕНИЯ всё равно идёт:
+        // игрок продолжал махать оружием, работа шла. Иначе добивание
+        // станавливалось бы бесконечным и бесплатным по прочности.
+        const brokenSlots = wearEquipmentSlots(
+            client,
+            playerId,
+            equipment,
+            COUNTER_HIT_WEAR_SLOTS
+        );
+        await client.query(
+            `UPDATE players
+                SET equipment = $2::jsonb
+              WHERE id = $3`,
+            [JSON.stringify(equipment), playerId]
+        );
+        return { damage: 0, health: Number(player.health || 0), broken_slots: brokenSlots };
     }
 
     const health = Math.max(0, Number(player.health || 0) - damage);
@@ -878,12 +942,18 @@ router.post('/start', async (req, res) => {
                             // /attack-boss. Нужен, чтобы клиент показал
                             // «Ваш урон» ДО первого удара.
                             current_damage: currentDamage,
-                            // Ответный удар в процентах здоровья игрока.
-                            // Колонка называется `damage` (db/schema.js:217):
-                            // `boss.damage_percent` всегда undefined, из-за чего
-                            // подпись на клиенте оставалась скрытой. Тот же
-                            // маппинг, что в списке боссов (bosses.js:939).
-                            damage_percent: Number(boss.damage) || 0
+                            // Ответный удар в ЕДИНИЦАХ урона при полном HP
+                            // босса — худший случай, с которым игрок
+                            // столкнётся на первом ударе. Раньше тут была
+                            // доля (boss.damage_percent), а сам расчёт был
+                            // процентом от max_health игрока: качать HP было
+                            // бессмысленно, урон рос вместе с запасом.
+                            counter_damage: calculateBossCounterDamage(
+                                boss,
+                                player.max_health,
+                                safeJsonParse(player.equipment, {}),
+                                { playerLevel: player.level }
+                            )
                         },
                         time_remaining_ms: SOLO_FIGHT_DURATION_MS,
                         // Длительность целиком: клиент показывает её в логе
@@ -965,9 +1035,17 @@ router.get('/', async (req, res) => {
                     max_hp: boss.max_health,
                     reward_coins: boss.reward_coins,
                     reward_experience: boss.reward_experience,
-                    // Ответный урон босса в процентах от здоровья игрока —
-                    // UI показывает его в карточке боя.
-                    damage_percent: boss.damage,
+                    // Ответный урон босса в ЕДИНИЦАХ при его текущем HP —
+                    // UI показывает его в карточке боя. Считаем тем же
+                    // calculateBossCounterDamage, что и сам ответный удар,
+                    // поэтому цифра в карточке совпадает с той, что получит
+                    // игрок. Вне активного боя HP = полное (худший случай).
+                    counter_damage: calculateBossCounterDamage(
+                        boss,
+                        player.max_health,
+                        safeJsonParse(player.equipment, {}),
+                        { currentHealth: soloProgress, playerLevel: player.level }
+                    ),
                     required_keys: keysRequired,
                     owned_keys: ownedKeys,
                     is_unlocked: isUnlocked,
@@ -1124,8 +1202,10 @@ router.post('/attack-boss', async (req, res) => {
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
             // Ответный удар босса и износ снаряжения.
+            // activeBattle.boss.hp — текущее HP до этого удара: от него
+            // зависит, насколько сильно босс бьёт в ответ.
             const counterHit = boss
-                ? await applyBossCounterHit(client, playerId, boss, player)
+                ? await applyBossCounterHit(client, playerId, boss, player, activeBattle.boss.hp)
                 : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
 
             // Ежедневное задание «Нанеси 100 урона боссам».
@@ -1602,11 +1682,13 @@ router.post('/raid/:id/attack', async (req, res) => {
             const newTotalDamage = session.damage_dealt + damage;
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
-            // Ответный урон рейдового босса и износ снаряжения — то же,
+            // Ответный удар рейдового босса и износ снаряжения — то же,
             // что и в соло-бою: иначе рейд был бы полностью безопасным.
+            // raid.current_health — HP ДО этого удара, от него зависит сила
+            // ответного удара.
             const raidBoss = await getBossById(client, raid.boss_id);
             const counterHit = raidBoss
-                ? await applyBossCounterHit(client, playerId, raidBoss, player)
+                ? await applyBossCounterHit(client, playerId, raidBoss, player, raid.current_health)
                 : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
             await progressDailyTask(client, playerId, 'boss_damage', damage);
 

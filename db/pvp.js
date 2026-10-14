@@ -108,9 +108,10 @@ async function createPVPMatch(attackerId, defenderId, locationId, client = null)
 /**
  * Расчёт базового урона в PvP (детерминированный, без уклонения)
  *
- * Формула: сила*2 + ловкость*0.8 + оружие, поправка на разницу уровней ±1% за
- * уровень, снижение выносливостью защитника (soft cap 60%), затем защита
- * брони (applyDefenseReduction) — минимум 1 урон.
+     * Формула: сила*2 + ловкость*0.8 + оружие, поправка на разницу уровней ±1% за
+     * уровень, снижение выносливостью защитника (soft cap 60%), затем защита
+     * брони. Минимум 1 урон держит сам PvP (Math.max после общей функции) —
+     * см. пояснение у вызова ниже.
  *
  * @param {object} attacker - атакующий ({ strength, agility, level, equipment, set_damage })
  * @param {object} defender - защищающийся ({ endurance, level, equipment })
@@ -150,8 +151,17 @@ function calculatePVPDamage(attacker, defender) {
     const defenseReduction = Math.min(60, endurance / (endurance + 60) * 60);
     damage = Math.floor(damage * (1 - defenseReduction / 100));
 
-    // Защита снаряжения защитника (мягкий предел 60%)
-    return { damage: equipmentRules.applyDefenseReduction(damage, equipmentRules.calculateDefenseTotal(dEq)) };
+    // Защита снаряжения защитника (мягкий предел 60%).
+    //
+    // Math.max(1, ...) — здесь, а не внутри applyDefenseReduction: общая
+    // функция урона больше не навязывает пол, потому что ответный удар
+    // босса должен уметь быть нулевым (почти добитый босс не бьёт). Пол для
+    // PvP решает сам PvP — удар в живого игрока не может стать «мимо».
+    const afterGear = equipmentRules.applyDefenseReduction(
+        damage,
+        equipmentRules.calculateDefenseTotal(dEq)
+    );
+    return { damage: Math.max(1, afterGear) };
 }
 
 /**

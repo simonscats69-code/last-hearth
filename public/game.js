@@ -5257,7 +5257,7 @@ function renderBosses(bosses) {
                 <div class="battle-health-text">${formatNumber(currentHp)} / ${formatNumber(maxHp)} HP</div>
                 <div class="boss-mastery">Побеждено: ${defeatedCount}</div>
                 <div class="boss-damage">Урон по боссу: ${currentDamage}</div>
-                ${boss.damage_percent ? `<div class="boss-counter">Ответный удар: ~${boss.damage_percent}% здоровья (защита снижает)</div>` : ''}
+                ${boss.counter_damage ? `<div class="boss-counter">Ответный удар: ~${boss.counter_damage} (защита и уровень снижают)</div>` : ''}
                 <div class="boss-reward">💰 ${boss.reward_coins || 0} | ✨ ${boss.reward_experience || 0} XP</div>
                 <div class="boss-keys ${isUnlocked ? 'unlocked' : ''}">
                     <span class="keys-owned">🔑 ${playerKeys}/${keysRequired}</span>
@@ -5487,12 +5487,14 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
         }
     }
 
-    // Ответный удар босса: процент от текущего здоровья игрока.
+    // Ответный удар босса в единицах урона. Больше не процент от HP игрока:
+    // урон зависит от силы босса и его ОСТАВШЕГОСЯ здоровья, поэтому
+    // подпись меняется по ходу боя.
     const bossCounterEl = document.getElementById('boss-counter-label');
     if (bossCounterEl) {
-        const percent = Number(boss.damage_percent);
-        if (Number.isFinite(percent) && percent > 0) {
-            bossCounterEl.textContent = `Ответный удар: ~${percent}% HP`;
+        const counterDamage = Number(boss.counter_damage);
+        if (Number.isFinite(counterDamage) && counterDamage > 0) {
+            bossCounterEl.textContent = `Ответный удар: ~${counterDamage}`;
             bossCounterEl.style.display = '';
         } else {
             bossCounterEl.style.display = 'none';
@@ -8554,8 +8556,9 @@ ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксесс
                             </div>
                             <div class="battle-health-text" id="boss-health-text">0/0</div>
                         </div>
-                        <!-- Ответный удар босса: сервер шлёт damage_percent,
-                             без него игрок не понимал, почему теряет здоровье. -->
+                        <!-- Ответный удар босса: сервер шлёт counter_damage
+                             (единицы урона при текущем HP босса), без него
+                             игрок не понимал, почему теряет здоровье. -->
                         <div class="battle-participant-meta" id="boss-counter-label" style="display:none"></div>
                     </div>
                 </div>
