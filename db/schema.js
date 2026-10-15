@@ -363,6 +363,18 @@ async function createTables() {
         ADD COLUMN IF NOT EXISTS rewards_earned BOOLEAN DEFAULT false
     `);
 
+    // Миграция: отметка первого удара в рейде.
+    //
+    // Нужна для бонуса «первый удар»: доля первого атаковавшего участника
+    // получает +5% к награде за смелость. Ставится в /raid/:id/attack
+    // (CASE WHEN damage_dealt = 0), поэтому на существующих строках
+    // дефолт false — участники, уже бившие до миграции, бонус не получают,
+    // но и не ломаются.
+    await query(`
+        ALTER TABLE boss_sessions
+        ADD COLUMN IF NOT EXISTS first_hitter BOOLEAN DEFAULT false
+    `);
+
     // Отложенные награды за рейд.
     //
     // Награда делится между ВСЕМИ участниками пропорционально урону, но
@@ -415,6 +427,16 @@ async function createTables() {
                 ALTER TABLE raid_progress ADD COLUMN leader_id INTEGER REFERENCES players(id);
             END IF;
         END $do$
+    `);
+
+    // Лог боя рейда: последние события (кто атаковал, сколько снял, ответ
+    // босса, убийство). Массив JSON-строк, обрезается до RAID_LOG_MAX_EVENTS
+    // при каждой атаке. Колонка необязательна по смыслу — рейд работает и
+    // без неё (COALESCE('[]')), поэтому ADD COLUMN IF NOT EXISTS безопасен
+    // на любой существующей БД.
+    await query(`
+        ALTER TABLE raid_progress
+        ADD COLUMN IF NOT EXISTS raid_log JSONB DEFAULT '[]'::jsonb
     `);
 
     // Таблица достижений

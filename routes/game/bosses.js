@@ -63,6 +63,15 @@ const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAMAGE_PER_KILL = 0.1;
 const KILL_DECAY_FACTOR = 0.1;
 
+/** Сколько событий боя рейда храним в raid_progress.raid_log */
+const RAID_LOG_MAX_EVENTS = 20;
+
+/** Бонус к доле награды за первый удар по рейдовому боссу (+5%) */
+const RAID_FIRST_HIT_BONUS = 0.05;
+
+/** Бонус к доле награды за смертельный удар в рейде (+5%) */
+const RAID_LAST_HIT_BONUS = 0.05;
+
 /**
  * Длительность вроде «8 ч» или «8 ч 30 мин» для подсказок в info.
  * Без форматтера часы приходилось вписывать в текст руками, и подсказка
@@ -701,11 +710,68 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
     return { rewards, mastery: kills };
 }
 
+/**
+ * Записать событие в лог боя рейда.
+ *
+ * Вызывается ВНУТРИ транзакции атаки: строку raid_progress она уже
+ * заперла SELECT ... FOR UPDATE, поэтому read-modify-write без повторной
+ * блокировки безопасен — параллельные атаки выстроятся в очередь.
+ *
+ * Лог заведён ради информации: участник должен видеть, кто и сколько
+ * снял, а не только собственные удары. Старые события обрезаются, чтобы
+ * JSONB не рос бесконечно.
+ *
+ * @param {object} client клиент БД (транзакция)
+ * @param {number} raidId
+ * @param {object} event произвольный JSON-объект события
+ */
+async function appendRaidLog(client, raidId, event) {
+    // Без колонки (старая БД, где ALTER не применялся) рейд продолжает
+    // работать — лог просто не пишется.
+    let rows = [];
+    try {
+        const result = await client.query(
+            'SELECT raid_log FROM raid_progress WHERE id = $1',
+            [raidId]
+        );
+        rows = result.rows || [];
+    } catch (error) {
+        if (error && error.code === '42703') return; // колонки raid_log нет
+        throw error;
+    }
+
+    const raw = rows[0]?.raid_log;
+    const current = Array.isArray(raw)
+        ? raw
+        : safeJsonParse(raw, []);
+    const next = [...current.slice(-(RAID_LOG_MAX_EVENTS - 1)), event];
+
+    try {
+        await client.query(
+            'UPDATE raid_progress SET raid_log = $1::jsonb WHERE id = $2',
+            [JSON.stringify(next), raidId]
+        );
+    } catch (error) {
+        if (error && error.code === '42703') return; // колонки raid_log нет
+        throw error;
+    }
+}
+
+/**
+ * Активные рейды с полной картиной боя.
+ *
+ * Раньше список отдавал только «сколько участников»: игрок не видел ни
+ * свой вклад, ни урон других, ни примерные награды. Все доп. поля
+ * считаются из тех же boss_sessions (источник урона) одним запросом,
+ * без N+1.
+ */
 async function getActiveRaids(client, playerId) {
     const raidsResult = await client.query(
         `SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at,
                 rp.leader_id, rp.leader_name,
                 b.name AS boss_name, b.icon, b.description AS boss_description,
+                b.reward_coins, b.reward_experience,
+                COALESCE(rp.raid_log, '[]'::jsonb) AS raid_log,
                 (SELECT COUNT(*) FROM boss_sessions WHERE raid_id = rp.id) AS participants_count
          FROM raid_progress rp
          JOIN bosses b ON b.id = rp.boss_id
@@ -716,39 +782,110 @@ async function getActiveRaids(client, playerId) {
 
     const participatingResult = await client.query(
         `SELECT bs.raid_id, bs.boss_id
-         FROM boss_sessions bs
-         JOIN raid_progress rp ON rp.id = bs.raid_id
-         WHERE bs.player_id = $1
-           AND bs.raid_id IS NOT NULL
-           AND rp.is_active = true
-           AND rp.is_raid = true
-           AND rp.expires_at > NOW()`,
+          FROM boss_sessions bs
+          JOIN raid_progress rp ON rp.id = bs.raid_id
+          WHERE bs.player_id = $1
+            AND bs.raid_id IS NOT NULL
+            AND rp.is_active = true
+            AND rp.is_raid = true
+            AND rp.expires_at > NOW()`,
         [playerId]
     );
 
     const participatingIds = [...new Set(participatingResult.rows.map((row) => Number(row.raid_id)).filter(Boolean))];
     const participatingBossIds = [...new Set(participatingResult.rows.map((row) => Number(row.boss_id)).filter(Boolean))];
 
+    // Урон всех участников активных рейдов одним запросом: по нему строим
+    // вклад каждого, топ-5 и примерные награды. Имена берём тем же
+    // запросом (LEFT JOIN), иначе на каждого участника уходил бы свой SELECT.
+    const activeRaidIds = raidsResult.rows.map((row) => Number(row.id));
+    const sessionsByRaid = new Map();
+    if (activeRaidIds.length > 0) {
+        const sessionsResult = await client.query(
+            `SELECT bs.raid_id, bs.player_id, bs.damage_dealt, p.first_name AS player_name
+               FROM boss_sessions bs
+               LEFT JOIN players p ON p.id = bs.player_id
+              WHERE bs.raid_id = ANY($1::int[])`,
+            [activeRaidIds]
+        );
+
+        for (const row of sessionsResult.rows) {
+            const raidId = Number(row.raid_id);
+            if (!sessionsByRaid.has(raidId)) sessionsByRaid.set(raidId, []);
+            sessionsByRaid.get(raidId).push({
+                player_id: Number(row.player_id),
+                player_name: row.player_name || 'Игрок',
+                damage_dealt: Math.max(0, Number(row.damage_dealt || 0))
+            });
+        }
+    }
+
     return {
-        raids: raidsResult.rows.map((raid) => ({
-            id: raid.id,
-            boss: {
-                id: raid.boss_id,
-                name: raid.boss_name,
-                icon: raid.icon,
-                description: raid.boss_description
-            },
-            hp: raid.current_health,
-            max_hp: raid.max_health,
-            hp_percent: raid.max_health > 0 ? Math.round((raid.current_health / raid.max_health) * 100) : 0,
-            leader: {
-                id: raid.leader_id,
-                name: raid.leader_name
-            },
-            participants_count: Number(raid.participants_count || 0),
-            expires_at: raid.expires_at,
-            time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now()
-        })),
+        raids: raidsResult.rows.map((raid) => {
+            const raidId = Number(raid.id);
+            const participants = [...(sessionsByRaid.get(raidId) || [])]
+                .sort((a, b) => b.damage_dealt - a.damage_dealt);
+
+            const coinsPool = Number(raid.reward_coins || 0);
+            const expPool = Number(raid.reward_experience || 0);
+            const totalDamage = participants.reduce((sum, p) => sum + p.damage_dealt, 0);
+            // Участник с нулевым уроном долю не получает: без деления на
+            // ноль его «вклад» дал бы NaN в проценты.
+            const myEntry = participants.find((p) => p.player_id === Number(playerId)) || null;
+            const myDamage = myEntry ? myEntry.damage_dealt : 0;
+            const myShare = (myDamage > 0 && totalDamage > 0) ? myDamage / totalDamage : 0;
+
+            // Бонусы первого/последнего удара (+5% каждый) и остаток
+            // округления в интерфейсе не показываем: «примерно» — честнее
+            // точной цифры, которая после kill слегка изменится.
+            const topDamagers = participants
+                .filter((p) => p.damage_dealt > 0)
+                .slice(0, 5)
+                .map((p) => ({
+                    player_id: p.player_id,
+                    player_name: p.player_name,
+                    damage_dealt: p.damage_dealt,
+                    damage_pct: totalDamage > 0 ? Math.round((p.damage_dealt / totalDamage) * 100) : 0
+                }));
+
+            const raidLog = Array.isArray(raid.raid_log) ? raid.raid_log : safeJsonParse(raid.raid_log, []);
+
+            return {
+                id: raid.id,
+                boss: {
+                    id: raid.boss_id,
+                    name: raid.boss_name,
+                    icon: raid.icon,
+                    description: raid.boss_description
+                },
+                hp: raid.current_health,
+                max_hp: raid.max_health,
+                hp_percent: raid.max_health > 0 ? Math.round((raid.current_health / raid.max_health) * 100) : 0,
+                // Сколько урона нанесено ВСЕГО (по факту ударов, а не по
+                // формуле max-current): прогресс боя должен совпадать с
+                // тем, что видно в логе.
+                total_damage: totalDamage,
+                damage_remaining: Math.max(0, Number(raid.current_health || 0)),
+                leader: {
+                    id: raid.leader_id,
+                    name: raid.leader_name
+                },
+                participants_count: Number(raid.participants_count || 0),
+                // Из общего числа участников реально бьющих — остальные
+                // «висят» без урона и долю не получают.
+                attackers_count: participants.filter((p) => p.damage_dealt > 0).length,
+                // Личный вклад. До первого удара — нули, всё ещё лучше,
+                // чем молчание.
+                your_damage: myDamage,
+                your_damage_pct: myShare > 0 ? Math.round(myShare * 100) : 0,
+                top_damagers: topDamagers,
+                expected_coins: myShare > 0 ? Math.floor(coinsPool * myShare) : 0,
+                expected_experience: myShare > 0 ? Math.floor(expPool * myShare) : 0,
+                raid_log: Array.isArray(raidLog) ? raidLog : [],
+                expires_at: raid.expires_at,
+                time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now()
+            };
+        }),
         participatingIds,
         participatingBossIds
     };
@@ -1601,6 +1738,53 @@ router.post('/raid/:id/join', async (req, res) => {
     }
 });
 
+/**
+ * Выйти из массового боя (остаться без активного боя, но с накопленным вкладом).
+ *
+ * Раньше выхода не было вообще: active_boss_* снимались только при
+ * убийстве босса или истечении рейда.
+ *
+ * Сессию с накопленным уроном НЕ удаляем: награда при убийстве босса
+ * считается по boss_sessions, и вышедший участник должен получить свою
+ * долю (строки raid_rewards пишутся всем участникам рейда).
+ */
+router.post('/raid/:id/leave', async (req, res) => {
+    // Валидация до открытия транзакции — как в остальных маршрутах боссов.
+    const raidId = Number(req.params.id);
+    const playerId = req.player.id;
+
+    if (!raidId || raidId <= 0) {
+        return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
+    }
+
+    try {
+        const outcome = await transaction(async (client) => {
+            const activeBattle = await resolveActiveBattle(client, playerId);
+            if (!activeBattle || activeBattle.type !== 'mass' || activeBattle.raid_id !== raidId) {
+                return {
+                    status: 400,
+                    body: { success: false, error: 'Вы не участвуете в этом массовом бою', code: 'NOT_PARTICIPATING' }
+                };
+            }
+
+            await clearPlayerActiveBattle(client, playerId);
+
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: { raid_id: raidId, left: true }
+                }
+            };
+        });
+
+        return res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+        if (handleConnectionError(res, error)) return undefined;
+        return handleError(res, error, 'mass_leave');
+    }
+});
+
 router.post('/raid/:id/attack', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const raidId = Number(req.params.id);
@@ -1715,7 +1899,29 @@ router.post('/raid/:id/attack', async (req, res) => {
             );
 
             await client.query('UPDATE raid_progress SET current_health = $1 WHERE id = $2', [newHp, raidId]);
-            await client.query('UPDATE boss_sessions SET damage_dealt = $1, last_hit_at = NOW() WHERE player_id = $2 AND raid_id = $3', [newTotalDamage, playerId, raidId]);
+            // first_hit отмечается здесь, а не в момент входа: участник,
+            // вошедший первым, но никем не тронутый босса, бонуса не стоит.
+            await client.query(
+                `UPDATE boss_sessions
+                    SET damage_dealt = $1,
+                        last_hit_at = NOW(),
+                        first_hitter = CASE WHEN damage_dealt = 0 THEN TRUE ELSE first_hitter END
+                  WHERE player_id = $2 AND raid_id = $3`,
+                [newTotalDamage, playerId, raidId]
+            );
+
+            // Лог боя: чей удар, сколько снял и чем ответил босс. Пишем
+            // после мутаций, чтобы цифры события были итоговыми.
+            await appendRaidLog(client, raidId, {
+                type: 'attack',
+                player_id: playerId,
+                player_name: player.first_name || 'Игрок',
+                damage,
+                counter_damage: counterHit.damage,
+                boss_hp_after: newHp,
+                final: newHp <= 0,
+                at: new Date().toISOString()
+            });
 
             let killed = false;
             let rewards = null;
@@ -1725,10 +1931,10 @@ router.post('/raid/:id/attack', async (req, res) => {
                 await client.query('UPDATE raid_progress SET is_active = false, ended_at = NOW(), current_health = 0 WHERE id = $1', [raidId]);
 
                 const participantsResult = await client.query(
-                    `SELECT bs.player_id, bs.damage_dealt, p.buffs
-                     FROM boss_sessions bs
-                     JOIN players p ON p.id = bs.player_id
-                     WHERE bs.raid_id = $1`,
+                    `SELECT bs.player_id, bs.damage_dealt, bs.first_hitter, p.buffs
+                      FROM boss_sessions bs
+                      JOIN players p ON p.id = bs.player_id
+                      WHERE bs.raid_id = $1`,
                     [raidId]
                 );
 
@@ -1749,12 +1955,21 @@ router.post('/raid/:id/attack', async (req, res) => {
                 // leader_id — INTEGER, но pg может отдать строкой; Number()
                 // страхует сравнение с participantId.
                 const leaderIdRaw = Number(raid.leader_id);
+                // Последний удар — тот, чья атака убила босса (этот запрос).
+                const lastHitId = playerId;
                 const shares = allParticipants.map((row) => {
                     const dealt = Number(row.damage_dealt || 0);
+                    // Бонусы: +5% доле первого удара и +5% доле добившего.
+                    // Смелость на входе и добивание — два стратегических
+                    // момента рейда, ради которых стоит рисковать.
+                    let bonusMultiplier = 1;
+                    if (dealt > 0 && row.first_hitter) bonusMultiplier += RAID_FIRST_HIT_BONUS;
+                    if (Number(row.player_id) === lastHitId) bonusMultiplier += RAID_LAST_HIT_BONUS;
                     return {
                         participantId: Number(row.player_id),
                         dealt,
                         share: dealt > 0 ? dealt / totalDamage : 0,
+                        bonusMultiplier,
                         buffs: row.buffs
                     };
                 });
@@ -1763,7 +1978,9 @@ router.post('/raid/:id/attack', async (req, res) => {
                 // разница из ниоткуда не взялась бы (на боссе с 50 опыта и
                 // тремя участниками терялось 1-2 единицы).
                 // Считаем от БАЗОВЫХ значений, без бафов: иначе exp_x2 у
-                // лидера сломал бы арифметику остатка.
+                // лидера сломал бы арифметику остатка. Бонус первого и
+                // последнего удара в арифметику остатка входят: иначе он
+                // отъедал бы часть пула у остальных.
                 const coinsPool = Number(raid.reward_coins || 0);
                 const expPool = Number(raid.reward_experience || 0);
                 const topDamager = shares.reduce((best, row) => (row.dealt > (best ? best.dealt : -1) ? row : best), null);
@@ -1773,10 +1990,10 @@ router.post('/raid/:id/attack', async (req, res) => {
                 // всё равно кому-то досталась.
                 const hasRealDamage = Boolean(topDamager) && topDamager.dealt > 0;
                 const coinsRemainder = hasRealDamage
-                    ? Math.max(0, coinsPool - shares.reduce((s, r) => s + Math.floor(coinsPool * r.share), 0))
+                    ? Math.max(0, coinsPool - shares.reduce((s, r) => s + Math.floor(coinsPool * r.share * r.bonusMultiplier), 0))
                     : 0;
                 const expRemainder = hasRealDamage
-                    ? Math.max(0, expPool - shares.reduce((s, r) => s + Math.floor(expPool * r.share), 0))
+                    ? Math.max(0, expPool - shares.reduce((s, r) => s + Math.floor(expPool * r.share * r.bonusMultiplier), 0))
                     : 0;
 
                 let leaderKey = null;
@@ -1786,8 +2003,8 @@ router.post('/raid/:id/attack', async (req, res) => {
                     const participantBuffs = getActiveBuffs(entry.buffs);
                     const lootMultiplier = participantBuffs.loot_x2 ? 2 : 1;
 
-                    const baseCoins = Math.floor(coinsPool * entry.share);
-                    const baseExp = Math.floor(expPool * entry.share);
+                    const baseCoins = Math.floor(coinsPool * entry.share * entry.bonusMultiplier);
+                    const baseExp = Math.floor(expPool * entry.share * entry.bonusMultiplier);
                     const isTopDamager = Boolean(topDamager) && topDamager.participantId === participantId;
 
                     const coinsReward = baseCoins + (isTopDamager ? coinsRemainder : 0);
@@ -1818,18 +2035,24 @@ router.post('/raid/:id/attack', async (req, res) => {
                         if (isLeader && leaderKey) rewards.key = leaderKey;
                     }
 
-                    await client.query(
-                        `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
-                         VALUES ($1, $2, 1, NOW())
-                         ON CONFLICT (player_id, boss_id)
-                         DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
-                        [participantId, raid.boss_id]
-                    );
+                    // Мастерство и счётчик убийств — только тем, кто реально
+                    // бил. Раньше +1 получал каждый участник с нулевым
+                    // уроном: пока рейд бьют другие, можно качать убийства
+                    // (и через killBonus — урон по боссам) без участия.
+                    if (entry.dealt > 0) {
+                        await client.query(
+                            `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
+                              VALUES ($1, $2, 1, NOW())
+                              ON CONFLICT (player_id, boss_id)
+                              DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
+                            [participantId, raid.boss_id]
+                        );
 
-                    await client.query(
-                        'UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1',
-                        [participantId]
-                    );
+                        await client.query(
+                            'UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1',
+                            [participantId]
+                        );
+                    }
 
                     // Отложенная награда. Убийца свою долю уже видит в ответе
                     // этого же запроса, поэтому его строчка сразу claimed=true
@@ -1874,6 +2097,14 @@ router.post('/raid/:id/attack', async (req, res) => {
                             max_hp: raid.max_health,
                             hp_percent: raid.max_health > 0 ? Math.round((newHp / raid.max_health) * 100) : 0
                         },
+                        // Плоские псевдонимы — те же имена, что у соло-удара
+                        // (см. ответ /attack-boss). Нужны общему обработчику
+                        // результата: клиент больше не должен различать две
+                        // формы ответа. Старые вложенные поля остаются.
+                        boss_hp: newHp,
+                        boss_max_hp: raid.max_health,
+                        damage_dealt: damage,
+                        boss_defeated: killed,
                         damage,
                         damage_taken: counterHit.damage,
                         health: counterHit.health,

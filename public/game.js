@@ -1170,6 +1170,8 @@ const gameState = {
     // Данные рейдов
     raids: [],
     raidsParticipating: [],
+    // id общего интервала живых таймеров рейдов (см. renderRaids)
+    raidTimersTickerId: null,
 
     // Уже показанные анлоки локаций
     seenUnlockedLocations: [],
@@ -5684,14 +5686,82 @@ function canStartBossAttack() {
 }
 
 /**
+ * Обновить полосу здоровья: полоса + подпись «hp/max».
+ *
+ * Одна функция на все экраны (соло-бой, список боссов, карточки рейдов):
+ * раньше в каждом месте была своя копия с разными классами и границами.
+ *
+ * @param {HTMLElement|null} barEl элемент-заливка (.battle-health-fill / .raid-hp-fill)
+ * @param {HTMLElement|null} textEl подпись «N/M»
+ * @param {number} hp текущее здоровье
+ * @param {number} maxHp максимум
+ */
+function setBattleHealthBar(barEl, textEl, hp, maxHp) {
+    const current = Math.max(0, Number(hp) || 0);
+    const max = Math.max(1, Number(maxHp) || 1);
+    const hpPercent = Math.max(0, Math.min(100, (current / max) * 100));
+    if (barEl) barEl.style.width = `${hpPercent}%`;
+    if (textEl) textEl.textContent = `${current}/${max}`;
+}
+
+/**
+ * Базовый форматтер остатка времени.
+ *
+ * Источник правды для всех подписей вида «3ч 12м»: раньше было четыре
+ * независимых копии (formatTimeRemaining, updateBossFightTimer,
+ * getBossFightDurationLabel, formatDuration на сервере).
+ *
+ * @param {number} ms миллисекунды (может быть <= 0)
+ * @param {{seconds?: boolean, withHours?: boolean}} [options]
+ */
+function formatRemainingMs(ms, options = {}) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value <= 0) return options.seconds ? '00:00' : 'Завершён';
+
+    const hours = Math.floor(value / 3600000);
+    const minutes = Math.floor((value % 3600000) / 60000);
+
+    if (options.seconds) {
+        // «00:00:00» — как в таймере соло-боя
+        const seconds = Math.floor((value % 60000) / 1000);
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    if (hours > 0) return `${hours}ч ${minutes}м`;
+    if (minutes > 0) return `${minutes}м`;
+    return 'меньше минуты';
+}
+
+/**
+ * Обновить все живые таймеры рейдов.
+ *
+ * Вызывается раз в секунду общим интервалом (startRaidTimersTicker).
+ * Каждый элемент хранит серверный дедлайн в data-raid-deadline — срок,
+ * пришедший с сервера (time_remaining_ms), а не локальные часы.
+ */
+function updateRaidTimers() {
+    const timers = document.querySelectorAll('[data-raid-deadline]');
+    const now = Date.now();
+    for (const timer of timers) {
+        const deadline = Number(timer.dataset.raidDeadline);
+        if (!Number.isFinite(deadline) || deadline <= 0) continue;
+        const remaining = deadline - now;
+        timer.textContent = remaining > 0
+            ? `Осталось: ${formatRemainingMs(remaining)}`
+            : 'Осталось: Завершён';
+    }
+}
+
+/**
  * Обновить полосу HP босса на экране боя.
  */
 function updateBossHealthUi(bossHp, bossMaxHp) {
-    const hpPercent = Math.max(0, Math.min(100, (Number(bossHp) / Number(bossMaxHp)) * 100));
-    const bar = document.getElementById('boss-health-bar');
-    const text = document.getElementById('boss-health-text');
-    if (bar) bar.style.width = `${hpPercent}%`;
-    if (text) text.textContent = `${bossHp}/${bossMaxHp}`;
+    setBattleHealthBar(
+        document.getElementById('boss-health-bar'),
+        document.getElementById('boss-health-text'),
+        bossHp,
+        bossMaxHp
+    );
 
     if (gameState.currentBoss) {
         gameState.currentBoss.hp = bossHp;
@@ -5940,12 +6010,15 @@ function appendCounterDamageToLog(payload) {
  *
  * @param {number} counterDamage урон следующего ответного удара
  * @param {number} [playerDefense] итоговая защита игрока
+ * @param {string|null} [elementId] id элемента (по умолчанию — соло-бой).
+ *        Рейд передаёт null, но отдаёт элемент напрямую (см. raidAttack).
+ * @param {HTMLElement|null} [element] элемент подписи (приоритетнее elementId)
  */
-function updateBossCounterLabel(counterDamage, playerDefense) {
+function updateBossCounterLabel(counterDamage, playerDefense, elementId = 'boss-counter-label', element = null) {
     const value = Number(counterDamage);
     if (!Number.isFinite(value) || value < 0) return;
 
-    const counterEl = document.getElementById('boss-counter-label');
+    const counterEl = element || (elementId ? document.getElementById(elementId) : null);
     if (!counterEl) return;
 
     const defense = Number(playerDefense);
@@ -7034,22 +7107,68 @@ async function showPendingRaidRewards(pending) {
 }
 
 /**
- * Отображение списка рейдов
+ * Отображение списка рейдов.
+ *
+ * Карточка показывает ВСЁ для решения «стоять / бить / выйти»:
+ * личный вклад, общий урон, топ бьющих, примерные награды, живой
+ * таймер и лог последних событий.
  */
 function renderRaids(raids) {
     const container = document.getElementById('raids-list');
     if (!container) return;
-    
+
+    // Останавливаем прошлый тикер: ререндер пересоздаёт элементы с
+    // дедлайнами, старый интервал писал бы в отсоединённые узлы.
+    if (gameState.raidTimersTickerId) {
+        safeClearInterval(gameState.raidTimersTickerId);
+        gameState.raidTimersTickerId = null;
+    }
+
     if (!raids || raids.length === 0) {
         container.innerHTML = '<div class="empty-message">Нет активных рейдов</div>';
         return;
     }
-    
+
+    const myId = Number(gameState.player?.id) || 0;
+
     container.innerHTML = raids.map(raid => {
         const hpPercent = raid.hp_percent || 0;
-        const timeRemaining = formatTimeRemaining(raid.time_remaining_ms);
         const isParticipating = gameState.raidsParticipating?.includes(raid.id);
-        
+        const deadline = Date.now() + Math.max(0, Number(raid.time_remaining_ms) || 0);
+        const totalDamage = Number(raid.total_damage) || 0;
+        const yourDamage = Number(raid.your_damage) || 0;
+        const yourPct = Number(raid.your_damage_pct) || 0;
+        const participants = Number(raid.participants_count) || 0;
+        const attackers = Number(raid.attackers_count) || 0;
+
+        // Топ-5 бьющих. Без урона — строчку не показываем: «топ» из нулей
+        // только занимает место.
+        const topHtml = Array.isArray(raid.top_damagers) && raid.top_damagers.length > 0
+            ? `<div class="raid-top">🏆 <strong>Топ:</strong> ${raid.top_damagers.map((t, i) => {
+                const name = escapeHtml(t.player_name || 'Игрок');
+                const dmg = Number(t.damage_dealt) || 0;
+                const pct = Number(t.damage_pct) || 0;
+                const me = Number(t.player_id) === myId ? ' class="raid-top-me"' : '';
+                return `<span${me}>${i + 1}. ${name} — ${formatNumber(dmg)} (${pct}%)</span>`;
+            }).join(' · ')}</div>`
+            : '';
+
+        // Лог боя: последние события рейда. Без него вклад других
+        // участников выглядит как случайные скачки HP.
+        const logEvents = Array.isArray(raid.raid_log) ? raid.raid_log.slice(-6) : [];
+        const logHtml = logEvents.length > 0
+            ? `<div class="raid-log">${logEvents.map((e) => {
+                const who = escapeHtml(e.player_name || 'Игрок');
+                if (e.type === 'attack') {
+                    const parts = [`⚔️ ${who}: −${Number(e.damage) || 0}`];
+                    if (Number(e.counter_damage) > 0) parts.push(`💥 ответ ${Number(e.counter_damage)}`);
+                    if (e.final) parts.push('💀 добит!');
+                    return parts.join(' · ');
+                }
+                return escapeHtml(JSON.stringify(e));
+            }).join('<br>')}</div>`
+            : '';
+
         return `
             <div class="raid-item" data-raid-id="${escapeAttribute(raid.id)}" data-boss-id="${escapeAttribute(raid.boss?.id)}">
                 <div class="raid-boss-icon">${escapeHtml(raid.boss?.icon || '👾')}</div>
@@ -7059,17 +7178,36 @@ function renderRaids(raids) {
                         <div class="raid-hp-fill" style="width: ${hpPercent}%"></div>
                     </div>
                     <div class="raid-hp-text">${formatNumber(raid.hp)} / ${formatNumber(raid.max_hp)} (${hpPercent}%)</div>
-                    <div class="raid-leader">Лидер: ${escapeHtml(raid.leader?.name || 'Неизвестно')}</div>
-                    <div class="raid-participants">Участников: ${Number(raid.participants_count) || 0}</div>
-                    <div class="raid-timer">Осталось: ${escapeHtml(timeRemaining)}</div>
-                    ${isParticipating ? 
-                        `<button class="btn-attack" data-raid-attack="${escapeAttribute(raid.id)}">Атаковать</button>` :
-                        `<button class="btn-join" data-raid-join="${escapeAttribute(raid.id)}">Присоединиться</button>`
-                    }
+                    <div class="raid-stats-line">🎯 Всего урона: ${formatNumber(totalDamage)} · Осталось снять: ${formatNumber(Math.max(0, Number(raid.hp) || 0))}</div>
+                    <div class="raid-leader">👑 Лидер: ${escapeHtml(raid.leader?.name || 'Неизвестно')} · 👥 Участников: ${participants} (бьют ${attackers})</div>
+                    ${isParticipating ? `
+                        <div class="raid-your">⚔️ Ваш вклад: ${formatNumber(yourDamage)} урона${yourPct > 0 ? ` (${yourPct}%)` : ''}</div>
+                        <div class="raid-expected">Награда за сейчас: 💰 ≈${formatNumber(raid.expected_coins || 0)} · ✨ ≈${formatNumber(raid.expected_experience || 0)} XP</div>
+                        <div class="battle-participant-meta" data-raid-counter-label="${escapeAttribute(raid.id)}" style="display:none"></div>
+                    ` : ''}
+                    ${topHtml}
+                    ${logHtml}
+                    <div class="raid-timer" data-raid-deadline="${deadline}">Осталось: ${escapeHtml(formatRemainingMs(raid.time_remaining_ms))}</div>
+                    <div class="raid-actions">
+                        ${isParticipating
+                            ? `<button class="btn-attack" data-raid-attack="${escapeAttribute(raid.id)}">⚔️ Атаковать</button>`
+                            : `<button class="btn-join" data-raid-join="${escapeAttribute(raid.id)}">Присоединиться</button>`
+                        }
+                        ${isParticipating
+                            ? `<button class="btn-leave" data-raid-leave="${escapeAttribute(raid.id)}">🚪 Выйти</button>`
+                            : ''
+                        }
+                    </div>
                 </div>
             </div>
         `;
     }).join('');
+
+    // Живой таймер: общий интервал на все карточки.
+    const hasDeadlines = container.querySelector('[data-raid-deadline]');
+    if (hasDeadlines) {
+        gameState.raidTimersTickerId = safeSetInterval(updateRaidTimers, 1000);
+    }
 }
 
 /**
@@ -7120,6 +7258,55 @@ async function joinRaid(raidId) {
 }
 
 /**
+ * Локально применить результат удара по рейду к gameState.raids.
+ *
+ * Без полной перезагрузки списка после КАЖДОГО удара: сервер шлёт
+ * ровно те поля, которыми обновляется карточка (hp, вклад, лог).
+ * Полный loadRaids остаётся на смерть босса — там нужны pending rewards.
+ */
+function applyLocalRaidAttack(raidId, data) {
+    const raids = Array.isArray(gameState.raids) ? gameState.raids : [];
+    const raid = raids.find((r) => Number(r.id) === Number(raidId));
+    if (!raid) return;
+
+    const damage = Number(data.damage_dealt ?? data.damage) || 0;
+    const hp = Number(data.boss_hp ?? data.raid?.hp) || 0;
+    const maxHp = Number(data.boss_max_hp ?? data.raid?.max_hp) || raid.max_hp || 1;
+
+    raid.hp = hp;
+    raid.max_hp = maxHp;
+    raid.hp_percent = maxHp > 0 ? Math.round((hp / maxHp) * 100) : 0;
+    raid.total_damage = (Number(raid.total_damage) || 0) + damage;
+    raid.your_damage = Number(data.your_total_damage) || 0;
+    raid.your_damage_pct = raid.total_damage > 0
+        ? Math.round((raid.your_damage / raid.total_damage) * 100)
+        : 0;
+
+    // Лог: дописываем свой удар, чтобы карточка жила без перезапроса.
+    if (Array.isArray(raid.raid_log)) {
+        raid.raid_log.push({
+            type: 'attack',
+            player_name: gameState.player?.first_name || 'Вы',
+            damage,
+            counter_damage: Number(data.damage_taken) || 0,
+            final: Boolean(data.boss_defeated ?? data.killed)
+        });
+        raid.raid_log = raid.raid_log.slice(-6);
+    }
+
+    // Топ-5: своя строка растёт вкладом — пересортировка без сервера.
+    if (Array.isArray(raid.top_damagers)) {
+        const myId = Number(gameState.player?.id) || 0;
+        const mine = raid.top_damagers.find((t) => Number(t.player_id) === myId);
+        if (mine) {
+            mine.damage_dealt = raid.your_damage;
+            mine.damage_pct = raid.your_damage_pct;
+            raid.top_damagers.sort((a, b) => (b.damage_dealt || 0) - (a.damage_dealt || 0));
+        }
+    }
+}
+
+/**
  * Атаковать в рейде
  * @param {number} raidId - ID рейда
  */
@@ -7134,8 +7321,8 @@ async function attackRaid(raidId) {
         if (result.success) {
             const data = result.data;
             
-            // Показываем урон
-            showDamageAnimation(data.damage);
+            // Показываем урон (число с сервера — плоское damage_dealt).
+            showDamageAnimation(Number(data.damage_dealt ?? data.damage) || 0);
 
             // Метка времени обязательна — иначе клиент досчитает регенерацию
             // от устаревшей метки и покажет лишнюю энергию
@@ -7148,23 +7335,18 @@ async function attackRaid(raidId) {
                 refreshPlayerEnergyUI();
             }
             
-            // Обновляем UI рейда
-            await loadRaids();
-            renderRaids(gameState.raids);
+            // Ответный удар СЛЕДУЮЩЕГО удара — по уже побитому боссу.
+            // Подпись живёт в карточке рейда: updateBossCounterLabel умеет
+            // писать в произвольный элемент, переданный напрямую.
+            const counterLabel = document.querySelector(`[data-raid-counter-label="${raidId}"]`);
+            if (counterLabel) {
+                updateBossCounterLabel(data.counter_damage, data.player_defense, null, counterLabel);
+            }
 
-            // Ответный удар следующего удара — по уже побитому боссу.
-            // В рейде подпись живёт на том же элементе, что и в соло.
-            updateBossCounterLabel(data.counter_damage, data.player_defense);
-            
-            // После удара в рейде на сервере изменились энергия/урон, а после
-            // убийства — монеты/XP/ключи. Профиль нужно перечитать, иначе
-            // награды появятся в интерфейсе позже, чем реально начислены.
-            loadProfile().catch((profileError) => {
-                console.error('Не удалось обновить профиль после атаки в рейде:', profileError);
-            });
-            
             // Если босс убит
-            if (data.killed) {
+            if (data.boss_defeated ?? data.killed) {
+                // Финальные награды, pending rewards и очистка списка —
+                // только полная перезагрузка.
                 showVictoryFlash?.();
                 showBossDeathParticles?.();
                 showConfetti?.(160);
@@ -7172,9 +7354,18 @@ async function attackRaid(raidId) {
                     showKeyAnimation?.();
                 }
                 gameState.activeBattle = null;
+                await loadRaids();
+                renderRaids(gameState.raids);
                 showBossVictorySummary?.('Рейдовый босс', data.rewards || {}, null);
-            } else if (typeof data.your_total_damage === 'number') {
-                showNotification(`Урон нанесён. Ваш вклад: ${data.your_total_damage}`, 'success');
+                // После убийства изменились монеты/XP/ключи — профиль перечитываем.
+                loadProfile().catch((profileError) => {
+                    console.error('Не удалось обновить профиль после победы в рейде:', profileError);
+                });
+            } else {
+                // Живое обновление карточки без лишних запросов (раньше
+                // каждый удар перезагружал весь список рейдов и профиль).
+                applyLocalRaidAttack(raidId, data);
+                renderRaids(gameState.raids);
             }
         } else {
             showNotification(result.error || 'Ошибка атаки', 'error');
@@ -7190,22 +7381,51 @@ async function attackRaid(raidId) {
 }
 
 /**
+ * Выйти из рейда.
+ *
+ * Участник снимает активный бой, но его накопленный урон остаётся:
+ * при убийстве босса он получит свою долю (награда считается по
+ * boss_sessions, сессия при выходе НЕ удаляется — см. роут).
+ */
+async function leaveRaid(raidId) {
+    if (!lockAction('raidJoin')) return;
+
+    try {
+        const result = await apiRequest(`/api/game/bosses/raid/${raidId}/leave`, {
+            method: 'POST'
+        });
+
+        if (result.success) {
+            gameState.activeBattle = null;
+            showNotification('Вы вышли из рейда. Накопленный урон сохранён.', 'success');
+            await loadRaids();
+            renderRaids(gameState.raids);
+        } else {
+            showNotification(result.error || 'Не удалось выйти из рейда', 'error');
+        }
+
+        return result;
+    } catch (error) {
+        console.error('Ошибка выхода из рейда:', error);
+        showNotification(clientErrorMessage(error, 'Ошибка при выходе из рейда'), 'error');
+    } finally {
+        unlockAction('raidJoin');
+    }
+}
+
+/**
  * Форматирование оставшегося времени
  */
 function formatTimeRemaining(ms) {
-    if (ms <= 0) return 'Завершён';
-    
-    const hours = Math.floor(ms / (1000 * 60 * 60));
-    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
-    
-    if (hours > 0) {
-        return `${hours}ч ${minutes}м`;
-    }
-    return `${minutes}м`;
+    // Делегат общего форматтера: остаётся обратная совместимость со
+    // старыми вызовами, логика живёт в formatRemainingMs.
+    return formatRemainingMs(ms);
 }
 
 // Экспорты
 window.startRaid = startRaid;
+window.leaveRaid = leaveRaid;
+window.renderRaids = renderRaids;
 
 window.restoreEnergy = restoreEnergy;
 /**
@@ -8121,6 +8341,12 @@ document.addEventListener('click', (event) => {
     const raidJoinBtn = target.closest('[data-raid-join]');
     if (raidJoinBtn) {
         joinRaid(Number(raidJoinBtn.dataset.raidJoin));
+        return;
+    }
+
+    const raidLeaveBtn = target.closest('[data-raid-leave]');
+    if (raidLeaveBtn) {
+        leaveRaid(Number(raidLeaveBtn.dataset.raidLeave));
         return;
     }
 

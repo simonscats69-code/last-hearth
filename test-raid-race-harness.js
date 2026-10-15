@@ -21,10 +21,15 @@ const db = {
           equipment: {}, inventory: JSON.stringify([]), active_boss_id: null, active_boss_mode: null,
           active_raid_id: null, buffs: {}, auto_heal_enabled: true, auto_heal_threshold: null }
     ],
-    bosses: [{ id: 5, name: 'Гниль', max_health: 1000, icon: 'x', required_key_id: null, key_drop_chance: 0, keys_required: 1 },
-             { id: 6, name: 'Хор', max_health: 2000, icon: 'y', required_key_id: null, key_drop_chance: 0, keys_required: 1 },
-             { id: 4, name: 'Предыдущий', max_health: 800, icon: 'z', required_key_id: null, key_drop_chance: 0, keys_required: 1 }],
+    bosses: [{ id: 5, name: 'Гниль', max_health: 1000, icon: 'x', required_key_id: null, key_drop_chance: 0, keys_required: 1, reward_coins: 100, reward_experience: 200, description: 'Тест-босс' },
+             { id: 6, name: 'Хор', max_health: 2000, icon: 'y', required_key_id: null, key_drop_chance: 0, keys_required: 1, reward_coins: 100, reward_experience: 200, description: 'Тест-босс' },
+             { id: 4, name: 'Предыдущий', max_health: 800, icon: 'z', required_key_id: null, key_drop_chance: 0, keys_required: 1, reward_coins: 100, reward_experience: 200, description: 'Тест-босс' }],
     raid_progress: [],
+    // Сессии рейдов: их пишет /raid/start (лидер) и join. Нужны, чтобы
+    // проверить новые поля списка (вклад/топ) и что leave НЕ удаляет
+    // накопленный урон участника.
+    boss_sessions: [],
+    raid_rewards: [],
     // Ключи от предыдущих боссов: для босса 5 нужен ключ от 4,
     // для босса 6 — ключ от 5.
     boss_keys: [
@@ -116,7 +121,111 @@ function makeClient() {
             }
 
             // --- boss_sessions upsert ---
-            if (/INSERT INTO boss_sessions/.test(s)) return { rows: [] };
+            // Состояние сохраняем: тесты полей списка и leave читают сессии.
+            if (/INSERT INTO boss_sessions/.test(s)) {
+                const existing = db.boss_sessions.find(
+                    x => x.boss_id === params[0] && x.player_id === params[1]
+                );
+                if (existing) {
+                    existing.raid_id = params[2];
+                    existing.damage_dealt = 0;
+                } else {
+                    db.boss_sessions.push({
+                        boss_id: params[0],
+                        player_id: params[1],
+                        raid_id: params[2],
+                        damage_dealt: 0,
+                        first_hitter: false
+                    });
+                }
+                return { rows: [] };
+            }
+
+            // --- Активный рейд (resolveActiveBattle: mass + join) ---
+            // ВАЖНО: той же строки начинается и список рейдов (getActiveRaids),
+            // но у списка есть ORDER BY — его ловит отдельный обработчик ниже.
+            if (/^SELECT rp\.id, rp\.boss_id, rp\.current_health, rp\.max_health, rp\.expires_at,/.test(s)
+                && /FROM raid_progress rp/.test(s)
+                && !/ORDER BY rp\.started_at DESC/.test(s)) {
+                const r = db.raid_progress.find(x => x.id === params[0] && x.is_active && x.is_raid
+                    && new Date(x.expires_at).getTime() > Date.now());
+                if (!r) return { rows: [] };
+                const b = db.bosses.find(x => x.id === r.boss_id);
+                return { rows: [{
+                    id: r.id, boss_id: r.boss_id, current_health: r.current_health,
+                    max_health: r.max_health, expires_at: r.expires_at,
+                    boss_name: b ? b.name : 'Босс', icon: b ? b.icon : 'x',
+                    reward_coins: b ? b.reward_coins : 0,
+                    reward_experience: b ? b.reward_experience : 0
+                }] };
+            }
+
+            // --- Список активных рейдов (getActiveRaids) ---
+            if (/SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at,/.test(s)
+                && /ORDER BY rp.started_at DESC/.test(s)) {
+                const rows = db.raid_progress
+                    .filter(x => x.is_active && x.is_raid && new Date(x.expires_at).getTime() > Date.now())
+                    .map((r) => {
+                        const b = db.bosses.find(x => x.id === r.boss_id) || {};
+                        const sessions = db.boss_sessions.filter(x => x.raid_id === r.id);
+                        return {
+                            id: r.id,
+                            boss_id: r.boss_id,
+                            current_health: r.current_health,
+                            max_health: r.max_health,
+                            expires_at: r.expires_at,
+                            leader_id: r.leader_id,
+                            leader_name: r.leader_name,
+                            boss_name: b.name || 'Босс',
+                            icon: b.icon || 'x',
+                            boss_description: b.description || null,
+                            reward_coins: Number(b.reward_coins || 0),
+                            reward_experience: Number(b.reward_experience || 0),
+                            raid_log: Array.isArray(r.raid_log) ? r.raid_log : [],
+                            participants_count: sessions.length
+                        };
+                    });
+                return { rows };
+            }
+
+            // --- Рейды, в которых участвует игрок (getActiveRaids) ---
+            if (/SELECT bs.raid_id, bs.boss_id FROM boss_sessions bs/.test(s)) {
+                return {
+                    rows: db.boss_sessions
+                        .filter(x => x.player_id === params[0] && x.raid_id !== null && x.raid_id !== undefined)
+                };
+            }
+
+            // --- Урон всех участников активных рейдов (getActiveRaids) ---
+            if (/SELECT bs.raid_id, bs.player_id, bs.damage_dealt, p.first_name AS player_name/.test(s)) {
+                const ids = params[0] || [];
+                const rows = db.boss_sessions
+                    .filter(x => ids.includes(x.raid_id))
+                    .map((x) => ({
+                        raid_id: x.raid_id,
+                        player_id: x.player_id,
+                        damage_dealt: x.damage_dealt,
+                        player_name: (db.players.find(p => p.id === x.player_id) || {}).first_name || 'Игрок'
+                    }));
+                return { rows };
+            }
+
+            // --- Отложенные награды рейда ---
+            if (/FROM raid_rewards WHERE player_id/.test(s)) {
+                return { rows: db.raid_rewards.filter(x => x.player_id === params[0] && !x.claimed) };
+            }
+
+            // --- Сброс активного боя (clearPlayerActiveBattle) ---
+            if (/UPDATE players\s+SET active_boss_id = NULL/.test(s)) {
+                const p = db.players.find(x => x.id === params[0]);
+                if (p) {
+                    p.active_boss_id = null;
+                    p.active_boss_started_at = null;
+                    p.active_boss_mode = null;
+                    p.active_raid_id = null;
+                }
+                return { rows: [], rowCount: p ? 1 : 0 };
+            }
 
             // --- UPDATE players.active_* ---
             if (/UPDATE players\s+SET active_boss_id = \$1/.test(s)) {
@@ -276,6 +385,8 @@ const makeReqRes = (playerId, body) => ({
 /** Сброс состояния между сценариями: игроки не в бою, рейды убраны, ключи восстановлены */
 function resetState() {
     db.raid_progress = [];
+    db.boss_sessions = [];
+    db.raid_rewards = [];
     db.hiddenRaids = [];
     db.boss_keys.forEach(k => { k.quantity = 5; });
     db.players.forEach(p => {
@@ -379,6 +490,70 @@ async function run() {
     ok(' constraint race -> 400 RAID_ALREADY_ACTIVE (не 500)',
         c1.res.statusCode === 400 && c1.res.body.code === 'RAID_ALREADY_ACTIVE',
         c1.res.statusCode + ' ' + (c1.res.body && c1.res.body.code));
+
+    console.log('\n=== Выход из рейда (leave) сохраняет накопленный урон ===');
+    resetState();
+    const leaveHandler = getHandler('/raid/:id/leave');
+    ok('хендлер leave найден', typeof leaveHandler === 'function');
+
+    const leaveStart = makeReqRes(1, { boss_id: 5 });
+    await handler(leaveStart.req, leaveStart.res);
+    const leaveRaidId = leaveStart.res.body.data.raid_id;
+
+    // Второй игрок входит и наносит урон: сессия с damage_dealt = 300.
+    const joinHandler = getHandler('/raid/:id/join');
+    const joinReq = makeReqRes(2, {});
+    joinReq.req.params = { id: String(leaveRaidId) };
+    await joinHandler(joinReq.req, joinReq.res);
+    ok('второй игрок присоединился', joinReq.res.statusCode === 200, joinReq.res.statusCode);
+    db.boss_sessions.find(x => x.player_id === 2 && x.raid_id === leaveRaidId).damage_dealt = 300;
+
+    const leaveReq = makeReqRes(2, {});
+    leaveReq.req.params = { id: String(leaveRaidId) };
+    await leaveHandler(leaveReq.req, leaveReq.res);
+    ok('leave возвращает 200', leaveReq.res.statusCode === 200, leaveReq.res.statusCode);
+    ok('активный бой игрока 2 снят',
+        db.players.find(p => p.id === 2).active_raid_id === null
+        && db.players.find(p => p.id === 2).active_boss_mode === null);
+    ok('сессия с уроном 300 СОХРАНЕНА (доля остаётся)',
+        db.boss_sessions.find(x => x.player_id === 2 && x.raid_id === leaveRaidId)?.damage_dealt === 300);
+
+    const leaveAgain = makeReqRes(2, {});
+    leaveAgain.req.params = { id: String(leaveRaidId) };
+    await leaveHandler(leaveAgain.req, leaveAgain.res);
+    ok('повторный leave -> 400 NOT_PARTICIPATING',
+        leaveAgain.res.statusCode === 400 && leaveAgain.res.body.code === 'NOT_PARTICIPATING',
+        leaveAgain.res.statusCode + ' ' + (leaveAgain.res.body && leaveAgain.res.body.code));
+
+    console.log('\n=== Список рейдов: вклад, топ, награды ===');
+    resetState();
+    const listStart = makeReqRes(1, { boss_id: 5 });
+    await handler(listStart.req, listStart.res);
+    const listRaidId = listStart.res.body.data.raid_id;
+    // Урон: игрок 1 — 100, игрок 2 — 300 (итого 400).
+    db.boss_sessions.find(x => x.player_id === 1 && x.raid_id === listRaidId).damage_dealt = 100;
+    db.boss_sessions.push({ boss_id: 5, player_id: 2, raid_id: listRaidId, damage_dealt: 300, first_hitter: false });
+
+    const listHandler = getHandler('/raids');
+    const listReq = makeReqRes(1, {});
+    await listHandler(listReq.req, listReq.res);
+    ok('GET /raids -> 200', listReq.res.statusCode === 200, listReq.res.statusCode);
+    const listRaid = listReq.res.body?.data?.raids?.[0];
+    ok('в списке 1 рейд', Boolean(listRaid));
+    ok('total_damage = 400', listRaid.total_damage === 400, listRaid.total_damage);
+    ok('your_damage = 100', listRaid.your_damage === 100, listRaid.your_damage);
+    ok('your_damage_pct = 25', listRaid.your_damage_pct === 25, listRaid.your_damage_pct);
+    ok('attackers_count = 2', listRaid.attackers_count === 2, listRaid.attackers_count);
+    ok('топ-2, лидер по урону — игрок 2',
+        Array.isArray(listRaid.top_damagers) && listRaid.top_damagers.length === 2
+        && listRaid.top_damagers[0].player_name === 'ЛидерБ'
+        && listRaid.top_damagers[0].damage_dealt === 300);
+    ok('ожидаемые награды — числа',
+        typeof listRaid.expected_coins === 'number' && typeof listRaid.expected_experience === 'number');
+    ok('ожидаемые монеты = доля 25% от пула',
+        listRaid.expected_coins === Math.floor(100 * 0.25), listRaid.expected_coins);
+    ok('raid_log — массив', Array.isArray(listRaid.raid_log));
+    ok('time_remaining_ms есть', typeof listRaid.time_remaining_ms === 'number');
 
     console.log('\n========================================');
     console.log('ИТОГ:', passed, 'passed,', failed, 'failed');

@@ -41,6 +41,7 @@ global.document = {
     createElement: () => {
         const el = {
             _text: '', _html: '',
+            style: {},
             set textContent(v) { this._text = String(v); this._html = String(v)
                 .replace(/&/g, '\u0026amp;').replace(/</g, '\u0026lt;')
                 .replace(/>/g, '\u0026gt;').replace(/"/g, '\u0026quot;')
@@ -78,7 +79,8 @@ const wrapped = new Function(
     'safeSetTimeout, safeClearTimeout, safeSetInterval, clearAllIntervals, ' +
     'activeTimeouts, activeIntervals, withTimeout, delay, createApiMethod, endpoints,' +
     'invalidateCache, invalidateAllCaches, apiCache, getInitData, getInitDataFromHash,' +
-    'apiRequest, clientErrorMessage, Loader, Templates, RenderCache, modalState' +
+    'apiRequest, clientErrorMessage, Loader, Templates, RenderCache, modalState,' +
+    'formatRemainingMs, formatTimeRemaining, setBattleHealthBar' +
     '};'
 );
 
@@ -183,6 +185,35 @@ function run() {
     ok('45 секунд', api.formatTime(45).indexOf('45') !== -1, api.formatTime(45));
     ok('минуты и секунды', /м/.test(api.formatTime(125)) && /05/.test(api.formatTime(125)), api.formatTime(125));
     ok('часы', /ч/.test(api.formatTime(3661)), api.formatTime(3661));
+
+    console.log('\n=== formatRemainingMs ===');
+    // Общий форматтер для всех «осталось времени»: рейд, соло, лог.
+    ok('часы и минуты', api.formatRemainingMs(2 * 3600000 + 5 * 60000) === '2ч 5м', api.formatRemainingMs(2 * 3600000 + 5 * 60000));
+    ok('только минуты', api.formatRemainingMs(45 * 60000) === '45м', api.formatRemainingMs(45 * 60000));
+    ok('меньше минуты', api.formatRemainingMs(30 * 1000) === 'меньше минуты', api.formatRemainingMs(30 * 1000));
+    ok('0 -> Завершён', api.formatRemainingMs(0) === 'Завершён', api.formatRemainingMs(0));
+    ok('отрицательное -> Завершён', api.formatRemainingMs(-100) === 'Завершён', api.formatRemainingMs(-100));
+    ok('NaN -> Завершён', api.formatRemainingMs(NaN) === 'Завершён', api.formatRemainingMs(NaN));
+    ok('режим секунд HH:MM:SS', api.formatRemainingMs(3661000, { seconds: true }) === '01:01:01', api.formatRemainingMs(3661000, { seconds: true }));
+    ok('режим секунд на нуле', api.formatRemainingMs(0, { seconds: true }) === '00:00', api.formatRemainingMs(0, { seconds: true }));
+    // formatTimeRemaining стал делегатом — поведение не поменялось.
+    ok('formatTimeRemaining — делегат те же значения', api.formatTimeRemaining(2 * 3600000 + 5 * 60000) === '2ч 5м', api.formatTimeRemaining(2 * 3600000 + 5 * 60000));
+
+    console.log('\n=== setBattleHealthBar ===');
+    // Одна функция на соло/рейды/список боссов: ширина полосы + подпись.
+    const bar = global.document.createElement();
+    const text = global.document.createElement();
+    api.setBattleHealthBar(bar, text, 30, 100);
+    ok('ширина 30%', bar.style.width === '30%', bar.style.width);
+    ok('подпись 30/100', text.textContent === '30/100', text.textContent);
+    api.setBattleHealthBar(bar, text, 150, 100);
+    ok('HP выше максимума обрезается до 100%', bar.style.width === '100%', bar.style.width);
+    api.setBattleHealthBar(bar, text, 0, 100);
+    ok('0 HP — пустая полоса', bar.style.width === '0%', bar.style.width);
+    api.setBattleHealthBar(null, text, 5, 10);
+    ok('без элемента полосы не падает', text.textContent === '5/10', text.textContent);
+    api.setBattleHealthBar(null, null, 5, 10);
+    ok('без элементов вообще не падает', true);
 
     console.log('\n=== getItemCategory ===');
     ok('по type', api.getItemCategory({ type: 'WEAPON' }) === 'weapon', api.getItemCategory({ type: 'WEAPON' }));

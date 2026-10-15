@@ -4376,6 +4376,58 @@ html, body {
 .raid-hp-text { font-size: var(--text-xs); color: var(--text-secondary); }
 .raid-leader, .raid-participants { font-size: var(--text-sm); color: var(--text-secondary); }
 .raid-timer { font-size: var(--text-xs); color: #ffd166; }
+/* Сводка боя: сколько урона всего и сколько осталось снять — раньше
+   игрок видел только долю HP и не понимал темп боя. */
+.raid-stats-line { font-size: var(--text-sm); color: var(--text-primary); }
+/* Личный вклад и примерные награды — ключевые строки решения
+   «бить дальше или выйти». */
+.raid-your {
+    font-size: var(--text-sm);
+    font-weight: bold;
+    color: var(--accent-gold, #ffd166);
+}
+.raid-expected { font-size: var(--text-xs); color: var(--text-secondary); }
+/* Топ бьющих: «≈» по вкладам, все строки одним потоком с разделителем. */
+.raid-top {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+}
+.raid-top-me {
+    color: var(--accent-gold, #ffd166);
+    font-weight: bold;
+}
+/* Лог боя: последние события рейда (кто снял сколько и что ответил босс). */
+.raid-log {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    max-height: 84px;
+    overflow-y: auto;
+    line-height: 1.5;
+}
+/* Кнопки действий в карточке: атака + выход в одну строку. */
+.raid-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+.raid-actions .btn-attack { flex: 1; }
+.btn-leave {
+    border: 1px solid var(--metal-400);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    font-size: var(--text-sm);
+    font-weight: bold;
+    color: var(--text-secondary);
+    background: transparent;
+    cursor: pointer;
+}
+.btn-leave:hover { color: var(--text-primary); border-color: var(--text-secondary); }
 .btn-join,
 .btn-attack {
     border: none;
