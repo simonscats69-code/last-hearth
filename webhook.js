@@ -20,6 +20,60 @@ const bot = BOT_TOKEN ? new Telegraf(BOT_TOKEN, {
 }) : null;
 
 /**
+ * Синхронизация Menu Button и списка команд бота.
+ *
+ * Menu Button — синяя кнопка «Открыть приложение» в профиле бота и кнопка
+ * «Открыть» рядом с ботом в списке «Мои Боты». Её URL задаётся ТОЛЬКО в
+ * BotFather вручную, и если там остался старый домен (last-hearth.bothost.ru),
+ * игра по этим кнопкам открывается пустой — а по инлайн-кнопке «🎮 Играть»
+ * (её шлёт /start с MINI_APP_URL из панели Bothost) работает. Выглядит как
+ * «два разных приложения», хотя это одна игра с двумя URL входа.
+ *
+ * Здесь бот при каждом старте ставит Menu Button на тот же MINI_APP_URL,
+ * что и инлайн-кнопки: ручную настройку в BotFather больше не нужно
+ * держать в голове, а смена домена в панели Bothost применяется сама.
+ *
+ * Идемпотентно: setChatMenuButton с web_app перезаписывает прежнее
+ * значение любого типа (commands/default/web_app).
+ */
+async function setupMenuButton() {
+    // Без токена или URL настроить нечего — просто выходим (не роняем старт).
+    if (!BOT_TOKEN || !bot || !MINI_APP_URL) {
+        logger.warn('[bot] Menu Button не настроен: нет токена или MINI_APP_URL');
+        return;
+    }
+
+    try {
+        await bot.telegram.setChatMenuButton({
+            menu_button: {
+                type: 'web_app',
+                text: '🎮 Играть',
+                web_app: { url: MINI_APP_URL }
+            }
+        });
+        logger.info(`[bot] Menu Button настроен на ${MINI_APP_URL}`);
+    } catch (error) {
+        // Не фатально: инлайн-кнопки /start продолжают работать.
+        logger.error('[bot] Не удалось настроить Menu Button: ' + (error?.message || String(error)));
+    }
+
+    // Список команд — чтобы в интерфейсе бота были подсказки, а не пустота.
+    try {
+        await bot.telegram.setMyCommands([
+            { command: 'start', description: '🎮 Начать игру' },
+            { command: 'play', description: '▶️ Быстрый запуск' },
+            { command: 'profile', description: '👤 Профиль' },
+            { command: 'locations', description: '🗺️ Локации' },
+            { command: 'shop', description: '🏪 Магазин' },
+            { command: 'daily', description: '🎁 Ежедневный бонус' },
+            { command: 'help', description: '❓ Помощь' }
+        ]);
+    } catch (error) {
+        logger.warn('[bot] Не удалось обновить список команд: ' + (error?.message || String(error)));
+    }
+}
+
+/**
  * Настройка webhook и обработчиков команд
  */
 async function setupWebhook(app) {
@@ -38,6 +92,11 @@ async function setupWebhook(app) {
             logger.error('Бот остановлен с ошибкой (polling): ' + (launchError?.message || String(launchError)));
         });
         logger.info('Бот запущен в режиме polling');
+
+        // Кнопка меню и список команд — сразу после старта: Menu Button из
+        // BotFather мог указывать на старый домен, и «синие» кнопки Telegram
+        // открывали пустой Mini App. Ставим актуальный URL из MINI_APP_URL.
+        await setupMenuButton();
     } catch (error) {
         logger.error('Ошибка запуска бота: ' + (error?.message || String(error)));
     }

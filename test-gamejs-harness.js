@@ -80,7 +80,7 @@ const wrapped = new Function(
     'activeTimeouts, activeIntervals, withTimeout, delay, createApiMethod, endpoints,' +
     'invalidateCache, invalidateAllCaches, apiCache, getInitData, getInitDataFromHash,' +
     'apiRequest, clientErrorMessage, Loader, Templates, RenderCache, modalState,' +
-    'formatRemainingMs, formatTimeRemaining, setBattleHealthBar' +
+    'formatRemainingMs, formatTimeRemaining, setBattleHealthBar, updateBossAttackButtonState' +
     '};'
 );
 
@@ -214,6 +214,55 @@ function run() {
     ok('без элемента полосы не падает', text.textContent === '5/10', text.textContent);
     api.setBattleHealthBar(null, null, 5, 10);
     ok('без элементов вообще не падает', true);
+
+    console.log('\n=== updateBossAttackButtonState (энергия на кнопке атаки) ===');
+    // Состояние кнопки боя должно следовать за энергией: disabled + честная
+    // подпись при нуле, учёт бесплатного баффа, no-op на скрытой кнопке.
+    const attackBtn = global.document.createElement();
+    attackBtn.style.display = 'inline-flex';
+    const realGetElementById = global.document.getElementById;
+    global.document.getElementById = (id) => (id === 'attack-boss-btn' ? attackBtn : null);
+    try {
+        const restoreState = () => {
+            global.window.gameState.player = {
+                status: { energy: 3, max_energy: 50 }
+            };
+            global.window.gameState.buffs = {};
+        };
+
+        restoreState();
+        api.updateBossAttackButtonState();
+        ok('при энергии 3 — активна и подпись со стоимостью',
+            attackBtn.disabled === false && attackBtn.textContent === '⚔️ Атаковать (1 ⚡)',
+            attackBtn.textContent + ' disabled=' + attackBtn.disabled);
+
+        global.window.gameState.player.status.energy = 0;
+        api.updateBossAttackButtonState();
+        ok('при энергии 0 — disabled и «Нет энергии»',
+            attackBtn.disabled === true && attackBtn.textContent === '🔋 Нет энергии',
+            attackBtn.textContent + ' disabled=' + attackBtn.disabled);
+
+        global.window.gameState.buffs.free_energy = { expires_at: Date.now() + 60000 };
+        api.updateBossAttackButtonState();
+        ok('при бесплатном бафе — активна даже на 0',
+            attackBtn.disabled === false && attackBtn.textContent === '⚔️ Атаковать (бесплатно)',
+            attackBtn.textContent + ' disabled=' + attackBtn.disabled);
+
+        // Кнопка скрыта (экран боя закрыт) — функция должна выйти, не
+        // тронув ни текст, ни disabled.
+        restoreState();
+        attackBtn.style.display = 'none';
+        attackBtn.textContent = 'служебный текст';
+        attackBtn.disabled = true; // состояние «до вызова» — должно сохраниться
+        api.updateBossAttackButtonState();
+        ok('скрытая кнопка не переписывается',
+            attackBtn.disabled === true && attackBtn.textContent === 'служебный текст',
+            attackBtn.textContent);
+
+        attackBtn.style.display = 'inline-flex';
+    } finally {
+        global.document.getElementById = realGetElementById;
+    }
 
     console.log('\n=== getItemCategory ===');
     ok('по type', api.getItemCategory({ type: 'WEAPON' }) === 'weapon', api.getItemCategory({ type: 'WEAPON' }));

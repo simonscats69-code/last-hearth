@@ -1172,6 +1172,8 @@ const gameState = {
     raidsParticipating: [],
     // id общего интервала живых таймеров рейдов (см. renderRaids)
     raidTimersTickerId: null,
+    // id секундного тика показателей (энергия: полоса, таймер, кнопка атаки)
+    energyTickerId: null,
 
     // Уже показанные анлоки локаций
     seenUnlockedLocations: [],
@@ -2791,8 +2793,24 @@ async function initGame() {
         hideLoadingScreen();
         gameLog('[initGame] Initialization complete!');
 
-        // Запускаем обновление энергии
-        safeSetInterval(updateEnergyDisplay, 60000); // Каждую минуту
+        // Запускаем обновление показателей.
+        //
+        // Энергия — СЕКУНДНЫЙ локальный тик: реген считается по времени
+        // (getEffectivePlayerStatus), а раньше updateEnergyDisplay дёргался
+        // раз в 60 секунд. Из-за этого полоса энергии росла рывками раз в
+        // минуту, таймер «Энергия через 0:42» не тикал между тиками, а
+        // кнопка атаки не реагировала на накопление энергии без действия.
+        // Сеть тикер не трогает: пересчёт чисто клиентский от серверной
+        // метки last_energy_update.
+        gameState.energyTickerId = safeSetInterval(() => {
+            refreshPlayerEnergyUI();
+        }, 1000);
+
+        // Баффы живут по своим срокам — минуты для их протухания хватает.
+        safeSetInterval(() => {
+            pruneExpiredBuffs();
+            renderActiveBuffs(gameState.buffs || {});
+        }, 60000);
 
         // Запускаем проверку статуса (переломы, инфекции)
         safeSetInterval(checkPlayerStatus, 600000); // Каждые 10 минут
@@ -3094,10 +3112,47 @@ function renderEnergyIndicators() {
 function refreshPlayerEnergyUI() {
     renderEnergyIndicators();
     updateSearchButtonsState();
+    // Кнопка атаки босса отражает энергию без перезапроса: без этого
+    // при нуле энергий кнопка оставалась активной и клик каждый раз лез
+    // в модалку «Нет энергии», а после траты последней энергии не
+    // блокировалась до следующего действия.
+    updateBossAttackButtonState();
 
     if (typeof updateEnergyTimer === 'function') {
         updateEnergyTimer();
     }
+}
+
+/**
+ * Доступность кнопки атаки босса по текущей энергии.
+ *
+ * Раньше проверка жила только внутри canStartBossAttack(): клик при 0
+ * энергии показывал модалку, а кнопка после траты последней энергии
+ * оставалась активной. Теперь состояние синхронизируется с показчиками
+ * (и по событиям, и по секундному тикеру energyTickerId).
+ */
+function updateBossAttackButtonState() {
+    const btn = document.getElementById('attack-boss-btn');
+    if (!btn) return;
+
+    // Кнопка скрыта (не на экране боя) — не трогаем её видимость и текст.
+    if (btn.style.display === 'none') return;
+
+    // Во время запроса текст владельца — «⚔️ Атакую...»; тикер не переписывает.
+    if (actionLocks.attackBoss) return;
+
+    const status = typeof getEffectivePlayerStatus === 'function'
+        ? getEffectivePlayerStatus()
+        : gameState.player?.status;
+    const isFreeAttack = Boolean(gameState.buffs?.free_energy);
+    const hasEnergy = isFreeAttack || Boolean(status && status.energy >= 1);
+
+    btn.disabled = !hasEnergy;
+    // Стоимость удара прямо на кнопке: 1 энергия либо «бесплатно» под
+    // баффом. Баф проверяем первым — при нём кнопка активна и при 0.
+    btn.textContent = isFreeAttack
+        ? '⚔️ Атаковать (бесплатно)'
+        : (hasEnergy ? '⚔️ Атаковать (1 ⚡)' : '🔋 Нет энергии');
 }
 
 const MAIN_INSIGHTS_TTL_MS = 60 * 1000;
@@ -5558,6 +5613,11 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
             freshBtn.style.display = 'inline-flex';
         }
     }
+
+    // Доступность кнопки по текущей энергии: до открытия боя могли
+    // тратить энергию на поиск/рейды, и кнопка должна открываться
+    // заблокированной с понятной подписью, а не активной.
+    updateBossAttackButtonState();
     
     // Рендерим слоты экипировки игрока.
     // .catch: функция асинхронная, и раньше её вызывали без обработки —
@@ -5902,6 +5962,10 @@ async function attackBoss() {
                 result.last_energy_update
             );
             refreshPlayerEnergyUI();
+            // Кнопка сразу отражает новую энергию (refreshPlayerEnergyUI тоже
+            // её обновляет; в сценарии победы экран боя закрывается — тогда
+            // кнопки на странице нет и вызов остаётся безопасным no-op).
+            updateBossAttackButtonState();
 
             if (energyUsed) {
                 energyUsed.textContent = isFreeAttack ? '0' : '-1';
@@ -5943,13 +6007,12 @@ async function attackBoss() {
         console.error('Attack error:', error);
         showModal('⚠️ Атака не выполнена', clientErrorMessage(error, 'Не удалось выполнить атаку'));
     } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = gameState.buffs?.free_energy
-                ? '⚔️ Атаковать (бесплатно)'
-                : '⚔️ Атаковать (1 ⚡)';
-        }
+        // Снимаем лок и возвращаем кнопке реальное состояние: «Атаковать
+        // (1 ⚡)» при энергии, «Нет энергии» при нуле. Раньше здесь стоял
+        // хардкод на активную кнопку — после траты последней энергии
+        // кнопка снова была кликабельна и упиралась в модалку.
         actionLocks.attackBoss = false;
+        updateBossAttackButtonState();
     }
 }
 
