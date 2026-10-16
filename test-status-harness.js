@@ -98,7 +98,24 @@ const gameConstantsMock = {
         radiation: { damagePerLevel: 3 },
         infection: { damagePerLevel: 2 }
     },
-    getDebuffTier: (n) => (n >= 10 ? 'critical' : n >= 5 ? 'danger' : n > 0 ? 'minor' : 'none')
+    getDebuffTier: (n) => (n >= 10 ? 'critical' : n >= 5 ? 'danger' : n > 0 ? 'minor' : 'none'),
+    // Те же функции, что экспортирует настоящий utils/gameConstants.js:
+    // status.js берёт парсинг уровня и формулу урона оттуда, поэтому
+    // мок обязан их предоставить (порог 5, damagePerLevel из конфига).
+    CONTAMINATION_DAMAGE_FROM_LEVEL: 5,
+    normalizeRadiationLevel: (raw) => {
+        if (typeof raw === 'number') return raw > 0 ? Math.floor(raw) : 0;
+        if (typeof raw === 'object' && raw !== null) return Math.max(0, Math.floor(Number(raw.level) || 0));
+        if (typeof raw === 'string') {
+            try { const p = JSON.parse(raw); return typeof p === 'object' && p ? Math.max(0, Math.floor(Number(p.level) || 0)) : Math.max(0, parseInt(p, 10) || 0); } catch { return 0; }
+        }
+        return 0;
+    },
+    calculateRadiationDamage: (level, perLevel) => {
+        const lvl = Number(level), per = Number(perLevel);
+        if (!(lvl >= 5) || !Number.isFinite(per)) return 0;
+        return Math.max(0, (lvl - 4) * per);
+    }
 };
 
 const debuffApiMock = {

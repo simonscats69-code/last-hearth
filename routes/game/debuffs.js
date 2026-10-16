@@ -10,8 +10,9 @@
 
 const { transaction } = require('../../db/database');
 // logger раньше использовался только в удалённых HTTP-роутах. Ошибки из
-// DebuffAPI ловит вызывающий: world.js пишет их в лог сам, status.js
-// отдаёт наружу через handleError (5xx без внутреннего текста).
+// DebuffAPI ловит вызывающий: world.js отдаёт их в handleError.
+// Модуль мёртв как HTTP-API (apply/cure не вызываются никем), но
+// calculateDebuffDamage/getModifiers используются внутренними расчётами.
 const { safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
@@ -33,11 +34,10 @@ const {
     DEBUFF_CONFIG,
     DEBUFF_CURES,
     calculateDebuffModifiers,
-    getDebuffTier
+    getDebuffTier,
+    normalizeRadiationLevel,
+    calculateRadiationDamage
 } = require('../../utils/gameConstants');
-// Порог «с какого уровня заражение бьёт по здоровью» — из общего файла
-// правил. Прежнее голое «5» в двух местах было источником расхождений.
-const CONTAMINATION_DAMAGE_FROM_LEVEL = require('../../public/shared/equipment.js').CONTAMINATION_DAMAGE_FROM_LEVEL;
 
 function createDebuffError(message, code, statusCode = 400) {
     return { message, code, statusCode };
@@ -219,9 +219,9 @@ const DebuffAPI = {
             const config = DEBUFF_CONFIG.radiation;
             if (!config) continue;
 
-            if (debuff.level >= CONTAMINATION_DAMAGE_FROM_LEVEL) {
-                damage += Math.max(0, debuff.level - (CONTAMINATION_DAMAGE_FROM_LEVEL - 1)) * config.damagePerLevel;
-            }
+            // Формула и порог урона — та же, что в status.js /check:
+            // обе вынесены в utils/gameConstants.js calculateRadiationDamage.
+            damage += calculateRadiationDamage(debuff.level, config.damagePerLevel);
         }
         
         return Math.floor(damage);
@@ -233,16 +233,22 @@ const DebuffAPI = {
      * Только радиация: инфекции объединены с ней.
      */
     getActive(player) {
-        const radiation = safeJsonParse(player.radiation, { level: 0, expires_at: null });
-        
+        // Тот же парсер, что и в status.js /check: три формата хранения
+        // радиации (объект/число/строка-JSON) живут в одной функции
+        // utils/gameConstants.js.
+        const radiationObj = typeof player.radiation === 'object' && player.radiation !== null
+            ? player.radiation
+            : safeJsonParse(player.radiation, {});
+        const level = normalizeRadiationLevel(player.radiation);
+
         const active = [];
-        
-        if (radiation.level > 0) {
+
+        if (level > 0) {
             active.push({
                 type: DEBUFF_TYPES.RADIATION,
-                level: radiation.level,
-                expiresAt: radiation.expires_at,
-                severity: getDebuffTier(radiation.level),
+                level,
+                expiresAt: radiationObj.expires_at || null,
+                severity: getDebuffTier(level),
                 name: 'Радиация',
                 icon: '☢'
             });
@@ -394,10 +400,11 @@ const DebuffAPI = {
 // Публичные HTTP-маршруты дебаффов удалены: GET /debuffs/status,
 // POST /debuffs/check и POST /debuffs/cure не вызывались клиентом
 // (слово "debuff" в public/game.js не встречается ни разу).
-// Модуль остаётся внутренним API: его используют world.js (DebuffAPI.apply)
-// и status.js (DebuffAPI.cure). Если понадобится отдельный экран дебаффов,
-// маршруты надо писать заново вместе с UI — и вместе с проверкой, что в 5xx
-// наружу не уходит внутренний текст ошибки.
+// ВАЖНО: DebuffAPI.apply и DebuffAPI.cure сейчас НЕ вызываются никем —
+// проверено grep по routes/, utils/ и index.js. DebuffAPI.calculateDebuffDamage
+// используется только внутри этого файла. Если понадобится отдельный экран
+// дебаффов, маршруты надо писать заново вместе с UI — и вместе с проверкой,
+// что в 5xx наружу не уходит внутренний текст ошибки.
 //
 // Применять дебаффы напрямую из других модулей:
 //   const { DebuffAPI } = require('./debuffs');

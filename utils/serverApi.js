@@ -520,12 +520,20 @@ async function telegramAuthMiddleware(req, res, next) {
         const botToken = process.env.TG_BOT_TOKEN;
 
         if (!botToken) {
-            if (process.env.NODE_ENV === 'production') {
-                logger.error('TG_BOT_TOKEN не настроен в production!');
-                return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
+            // Fail-closed: пропускаем ТОЛЬКО при явном DEV_MODE=true.
+            // Раньше условие было `NODE_ENV !== 'production'` — при
+            // незаданном NODE_ENV (фактическое состояние деплоя: см.
+            // index.js validateStartupConfig) и отсутствующем токене
+            // middleware уходил в next() без req.telegramUser, и защита
+            // /api/admin и /metrics целиком зависела от того, вспомнит ли
+            // каждый роут про собственный guard. Обе ошибки одинаково
+            // дают 500 — поведение больше не зависит от неявного NODE_ENV.
+            if (process.env.DEV_MODE === 'true') {
+                logger.warn('TG_BOT_TOKEN не настроен - авторизация пропущена (DEV_MODE=true)');
+                return next();
             }
-            logger.warn('TG_BOT_TOKEN не настроен - авторизация пропущена (development mode)');
-            return next();
+            logger.error('TG_BOT_TOKEN не настроен - запрос отклонён');
+            return res.status(500).json({ error: 'Ошибка конфигурации сервера' });
         }
 
         if (!initData) {
@@ -578,52 +586,77 @@ async function idempotencyMiddleware(req, res, next) {
 
     const fullKey = `idem:${playerId}:${idempotencyKey}`;
 
+    // ЗДЕСЬ БЫЛА ГОНКА: ключ сначала только проверялся (SELECT), а
+    // сохранялся уже ПОСЛЕ выполнения запроса. Два параллельных запроса
+    // с одним Idempotency-Key (двойной тап клиента даёт стабильный ключ
+    // на 1.5 с) оба не находили строку и оба выполняли мутацию —
+    // двойное списание/начисление. Теперь ключ «занимается» атомарным
+    // INSERT ДО next(); параллельный повтор получает 409 (или
+    // сохранённый ответ, если первая попытка уже завершилась).
+    let claimed = false;
     try {
-        const { queryOne } = require('../db/database');
-        
-        // Проверяем, есть ли уже результат для этого ключа
-        const existing = await queryOne(
-            `SELECT response_data, created_at FROM idempotency_keys WHERE idempotency_key = $1`,
+        const { query: dbQuery, queryOne } = require('../db/database');
+
+        // Ключи старше 24 ч переиспользуются — сначала удаляем протухший.
+        await dbQuery(
+            `DELETE FROM idempotency_keys
+              WHERE idempotency_key = $1 AND created_at < NOW() - INTERVAL '24 hours'`,
             [fullKey]
         );
 
-        if (existing) {
-            // Ключ найден — возвращаем сохранённый ответ
-            const age = Date.now() - new Date(existing.created_at).getTime();
-            if (age < 24 * 60 * 60 * 1000) { // 24 часа TTL
+        const insertResult = await dbQuery(
+            `INSERT INTO idempotency_keys (idempotency_key, response_data, created_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (idempotency_key) DO NOTHING`,
+            [fullKey, {}]
+        );
+        claimed = insertResult.rowCount > 0;
+
+        if (!claimed) {
+            // Ключ занят: либо первая попытка ещё выполняется, либо уже
+            // ответила. Если ответ готов (response_data не пустой) —
+            // отдаём его как реплей.
+            const existing = await queryOne(
+                `SELECT response_data FROM idempotency_keys WHERE idempotency_key = $1`,
+                [fullKey]
+            );
+            if (existing && existing.response_data && Object.keys(existing.response_data).length > 0) {
                 logger.info('[idempotency] returning cached response', { key: idempotencyKey, playerId });
                 return res.set('Idempotency-Replay', 'true').json(existing.response_data);
-            } else {
-                // Старый ключ — удаляем и продолжаем выполнение
-                await queryOne(`DELETE FROM idempotency_keys WHERE idempotency_key = $1`, [fullKey]);
             }
+            return res.status(409).json({
+                error: 'Запрос с таким Idempotency-Key уже выполняется',
+                code: 'IDEMPOTENCY_IN_PROGRESS'
+            });
         }
     } catch (err) {
-        // Ошибка БД — не блокируем запрос, логируем и продолжаем
-        logger.warn('[idempotency] check failed', { error: err.message });
+        // Ошибка БД — не блокируем запрос, логируем и продолжаем.
+        // claimed остаётся false: ответ ниже всё равно будет отдан.
+        logger.warn('[idempotency] claim failed', { error: err.message });
     }
 
     // Перехватываем res.json чтобы сохранить ответ
     const originalJson = res.json.bind(res);
     res.json = function(data) {
-        // Сохраняем ответ асинхронно (не блокируем ответ клиенту)
-        if (idempotencyKey && res.statusCode >= 200 && res.statusCode < 400) {
+        const result = originalJson(data);
+        // Сохраняем ответ в кэш идемпотентности сразу после отправки ответа.
+        // Запускаем запись в БД без ожидания (не блокируем клиента), но без
+        // setImmediate — запрос уходит в pg как микротаск немедленно, а не
+        // после следующей итерации цикла событий. Это существенно сужает
+        // окно гонки, в которое параллельный повтор с тем же ключом мог бы
+        // получить 409 вместо сохранённого реплея.
+        if (claimed && idempotencyKey && res.statusCode >= 200 && res.statusCode < 400) {
             const fullKey = `idem:${playerId}:${idempotencyKey}`;
-            setImmediate(async () => {
-                try {
-                    const { query } = require('../db/database');
-                    await query(
-                        `INSERT INTO idempotency_keys (idempotency_key, response_data, created_at)
-                         VALUES ($1, $2, NOW())
-                         ON CONFLICT (idempotency_key) DO UPDATE SET response_data = $2, created_at = NOW()`,
-                        [fullKey, data]
-                    );
-                } catch (err) {
-                    logger.warn('[idempotency] save failed', { error: err.message });
-                }
+            const { query } = require('../db/database');
+            query(
+                `UPDATE idempotency_keys SET response_data = $2, created_at = NOW()
+                  WHERE idempotency_key = $1`,
+                [fullKey, data]
+            ).catch((err) => {
+                logger.warn('[idempotency] save failed', { error: err.message });
             });
         }
-        return originalJson(data);
+        return result;
     };
 
     next();
@@ -671,7 +704,6 @@ module.exports = {
     // Обработка ошибок
     ERROR_MESSAGES,
     // Утилиты игроков
-    getPlayerByTelegramId,
 
     // Telegram авторизация
     validateTelegramInitData,

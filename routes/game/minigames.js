@@ -210,8 +210,13 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
             // Ограничиваем: не более +2000 монет за одно вращение.
             const MAX_MULTIPLIER_BONUS = 2000;
             const multiplier = Math.max(2, Math.floor(prize.value) || 2);
+            // Платное вращение не должно быть «в пустоту»: при нулевом
+            // балансе удвоение даёт 0, а звезда уже списана — игрок не
+            // получает ничего. Гарантируем минимум 1 монету за paid-spin.
             const rawBonus = Math.floor((player.coins || 0) * (multiplier - 1));
-            const bonus = Math.max(0, Math.min(rawBonus, MAX_MULTIPLIER_BONUS));
+            const bonus = is_paid
+                ? Math.max(1, Math.min(rawBonus, MAX_MULTIPLIER_BONUS))
+                : Math.max(0, Math.min(rawBonus, MAX_MULTIPLIER_BONUS));
             const updateCooldown = !is_paid ? ', last_wheel_spin = NOW()' : '';
             
             if (bonus > 0) {
@@ -227,7 +232,7 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
                     [playerId]
                 );
             }
-            // При is_paid и отсутствии бонуса ничего не делаем
+            // Ветка is_paid && bonus === 0 недостижима: см. max(1, ...) выше.
             }
 
             // Успешный путь: результат возвращаем, транзакция закоммитится

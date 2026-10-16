@@ -173,9 +173,12 @@ async function runRender(opts) {
         ok('сломанный предмет (0/100) помечен broken', bodyClasses.includes('broken'), bodyClasses.join(','));
         ok('целый предмет (50/50) НЕ помечен broken', !weaponClasses.includes('broken'), weaponClasses.join(','));
         ok('класс empty снят с занятого слота', !bodyClasses.includes('empty'), bodyClasses.join(','));
-        // Иконка и title
+        // Иконка и title: с PNG-иконками рендер идёт через innerHTML
+        // (iconHtml → <img> при наличии манифеста, иначе эмодзи),
+        // а textContent мок-элемента innerHTML не отражает — смотрим _html.
         const itemEl = r.slotEls.weapon.querySelector('.slot-item');
-        ok('иконка предмета подставлена', itemEl && itemEl.textContent === '🗡️', itemEl && itemEl.textContent);
+        const itemHtml = itemEl && (itemEl._html || itemEl.textContent || '');
+        ok('иконка предмета подставлена', itemEl && (itemHtml.includes('🗡️') || itemHtml.includes('<img')), itemHtml);
     }
 
     // --- БЕЗ общего модуля: функция должна работать, а не падать ----------

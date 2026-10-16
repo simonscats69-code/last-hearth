@@ -53,8 +53,19 @@ const clientFactory = () => ({
     }
 });
 
+// Гонка: два параллельных buy. Настоящий pg пул + FOR UPDATE сериализуют
+// транзакции по строке players — мок обязан воспроизводить это поведение,
+// иначе тест ничего не проверяет. Ставим транзакции в очередь: следующая
+// стартует только после завершения предыдущей (эмуляция блокировки строки).
+let txQueue = Promise.resolve();
+
 const dbMock = {
-    transaction: async (fn) => fn(clientFactory()),
+    transaction: async (fn) => {
+        const run = txQueue.then(() => fn(clientFactory()));
+        // Очередь продолжается даже если транзакция упала
+        txQueue = run.then(() => { }, () => { });
+        return run;
+    },
     queryOne: async () => null,
     queryAll: async () => [],
     query: async () => ({ rows: [] })
@@ -170,6 +181,24 @@ const player = () => ({ id: 5 });
     ok('INSUFFICIENT_COINS', res.body && res.body.code === 'INSUFFICIENT_COINS', JSON.stringify(res.body));
     ok('UPDATE coins отсутствует', !callLog.some(q => /^UPDATE players SET coins/.test(q.sql)));
     ok('баланс цел', coins === 50, String(coins));
+
+    console.log('\n=== Гонка: два параллельных buy (двойной тап) ===');
+    // Баланса хватает РОВНО на одну покупку: если FOR UPDATE работает,
+    // вторая транзакция прочитает уже уменьшенный баланс и получит
+    // INSUFFICIENT_COINS. Без блокировки обе прочитали бы 150 и списали
+    // обе — двойное списание.
+    reset(150, []);
+    const raceA = makeReqRes(player(), { item_id: 1, quantity: 1 });
+    const raceB = makeReqRes(player(), { item_id: 1, quantity: 1 });
+    await Promise.all([
+        buy(raceA.req, raceA.res),
+        buy(raceB.req, raceB.res)
+    ]);
+    const raceBodies = [raceA, raceB].map(r => r.res.body).filter(Boolean);
+    const successes = raceBodies.filter(b => b.success === true).length;
+    ok('ровно одна покупка из двух прошла', successes === 1, JSON.stringify(raceBodies));
+    ok('баланс уменьшился ровно на одну покупку (150 - 100 = 50)', coins === 50, String(coins));
+    ok('проигравший получил внятную ошибку', raceBodies.some(b => b.code === 'INSUFFICIENT_COINS'), JSON.stringify(raceBodies));
 
     console.log('\n=== Итог ===');
     console.log(`ИТОГ: ${passed} passed, ${failed} failed`);

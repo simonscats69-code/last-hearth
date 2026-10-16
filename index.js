@@ -17,7 +17,7 @@ try {
 // ADMIN_IDS парсится один раз при старте
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
 const DEV_MODE = process.env.DEV_MODE === 'true';
-// Окно валидации initData (MAX_INIT_DATA_AGE_SECONDS, по умолчанию 24 ч)
+// Окно валидации initData (MAX_INIT_DATA_AGE_SECONDS, по умолчанию 1 ч)
 // читается напрямую в utils/serverApi.js (validateTelegramInitData) —
 // дубль константы здесь был мёртвым кодом и удалён.
 
@@ -102,7 +102,6 @@ const { query, closePool, setLogger, describeError } = require('./db/database');
 const { initDatabase } = require('./db/init');
 const { setupWebhook, bot } = require('./webhook');
 const gameRouter = require('./routes/game');
-const apiRouter = require('./routes/api');
 const adminRouter = require('./routes/admin');
 
 const app = express();
@@ -481,8 +480,8 @@ app.use((req, res, next) => {
  * Middleware: игровые маршруты не работают, пока не готова БД.
  *
  * Ставится перед /api/game, /api/admin и /api/leaderboard — всем, что ходит
- * в базу. /api (apiRouter) пропускаем намеренно: там /health-like и
- * справочные ручки, которые должны отвечать и во время подъёма.
+ * в базу. /health, /ready и корневая страница смонтированы без него:
+ * проверка живости и загрузка UI не должны зависеть от базы.
  */
 function requireDatabaseReady(req, res, next) {
     if (isDatabaseReady) return next();
@@ -511,7 +510,6 @@ app.use('/api/leaderboard', requireDatabaseReady, (req, res, next) => {
     req.url = '/minigames/leaderboard' + req.url;
     gameRouter(req, res, next);
 });
-app.use('/api', apiRouter);
 
 // Главная страница: index.html через шаблон (подстановка nonce для CSP)
 app.get(['/', '/index.html'], (req, res) => sendIndexHtml(res));

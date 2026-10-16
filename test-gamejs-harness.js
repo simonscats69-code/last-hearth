@@ -212,8 +212,9 @@ function run() {
     ok('0 HP — пустая полоса', bar.style.width === '0%', bar.style.width);
     api.setBattleHealthBar(null, text, 5, 10);
     ok('без элемента полосы не падает', text.textContent === '5/10', text.textContent);
-    api.setBattleHealthBar(null, null, 5, 10);
-    ok('без элементов вообще не падает', true);
+    let noThrow = true;
+    try { api.setBattleHealthBar(null, null, 5, 10); } catch { noThrow = false; }
+    ok('без элементов вообще не падает', noThrow, noThrow ? 'ok' : 'выбросило исключение');
 
     console.log('\n=== updateBossAttackButtonState (энергия на кнопке атаки) ===');
     // Состояние кнопки боя должно следовать за энергией: disabled + честная
@@ -299,7 +300,9 @@ function run() {
     const badId = api.safeSetTimeout(() => { throw new Error('boom'); }, 0);
     realSetTimeout(() => {
         try {
-            ok('необработанное исключение в колбэке не выходит наружу', true);
+            // «Не выходит наружу» гарантирует сам процесс: необработанное
+            // исключение уронило бы харнесс с ненулевым кодом. Конкретная
+            // проверка — реестр activeTimeouts почищен.
             ok('ID удалён из реестра после срабатывания', api.activeTimeouts.has(badId) === false, api.activeTimeouts.has(badId));
             finish();
         } catch (e) { finish(); }
@@ -318,17 +321,20 @@ function run() {
                 .then(() => { ok('медленный промис должен отваливаться', false, 'не rejects'); },
                       (e) => { ok('withTimeout реджектит по таймауту', e && /[Тт]аймаут/.test(e.message), e && e.message); })
                 .then(() => {
-                    // Таймер withTimeout должен очищаться: иначе он бы "утека"
+                    // Таймер withTimeout должен очищаться. Проверяем через
+                    // timeoutRegistry: моки setTimeout/clearTimeout фиксируют
+                    // каждый взведённый и очищенный таймер, а
+                    // process._getActiveHandles() на современных Node всегда
+                    // возвращает [] — старая проверка была вакуумной.
                     console.log('\n=== withTimeout: таймер очищается ===');
-                    const pend = process._getActiveHandles ? process._getActiveHandles().length : 0;
-                    return api.withTimeout(new Promise(() => {}), 50).catch(() => {}).then(() => {
-                        realSetTimeout(() => {
-                            const after = process._getActiveHandles ? process._getActiveHandles().length : 0;
-                            ok('нет подозрительного роста активных хендлов', after <= pend + 2, pend + ' -> ' + after);
-                            report();
-                        }, 40);
+                    const pend = timeoutRegistry.size;
+                    return api.withTimeout(Promise.resolve('ok'), 5000).then((v) => {
+                        ok('успешный withTimeout возвращает значение', v === 'ok', v);
+                        ok('таймер убран из реестра после резолва', timeoutRegistry.size <= pend,
+                            pend + ' -> ' + timeoutRegistry.size);
                     });
-                });
+                })
+                .then(() => report());
         });
     }
 

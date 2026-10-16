@@ -15,9 +15,23 @@ const path = require('path');
 const fs = require('fs');
 
 // Список берём с диска, чтобы новые тесты не приходилось добавлять вручную.
-const harnesses = fs.readdirSync(__dirname)
+// ЗДЕСЬ БЫЛА ДЫРА: glob шёл только по корню, поэтому tests/db-init.test.js
+// (32 проверки) не выполнялся в общем прогоне — только через test:root.
+const rootHarnesses = fs.readdirSync(__dirname)
     .filter(f => /^test-.*\.js$/.test(f))
-    .sort();
+    .map(f => ({ dir: __dirname, file: f }));
+
+const testsDir = path.join(__dirname, 'tests');
+const testsDirHarnesses = fs.existsSync(testsDir)
+    ? fs.readdirSync(testsDir)
+        .filter(f => /\.test\.js$/.test(f))
+        .map(f => ({ dir: testsDir, file: f }))
+    : [];
+
+const harnessFiles = [...rootHarnesses, ...testsDirHarnesses].sort((a, b) =>
+    a.file.localeCompare(b.file)
+);
+const harnesses = harnessFiles.map(h => h.file);
 
 // Проверочные скрипты: они не печатают «ИТОГ», зато возвращают exit code,
 // поэтому судим по коду возврата.
@@ -33,15 +47,20 @@ const failed = [];
 for (const h of harnesses) {
     let out = '';
     let code = 0;
+    const harnessInfo = harnessFiles.find(x => x.file === h) || { dir: __dirname };
     try {
-        out = execFileSync(process.execPath, [path.join(__dirname, h)], { encoding: 'utf8', stdio: 'pipe' });
+        out = execFileSync(process.execPath, [path.join(harnessInfo.dir, h)], { encoding: 'utf8', stdio: 'pipe' });
     } catch (e) {
         out = String(e.stdout || '');
         code = typeof e.status === 'number' ? e.status : 1;
     }
 
     const failLines = out.split(/\r?\n/).filter(l => /^\s*FAIL\b/.test(l));
-    const summary = (out.match(/ИТОГ:.+/) || [''])[0];
+    // Два формата итога: «ИТОГ: N passed, M failed» (корневые харнесы)
+    // и просто «N passed, M failed» (tests/db-init.test.js). Раньше второй
+    // формат не распознавался — db-init всегда считался провалом прогона.
+    let summary = (out.match(/ИТОГ:.+/) || [''])[0];
+    if (!summary) summary = (out.match(/\d+\s+passed,\s+\d+\s+failed/) || [''])[0];
     const m = /(\d+)\s+passed,\s+(\d+)\s+failed/.exec(summary);
 
     if (m) {

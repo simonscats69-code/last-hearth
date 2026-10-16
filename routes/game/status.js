@@ -5,13 +5,12 @@
 const express = require('express');
 const router = express.Router();
 const { transaction } = require('../../db/database');
-const { DEBUFF_CONFIG, getDebuffTier } = require('../../utils/gameConstants');
-// Порог урона от заражения — единое место правды (раньше «5» было вписано
-// и здесь, и в debuffs.js).
-const CONTAMINATION_DAMAGE_FROM_LEVEL = require('../../public/shared/equipment.js').CONTAMINATION_DAMAGE_FROM_LEVEL;
-const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
+const { DEBUFF_CONFIG, getDebuffTier, normalizeRadiationLevel, calculateRadiationDamage } = require('../../utils/gameConstants');
+// Порог урона от заражения больше не нужен здесь: нормализация уровня и
+// сама формула урона теперь в utils/gameConstants.js (debuffs.js считает
+// тем же путем) — раньше «5» было вписано и здесь, и в debuffs.js.
+const { handleError, logPlayerAction } = require('../../utils/serverApi');
 const { validateId } = require('../../utils/validate');
-const { DebuffAPI } = require('./debuffs');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -51,24 +50,11 @@ async function runStatusCheck(client, playerId) {
 
     let radDamage = 0;
     const radConfig = DEBUFF_CONFIG.radiation;
-    
-    // Обрабатываем оба формата хранения радиации (JSON и число)
-    let radiationLevel = 0;
-    const rawRadiation = p.radiation;
-    
-    if (typeof rawRadiation === 'object' && rawRadiation !== null) {
-        radiationLevel = rawRadiation.level || 0;
-    } else if (typeof rawRadiation === 'number') {
-        radiationLevel = rawRadiation;
-    } else if (typeof rawRadiation === 'string') {
-        const parsed = safeJsonParse(rawRadiation, { level: 0 });
-        radiationLevel = typeof parsed === 'object' ? (parsed.level || 0) : (parseInt(parsed) || 0);
-    }
-    
-    // Порог урона — из общего файла правил, одно место на весь проект.
-    if (radiationLevel >= CONTAMINATION_DAMAGE_FROM_LEVEL) {
-        radDamage = (radiationLevel - (CONTAMINATION_DAMAGE_FROM_LEVEL - 1)) * radConfig.damagePerLevel;
-    }
+
+    // Нормализация уровня и порог урона — из общего файла правил:
+    // одна формула на весь проект (debuffs.js считает тем же путем).
+    const radiationLevel = normalizeRadiationLevel(p.radiation);
+    radDamage = calculateRadiationDamage(radiationLevel, radConfig.damagePerLevel);
 
     // Инфекции объединены с радиацией: урон один, отдельного слагаемого
     // от players.infections больше нет. Прежняя строка второго урона

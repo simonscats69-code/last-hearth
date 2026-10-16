@@ -122,6 +122,10 @@
          Обязательно ДО game.js — тот обращается к window.EquipmentShared
          на этапе загрузки (лимит слотов инвентаря). -->
     <script src="shared/equipment.js?v={{assetVersion}}" nonce="{{nonce}}"></script>
+    <!-- Манифест PNG-иконок (scripts/icon-gen): window.IconManifest — карта
+         «имя/эмодзи предмета → icons/*.png». До game.js — тот использует
+         её в iconHtml() при рендере инвентаря/боссов/магазина. -->
+    <script src="icons/manifest.js?v={{assetVersion}}" nonce="{{nonce}}"></script>
     <script src="game.js?v={{assetVersion}}" nonce="{{nonce}}"></script>
 </body>
 </html>

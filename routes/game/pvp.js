@@ -696,14 +696,24 @@ await client.query(`
                 `, [coinsReward, attackerId]);
 
                 if (stolenItem) {
-                    await client.query(
-                        `UPDATE players SET inventory = $1 WHERE id = $2`,
+                    // RETURNING + rowCount: строки заперты FOR UPDATE ранее
+                    // (порядок детерминирован), но при исчезновении игрока
+                    // между чтением и записью инвентарь молча не сохранился
+                    // бы — украденный предмет рассинхронизировался с БД.
+                    const defWrite = await client.query(
+                        `UPDATE players SET inventory = $1 WHERE id = $2 RETURNING id`,
                         [safeStringify(defenderInventory), defenderId]
                     );
-                    await client.query(
-                        `UPDATE players SET inventory = $1 WHERE id = $2`,
+                    if (defWrite.rowCount === 0) {
+                        throw { message: 'Защитник исчез', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+                    }
+                    const attWrite = await client.query(
+                        `UPDATE players SET inventory = $1 WHERE id = $2 RETURNING id`,
                         [safeStringify(attackerInventory), attackerId]
                     );
+                    if (attWrite.rowCount === 0) {
+                        throw { message: 'Атакующий исчез', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+                    }
                 }
 
                 rewards = {

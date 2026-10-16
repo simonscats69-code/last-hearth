@@ -35,7 +35,9 @@ function gameLog(...args) {
  * В production там всегда `false`, поэтому поддельные telegram_id/initData
  * физически недоступны: без настоящего Telegram.WebApp.initData игра не
  * стартует, а не продолжает работать от имени фиктивного игрока 123456789.
- /**
+ */
+
+/**
  * Состояние анимации закрытия модального окна.
  *
  * Объявлено здесь, а не рядом с hideModal(): файл выполняется сверху вниз,
@@ -178,10 +180,10 @@ function escapeHtml(text) {
 /**
  * Экранирование значения для подстановки внутрь HTML-атрибута.
  *
- * escapeHtml() экранирует только текстовый узел: кавычки в нём остаются
- * как есть. В атрибуте вида data-x="${value}" значение `x" onmouseover=...`
- * сломало бы разметку и выполнило произвольный код, поэтому для атрибутов
- * нужен отдельный, более строгий вариант.
+ * На практике сейчас эквивалентен escapeHtml (кавычки экранирует и он),
+ * но для атрибутов вызван отдельно намеренно: если в escapeHtml когда-либо
+ * останется только &<> (как в чисто текстовых шаблонах), все места с
+ * data-x="${escapeAttribute(value)}" останутся безопасными.
  *
  * @param {*} value - значение атрибута
  * @returns {string}
@@ -194,6 +196,49 @@ function escapeAttribute(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+/**
+ * HTML-иконки предмета/босса.
+ *
+ * Сначала ищем PNG по имени (точное совпадение из каталога БД), затем по
+ * эмодзи (fallback для ачивок и всего, где имя не передаётся). Маппинг
+ * отдаёт window.IconManifest — генерируется scripts/icon-gen в
+ * public/icons/manifest.js.
+ *
+ * Если манифеста нет или маппинга не нашлось — возвращаем исходное эмодзи
+ * текстом: игра продолжает работать даже без картинок (например, при
+ * частично закэшированной статике).
+ *
+ * @param {string|null} name - игровое имя (items.name / bosses.name)
+ * @param {string|null} emoji - эмодзи из БД как последний fallback
+ * @param {string} [cls] - дополнительный CSS-класс для <img>
+ * @returns {string} HTML: <img> или экранированное эмодзи
+ */
+function iconHtml(name, emoji, cls = 'icon-img') {
+    const manifest = window.IconManifest;
+    const src = manifest && (
+        (name && manifest.byName[name])
+        || (emoji && manifest.byEmoji[emoji])
+    );
+    if (!src) return escapeHtml(emoji || '📦');
+    // data-emoji нужен глобальному error-фолбэку ниже: если PNG
+    // не отдался (404/устаревший кэш), на его место встанет эмодзи.
+    return `<img class="${escapeHtml(cls)}" src="${escapeAttribute(src)}" alt="" loading="lazy" draggable="false" data-emoji="${escapeAttribute(emoji || '📦')}">`;
+}
+
+// Глобальный фолбэк PNG-иконок: CSP запрещает inline onerror, поэтому
+// ловим ошибку загрузки capture-фазой на document. Битый <img class="icon-img">
+// заменяется экранированным эмодзи из data-emoji — интерфейс не ломается,
+// даже если статика частично устарела.
+if (typeof document !== 'undefined') {
+    document.addEventListener('error', (e) => {
+        const el = e.target;
+        if (!(el instanceof HTMLImageElement) || !el.classList.contains('icon-img')) return;
+        const span = document.createElement('span');
+        span.textContent = el.dataset.emoji || '📦';
+        el.replaceWith(span);
+    }, true);
 }
 
 /**
@@ -619,9 +664,9 @@ function getInitData() {
         return fromHash;
     }
 
-    // 3. Заглушка для разработки — только при явном DEV-флаге с сервера.
-    // В production её нет: поддельный initData с hash=dummy раньше позволял
-    // пройти инициализацию без Telegram вообще.
+    // 3. Заглушки для разработки НЕТ. Поддельный initData с hash=dummy
+    // раньше позволял пройти инициализацию без Telegram — таких ветвей
+    // в коде больше нет, функция просто возвращает null.
     console.warn('[getInitData] Telegram WebApp initData отсутствует');
     return null;
 }
@@ -1499,7 +1544,7 @@ const Templates = {
         return `
             <div class="item-card rarity-${rarityClass}" 
                  data-id="${escapeAttribute(item.id)}" data-use-item="${escapeAttribute(itemActionId)}">
-                <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
+                <span class="item-icon">${iconHtml(item.name, item.icon)}</span>
                 <span class="item-name">${escapeHtml(item.name)}</span>
                 ${item.count ? `<span class="item-count">x${Number(item.count)}</span>` : ''}
                 ${actions}
@@ -1513,7 +1558,7 @@ const Templates = {
         return `
             <div class="boss-card" data-id="${escapeAttribute(boss.id)}">
                 <div class="boss-header">
-                    <span class="boss-icon">${escapeHtml(boss.icon || '👹')}</span>
+                    <span class="boss-icon">${iconHtml(boss.name, boss.icon, 'icon-img boss-card-icon')}</span>
                     <span class="boss-name">${escapeHtml(boss.name)}</span>
                 </div>
                 <div class="battle-health">
@@ -1602,7 +1647,7 @@ const Templates = {
         return `
             <div class="inventory-slot rarity-${rarityClass}" 
                  data-use-item="${escapeAttribute(itemActionId)}" data-id="${escapeAttribute(item.id)}">
-                <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
+                <span class="item-icon">${iconHtml(item.name, item.icon)}</span>
                 ${item.count > 1 ? `<span class="item-count">${Number(item.count)}</span>` : ''}
                 ${sellBtn}
             </div>
@@ -2094,7 +2139,9 @@ function getTimeToNextEnergy(lastUpdate) {
     if (!lastUpdate) return null;
     
     const lastUpdateTime = new Date(lastUpdate).getTime();
-    const now = Date.now();
+    // getNow(), а не Date.now(): вся регенерация считается от
+    // серверных часов. С локальными таймер при расъезде часов врал.
+    const now = getNow();
     const timePassed = now - lastUpdateTime;
     
     // Если прошёл полный интервал - энергия уже восстановилась
@@ -2375,7 +2422,7 @@ function renderMain() {
 
     if (locationName) locationName.textContent = location.name || 'Спальный район';
     if (locationDesc) locationDesc.textContent = location.description || 'Тихий жилой комплекс';
-    if (locationIcon) locationIcon.textContent = location.icon || '🏠';
+    if (locationIcon) locationIcon.innerHTML = iconHtml(location.name, location.icon, 'icon-img location-icon-img');
     if (locationRadiation) locationRadiation.textContent = location.radiation || 0;
     if (locationDanger) locationDanger.textContent = location.danger_level || 1;
 
@@ -3604,7 +3651,7 @@ function updateProfileUI(player) {
         const locationDesc = document.getElementById('location-desc');
         const locationRadiation = document.getElementById('location-radiation');
         const locationDanger = document.getElementById('location-danger');
-        if (locationIcon) locationIcon.textContent = player.location.icon || '🏠';
+        if (locationIcon) locationIcon.innerHTML = iconHtml(player.location.name, player.location.icon, 'icon-img location-icon-img');
         if (locationName) locationName.textContent = player.location.name;
         if (locationDesc) locationDesc.textContent = player.location.description || 'Описание локации недоступно';
         if (locationRadiation) locationRadiation.textContent = player.location.radiation;
@@ -3704,7 +3751,7 @@ function updateHealPanel(player) {
         } else {
             itemsEl.innerHTML = items.map((item) => `
                 <button class="heal-item-btn" data-heal-index="${item.index}">
-                    <span class="heal-item-icon">${escapeHtml(item.icon)}</span>
+                    <span class="heal-item-icon">${iconHtml(item.name, item.icon)}</span>
                     <span class="heal-item-name">${escapeHtml(item.name)}</span>
                     <span class="heal-item-value">+${item.heal} HP</span>
                     ${item.quantity > 1 ? `<span class="heal-item-stack">×${item.quantity}</span>` : ''}
@@ -3806,7 +3853,7 @@ function renderActiveBuffs(buffs = {}) {
 
         return `
             <div class="active-buff-pill">
-                <span class="buff-icon">${meta.icon}</span>
+                <span class="buff-icon">${iconHtml(null, meta.icon)}</span>
                 <span class="buff-label">${meta.label}</span>
                 <span class="buff-time">${minutesLeft}м</span>
             </div>
@@ -4313,7 +4360,7 @@ function renderEquipment(equipment) {
                     </div>`;
                 }
                 return `<div class="equip-slot rarity-${escapeHtml(item.rarity || 'common')}">
-                    <span class="equip-slot-icon">${escapeHtml(item.icon || '📦')}</span>
+                    <span class="equip-slot-icon">${iconHtml(item.name, item.icon)}</span>
                     <span class="equip-slot-info">
                         <span class="equip-slot-name">${escapeHtml(item.name || label)}</span>
                         <span class="equip-slot-label">${escapeHtml(RARITY_LABELS[item.rarity] || '')}</span>
@@ -4404,7 +4451,7 @@ function renderWorkshopModifications(entry, data) {
 
         return `
             <div class="inv-workshop-mod">
-                <span class="inv-workshop-mod-name">${modification.icon} ${escapeHtml(modification.name)} ${modification.level}/${modification.max_level}</span>
+                <span class="inv-workshop-mod-name">${iconHtml(null, modification.icon)} ${escapeHtml(modification.name)} ${modification.level}/${modification.max_level}</span>
                 <button class="ws-btn ws-btn-mod" data-ws-modify="${entry.slot}"
                         data-ws-modification="${escapeAttribute(modification.key)}" ${maxed ? 'disabled' : ''}>
                     ${maxed ? 'максимум' : `+1 · 🪙 ${formatNumber(cost.coins)}`}
@@ -4447,7 +4494,7 @@ function renderWorkshopSlot(entry, data) {
     return `
         <div class="inv-workshop-slot">
             <div class="inv-workshop-head">
-                <span class="inv-workshop-name">${item.icon || '📦'} ${escapeHtml(item.name)}${item.upgrade_level ? ` +${item.upgrade_level}` : ''}</span>
+                <span class="inv-workshop-name">${iconHtml(item.name, item.icon)} ${escapeHtml(item.name)}${item.upgrade_level ? ` +${item.upgrade_level}` : ''}</span>
                 <span class="inv-workshop-dur ${durability.is_broken ? 'is-broken' : ''}">
                     ${durability.is_broken ? '⚠️ сломано' : `🔧 ${durability.current}/${durability.max}`}
                 </span>
@@ -4565,8 +4612,8 @@ async function upgradeEquipmentSlot(slot) {
 
 /**
  * Индикатор вместимости инвентаря.
- * Лимит берём из ответа сервера, а при его отсутствии — из локальной константы,
- * синхронизированной с MAX_INVENTORY_SLOTS в routes/game/world.js.
+ * Лимит берём из общей константы INVENTORY_MAX_SLOTS из shared/equipment.js,
+ * которая синхронизирована с серверным значением.
  */
 function renderInventoryCapacity() {
     const el = document.getElementById('inventory-capacity');
@@ -4728,7 +4775,7 @@ function showItemDetailCard(item) {
     const isEquippable = isEquippableInventoryItem(item);
     const sellPrice = Number(item.sell_price || 0);
 
-    title.textContent = `${item.icon || '📦'} ${name}`;
+    title.innerHTML = `${iconHtml(item.name, item.icon)} ${escapeHtml(name)}`;
 
     // Статы через общий рендерер — тот же, что показывается в магазине.
     // Он возвращает HTML со <br>, поэтому вставляем как есть.
@@ -4888,7 +4935,7 @@ function renderInventory(items) {
 
         slot.dataset.index = item.index;
         slot.innerHTML = `
-            <span class="item-icon">${escapeHtml(item.icon || '📦')}</span>
+            <span class="item-icon">${iconHtml(item.name, item.icon)}</span>
             <span class="item-name">${escapeHtml(name)}</span>
             ${primaryStat || ''}
             ${amount > 1 ? `<span class="item-count">${amount}</span>` : ''}
@@ -5266,9 +5313,8 @@ function switchBossesTab(tabName = 'solo') {
     }
 }
 
-// Обработчик переключателя режима боссов (перенесён в startGame)
-// document.getElementById('boss-mode-switch')?.addEventListener('change', ...)
-// теперь вызывается внутри startGame() после generateScreens()
+// Обработчик переключателя режима боссов регистрируется в startGame()
+// после generateScreens() — см. блок с id=boss-mode-switch в startGame.
 
 /**
  * Отрисовка боссов с новой механикой "Война с боссами"
@@ -5304,7 +5350,7 @@ function renderBosses(bosses) {
         item.className = `boss-item ${isUnlocked ? '' : 'locked'} ${isUnlocked ? 'available' : 'unavailable'}`;
 
         item.innerHTML = `
-            <div class="boss-icon">${escapeHtml(boss.icon)}</div>
+            <div class="boss-icon">${iconHtml(boss.name, boss.icon, 'icon-img boss-list-icon')}</div>
             <div class="boss-info">
                 <div class="boss-name">${escapeHtml(boss.name)}</div>
                 <div class="boss-desc">${escapeHtml(boss.description || '')}</div>
@@ -5425,10 +5471,10 @@ async function renderPlayerEquipmentInBossFight() {
             
             slotEl.classList.toggle('broken', isBroken);
             
-            // Иконка предмета
-            const itemIcon = item.icon || (slotIcons[slot] || '📦');
+            // Иконка предмета. innerHTML вместо textContent: иконки теперь
+            // PNG из манифеста (iconHtml сам падает на эмодзи без маппинга).
             if (itemEl) {
-                itemEl.textContent = itemIcon;
+                itemEl.innerHTML = iconHtml(item.name, item.icon || slotIcons[slot]);
                 itemEl.title = `${item.name}${item.upgrade_level ? ` +${item.upgrade_level}` : ''}`;
             }
             
@@ -5449,7 +5495,7 @@ async function renderPlayerEquipmentInBossFight() {
         } else {
             slotEl.classList.add('empty');
             slotEl.classList.remove('broken');
-            if (itemEl) itemEl.textContent = slotIcons[slot] || '📦';
+            if (itemEl) itemEl.innerHTML = iconHtml(null, slotIcons[slot]);
             if (durabilityEl) durabilityEl.innerHTML = '';
         }
     }
@@ -5497,7 +5543,9 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
     
     if (bossName) bossName.textContent = boss.name || 'Неизвестный босс';
     if (bossIcon) {
-        bossIcon.textContent = boss.icon || '👹';
+        // innerHTML вместо textContent: иконка босса теперь PNG-картинка
+        // (iconHtml вернёт <img> или эмодзи-fallback).
+        bossIcon.innerHTML = iconHtml(boss.name, boss.icon, 'icon-img boss-fight-icon');
         bossIcon.classList.remove('damage-shake');
     }
 
@@ -5637,6 +5685,9 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
 
 
 async function startSoloBossFight(bossId) {
+    // Блокировка от двойного тапа: без неё две кнопки подряд
+    // отправляли два POST /bosses/start.
+    if (!lockAction('startBossFight')) return;
     try {
         const result = await apiRequest('/api/game/bosses/start', {
             method: 'POST',
@@ -5653,10 +5704,14 @@ async function startSoloBossFight(bossId) {
     } catch (error) {
         console.error('Start solo boss fight error:', error);
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать бой с боссом'));
+    } finally {
+        unlockAction('startBossFight');
     }
 }
 
 async function startMassBossFight(bossId) {
+    // Та же блокировка двойного тапа для старта рейда
+    if (!lockAction('startMassBossFight')) return;
     try {
         const result = await apiRequest('/api/game/bosses/raid/start', {
             method: 'POST',
@@ -5672,6 +5727,8 @@ async function startMassBossFight(bossId) {
     } catch (error) {
         console.error('Start mass boss fight error:', error);
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось начать массовый бой'));
+    } finally {
+        unlockAction('startMassBossFight');
     }
 }
 
@@ -5860,7 +5917,7 @@ function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound
     //
     // ЗДЕСЬ БЫЛ ГЛАВНЫЙ БАГ «бой не завершается»: раньше перед setTimeout
     // вручную ставилось actionLocks.loadBosses = true, но loadBosses()
-    // БЕРЁТ ЭТУ ЖЕ блокировку (game.js:4935) и при true мгновенно выходит:
+    // БЕРЁТ ЭТУ ЖЕ блокировку (game.js:5132) и при true мгновенно выходит:
     //     if (!lockAction('loadBosses')) return;   // <- true -> return
     // Из-за этого экран боя НИКОГДА не переключался на список: игрок оставался
     // на арене с убитым боссом и живой кнопкой «Атаковать», а поверх висело
@@ -5915,9 +5972,7 @@ async function attackBoss() {
         if (result.success) {
             // Показываем анимацию урона.
             // Урон передаём: без него showDamageAnimation трясёт иконку,
-            // но не показывает всплывающее «−24». В рейдовой атаке
-            // (attackRaid) число показывается, здесь почему-то нет —
-            // из-за этого в соло не видно, сколько именно снято.
+            // но не показывает всплывающее «−24».
             showDamageAnimation(Number(result.damage_dealt) || 0);
             
             if (log) {
@@ -6603,19 +6658,31 @@ function openModalElement(modal) {
     modal.style.display = 'flex';
     modal.style.animation = 'fade-in-up 0.3s ease-out';
 
-    // Закрытие по клику вне окна и по крестику
+    // Закрытие по клику вне окна и по крестику.
+    //
+    // ЗДЕСЬ БЫЛА УТЕЧКА: каждое открытие вешало {once:true} на вечные
+    // #modal/#modal-close. Крестик/оверлей гасили свой слушатель, а программный
+    // hideModal() — нет: слушатели копились за сессию без границ.
+    // Теперь именованные обработчики + remove перед add:
+    // накопления нет.
     const modalClose = document.getElementById('modal-close');
     if (modalClose) {
-        // Удаляем старый обработчик если есть
-        modalClose.onclick = null;
-        modalClose.addEventListener('click', hideModal, { once: true });
+        modalClose.removeEventListener('click', hideModal);
+        modalClose.addEventListener('click', hideModal);
     }
-    
-    // Удаляем старый обработчик клика по оверлею
-    modal.onclick = null;
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) hideModal();
-    }, { once: true });
+
+    modal.removeEventListener('click', onModalOverlayClick);
+    modal.addEventListener('click', onModalOverlayClick);
+}
+
+/**
+ * Клик по оверлею модального окна: закрыть, если клик был по самому фону.
+ *
+ * Именована (а не стрелочная в openModalElement), чтобы
+ * removeEventListener мог её снять при следующем открытии.
+ */
+function onModalOverlayClick(e) {
+    if (e.target === e.currentTarget) hideModal();
 }
 
 /**
@@ -7022,7 +7089,7 @@ function selectMapLocation(loc) {
     lastSelectedMapLocationId = locationId;
 
     const nameEl = document.querySelector('.map-location-name');
-    if (nameEl) nameEl.textContent = `${loc.icon || ''} ${loc.name || ''}`.trim();
+    if (nameEl) nameEl.innerHTML = `${iconHtml(loc.name, loc.icon, 'icon-img location-icon-img')} ${escapeHtml(loc.name || '')}`.trim();
 
     const infoEl = document.getElementById('map-location-info');
     const travelBtn = document.getElementById('map-travel-btn');
@@ -7234,7 +7301,7 @@ function renderRaids(raids) {
 
         return `
             <div class="raid-item" data-raid-id="${escapeAttribute(raid.id)}" data-boss-id="${escapeAttribute(raid.boss?.id)}">
-                <div class="raid-boss-icon">${escapeHtml(raid.boss?.icon || '👾')}</div>
+                <div class="raid-boss-icon">${iconHtml(raid.boss?.name, raid.boss?.icon, 'icon-img raid-boss-icon-img')}</div>
                 <div class="raid-info">
                     <div class="raid-boss-name">${escapeHtml(raid.boss?.name || 'Босс')}</div>
                     <div class="raid-hp-bar">
@@ -7778,7 +7845,7 @@ function renderAchievementsList(achievements) {
 
         html += `
             <div class="achievement-card ${ach.completed ? 'completed' : ''} ${rarityClass}">
-                <div class="icon">${escapeHtml(ach.icon || '🏆')}</div>
+                <div class="icon">${iconHtml(ach.name, ach.icon)}</div>
                 <div class="info">
                     <div class="name">${escapeHtml(ach.name || '')}</div>
                     <div class="description">${escapeHtml(ach.description || '')}</div>
@@ -7876,8 +7943,8 @@ async function loadPVPGamePlayers() {
         list.innerHTML = payload.players.map(player => {
             // Имя соперника — это данные, которые игрок контролирует сам
             // (Telegram username/first_name). В атрибуте data-target-name
-            // нужен escapeAttribute: escapeHtml не экранирует кавычки,
-            // и значение вида x" onclick="... разорвало бы разметку.
+            // для data-target-name берём escapeHtml: он экранирует кавычки,
+            // поэтому значение вида x" onclick="... не разорвёт атрибут.
             const safeName = escapeHtml(player.username || 'Игрок');
             return `
             <div class="pvp-player-item">
@@ -9338,7 +9405,7 @@ function renderShopCategory(category) {
         
         return `
             <div class="shop-item" data-item-id="${escapeAttribute(item.id)}" data-category="${escapeAttribute(category)}">
-                <div class="shop-item-icon">${escapeHtml(item.icon)}</div>
+                <div class="shop-item-icon">${iconHtml(item.name, item.icon)}</div>
                 <div class="shop-item-info">
                     <div class="shop-item-name">${escapeHtml(item.name)}</div>
                     <div class="shop-item-desc">${escapeHtml(item.desc)}</div>
@@ -9584,7 +9651,7 @@ function renderWheelSectors(palette) {
 
 /**
  * Открытие колеса удачи.
- * Данные подгружает onScreenOpen('wheel') — здесь только переход.
+ * Данные подгружает onScreenOpen('trade') — здесь только переход.
  */
 /**
  * Активный под-таб «Торговли». Держим вне DOM, потому что onScreenOpen
@@ -9778,7 +9845,9 @@ async function spinWheelFree() {
     if (paidBtn) paidBtn.disabled = true;
 
     try {
-        const response = await gameApi.post('/game/wheel/spin', { is_paid: false });
+        const playerId = gameState.player?.id;
+        const wheelIdempotencyKey = stableMutationKey(`wheel-free-${playerId}`, IDEMPOTENCY_WINDOW_MS);
+        const response = await gameApi.post('/game/wheel/spin', { is_paid: false }, { idempotencyKey: wheelIdempotencyKey });
         
         if (!response.success) {
             if (response.code === 'COOLDOWN' && response.next_free_spin) {
@@ -9828,7 +9897,9 @@ async function spinWheelPaid() {
     if (paidBtn) paidBtn.disabled = true;
     
     try {
-        const response = await gameApi.post('/game/wheel/spin', { is_paid: true });
+        const playerId = gameState.player?.id;
+        const wheelIdempotencyKey = stableMutationKey(`wheel-paid-${playerId}`, IDEMPOTENCY_WINDOW_MS);
+        const response = await gameApi.post('/game/wheel/spin', { is_paid: true }, { idempotencyKey: wheelIdempotencyKey });
         
         if (!response.success) {
             showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
@@ -9995,13 +10066,12 @@ function renderCoinShop() {
     
     container.innerHTML = filtered.map(item => {
         const escapedRarity = escapeHtml(item.rarity || 'common');
-        const escapedIcon = escapeHtml(item.icon || '📦');
         const safeItemId = parseInt(item.id) || 0;
         const prepTag = item.stats?.radiation_cure || item.stats?.infection_cure || item.stats?.radiation_resist || item.stats?.infection_resist
             ? '<div class="shop-item-role">Подготовка к опасной зоне</div>'
             : '';        return `
             <div class="shop-item-card ${escapedRarity}" data-item-id="${safeItemId}">
-                <div class="shop-item-icon">${escapedIcon}</div>
+                <div class="shop-item-icon">${iconHtml(item.name, item.icon)}</div>
                 <div class="shop-item-info">
                     <div class="shop-item-name">${escapeHtml(item.name)}</div>
                     <div class="shop-item-desc">${escapeHtml(item.description || '')}</div>
@@ -11272,7 +11342,7 @@ function showLootAnimation(item) {
 
     const iconEl = document.createElement('div');
     iconEl.className = 'loot-icon';
-    iconEl.textContent = item.icon || '📦';
+    iconEl.innerHTML = iconHtml(item.name, item.icon, 'icon-img loot-icon-img');
     lootEl.appendChild(iconEl);
 
     const nameEl = document.createElement('div');

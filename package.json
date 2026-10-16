@@ -22,7 +22,9 @@
     "test:unit": "npm run -ws -- test:unit",
     "test:integration": "npm run -ws -- test:integration",
     "typecheck": "npm run -ws -- typecheck",
-    "clean": "npm run -ws -- clean"
+    "clean": "npm run -ws -- clean",
+    "icons": "node scripts/icon-gen",
+    "icons:verify": "node scripts/icon-gen/verify.js"
   },
   "dependencies": {
     "express-async-errors": "^3.1.1",

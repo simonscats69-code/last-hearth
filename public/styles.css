@@ -5572,3 +5572,75 @@ html, body {
     font-weight: 700;
     color: var(--text-primary);
 }
+
+/* ===========================================================================
+   PNG-иконки (public/icons, генератор scripts/icon-gen).
+
+   Правила ниже — единственное место, где задаётся размер картинок-иконок.
+   Базовый .icon-img использует em-единицы, поэтому наследует font-size
+   контекста: везде, где раньше стоял эмодзи нужного размера, PNG
+   автоматически подхватывает тот же кегль без правки каждого селектора.
+   =========================================================================== */
+.icon-img {
+    display: inline-block;
+    width: 1.2em;
+    height: 1.2em;
+    object-fit: contain;
+    vertical-align: -0.25em;
+    border-radius: 0.22em;      /* скругление повторяет плашку иконки */
+    image-rendering: auto;
+    /* никакого ресайза-кракозябры на ретине: PNG рисуется 64×64, а
+       браузер сам решает, что лучше — smooth или pixelated */
+}
+
+/* Крупные иконки боссов: карточка боя и список боссов. */
+.boss-fight-icon,
+.boss-card-icon {
+    width: 1em;
+    height: 1em;
+    border-radius: 0.18em;
+    vertical-align: middle;
+}
+
+.boss-list-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+}
+
+/* Лут-анимация: картинка вместо эмодзи, тот же визуальный вес. */
+.loot-icon-img {
+    width: 1em;
+    height: 1em;
+    border-radius: 0.2em;
+}
+
+/* Слот экипировки в бою: иконка ровно в ячейке. */
+.slot-item .icon-img {
+    width: 1.35em;
+    height: 1.35em;
+}
+
+/* Карточка ачивки: PNG в кружке-иконке. */
+.achievement-card .icon .icon-img {
+    width: 1.15em;
+    height: 1.15em;
+    border-radius: 0.25em;
+}
+
+/* Иконка локации на карте/в заголовке. */
+.location-icon-img {
+    width: 1.1em;
+    height: 1.1em;
+    vertical-align: -0.15em;
+    border-radius: 0.2em;
+}
+
+/* Иконка босса в рейде. */
+.raid-boss-icon-img {
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.1em;
+    border-radius: 0.18em;
+}
+

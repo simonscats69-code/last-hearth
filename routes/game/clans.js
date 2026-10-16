@@ -12,6 +12,13 @@
  */
 
 const express = require('express');
+/**
+ * Максимальная сумма одного пожертвования в казну клана (монет).
+ * Константа вместо «голого» 1000000 в проверке: лимит продублирован
+ * в сообщении об ошибке, и расхождение не заметить с первого взгляда.
+ */
+const MAX_DONATION_COINS = 1000000;
+
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, wrap, logPlayerAction, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
@@ -619,13 +626,15 @@ router.post('/clan/donate', wrap(async (req, res) => {
     }
     
     // Валидация суммы
-    const donation = parseInt(amount);
-    if (!donation || isNaN(donation) || donation <= 0) {
+    // Number.isSafeInteger вместо parseInt: parseInt('10000abc') давал
+    // 10000 (частичный разбор проходил проверку), parseInt('1e7') давал 1.
+    const donation = Number(amount);
+    if (!Number.isSafeInteger(donation) || donation <= 0) {
         return fail(res, 'Неверная сумма пожертвования', 'INVALID_AMOUNT');
     }
     
-    if (donation > 1000000) {
-        return fail(res, 'Слишком большая сумма (макс. 1,000,000)', 'AMOUNT_TOO_BIG');
+    if (donation > MAX_DONATION_COINS) {
+        return fail(res, `Слишком большая сумма (макс. ${MAX_DONATION_COINS.toLocaleString('ru-RU')})`, 'AMOUNT_TOO_BIG');
     }
     
     const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {

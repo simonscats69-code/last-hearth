@@ -14,7 +14,7 @@ const router = express.Router();
 // маршрутах с записью: см. пояснение в POST /bosses/start. withClient()
 // для чтений, которым транзакция не нужна — удобнее ручного pool.connect().
 const { transaction, withClient, isConnectionError } = require('../../db/database');
-const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger, unauthorized } = require('../../utils/serverApi');
+const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger, unauthorized, logPlayerAction } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -581,11 +581,23 @@ async function loadItemTemplates(client, rewardItems) {
     return templates;
 }
 
-async function grantRewardItems(client, playerId, rewardItems, multiplier = 1) {
+/**
+ * Выдать предметы-награды игроку.
+ *
+ * @param {object} client - клиент транзакции
+ * @param {number} playerId - кому
+ * @param {Array} rewardItems - наградные предметы ({item_id|name} + quantity)
+ * @param {number} multiplier - множитель количества
+ * @param {Array|null} preloadedTemplates - заранее загруженные шаблоны.
+ *   Нужны при пакетной выдаче (рейд): reward_items у рейда одни на всех,
+ *   а loadItemTemplates делает запрос к items — на каждого участника
+ *   это был N+1. Вызывающая сторона грузит шаблоны один раз и передаёт.
+ */
+async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, preloadedTemplates = null) {
     const normalizedItems = normalizeRewardItems(rewardItems);
     if (!normalizedItems.length || multiplier <= 0) return [];
 
-    const templates = await loadItemTemplates(client, normalizedItems);
+    const templates = preloadedTemplates || await loadItemTemplates(client, normalizedItems);
     if (!templates.length) return [];
 
     const playerResult = await client.query('SELECT inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
@@ -1231,11 +1243,15 @@ router.get('/', async (req, res) => {
 });
 
 async function getPendingRaidRewards(client, playerId) {
+    // FOR UPDATE:claim читает claimed=false и помечает их в той же
+    // транзакции. Без блокировки два параллельных запроса читают один
+    // набор pending и начисляют награду дважды (двойной тап/ретрай).
     const result = await client.query(
         `SELECT id, raid_id, boss_id, coins, experience, items, key_item_name, created_at
            FROM raid_rewards
           WHERE player_id = $1 AND claimed = false
-          ORDER BY created_at ASC`,
+          ORDER BY created_at ASC
+          FOR UPDATE`,
         [playerId]
     );
     return result.rows.map((row) => ({
@@ -1490,12 +1506,12 @@ router.post('/raid/start', async (req, res) => {
             // оба проходили проверку и упирались в UNIQUE(boss_id, is_active):
             // победитель получал рейд, а проигравший — 500 INTERNAL_ERROR
             // вместо внятной бизнес-ошибки RAID_ALREADY_ACTIVE.
+            const player = await getPlayerBaseState(client, playerId);
+
             await client.query(
                 'SELECT id FROM bosses WHERE id = $1 FOR UPDATE',
                 [bossId]
             );
-
-            const player = await getPlayerBaseState(client, playerId);
             if (!player || player.health <= 0) {
                 return {
                     status: 400,
@@ -1998,6 +2014,15 @@ router.post('/raid/:id/attack', async (req, res) => {
 
                 let leaderKey = null;
 
+                // Батч-загрузка шаблонов наград ДО цикла по участникам:
+                // раньше grantRewardItems() делал SELECT ... FROM items для
+                // каждого участника (N+1). Набор reward_items у рейда один,
+                // multiplier применяется к количеству позже.
+                const raidRewardTemplates = await loadItemTemplates(
+                    client,
+                    normalizeRewardItems(raid.reward_items)
+                );
+
                 for (const entry of shares) {
                     const participantId = entry.participantId;
                     const participantBuffs = getActiveBuffs(entry.buffs);
@@ -2019,7 +2044,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         await playerHelper.addExperience(participantId, experienceReward, client);
                     }
 
-                    const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier);
+                    const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
                     const isLeader = participantId === leaderIdRaw;
 
                     if (isLeader) {

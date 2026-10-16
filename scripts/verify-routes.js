@@ -107,6 +107,11 @@ function main() {
         console.log(`В снимке: ${before.length}, сейчас: ${after.length}`);
         console.log(lost.length ? `ПОТЕРЯНО:\n  ${lost.map((r) => `${r.method} ${r.paths}`).join('\n  ')}` : 'ПОТЕРЯНО: нет');
         console.log(added.length ? `ПОЯВИЛОСЬ:\n  ${added.map((r) => `${r.method} ${r.paths}`).join('\n  ')}` : 'ПОЯВИЛОСЬ: нет');
+        if (lost.length > 0) {
+            // Потерянный эндпоинт раньше только печатался: прогон оставался
+            // зелёным. Код 1 роняет общий прогон.
+            process.exitCode = 1;
+        }
         return;
     }
 

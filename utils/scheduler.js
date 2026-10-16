@@ -849,7 +849,49 @@ async function resetDailyTasks() {
  * Запуск планировщика
  * Запускает все задачи с задержкой для избежания пиковой нагрузки
  */
+/**
+ * Сколько минут задача считается застрявшей.
+ *
+ * Самая долгая задача (регенерация энергии по батчам) укладывается
+ * в единицы минут. Полчаса — заведомо выше любого честного выполнения,
+ * но ниже интервала, после которого вечное отключение планировщика
+ * заметят игроки (энергия перестаёт регенерироваться).
+ */
+const STALE_LOCK_MINUTES = 30;
+
+/**
+ * Сбросить флаги is_running у задач, которые не отмечались дольше
+ * STALE_LOCK_MINUTES. Нужно после kill -9 / OOM / падения контейнера
+ * посреди задачи: startScheduler без этого навсегда выходит по
+ * проверке «уже запущен», и фоновые задачи не идут вообще.
+ *
+ * @returns {Promise<string[]>} имена сброшенных задач
+ */
+async function resetStaleTaskLocks() {
+    try {
+        const result = await query(
+            `UPDATE scheduler_state
+                SET is_running = false, updated_at = NOW()
+              WHERE is_running = true
+                AND (last_run_at IS NULL OR last_run_at < NOW() - ($1 || ' minutes')::interval)
+              RETURNING task_name`,
+            [String(STALE_LOCK_MINUTES)]
+        );
+        for (const row of result.rows) {
+            logger.warn(`[scheduler] сброшен застрявший лок задачи ${row.task_name} (не отмечалась ${STALE_LOCK_MINUTES}+ минут)`);
+        }
+        return result.rows.map((r) => r.task_name);
+    } catch (err) {
+        logger.error('[scheduler] не удалось сбросить застрявшие локи:', describeError(err));
+        return [];
+    }
+}
+
 async function startScheduler() {
+    // Запуск после падения: застрявшие в БД локи сбрасываем, иначе
+    // startScheduler навсегда уйдёт по ветке «Планировщик уже запущен».
+    await resetStaleTaskLocks();
+
     // Проверяем, не запущены ли уже задачи
     const energyRunning = await isTaskRunning('energy');
     const dailyRunning = await isTaskRunning('dailyActivity');

@@ -1011,9 +1011,10 @@ async function claimAchievementReward(playerId, achievementId) {
 
 /**
  * Инициализировать таблицу достижений.
- * P2-12: единый источник теперь schema.js (4 базовых ачивки).
- * Старый набор из 19 записей больше не вставляется, чтобы не дублировать
- * и не путать UI. Функция оставлена для обратной совместимости вызовов.
+ * P2-12: единый источник достижений — seed в schema.js (22 записи:
+ * survival, bosses, pvp, exploration, social, collection, daily).
+ * Функция сама ничего не вставляет, только считает записи и предупреждает,
+ * если таблица пуста. Оставлена для обратной совместимости вызовов.
  */
 async function initAchievementsTable() {
     const countResult = await query('SELECT COUNT(*) as cnt FROM achievements');

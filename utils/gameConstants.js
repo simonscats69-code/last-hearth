@@ -18,6 +18,9 @@ const { RISK_PREPARED_MAX_SCORE, getRiskTierByScore } = sharedEquipment;
 // Формула опыта (getTotalExpForLevel) читается только клиентом —
 // на сервере никогда не понадобилась.
 const { getExpForLevel } = sharedEquipment;
+// Порог урона радиацией читается из общего клиент-серверного модуля:
+// одна константа на весь проект, а не копия в каждом роуте.
+const { CONTAMINATION_DAMAGE_FROM_LEVEL } = sharedEquipment;
 
 // Шанс дропа — тоже из общего файла.
 const { calculateDropChance } = sharedEquipment;
@@ -287,6 +290,72 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
  * таблицы (LOOT_TABLES) и обёртки над public/shared/equipment.js остаются
  * здесь как реализация.
  */
+/**
+ * Разбор JSON без исключений.
+ *
+ * Локальная копия, а не безопасный импорт из utils/serverApi.js: тот тянет
+ * db/database, а этот модуль читает ещё и браузер — цикл загрузки.
+ *
+ * @param {string} raw - строка для разбора
+ * @param {*} fallback - значение при неудаче
+ */
+function safeParseJson(raw, fallback) {
+    if (typeof raw !== 'string') return fallback;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return fallback;
+    }
+}
+
+/**
+ * Нормализовать уровень радиации из значения players.radiation.
+ *
+ * В БД встречаются три формата хранения одного и того же: JSONB-объект
+ * {level, expires_at}, число (миграции 003+ оставили INTEGER в части строк)
+ * и строка-JSON. Один парсер на весь проект: status.js и debuffs.js
+ * держали по своей копии этой логики, копии разъезжались.
+ *
+ * @param {*} raw - players.radiation в любом из форматов
+ * @returns {number} уровень радиации (0 если не распознано)
+ */
+function normalizeRadiationLevel(raw) {
+    if (typeof raw === 'number') return Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+    if (typeof raw === 'object' && raw !== null) {
+        const level = Number(raw.level || 0);
+        return Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+    }
+    if (typeof raw === 'string') {
+        const parsed = safeParseJson(raw, 0);
+        if (typeof parsed === 'object' && parsed !== null) {
+            const level = Number(parsed.level || 0);
+            return Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+        }
+        const level = Number(parseInt(parsed, 10) || 0);
+        return Number.isFinite(level) ? Math.max(0, level) : 0;
+    }
+    return 0;
+}
+
+/**
+ * Урон радиации за проверку состояния.
+ *
+ * Формула одна на весь проект: раньше status.js (/check) и debuffs.js
+ * (calculateDebuffDamage) считали её каждый своим способом — при правке
+ * порога в одном месте другое молча рассинхронизировалось бы.
+ *
+ * @param {number} level - уровень радиации
+ * @param {number} damagePerLevel - DEBUFF_CONFIG.radiation.damagePerLevel
+ * @returns {number} урон (0 если уровень ниже порога)
+ */
+function calculateRadiationDamage(level, damagePerLevel) {
+    const levelNum = Number(level);
+    const perLevelNum = Number(damagePerLevel);
+    if (!Number.isFinite(levelNum) || !Number.isFinite(perLevelNum)) return 0;
+    if (!(levelNum >= CONTAMINATION_DAMAGE_FROM_LEVEL)) return 0;
+    return Math.max(0, (levelNum - (CONTAMINATION_DAMAGE_FROM_LEVEL - 1)) * perLevelNum);
+}
+
 module.exports = {
     // Дебаффы — читают debuffs.js, status.js, world.js
     DEBUFF_TYPES,
@@ -299,6 +368,10 @@ module.exports = {
 
     // Опыт — читает utils/serverApi.js (PlayerHelper.addExperience)
     getExpForLevel,
+
+    // Радиация — читают routes/game/status.js (/check) и debuffs.js
+    normalizeRadiationLevel,
+    calculateRadiationDamage,
 
     // Лут — читает routes/game/world.js
     calculateDropChance,
