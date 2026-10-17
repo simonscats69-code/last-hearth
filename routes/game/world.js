@@ -681,9 +681,10 @@ router.post('/move', async (req, res) => {
         // Как и в /search: тело транзакции возвращает результат, ответ
         // уходит после COMMIT, ROLLBACK делает transaction().
         const outcome = await transaction(async (client) => {
-            // SELECT с явным списком полей вместо SELECT *
+            // SELECT с явным списком полей вместо SELECT *. energy нужен для
+            // проверки стоимости перемещения (1 единица).
             const playerResult = await client.query(`
-                SELECT id, level, current_location_id FROM players WHERE id = $1 FOR UPDATE
+                SELECT id, level, current_location_id, energy FROM players WHERE id = $1 FOR UPDATE
             `, [playerId]);
 
             const player = playerResult.rows[0];
@@ -702,7 +703,7 @@ router.post('/move', async (req, res) => {
 
             const targetLocation = await client.query(`
                 SELECT id, name, radiation, description, min_level, danger_level, icon
-                FROM locations WHERE id = $1 FOR UPDATE
+                FROM locations WHERE id = $1
             `, [locationIdNum]);
 
             if (targetLocation.rows.length === 0) {
@@ -733,19 +734,14 @@ router.post('/move', async (req, res) => {
             }
 
             // Перемещение стоит 1 энергии
-            const energyResult = await client.query(
-                `SELECT energy FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            const energyRow = energyResult.rows[0];
-            if (!energyRow || Number(energyRow.energy || 0) < 1) {
+            if (Number(player.energy || 0) < 1) {
                 return {
                     status: 200,
                     body: {
                         success: false,
                         error: 'Недостаточно энергии для перемещения',
                         code: 'INSUFFICIENT_ENERGY',
-                        energy: Number(energyRow?.energy || 0)
+                        energy: Number(player.energy || 0)
                     }
                 };
             }
