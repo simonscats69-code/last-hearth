@@ -49,7 +49,7 @@ async function getPVPCooldown(playerId) {
  */
 async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = 'После PvP боя', client = null) {
     // Валидация minutes (диапазон 1-10080)
-    const validatedMinutes = parseInt(minutes);
+    const validatedMinutes = parseInt(minutes, 10);
     if (!Number.isInteger(validatedMinutes) || validatedMinutes <= 0 || validatedMinutes > 10080) {
         // Явный код, а не текст «minutes»: handleError из serverApi читает
         // code/statusCode из объекта. Раньше здесь был обычный Error, и
