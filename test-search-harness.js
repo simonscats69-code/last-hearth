@@ -103,7 +103,14 @@ const debuffsMock = { DebuffAPI: { apply: async () => {}, cure: async () => ({})
 // equipmentRules (namespace с методами) приходит из helpers.
 const equipmentMock = Object.assign(
     function calculateCoinDrop() { return { amount: 42 }; },
-    { MAX_INVENTORY_SLOTS: 100 }
+    {
+        MAX_INVENTORY_SLOTS: 100,
+        SEARCH_BASE_XP: 6,
+        SEARCH_RARITY_XP: { common: 0, uncommon: 3, rare: 7, epic: 11, legendary: 15 },
+        LOCATION_XP_BONUS_PER_ID: 0.15,
+        SEARCH_COMBO_EVERY: 10,
+        SEARCH_COMBO_MULTIPLIER: 1.5
+    }
 );
 equipmentMock.calculateCoinDrop = () => ({ amount: 42 });
 
@@ -136,7 +143,7 @@ const basePlayer = () => ({
     current_location_id: 3, luck: 5, total_actions: 0, buffs: {},
     inventory: [], equipment: {}, radiation: { level: 0 }
 });
-const baseLocation = () => ({ id: 3, name: 'Тест', radiation: 0, infection: 0 });
+const baseLocation = () => ({ id: 3, name: 'Тест', radiation: 0 });
 
 const makeReqRes = (player) => ({
     req: { player, body: {}, headers: {} },

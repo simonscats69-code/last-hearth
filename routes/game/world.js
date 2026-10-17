@@ -15,7 +15,8 @@ const {
     calculateDropChance,
     rollItemRarity,
     calculateDebuffModifiers,
-    calculateLocationRiskProfile
+    calculateLocationRiskProfile,
+    calculateRadiationDamage
 } = require('../../utils/gameConstants');
 const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
 
@@ -33,44 +34,26 @@ const crypto = require('crypto');
 // фигурировал дважды (отдельно для calculateCoinDrop, отдельно для
 // MAX_INVENTORY_SLOTS). Node кэширует модуль, поэтому это было безвредно,
 // но выглядело как два разных источника одних и тех же правил.
-// equipmentRules (объект с методами) берётся из helpers — это он и есть
-// «файл правил» в виде namespace-объекта; из самого equipment.js
-// экспортируются отдельные функции, а не объект equipmentRules.
 const equipmentShared = require('../../public/shared/equipment.js');
-const { calculateCoinDrop, MAX_INVENTORY_SLOTS } = equipmentShared;
+const {
+    calculateCoinDrop,
+    MAX_INVENTORY_SLOTS,
+    SEARCH_BASE_XP,
+    SEARCH_RARITY_XP,
+    LOCATION_XP_BONUS_PER_ID,
+    SEARCH_COMBO_EVERY,
+    SEARCH_COMBO_MULTIPLIER
+} = equipmentShared;
 
 // =============================================================================
 // УТИЛИТЫ
 // =============================================================================
 
-// --- Баланс опыта за поиск (были «магические числа» прямо в расчёте) -------
-
-/** Базовый опыт за находку до множителей локации, комбо и риска. */
-const SEARCH_BASE_XP = 6;
-
-/**
- * Бонус опыта по редкости.
- * common не даёт прибавки — иначе ранние локации качались бы слишком быстро.
- */
-const SEARCH_RARITY_XP = {
-    common: 0,
-    uncommon: 3,
-    rare: 7,
-    epic: 11,
-    legendary: 15
-};
-
-/** Прирост бонуса локации за каждый id; локация 1 — базовая. */
-const LOCATION_XP_BONUS_PER_ID = 0.15;
-
-/** Каждый N-й поиск даёт комбо-бонус. */
-const SEARCH_COMBO_EVERY = 10;
-
-/** Множитель комбо на юбилейном действии. */
-const SEARCH_COMBO_MULTIPLIER = 1.5;
+// --- Баланс опыта за поиск берётся из equipment.js (единый источник правды) --
 
 function validateLocationId(locationId) {
-    return Number.isInteger(locationId) && locationId > 0;
+    const num = Number(locationId);
+    return Number.isSafeInteger(num) && num > 0;
 }
 
 async function getRandomLootItem(client, rarity, locationId) {
@@ -178,16 +161,16 @@ async function handleLocationsList(req, res) {
     try {
         const player = req.player;
         
-        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
-        const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+        const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
         
         const countResult = await query(`
             SELECT COUNT(*) as total FROM locations
         `);
-        const totalLocations = parseInt(countResult.rows[0].total);
+        const totalLocations = parseInt(countResult.rows[0].total, 10);
         
         const locations = await queryAll(`
-            SELECT id, name, icon, color, radiation, infection, danger_level,
+            SELECT id, name, icon, color, radiation, danger_level,
                    min_level as required_level, description
             FROM locations
             ORDER BY min_level ASC
@@ -200,7 +183,6 @@ async function handleLocationsList(req, res) {
             icon: loc.icon,
             color: loc.color,
             radiation: loc.radiation,
-            infection: loc.infection || 0,
             danger_level: loc.danger_level,
             required_level: loc.required_level,
             min_level: loc.required_level,
@@ -317,7 +299,7 @@ router.post('/search', async (req, res) => {
             }
 
             const location = await client.query(`
-                SELECT id, name, radiation, infection FROM locations WHERE id = $1
+                SELECT id, name, radiation FROM locations WHERE id = $1
             `, [updatedPlayer.current_location_id]);
 
             if (location.rows.length === 0) {
@@ -335,11 +317,7 @@ router.post('/search', async (req, res) => {
             const equipment = safeJsonParse(updatedPlayer.equipment, {});
             const riskProfile = calculateLocationRiskProfile(locationData, equipment);
         
-        // Заражение зоной: радиация и инфекция локации складываются в ОДНО
-        // давление (calculateLocationRiskProfile считает общую угрозу).
-        // Раньше это были два независимых блока с двумя разными формулами:
-        // радиация брала riskProfile.radiationPressure, а инфекция
-        // пересчитывала baseInfection от локации на месте.
+        // Заражение зоной считается unified: radiация + любые угрозы зоны.
         let radiationGain = 0;
         const contaminationDefense = riskProfile.contaminationDefense;
         let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
@@ -517,11 +495,10 @@ router.post('/search', async (req, res) => {
 
         if (resultingRadiationLevel >= 10) {
             radiationEffect = 'critical';
-            radiationDamage = 10;
+            radiationDamage = calculateRadiationDamage(resultingRadiationLevel, DEBUFF_CONFIG.radiation.damagePerLevel);
         } else if (resultingRadiationLevel >= 5) {
             radiationEffect = 'danger';
-            // P1-7: используем константу напрямую (без || 2)
-            radiationDamage = DEBUFF_CONFIG.radiation.damagePerLevel;
+            radiationDamage = calculateRadiationDamage(resultingRadiationLevel, DEBUFF_CONFIG.radiation.damagePerLevel);
         } else if (radiationGain > 0) {
             radiationEffect = 'applied';
         }
@@ -626,10 +603,8 @@ router.post('/search', async (req, res) => {
                 },
                 location: {
                     name: locationData.name,
-                    // Оба значения остаются в ответе: это данные мира,
-                    // по ним клиент рисует карточку локации.
-                    radiation: locationData.radiation,
-                    infection: locationData.infection || 0
+                    // Данные мира, по ним клиент рисует карточку локации.
+                    radiation: locationData.radiation
                 },
                 effective_luck: effectiveLuck,
                 risk_adjusted_luck: riskAdjustedLuck,
@@ -684,6 +659,7 @@ router.post('/move', async (req, res) => {
     // занятие соединения из пула на время валидации.
     const { location_id } = req.body;
     const playerId = req.player.id;
+    const locationIdNum = Number(location_id);
 
     if (location_id === undefined || location_id === null) {
         return res.status(400).json({
@@ -693,7 +669,7 @@ router.post('/move', async (req, res) => {
         });
     }
 
-    if (!validateLocationId(location_id)) {
+    if (!validateLocationId(locationIdNum)) {
         return res.status(400).json({
             success: false,
             error: 'ID локации должен быть положительным целым числом',
@@ -725,9 +701,9 @@ router.post('/move', async (req, res) => {
             }
 
             const targetLocation = await client.query(`
-                SELECT id, name, radiation, infection, description, min_level, danger_level, icon
-                FROM locations WHERE id = $1
-            `, [location_id]);
+                SELECT id, name, radiation, description, min_level, danger_level, icon
+                FROM locations WHERE id = $1 FOR UPDATE
+            `, [locationIdNum]);
 
             if (targetLocation.rows.length === 0) {
                 return {
@@ -756,9 +732,29 @@ router.post('/move', async (req, res) => {
                 };
             }
 
+            // Перемещение стоит 1 энергии
+            const energyResult = await client.query(
+                `SELECT energy FROM players WHERE id = $1 FOR UPDATE`,
+                [playerId]
+            );
+            const energyRow = energyResult.rows[0];
+            if (!energyRow || Number(energyRow.energy || 0) < 1) {
+                return {
+                    status: 200,
+                    body: {
+                        success: false,
+                        error: 'Недостаточно энергии для перемещения',
+                        code: 'INSUFFICIENT_ENERGY',
+                        energy: Number(energyRow?.energy || 0)
+                    }
+                };
+            }
+
             await client.query(`
                 UPDATE players
                    SET current_location_id = $1,
+                       updated_at = NOW(),
+                       energy = GREATEST(0, energy - 1)
                        -- locations_visited читает достижение «Путешественник»
                        -- (3 локации) и «Искатель» (7). Хранит объекты {id, name}.
                        locations_visited = (
@@ -768,8 +764,8 @@ router.post('/move', async (req, res) => {
                                  || jsonb_build_array(jsonb_build_object('id', $1, 'name', (SELECT name FROM locations WHERE id = $1)))
                              ) AS visited_obj
                        )
-                 WHERE id = $2
-            `, [location_id, playerId]);
+                  WHERE id = $2
+           `, [locationIdNum, playerId]);
 
             return {
                 status: 200,
@@ -781,7 +777,6 @@ router.post('/move', async (req, res) => {
                             name: locationData.name,
                             icon: locationData.icon || '🏠',
                             radiation: locationData.radiation,
-                            infection: locationData.infection || 0,
                             danger_level: locationData.danger_level || 1,
                             description: locationData.description
                         },
@@ -790,7 +785,7 @@ router.post('/move', async (req, res) => {
                 },
                 log: {
                     fromLocationId: player.current_location_id,
-                    toLocationId: location_id
+                    toLocationId: locationIdNum
                 }
             };
         });

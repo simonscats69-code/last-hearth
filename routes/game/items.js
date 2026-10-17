@@ -166,7 +166,7 @@ router.post('/buy', async (req, res) => {
 
             const player = playerResult.rows[0];
 
-            if (player.coins < totalPrice) {
+            if (Number(player.coins || 0) < totalPrice) {
                 throw {
                     message: `Недостаточно монет. Требуется: ${totalPrice}, у вас: ${player.coins}`,
                     code: 'INSUFFICIENT_COINS',
@@ -295,9 +295,12 @@ router.post(['/use', '/use-item'], async (req, res) => {
                     [JSON.stringify(equipment), JSON.stringify(inventory), playerId]
                 );
 
-                await logPlayerAction(playerId, 'item_equip', { slot, item_id: item.id }, client);
-
-                return { success: true, message: 'Предмет экипирован', item: { id: item.id, name: item.name } };
+                return {
+                    success: true,
+                    message: 'Предмет экипирован',
+                    item: { id: item.id, name: item.name },
+                    log: { action: 'item_equip', playerId, data: { slot, item_id: item.id } }
+                };
             }
 
             // Расходный предмет
@@ -362,18 +365,22 @@ router.post(['/use', '/use-item'], async (req, res) => {
                     [...params, JSON.stringify(updatedInventory)]
                 );
 
-                await logPlayerAction(playerId, 'item_use', { item_id: item.id, item_name: item.name }, client);
-
                 return {
                     success: true,
                     message: 'Предмет использован',
                     item: { id: item.id, name: item.name },
-                    quantity_left: quantityLeft
+                    quantity_left: quantityLeft,
+                    log: { action: 'item_use', playerId, data: { item_id: item.id, item_name: item.name } }
                 };
             }
 
             return { success: false, message: 'Этот предмет нельзя использовать' };
         });
+
+        // Логируем ПОСЛЕ коммита транзакции
+        if (result.log) {
+            await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+        }
 
         res.json(result);
     } catch (error) {

@@ -322,7 +322,7 @@
     const ENERGY_PER_PURCHASE = 25;
 
     /** Цена создания клана. Была захардкожена в 4 местах routes/game/clans.js. */
-    const CLAN_CREATE_COST = 1000;
+    const CLAN_CREATE_COST = 100000;
 
     /** Максимальная длина описания клана. */
     const CLAN_DESCRIPTION_MAX = 200;
@@ -1036,6 +1036,63 @@ function resolveEquipmentSlot(item) {
         return totals;
     }
 
+    /* ================= БАЛАНС ПОИСКА ЛУТА =================
+     *
+     * Опыт за поиск, бонусы редкости, комбо и локации — единый источник
+     * для клиента и сервера (routes/game/world.js).
+     */
+
+    /** Базовый опыт за находку до множителей локации, комбо и риска. */
+    const SEARCH_BASE_XP = 6;
+
+    /** Бонус опыта по редкости. common не даёт прибавки. */
+    const SEARCH_RARITY_XP = Object.freeze({
+        common: 0,
+        uncommon: 3,
+        rare: 7,
+        epic: 11,
+        legendary: 15
+    });
+
+    /** Прирост бонуса локации за каждый id; локация 1 — базовая. */
+    const LOCATION_XP_BONUS_PER_ID = 0.15;
+
+    /** Каждый N-й поиск даёт комбо-бонус. */
+    const SEARCH_COMBO_EVERY = 10;
+
+    /** Множитель комбо на юбилейном действии. */
+    const SEARCH_COMBO_MULTIPLIER = 1.5;
+
+    /* ================= КЛАНЫ ================= */
+
+    /** Максимальная сумма одного пожертвования в казну клана (монет). */
+    const MAX_DONATION_COINS = 1000000;
+
+    /* ================= ЕЖЕДНЕВНЫЙ БОНУС ================= */
+
+    /** Интервал между ежедневными бонусами (24 часа). */
+    const DAILY_BONUS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+    /** Лимит серии ежедневных бонусов. */
+    const DAILY_BONUS_STREAK_LIMIT = 7;
+
+    /** Базовая награда за первый день. */
+    const DAILY_BONUS_BASE_COINS = 25;
+
+    /** Прирост монет за каждый следующий день серии. */
+    const DAILY_BONUS_COINS_PER_DAY = 25;
+
+    /** Каждый N-й день серии даёт звезду. */
+    const DAILY_BONUS_STAR_EVERY = 3;
+
+    /* ================= БОССЫ ================= */
+
+    /** Базовый урон игрока по боссу. */
+    const BOSS_BASE_DAMAGE = 3;
+
+    /** Прибавка урона за каждый уровень игрока при атаке босса. */
+    const BOSS_DAMAGE_PER_LEVEL = 2;
+
     /* ================= МАГАЗИН ЗА ЗВЁЗДЫ =================
      *
      * Каталог покупок жил в двух копиях: BUFFS_CONFIG/COSMETICS_CONFIG на
@@ -1089,73 +1146,90 @@ function resolveEquipmentSlot(item) {
         COMBAT_SLOTS,
         resolveEquipmentSlot,
     CONTAMINATION_KEYS,
-        DEFENSE_KEYS,
-        LUCK_KEYS,
-        MAX_INVENTORY_SLOTS,
-        RISK_TIERS,
-        RISK_PREPARED_MAX_SCORE,
+    DEFENSE_KEYS,
+    LUCK_KEYS,
+    MAX_INVENTORY_SLOTS,
+    RISK_TIERS,
+    RISK_PREPARED_MAX_SCORE,
     CONTAMINATION_DAMAGE_FROM_LEVEL,
-        getRiskTierByScore,
-        getExpForLevel,
-        getTotalExpForLevel,
-        HEALTH_REGEN_INTERVAL_MS,
-        ENERGY_REGEN_INTERVAL_MS,
-        ENERGY_PURCHASE_STARS_COST,
-        ENERGY_PER_PURCHASE,
-        CLAN_CREATE_COST,
-        CLAN_DESCRIPTION_MAX,
-        CLAN_NAME_MAX,
-        WHEEL_PRIZES,
-        WHEEL_FREE_SPIN_COOLDOWN_MS,
-        HEALTH_REGEN_CAP_RATIO,
-        DEFENSE_CAP_PERCENT,
-        DEFENSE_PER_PLAYER_LEVEL,
-        calculateLevelDefense,
-        getHealthRegenCap,
-        getRegenerableHealth,
-        MAX_UPGRADE_LEVEL,
-        UPGRADE_BONUS_PER_LEVEL,
-        RARITY_ORDER,
-        UPGRADE_MATERIAL_BY_RARITY,
-        SCRAP_YIELD_BY_RARITY,
-        BASE_PRICE_BY_RARITY,
-        AMMO_ITEM_NAME,
-        ROCKET_ITEM_NAME,
-        MODIFICATIONS,
-        MODIFICATION_BY_STAT,
-        MAX_MODIFICATION_LEVEL,
-        GAME_CONFIG,
-        calculateDropChance,
-        calculateCoinDrop,
-        getEquipmentStatValue,
-        sumEquipmentResistance,
-        normalizeResistanceToThreatPoints,
-        normalizeThreatLevelToPoints,
+    getRiskTierByScore,
+    getExpForLevel,
+    getTotalExpForLevel,
+    HEALTH_REGEN_INTERVAL_MS,
+    ENERGY_REGEN_INTERVAL_MS,
+    ENERGY_PURCHASE_STARS_COST,
+    ENERGY_PER_PURCHASE,
+    CLAN_CREATE_COST,
+    CLAN_DESCRIPTION_MAX,
+    CLAN_NAME_MAX,
+    WHEEL_PRIZES,
+    WHEEL_FREE_SPIN_COOLDOWN_MS,
+    HEALTH_REGEN_CAP_RATIO,
+    DEFENSE_CAP_PERCENT,
+    DEFENSE_PER_PLAYER_LEVEL,
+    calculateLevelDefense,
+    getHealthRegenCap,
+    getRegenerableHealth,
+    MAX_UPGRADE_LEVEL,
+    UPGRADE_BONUS_PER_LEVEL,
+    RARITY_ORDER,
+    UPGRADE_MATERIAL_BY_RARITY,
+    SCRAP_YIELD_BY_RARITY,
+    BASE_PRICE_BY_RARITY,
+    AMMO_ITEM_NAME,
+    ROCKET_ITEM_NAME,
+    MODIFICATIONS,
+    MODIFICATION_BY_STAT,
+    MAX_MODIFICATION_LEVEL,
+    GAME_CONFIG,
+    calculateDropChance,
+    calculateCoinDrop,
+    getEquipmentStatValue,
+    sumEquipmentResistance,
+    normalizeResistanceToThreatPoints,
+    normalizeThreatLevelToPoints,
     calculateContaminationDefense,
     calculateLocationContaminationThreat,
-        normalizeRarity,
-        getUpgradeLevel,
-        getUpgradeMultiplier,
-        isEquipmentItem,
-        getDurabilityInfo,
-        getDurabilityState,
-        getEffectiveStatValue,
-        calculateDefenseTotal,
-        calculateEquipmentLuckBonus,
-        applyDefenseReduction,
-        wearEquipment,
-        calculateRepairCost,
-        calculateUpgradeCost,
-        calculateScrapYield,
-        getModificationLevel,
-        getModificationBonus,
-        calculateModificationCost,
-        isModificationApplicable,
-        rollVarianceDamage,
-        WEAPON_CONTEXTS,
-        getWeaponContextMultiplier,
-        getWeaponDamageForContext,
-        collectSetPieceCounts,
-        calculateSetBonuses
+    normalizeRarity,
+    getUpgradeLevel,
+    getUpgradeMultiplier,
+    isEquipmentItem,
+    getDurabilityInfo,
+    getDurabilityState,
+    getEffectiveStatValue,
+    calculateDefenseTotal,
+    calculateEquipmentLuckBonus,
+    applyDefenseReduction,
+    wearEquipment,
+    calculateRepairCost,
+    calculateUpgradeCost,
+    calculateScrapYield,
+    getModificationLevel,
+    getModificationBonus,
+    calculateModificationCost,
+    isModificationApplicable,
+    rollVarianceDamage,
+    WEAPON_CONTEXTS,
+    getWeaponContextMultiplier,
+    getWeaponDamageForContext,
+    collectSetPieceCounts,
+    calculateSetBonuses,
+    // Поиск лута
+    SEARCH_BASE_XP,
+    SEARCH_RARITY_XP,
+    LOCATION_XP_BONUS_PER_ID,
+    SEARCH_COMBO_EVERY,
+    SEARCH_COMBO_MULTIPLIER,
+    // Кланы
+    MAX_DONATION_COINS,
+    // Ежедневный бонус
+    DAILY_BONUS_COOLDOWN_MS,
+    DAILY_BONUS_STREAK_LIMIT,
+    DAILY_BONUS_BASE_COINS,
+    DAILY_BONUS_COINS_PER_DAY,
+    DAILY_BONUS_STAR_EVERY,
+    // Боссы
+    BOSS_BASE_DAMAGE,
+    BOSS_DAMAGE_PER_LEVEL,
     };
 }));

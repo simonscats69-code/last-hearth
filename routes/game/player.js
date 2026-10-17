@@ -22,8 +22,9 @@ function getGameHelpers() {
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
 const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth } = helpers;
-// Общий файл правил с клиентом: цены покупки энергии (в звёздах).
+// Общий файл правил с клиентом: цены покупки энергии (в звёздах), ежедневный бонус.
 const equipmentRules = require('../../public/shared/equipment.js');
+const { DAILY_BONUS_COOLDOWN_MS, DAILY_BONUS_STREAK_LIMIT, DAILY_BONUS_BASE_COINS, DAILY_BONUS_COINS_PER_DAY, DAILY_BONUS_STAR_EVERY } = equipmentRules;
 
 
 // C-6: Whitelist разрешённых полей для обновления профиля
@@ -250,10 +251,17 @@ router.post('/buy-energy', async (req, res) => {
                 [STARS_COST, newEnergy, playerId]
             );
 
-            await logPlayerAction(playerId, 'buy_energy', { cost: STARS_COST, gained: ENERGY_PER_PURCHASE }, client);
-
-            return { energy: newEnergy, stars: p.stars - STARS_COST };
+            return {
+                energy: newEnergy,
+                stars: p.stars - STARS_COST,
+                log: { action: 'buy_energy', playerId, data: { cost: STARS_COST, gained: ENERGY_PER_PURCHASE } }
+            };
         });
+
+        // Логируем ПОСЛЕ коммита транзакции
+        if (result.log) {
+            await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+        }
 
         res.json({ success: true, data: result });
     } catch (err) {
@@ -269,16 +277,8 @@ router.post('/buy-energy', async (req, res) => {
  * 
  * Награда растёт с серией (+25 монет/день, макс. 7 дней).
  * Каждые 3 дня — одна звезда. Пропуск >48 часов обнуляет серию.
+ * Константы берутся из equipment.js (единый источник правды с клиентом).
  */
-const DAILY_BONUS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const DAILY_BONUS_STREAK_LIMIT = 7;
-// Награда за первый день и прирост за каждую следующую серию (было инлайном
-// в формуле coins/stars ниже).
-const DAILY_BONUS_BASE_COINS = 25;
-const DAILY_BONUS_COINS_PER_DAY = 25;
-/** Каждый N-й день серии даёт звезду. */
-const DAILY_BONUS_STAR_EVERY = 3;
-
 router.post('/daily-bonus', async (req, res) => {
     try {
         const playerId = req.player?.id;
@@ -328,8 +328,6 @@ router.post('/daily-bonus', async (req, res) => {
                 [coins, stars, streak, playerId]
             );
 
-            await logPlayerAction(playerId, 'daily_bonus', { coins, stars, streak }, client);
-
             return {
                 success: true,
                 message: `День ${streak}: +${coins} монет${stars ? ` и +${stars} ⭐` : ''}`,
@@ -338,9 +336,15 @@ router.post('/daily-bonus', async (req, res) => {
                 daily_streak: streak,
                 coins_total: Number(player.coins || 0) + coins,
                 stars_total: Number(player.stars || 0) + stars,
-                next_claim_at: new Date(now + DAILY_BONUS_COOLDOWN_MS).toISOString()
+                next_claim_at: new Date(now + DAILY_BONUS_COOLDOWN_MS).toISOString(),
+                log: { action: 'daily_bonus', playerId, data: { coins, stars, streak } }
             };
         });
+
+        // Логируем ПОСЛЕ коммита транзакции
+        if (result.log) {
+            await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+        }
 
         res.json({ success: true, data: result });
     } catch (err) {

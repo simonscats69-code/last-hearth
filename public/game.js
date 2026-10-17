@@ -4075,10 +4075,11 @@ async function moveToLocation(locationId) {
             showModal('✅ Успех', result.data?.message || result.message || `Вы прибыли в ${locationData?.name || 'новую локацию'}`);
             await loadProfile();
         } else {
-            showModal('⚠️ Внимание', result.error || result.message);
+            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось перейти на локацию');
         }
     } catch (error) {
         console.error('Move error:', error);
+        showModal('❌ Ошибка', error?.message || 'Не удалось подключиться к серверу');
     }
 }
 
@@ -7106,9 +7107,8 @@ function selectMapLocation(loc) {
 
     if (infoEl) {
         // textContent, а не innerHTML: значения приходят с сервера.
-        // Заражение зоны одно — показываем сумму радиации и инфекции
-        // (общее давление, как считает сервер).
-        const contamination = Number(loc.radiation || 0) + Number(loc.infection || 0);
+        // Заражение зоны — только радиация.
+        const contamination = Number(loc.radiation || 0);
         infoEl.textContent =
             `☢️ ${contamination} · ⚠️ риск ${Number(loc.danger_level) || 1}/7 · ${risk.label}`;
         infoEl.dataset.locked = requiredLevel > level ? 'true' : 'false';
@@ -7136,6 +7136,11 @@ function travelToSelectedLocation() {
     if (!locationId) return;
 
     const loc = (gameState.locations || []).find((item) => Number(item.id) === locationId);
+    if (!loc) {
+        showModal('⚠️ Внимание', 'Локация не найдена в списке. Обновите карту.');
+        return;
+    }
+
     const level = Math.max(1, Number(gameState.player?.level) || 1);
     const requiredLevel = Number(loc?.required_level ?? loc?.min_level ?? 1);
 
@@ -7154,9 +7159,8 @@ function updateMapRiskPreview() {
     if (!info || !gameState.player?.location) return;
 
     const zoneRisk = getCurrentZoneRiskProfile(gameState.player);
-    // Заражение зоны одно: радиация + инфекция локации дают общий уровень.
-    const contamination = Number(gameState.player.location.radiation || 0)
-        + Number(gameState.player.location.infection || 0);
+    // Заражение зоны — только радиация.
+    const contamination = Number(gameState.player.location.radiation || 0);
     info.textContent = `☢️ ${contamination} | ${zoneRisk.label}`;
 }
 
@@ -8767,9 +8771,7 @@ function mapScreenHtml() {
                         aria-label="Карта города. Выберите локацию" tabindex="0"></canvas>
                 <div class="location-preparation" id="location-preparation-panel">
                     <span class="prep-pill risk">⚠️ <span id="location-risk-label">—</span></span>
-                    <span class="prep-pill rad-def">🛡☢ <span id="location-rad-defense">0</span></span>
-                    <span class="prep-pill inf-def">🛡🦠 <span id="location-inf-defense">0</span></span>
-                </div>
+                <span class="prep-pill rad-def">🛡☢ <span id="location-rad-defense">0</span></span>
                 <div class="location-risk-hint" id="location-risk-hint" aria-live="polite">Выберите локацию для просмотра рисков</div>
             </div>
         </div>
@@ -11126,16 +11128,6 @@ function scheduleMapRepaint(hoveredLoc) {
         setTimeout(paint, 16);
     }
 }
-
-/**
- * Перерисовка карты с подсветкой.
- * Отрисовка живёт в paintCityMap(), здесь только передаём подсветку.
- * @param {Object} hoveredLoc - локация под курсором
- */
-// Функция redrawMap удалена: последняя переработка карты обнулила её тело до
-// делегата в paintCityMap и одновременно убрала всех вызывающих, но саму
-// функцию и window.redrawMap оставила. Вызовов не было — только определение.
-// Отрисовка теперь идёт напрямую через paintCityMap / scheduleMapRepaint.
 
 /**
  * Перерисовать карту при изменении размера окна/повороте экрана.

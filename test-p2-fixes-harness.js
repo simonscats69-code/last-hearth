@@ -58,7 +58,7 @@ console.log('=== 1. Кланы: parseBoolSetting, описание, CLAN_CREATE_
     ok('мусор -> default', parseBoolSetting('maybe') === true);
 
     const equip = require(path.join(__dirname, 'public/shared/equipment.js'));
-    ok('CLAN_CREATE_COST экспортирован = 1000', equip.CLAN_CREATE_COST === 1000, equip.CLAN_CREATE_COST);
+    ok('CLAN_CREATE_COST экспортирован = 100000', equip.CLAN_CREATE_COST === 100000, equip.CLAN_CREATE_COST);
     ok('CLAN_DESCRIPTION_MAX = 200', equip.CLAN_DESCRIPTION_MAX === 200);
     ok('CLAN_NAME_MAX = 30', equip.CLAN_NAME_MAX === 30);
     ok('clans.js использует CLAN_CREATE_COST (не хардкод)', clansSrc.includes('CLAN_CREATE_COST'));
@@ -125,9 +125,9 @@ console.log('\n=== 3. Player: avatar, валидация, реген-log, daily 
         /\}\)\.catch\(\((?:err|error|e)\) => \{[\s\S]{0,1200}?logger\.warn/.test(plCode));
     ok('реген: пустой .catch(() => 0) больше не используется в коде',
         !/\}\)\.catch\(\(\) => 0\)/.test(plCode));
-    ok('daily: DAILY_BONUS_BASE_COINS', /DAILY_BONUS_BASE_COINS = 25/.test(pl));
-    ok('daily: DAILY_BONUS_COINS_PER_DAY', /DAILY_BONUS_COINS_PER_DAY = 25/.test(pl));
-    ok('daily: DAILY_BONUS_STAR_EVERY', /DAILY_BONUS_STAR_EVERY = 3/.test(pl));
+    ok('daily: DAILY_BONUS_BASE_COINS импортирован из equipment.js', /DAILY_BONUS_BASE_COINS/.test(pl) && !/DAILY_BONUS_BASE_COINS = 25/.test(plCode));
+    ok('daily: DAILY_BONUS_COINS_PER_DAY импортирован из equipment.js', /DAILY_BONUS_COINS_PER_DAY/.test(pl) && !/DAILY_BONUS_COINS_PER_DAY = 25/.test(plCode));
+    ok('daily: DAILY_BONUS_STAR_EVERY импортирован из equipment.js', /DAILY_BONUS_STAR_EVERY/.test(pl) && !/DAILY_BONUS_STAR_EVERY = 3/.test(plCode));
     ok('daily: формула через константы', /DAILY_BONUS_BASE_COINS \+ \(cappedDay - 1\) \* DAILY_BONUS_COINS_PER_DAY/.test(pl));
     ok('daily: звёзды через константу', /streak % DAILY_BONUS_STAR_EVERY === 0/.test(pl));
 }

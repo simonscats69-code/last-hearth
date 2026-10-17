@@ -63,6 +63,9 @@ const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAMAGE_PER_KILL = 0.1;
 const KILL_DECAY_FACTOR = 0.1;
 
+const BOSS_BASE_DAMAGE = 3;
+const BOSS_DAMAGE_PER_LEVEL = 2;
+
 /** Сколько событий боя рейда храним в raid_progress.raid_log */
 const RAID_LOG_MAX_EVENTS = 20;
 
@@ -139,7 +142,7 @@ function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
     const killBonus = calculateDamageBonus(bossId, masteries);
     // Усиливаем базовую прогрессию, чтобы ранние боссы не были чрезмерно затянутыми.
     const levelDamage = Math.max(1, Number(player.level || 1));
-    const baseDamage = 3 + (levelDamage * 2);
+    const baseDamage = BOSS_BASE_DAMAGE + (levelDamage * BOSS_DAMAGE_PER_LEVEL);
     return Math.floor(baseDamage + killBonus + setDamage + weaponDamage);
 }
 
@@ -2014,6 +2017,8 @@ router.post('/raid/:id/attack', async (req, res) => {
 
                 let leaderKey = null;
 
+                const expLogs = [];
+
                 // Батч-загрузка шаблонов наград ДО цикла по участникам:
                 // раньше grantRewardItems() делал SELECT ... FROM items для
                 // каждого участника (N+1). Набор reward_items у рейда один,
@@ -2041,7 +2046,8 @@ router.post('/raid/:id/attack', async (req, res) => {
                     }
 
                     if (experienceReward > 0) {
-                        await playerHelper.addExperience(participantId, experienceReward, client);
+                        const expResult = await playerHelper.addExperience(participantId, experienceReward, client);
+                        expLogs.push({ playerId: participantId, logData: expResult.logData });
                     }
 
                     const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
@@ -2154,6 +2160,10 @@ router.post('/raid/:id/attack', async (req, res) => {
                 }
             };
         });
+
+        for (const { playerId: pid, logData } of expLogs) {
+            await logPlayerAction(pid, logData.action, logData.data);
+        }
 
         return res.status(outcome.status).json(outcome.body);
     } catch (error) {

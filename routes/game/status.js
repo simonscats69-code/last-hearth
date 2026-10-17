@@ -114,7 +114,7 @@ router.post('/check', async (req, res) => {
         });
         
     } catch (error) {
-        handleError(res, error, 'STATUS_CHECK');
+        return handleError(res, error, 'STATUS_CHECK');
     }
 });
 

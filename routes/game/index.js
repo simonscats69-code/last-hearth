@@ -106,6 +106,7 @@ const itemsRouter = safeRequire('./items', 'items');
 const workshopRouter = safeRequire('./workshop', 'workshop');
 const statusRouter = safeRequire('./status', 'status');
 const minigamesRouter = safeRequire('./minigames', 'minigames');
+const debuffsRouter = safeRequire('./debuffs', 'debuffs');
 
 async function upsertPlayerFromTelegramUser(user) {
     const telegramId = Number(user.id);
@@ -367,6 +368,7 @@ router.use('/items', itemsRouter);
 router.use('/workshop', workshopRouter);
 router.use('/status', statusRouter);
 router.use('/minigames', minigamesRouter);
+router.use('/debuffs', debuffsRouter);
 
 // Алиасы для обратной совместимости
 router.use('/locations', worldRouter);

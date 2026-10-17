@@ -122,7 +122,6 @@ async function createTables() {
             name VARCHAR(255) NOT NULL UNIQUE,
             description TEXT,
             radiation INTEGER DEFAULT 0,
-            infection INTEGER DEFAULT 0,
             min_luck INTEGER DEFAULT 0,
             danger_level INTEGER DEFAULT 1,
             loot_table JSONB DEFAULT '[]',
@@ -131,9 +130,6 @@ async function createTables() {
             color VARCHAR(20)
         );
     `);
-    
-    // Миграция: добавить колонку infection если не существует
-    await query(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS infection INTEGER DEFAULT 0`);
     
     // Миграция: добавить колонку min_level если не существует (вместо min_luck для входа на локации)
     await query(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS min_level INTEGER DEFAULT 1`);
@@ -470,59 +466,10 @@ async function createTables() {
         );
     `);
 
-    // Достижения боссов - начальные достижения
-    // Оптимизация: добавляем только если таблица пуста
-    await query(`
-        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
-        SELECT 
-            'Первое убийство', 
-            'Убить босса впервые', 
-            'bosses', 
-            '{"type": "first_boss_kill"}', 
-            '{"coins": 100, "stars": 0}', 
-            '🎯', 
-            'common'
-        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Первое убийство');
-    `);
-
-    await query(`
-        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
-        SELECT 
-            'Охотник на боссов', 
-            'Убить 10 боссов', 
-            'bosses', 
-            '{"type": "bosses_killed", "count": 10}', 
-            '{"coins": 500, "stars": 2}', 
-            '🏅', 
-            'uncommon'
-        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Охотник на боссов');
-    `);
-
-    await query(`
-        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
-        SELECT 
-            'Мастер боссов', 
-            'Убить босса 50 раз', 
-            'bosses', 
-            '{"type": "single_boss_kills", "count": 50}', 
-            '{"coins": 2000, "stars": 10}', 
-            '👑', 
-            'epic'
-        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Мастер боссов');
-    `);
-
-    await query(`
-        INSERT INTO achievements (name, description, category, condition, reward, icon, rarity) 
-        SELECT 
-            'Доминатор', 
-            'Убить всех боссов', 
-            'bosses', 
-            '{"type": "all_bosses_killed"}', 
-            '{"coins": 10000, "stars": 50}', 
-            '💀', 
-            'legendary'
-        WHERE NOT EXISTS (SELECT 1 FROM achievements WHERE name = 'Доминатор');
-    `);
+    // Новые достижения просеиваются в seedAchievements() —
+    // старый блок вручную добавленных достижений ниже удалён,
+    // чтобы не было дублей ('Первое убийство' = 'Первая кровь',
+    // 'Мастер боссов' = 'Убийца монстров' и т.д.).
 
     // Таблица ежедневных заданий
     await query(`
@@ -1125,30 +1072,26 @@ async function mergeDuplicateInventoryStacks() {
 async function seedDatabase() {
     // Локации
     const locations = [
-        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, infection: 0, min_level: 1, danger_level: 1, icon: '🏠', color: '#4CAF50' },
-        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, infection: 5, min_level: 3, danger_level: 2, icon: '🛒', color: '#FF9800' },
-        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, infection: 25, min_level: 5, danger_level: 3, icon: '🏥', color: '#E91E63' },
-        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, infection: 35, min_level: 8, danger_level: 4, icon: '🏭', color: '#9C27B0' },
-        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, infection: 50, min_level: 12, danger_level: 5, icon: '🌆', color: '#F44336' },
-        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, infection: 65, min_level: 18, danger_level: 6, icon: '🎖️', color: '#607D8B' },
-        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, infection: 80, min_level: 25, danger_level: 7, icon: '🔒', color: '#000000' }
+        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, min_level: 1, danger_level: 1, icon: '🏠', color: '#4CAF50' },
+        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, min_level: 3, danger_level: 2, icon: '🛒', color: '#FF9800' },
+        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, min_level: 5, danger_level: 3, icon: '🏥', color: '#E91E63' },
+        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, min_level: 8, danger_level: 4, icon: '🏭', color: '#9C27B0' },
+        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, min_level: 12, danger_level: 5, icon: '🌆', color: '#F44336' },
+        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, min_level: 18, danger_level: 6, icon: '🎖️', color: '#607D8B' },
+        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, min_level: 25, danger_level: 7, icon: '🔒', color: '#000000' }
     ];
     for (const loc of locations) {
-        // UPSERT, а не DO NOTHING: на проде у всех локаций min_level = 1
-        // (миграция выводила его из min_luck, который везде был 0), из-за
-        // чего карта фактически не имела прогрессии — доступна была сразу.
         await queryTx(`
-            INSERT INTO locations (name, description, radiation, infection, min_level, danger_level, icon, color)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO locations (name, description, radiation, min_level, danger_level, icon, color)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 radiation = EXCLUDED.radiation,
-                infection = EXCLUDED.infection,
                 min_level = EXCLUDED.min_level,
                 danger_level = EXCLUDED.danger_level,
                 icon = EXCLUDED.icon,
                 color = EXCLUDED.color
-        `, [loc.name, loc.description, loc.radiation, loc.infection, loc.min_level, loc.danger_level, loc.icon, loc.color]);
+        `, [loc.name, loc.description, loc.radiation, loc.min_level, loc.danger_level, loc.icon, loc.color]);
     }
 
     // Боссы сидируются ПОСЛЕ каталога предметов: их reward_items и
@@ -2005,11 +1948,13 @@ async function seedAchievements() {
         { name: 'Коллекционер', description: 'Собери 10 уникальных предметов', category: 'collection', condition: { type: 'unique_items', value: 10 }, reward: { coins: 200, stars: 3 }, icon: '📦', rarity: 'uncommon' },
         { name: 'Хранитель', description: 'Собери 25 уникальных предметов', category: 'collection', condition: { type: 'unique_items', value: 25 }, reward: { coins: 750, stars: 10 }, icon: '💎', rarity: 'rare' },
         
-        // Ежедневные
-        { name: 'Ежедневная победа', description: 'Выполни 1 ежедневное задание', category: 'daily', condition: { type: 'daily_tasks', value: 1 }, reward: { coins: 25, stars: 0 }, icon: '📅', rarity: 'common' },
-        { name: 'Настойчивый', description: 'Выполни 25 ежедневных заданий', category: 'daily', condition: { type: 'daily_tasks', value: 25 }, reward: { coins: 300, stars: 5 }, icon: '📆', rarity: 'uncommon' }
     ];
-    
+
+    // Удаляем достижения категории 'daily' — ежедневные задания убраны из игры.
+    // Выполняется при каждом старте, чтобы очистить и уже существующие записи
+    // в развёрнутых базах данных.
+    await queryTx(`DELETE FROM achievements WHERE category = 'daily'`);
+
     for (const a of achievements) {
         await queryTx(`
             INSERT INTO achievements (name, description, category, condition, reward, icon, rarity)

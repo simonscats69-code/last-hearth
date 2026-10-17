@@ -8,12 +8,12 @@
  * - Расчёт влияния на статы
  */
 
-const { transaction } = require('../../db/database');
+const express = require('express');
+const router = express.Router();
+const { transaction, queryOne } = require('../../db/database');
 // logger раньше использовался только в удалённых HTTP-роутах. Ошибки из
 // DebuffAPI ловит вызывающий: world.js отдаёт их в handleError.
-// Модуль мёртв как HTTP-API (apply/cure не вызываются никем), но
-// calculateDebuffDamage/getModifiers используются внутренними расчётами.
-const { safeJsonParse, logPlayerAction } = require('../../utils/serverApi');
+const { safeJsonParse, logPlayerAction, handleError } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -397,18 +397,81 @@ const DebuffAPI = {
     }
 };
 
-// Публичные HTTP-маршруты дебаффов удалены: GET /debuffs/status,
-// POST /debuffs/check и POST /debuffs/cure не вызывались клиентом
-// (слово "debuff" в public/game.js не встречается ни разу).
-// ВАЖНО: DebuffAPI.apply и DebuffAPI.cure сейчас НЕ вызываются никем —
-// проверено grep по routes/, utils/ и index.js. DebuffAPI.calculateDebuffDamage
-// используется только внутри этого файла. Если понадобится отдельный экран
-// дебаффов, маршруты надо писать заново вместе с UI — и вместе с проверкой,
-// что в 5xx наружу не уходит внутренний текст ошибки.
-//
-// Применять дебаффы напрямую из других модулей:
-//   const { DebuffAPI } = require('./debuffs');
-//   await DebuffAPI.apply(playerId, DEBUFF_TYPES.RADIATION, 2, { source: 'zone_5' });
+// ============================================
+// HTTP-МАРШРУТЫ ДЕБАФФОВ
+// ============================================
 
-// Экспорт для использования в других модулях
-module.exports = { DebuffAPI };
+/**
+ * POST /debuffs/apply — применить дебафф к игроку (радиация)
+ * Тело: { type, level, source }
+ */
+router.post('/apply', async (req, res) => {
+    const playerId = req.player?.id;
+    const { type, level, source } = req.body || {};
+    try {
+        if (!playerId) {
+            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+        }
+        const result = await DebuffAPI.apply(playerId, type || DEBUFF_TYPES.RADIATION, Number(level) || 1, { source });
+        return res.json({ success: true, data: result });
+    } catch (error) {
+        return handleError(res, error, 'debuff_apply', playerId);
+    }
+});
+
+/**
+ * GET /debuffs/check — проверить дебаффы игрока (очистить истёкшие, применить урон)
+ */
+router.get('/check', async (req, res) => {
+    const playerId = req.player?.id;
+    try {
+        if (!playerId) {
+            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+        }
+        const result = await DebuffAPI.check(playerId);
+        return res.json({ success: true, data: result });
+    } catch (error) {
+        return handleError(res, error, 'debuff_check', playerId);
+    }
+});
+
+/**
+ * GET /debuffs/active — получить активные дебаффы игрока
+ */
+router.get('/active', async (req, res) => {
+    const playerId = req.player?.id;
+    try {
+        if (!playerId) {
+            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+        }
+        const playerResult = await queryOne('SELECT radiation FROM players WHERE id = $1', [playerId]);
+        if (!playerResult) {
+            return res.status(404).json({ success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' });
+        }
+        const active = DebuffAPI.getActive(playerResult);
+        return res.json({ success: true, data: { active } });
+    } catch (error) {
+        return handleError(res, error, 'debuff_active', playerId);
+    }
+});
+
+/**
+ * POST /debuffs/cure — вылечить дебафф предметом
+ * Тело: { cureType, itemId, itemIndex }
+ */
+router.post('/cure', async (req, res) => {
+    const playerId = req.player?.id;
+    const { cureType, itemId, itemIndex } = req.body || {};
+    try {
+        if (!playerId) {
+            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+        }
+        const result = await DebuffAPI.cure(playerId, cureType || 'auto', itemId, itemIndex);
+        return res.json({ success: true, data: result });
+    } catch (error) {
+        return handleError(res, error, 'debuff_cure', playerId);
+    }
+});
+
+// Экспорт: DebuffAPI для внутренних модулей, router для подключения в index.js
+module.exports = { DebuffAPI, router };

@@ -12,20 +12,13 @@
  */
 
 const express = require('express');
-/**
- * Максимальная сумма одного пожертвования в казну клана (монет).
- * Константа вместо «голого» 1000000 в проверке: лимит продублирован
- * в сообщении об ошибке, и расхождение не заметить с первого взгляда.
- */
-const MAX_DONATION_COINS = 1000000;
-
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
 const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, wrap, logPlayerAction, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
 
 const crypto = require('crypto');
 // Единый источник игровых констант (общий с клиентом).
-const { CLAN_CREATE_COST, CLAN_DESCRIPTION_MAX, CLAN_NAME_MAX } = require('../../public/shared/equipment.js');
+const { CLAN_CREATE_COST, CLAN_DESCRIPTION_MAX, CLAN_NAME_MAX, MAX_DONATION_COINS } = require('../../public/shared/equipment.js');
 
 /**
  * Разбор булевой настройки из тела запроса.
@@ -266,16 +259,17 @@ router.post('/clan/create', wrap(async (req, res) => {
             [clanId, playerId, CLAN_CREATE_COST]
         );
 
-        // Логируем создание клана
-        await logPlayerAction(playerId, 'clan_create', {
-            clan_id: clanId,
-            clan_name: nameValidation.value,
-            cost: CLAN_CREATE_COST
-        }, client);
-
-        return { message: `Клан "${nameValidation.value}" создан!`, clan: { id: clanId, name: nameValidation.value } };
+        return {
+            message: `Клан "${nameValidation.value}" создан!`,
+            clan: { id: clanId, name: nameValidation.value },
+            log: { action: 'clan_create', data: { clan_id: clanId, clan_name: nameValidation.value, cost: CLAN_CREATE_COST } },
+        };
     });
     
+    if (result.log) {
+        await logPlayerAction(playerId, result.log.action, result.log.data);
+    }
+
     ok(res, result);
 }));
 
@@ -373,15 +367,17 @@ router.post('/clan/join', wrap(async (req, res) => {
             throw { message: 'Не удалось вступить (клан полный)', code: 'CLAN_JOIN_FAILED', statusCode: 409 };
         }
 
-        // Логируем вступление
-        await logPlayerAction(playerId, 'clan_join', {
-            clan_id: clanId,
-            clan_name: clan.name
-        }, client);
-
-        return { message: `Вы вступили в клан ${clan.name}`, clan: { id: clan.id, name: clan.name } };
+        return {
+            message: `Вы вступили в клан ${clan.name}`,
+            clan: { id: clan.id, name: clan.name },
+            log: { action: 'clan_join', data: { clan_id: clanId, clan_name: clan.name } },
+        };
     });
     
+    if (result.log) {
+        await logPlayerAction(playerId, result.log.action, result.log.data);
+    }
+
     ok(res, result);
 }));
 
@@ -401,7 +397,7 @@ router.post('/clan/leave', wrap(async (req, res) => {
         return fail(res, 'Лидер не может покинуть клан. Передайте лидерство.', 'LEADER_CANT_LEAVE', 403);
     }
     
-    await withPlayerLock(playerId, async (client, lockedPlayer) => {
+    const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
         if (!lockedPlayer) {
             throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
         }
@@ -411,13 +407,17 @@ router.post('/clan/leave', wrap(async (req, res) => {
             [playerId]
         );
 
-        // Логируем выход из клана
-        await logPlayerAction(playerId, 'clan_leave', {
-            clan_id: player.clan_id
-        }, client);
+        return {
+            message: 'Вы покинули клан',
+            log: { action: 'clan_leave', data: { clan_id: player.clan_id } },
+        };
     });
     
-    ok(res, { message: 'Вы покинули клан' });
+    if (result.log) {
+        await logPlayerAction(playerId, result.log.action, result.log.data);
+    }
+
+    ok(res, result);
 }));
 
 /**
@@ -430,8 +430,8 @@ router.get('/', wrap(async (req, res) => {
     const search = String(req.query.search || '').trim();
     
     // Пагинация
-    let limit = parseInt(req.query.limit) || 20;
-    let offset = parseInt(req.query.offset) || 0;
+    let limit = parseInt(req.query.limit, 10) || 20;
+    let offset = parseInt(req.query.offset, 10) || 0;
     
     limit = Math.min(Math.max(1, limit), 100);
     offset = Math.max(0, offset);
@@ -451,7 +451,7 @@ router.get('/', wrap(async (req, res) => {
     const countResult = hasSearch 
         ? await queryOne(countQuery, [searchPattern])
         : await queryOne(countQuery);
-    const total = parseInt(countResult?.total || 0);
+    const total = parseInt(countResult?.total || 0, 10);
 
     // Получаем кланы с пагинацией
     let clansQuery = `
@@ -669,22 +669,20 @@ router.post('/clan/donate', wrap(async (req, res) => {
             [player.clan_id]
         );
 
-        // Логируем пожертвование (внутри транзакции — передаём client)
-        await logPlayerAction(playerId, 'clan_donate', {
-            clan_id: player.clan_id,
-            amount: donation,
-            new_balance: lockedPlayer.coins - donation
-        }, client);
-
         return { 
             success: true,
             donated: donation,
             new_balance: lockedPlayer.coins - donation,
             clan_total: clanResult.rows[0]?.coins || donation,
-            total_donated: clanResult.rows[0]?.total_donated || donation
+            total_donated: clanResult.rows[0]?.total_donated || donation,
+            log: { action: 'clan_donate', data: { clan_id: player.clan_id, amount: donation, new_balance: lockedPlayer.coins - donation } },
         };
     });
     
+    if (result.log) {
+        await logPlayerAction(playerId, result.log.action, result.log.data);
+    }
+
     ok(res, result);
 }));
 module.exports = router;

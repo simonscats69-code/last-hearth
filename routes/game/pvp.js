@@ -146,8 +146,8 @@ router.get('/players', async (req, res) => {
     
     try {
         // Пагинация
-        let limit = parseInt(req.query.limit) || 20;
-        let offset = parseInt(req.query.offset) || 0;
+        let limit = parseInt(req.query.limit, 10) || 20;
+        let offset = parseInt(req.query.offset, 10) || 0;
         
         limit = Math.min(Math.max(1, limit), 100);
         offset = Math.max(0, offset);
@@ -188,7 +188,7 @@ router.get('/players', async (req, res) => {
 
         // total одинаков для всех строк; если строк нет, total = 0
         const total = resultRows.length > 0
-            ? parseInt(resultRows[0].total_count || 0)
+            ? parseInt(resultRows[0].total_count || 0, 10)
             : 0;
 
         // Убираем служебное поле из ответа клиенту
@@ -321,12 +321,14 @@ router.post('/attack', async (req, res) => {
                 throwPvpError(PvpError.RATE_LIMIT);
             }
 
-const existingBattleResult = await client.query(
+            const existingBattleResult = await client.query(
                 `SELECT id, attacker_id, defender_id
                  FROM pvp_battles
                  WHERE status = 'active'
                    AND (attacker_id = $1 OR defender_id = $1 OR attacker_id = $2 OR defender_id = $2)
-                   LIMIT 1`,
+                 ORDER BY id ASC
+                 LIMIT 1
+                 FOR UPDATE`,
                 [playerId, targetId]
             );
 
@@ -410,6 +412,7 @@ router.post('/attack-hit', async (req, res) => {
         // Выполняем удар в транзакции
         // Результат транзакции: содержит данные ответа и лог.
         // Логи уходят после COMMIT — см. ниже.
+        let expLogData = null;
         const outcome = await transaction(async (client) => {
             // Получаем бой
             const battle = await client.query(`
@@ -469,10 +472,10 @@ router.post('/attack-hit', async (req, res) => {
             }
 
             // Проверяем, что игрок жив перед атакой
-            if (attacker.health <= 0) {
+            if (Number(attacker.health || 0) <= 0) {
                 throwPvpError(PvpError.SELF_DEAD);
             }
-            if (defender.health <= 0) {
+            if (Number(defender.health || 0) <= 0) {
                 throwPvpError(PvpError.TARGET_DEAD);
             }
 
@@ -657,7 +660,7 @@ await client.query(`
                          winner_id = $1,
                          loser_id = $2,
                          attacker_reward = CASE WHEN attacker_id = $1 THEN $3 ELSE 0 END,
-                         defender_reward = CASE WHEN defender_id = $1 THEN $3 ELSE 0 END,
+                         defender_reward = CASE WHEN defender_id = $2 THEN $3 ELSE 0 END,
                          ended_at = NOW(),
                          battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
                      WHERE id = $4
@@ -676,7 +679,8 @@ await client.query(`
                 );
                 
                 // Используем playerHelper.addExperience для корректного level-up
-                await playerHelper.addExperience(attackerId, pvpExpReward, client);
+                const expResult = await playerHelper.addExperience(attackerId, pvpExpReward, client);
+                expLogData = expResult.logData;
 
                 // Обновляем PvP статистику проигравшего
                 await client.query(`
@@ -799,6 +803,10 @@ await client.query(`
         // Логируем ПОСЛЕ коммита транзакции
         if (outcome.log) {
             await logPlayerAction(outcome.log.playerId, outcome.log.action, outcome.log.data);
+        }
+
+        if (expLogData) {
+            await logPlayerAction(attackerId, expLogData.action, expLogData.data);
         }
 
         return ok(res, outcome);

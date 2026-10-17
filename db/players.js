@@ -11,6 +11,7 @@ const { query: defaultQuery } = require('./database');
 // PlayerHelper.addExperience), и верхнеуровневый импорт дал бы цикл.
 // utils/validate.js зависимостей не имеет, поэтому цикла не будет.
 const { requireId } = require('../utils/validate');
+const equipmentRules = require('../public/shared/equipment.js');
 
 const ERR_PLAYER_NOT_FOUND = 'Игрок не найден';
 
@@ -50,15 +51,16 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     // С ограничением MAX_LUCK = 150
     const luckBonusPerLevel = 1;
     const luckBonus = levelsGained * luckBonusPerLevel;
+    const maxLuck = equipmentRules.GAME_CONFIG.MAX_LUCK;
     
     const result = levelsGained <= 1
         ? await exec(
-            `WITH updated AS (UPDATE players SET level = level + 1, experience = $2, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, luck = LEAST(150, luck + 1), energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
-            [playerId, newExperience]
+            `WITH updated AS (UPDATE players SET level = level + 1, experience = $2, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, luck = LEAST($5, luck + 1), energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
+            [playerId, newExperience, null, null, maxLuck]
         )
         : await exec(
-            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST(150, luck + $3), energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
-            [levelsGained, newExperience, luckBonus, playerId]
+            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST($5, luck + $3), energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
+            [levelsGained, newExperience, luckBonus, playerId, maxLuck]
         );
     
     if (!result.rows[0]) throw new Error(ERR_PLAYER_NOT_FOUND);
@@ -76,31 +78,41 @@ async function addExperienceWithLevelUp(client, playerId, exp, getExpForLevel) {
     if (!client) throw new Error('addExperienceWithLevelUp требует client');
     playerId = requireId(playerId, 'playerId');
     validateExperience(exp);
-    
+
     const lockedPlayer = await lockPlayer(playerId, client);
     if (!lockedPlayer) throw { message: ERR_PLAYER_NOT_FOUND, code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-    
+
     let newExperience = lockedPlayer.experience + exp;
     let newLevel = lockedPlayer.level;
     let leveledUp = false;
     let totalLevelsGained = 0;
-    
+
     while (newExperience >= getExpForLevel(newLevel)) {
         newExperience -= getExpForLevel(newLevel);
         newLevel++;
         leveledUp = true;
         totalLevelsGained++;
     }
-    
+
+    const logData = {
+        action: leveledUp ? 'level_up' : 'add_experience',
+        data: {
+            old_level: lockedPlayer.level,
+            new_level: newLevel,
+            levels_gained: totalLevelsGained,
+            exp_gained: exp,
+            total_exp: newExperience,
+            level: newLevel,
+        },
+    };
+
     if (leveledUp) {
         await levelUpPlayer(playerId, client, totalLevelsGained, newExperience);
-        await logPlayerAction(playerId, 'level_up', { old_level: lockedPlayer.level, new_level: newLevel, levels_gained: totalLevelsGained, exp_gained: exp }, client);
     } else {
         await updatePlayerExperience(playerId, exp, { client, updateTimestamp: false });
-        await logPlayerAction(playerId, 'add_experience', { exp_gained: exp, total_exp: newExperience, level: newLevel }, client);
     }
-    
-    return { level: newLevel, experience: newExperience, leveled_up: leveledUp, levels_gained: totalLevelsGained, exp_needed: getExpForLevel(newLevel) };
+
+    return { level: newLevel, experience: newExperience, leveled_up: leveledUp, levels_gained: totalLevelsGained, exp_needed: getExpForLevel(newLevel), logData };
 }
 
 module.exports = {
