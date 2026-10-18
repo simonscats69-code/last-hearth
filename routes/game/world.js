@@ -286,15 +286,12 @@ router.post('/search', async (req, res) => {
             const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
             const energyCost = activeBuffs.free_energy ? 0 : 1;
             if (updatedPlayer.energy < energyCost) {
-                return {
-                    status: 200,
-                    body: {
-                        success: false,
-                        error: 'Недостаточно энергии',
-                        code: 'INSUFFICIENT_ENERGY',
-                        energy: Math.max(0, updatedPlayer.energy),
-                        max_energy: updatedPlayer.max_energy
-                    }
+                throw {
+                    message: 'Недостаточно энергии',
+                    code: 'INSUFFICIENT_ENERGY',
+                    statusCode: 400,
+                    energy: Math.max(0, updatedPlayer.energy),
+                    max_energy: updatedPlayer.max_energy
                 };
             }
 
@@ -303,13 +300,10 @@ router.post('/search', async (req, res) => {
             `, [updatedPlayer.current_location_id]);
 
             if (location.rows.length === 0) {
-                return {
-                    status: 404,
-                    body: {
-                        success: false,
-                        error: 'Локация не найдена',
-                        code: 'LOCATION_NOT_FOUND'
-                    }
+                throw {
+                    message: 'Локация не найдена',
+                    code: 'LOCATION_NOT_FOUND',
+                    statusCode: 404
                 };
             }
 
@@ -441,14 +435,14 @@ router.post('/search', async (req, res) => {
                 // Проверка лимита слотов ПОСЛЕ всех добавлений (включая loot_x2).
                 // При 99 слотах и нестакуемом предмете бафф x2 добавлял 2 слота
                 // и инвентарь становился 101 — лимит 100 молча превышался.
+                // Бросаем ошибку вместо возврата объекта: transaction() сделает
+                // ROLLBACK всех изменений (радиация, ключ босса, реген энергии),
+                // и клиент получит корректный ответ об ошибке.
                 if (inventory.length > MAX_INVENTORY_SLOTS) {
-                    return {
-                        status: 200,
-                        body: {
-                            success: false,
-                            error: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
-                            code: 'INVENTORY_FULL'
-                        }
+                    throw {
+                        message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
+                        code: 'INVENTORY_FULL',
+                        statusCode: 400
                     };
                 }
 

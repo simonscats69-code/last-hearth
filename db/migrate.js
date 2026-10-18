@@ -126,6 +126,16 @@ async function runDataRepairs() {
     await applyItemRenames();
     logger.info('[migrate] Переименования предметов применены');
 
+    // Инвалидируем кэш лута: после переименования предметов старые id
+    // в lootPoolCache становятся невалидными, новые — отсутствуют.
+    try {
+        const lootCache = require('../utils/lootCache');
+        lootCache.clearLootCache();
+        logger.info('[migrate] Кэш лута сброшен после переименований');
+    } catch (cacheError) {
+        logger.warn('[migrate] Не удалось сбросить кэш лута: ' + cacheError.message);
+    }
+
     // Ремонт идёт до слияния стеков: он чинит состав инвентаря
     // (фантомные id, ключи в boss_keys), а уже потом стеки сворачиваются.
     await repairPlayerInventories();

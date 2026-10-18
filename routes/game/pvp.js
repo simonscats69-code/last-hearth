@@ -587,6 +587,13 @@ router.post('/attack-hit', async (req, res) => {
             );
 
             const battleDamageField = isAttacker ? 'attacker_damage' : 'defender_damage';
+            // Whitelist имён колонок: защита от SQL-инъекции в идентификатор
+            // при будущем рефакторинге (параметризация через $n не работает
+            // для имён колонок).
+            const ALLOWED_DAMAGE_FIELDS = new Set(['attacker_damage', 'defender_damage']);
+            if (!ALLOWED_DAMAGE_FIELDS.has(battleDamageField)) {
+                throw { message: 'Некорректное поле урона', code: 'INTERNAL_ERROR', statusCode: 500 };
+            }
             await client.query(
                 `UPDATE pvp_battles
                  SET ${battleDamageField} = COALESCE(${battleDamageField}, 0) + $1,
@@ -805,8 +812,8 @@ await client.query(`
             await logPlayerAction(outcome.log.playerId, outcome.log.action, outcome.log.data);
         }
 
-        if (expLogData) {
-            await logPlayerAction(attackerId, expLogData.action, expLogData.data);
+        if (expLogData && outcome.log) {
+            await logPlayerAction(outcome.log.playerId, expLogData.action, expLogData.data);
         }
 
         return ok(res, outcome);

@@ -1086,6 +1086,19 @@ function stableMutationKey(scope, windowMs = 1500) {
     return key;
 }
 
+function stableMutationKeyWithBody(name, body, windowMs = 1500) {
+    // Ключ зависит от имени эндпоинта И от тела запроса: разные покупки
+    // разных предметов получают разные ключи и не схлопываются сервером.
+    let bodyHash = 0;
+    try {
+        const str = JSON.stringify(body);
+        for (let i = 0; i < str.length; i++) {
+            bodyHash = ((bodyHash << 5) - bodyHash + str.charCodeAt(i)) | 0;
+        }
+    } catch { /* bodyHash остаётся 0 */ }
+    return stableMutationKey(`${name}:${bodyHash}`, windowMs);
+}
+
 function createApiMethod(name) {
     const config = endpoints[name];
     if (!config) {
@@ -1117,7 +1130,7 @@ function createApiMethod(name) {
             // Повторного вызова внутри окна получает тот же ключ -> сервер
             // отвечает сохранённым результатом вместо второго выполнения.
             const idempotencyKey = callOptions.idempotencyKey
-                || (isIdempotent ? stableMutationKey(name, IDEMPOTENCY_WINDOW_MS) : null);
+                || (isIdempotent ? stableMutationKeyWithBody(name, body, IDEMPOTENCY_WINDOW_MS) : null);
 
             return apiRequest(config.endpoint, {
                 method: 'POST',
@@ -4967,39 +4980,46 @@ function renderInventory(items) {
         // в Telegram WebView и не discoverable.
         // async: внутри ветки разбора await на диалог подтверждения.
         const activate = async () => {
-            if (currentInventoryMode === 'sell') {
-                if (!canSell) {
-                    showNotification('Этот предмет нельзя продать', 'warning');
-                    return;
-                }
-                // Стеку предлагаем выбор: одна штука или весь стек.
-                // Раньше продавался только весь стек, а это неудобно, когда
-                // нужно оставить пару аптечек.
-                if (amount > 1 && canAskStackChoice(item)) {
-                    showStackSellDialog(item, amount, sellPrice);
-                    return;
-                }
-                sellItem(item.index);
-                return;
-            }
-            if (currentInventoryMode === 'drop') {
-                // Разбор необратим: подтверждаем диалогом игры.
-                const confirmed = await showConfirmDialog(
-                    `Разобрать «${name}»? Снаряжение даст материалы, остальное просто пропадёт.`,
-                    {
-                        title: '♻️ Разобрать предмет',
-                        confirmLabel: 'Разобрать',
-                        cancelLabel: 'Оставить',
-                        type: 'warning'
+            // Защита от повторного входа во время обработки предыдущего клика
+            if (slot.dataset.busy === '1') return;
+            slot.dataset.busy = '1';
+            try {
+                if (currentInventoryMode === 'sell') {
+                    if (!canSell) {
+                        showNotification('Этот предмет нельзя продать', 'warning');
+                        return;
                     }
-                );
-                if (!confirmed) {
+                    // Стеку предлагаем выбор: одна штука или весь стек.
+                    // Раньше продавался только весь стек, а это неудобно, когда
+                    // нужно оставить пару аптечек.
+                    if (amount > 1 && canAskStackChoice(item)) {
+                        showStackSellDialog(item, amount, sellPrice);
+                        return;
+                    }
+                    sellItem(item.index);
                     return;
                 }
-                dropItem(item.index);
-                return;
+                if (currentInventoryMode === 'drop') {
+                    // Разбор необратим: подтверждаем диалогом игры.
+                    const confirmed = await showConfirmDialog(
+                        `Разобрать «${name}»? Снаряжение даст материалы, остальное просто пропадёт.`,
+                        {
+                            title: '♻️ Разобрать предмет',
+                            confirmLabel: 'Разобрать',
+                            cancelLabel: 'Оставить',
+                            type: 'warning'
+                        }
+                    );
+                    if (!confirmed) {
+                        return;
+                    }
+                    dropItem(item.index);
+                    return;
+                }
+                useItem(item.index, { equip: isEquippable });
+            } finally {
+                slot.dataset.busy = '0';
             }
-            useItem(item.index, { equip: isEquippable });
         };
         slot.addEventListener('click', activate);
         slot.addEventListener('keydown', (e) => {

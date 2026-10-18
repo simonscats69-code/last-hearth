@@ -413,17 +413,22 @@ async function cleanupOldLogs() {
         }
         
         // Удаляем старые сессии
-        const sessionsResult = await query(`
-            DELETE FROM player_sessions
-            WHERE expires_at < NOW()
-            RETURNING id
-        `);
+        try {
+            const sessionsResult = await query(`
+                DELETE FROM player_sessions
+                WHERE expires_at < NOW()
+                RETURNING id
+            `);
 
-        if (sessionsResult.rows.length > 0) {
-            logger.info({
-                type: 'sessions_cleanup',
-                sessions_deleted: sessionsResult.rows.length
-            });
+            if (sessionsResult.rows.length > 0) {
+                logger.info({
+                    type: 'sessions_cleanup',
+                    sessions_deleted: sessionsResult.rows.length
+                });
+            }
+        } catch (sessionsErr) {
+            // Таблицы player_sessions может не быть в новой схеме — не роняем очистку.
+            logger.warn('sessions cleanup пропущен: ' + describeError(sessionsErr));
         }
 
         // Удаляем сообщения клан-чата старше 30 дней.

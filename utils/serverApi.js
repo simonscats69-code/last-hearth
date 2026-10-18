@@ -637,24 +637,23 @@ async function idempotencyMiddleware(req, res, next) {
 
     // Перехватываем res.json чтобы сохранить ответ
     const originalJson = res.json.bind(res);
-    res.json = function(data) {
+    res.json = async function(data) {
         const result = originalJson(data);
-        // Сохраняем ответ в кэш идемпотентности сразу после отправки ответа.
-        // Запускаем запись в БД без ожидания (не блокируем клиента), но без
-        // setImmediate — запрос уходит в pg как микротаск немедленно, а не
-        // после следующей итерации цикла событий. Это существенно сужает
-        // окно гонки, в которое параллельный повтор с тем же ключом мог бы
-        // получить 409 вместо сохранённого реплея.
+        // Сохраняем ответ в кэш идемпотентности после отправки ответа клиенту.
+        // await гарантирует, что запись в БД завершится перед возвратом из
+        // res.json: процесс не упадёт между ответом и сохранением ключа.
         if (claimed && idempotencyKey && res.statusCode >= 200 && res.statusCode < 400) {
             const fullKey = `idem:${playerId}:${idempotencyKey}`;
             const { query } = require('../db/database');
-            query(
-                `UPDATE idempotency_keys SET response_data = $2, created_at = NOW()
-                  WHERE idempotency_key = $1`,
-                [fullKey, data]
-            ).catch((err) => {
+            try {
+                await query(
+                    `UPDATE idempotency_keys SET response_data = $2, created_at = NOW()
+                      WHERE idempotency_key = $1`,
+                    [fullKey, data]
+                );
+            } catch (err) {
                 logger.warn('[idempotency] save failed', { error: err.message });
-            });
+            }
         }
         return result;
     };

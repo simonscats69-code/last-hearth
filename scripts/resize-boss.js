@@ -89,7 +89,16 @@ function downscale(src, sw, sh, size) {
 const file = process.argv[2];
 const size = parseInt(process.argv[3] || '256', 10);
 if (!file) { console.error('usage: node scripts/resize-boss.js <png> [size]'); process.exit(1); }
+if (!Number.isInteger(size) || size <= 0) { console.error('size должен быть положительным целым числом'); process.exit(1); }
 const abs = path.resolve(file);
+if (!fs.existsSync(abs)) { console.error(`файл не найден: ${abs}`); process.exit(1); }
+
+// Бэкап оригинала перед перезаписью
+const bak = abs + '.bak';
+if (!fs.existsSync(bak)) {
+    try { fs.copyFileSync(abs, bak); } catch (e) { console.error(`не удалось создать бэкап: ${e.message}`); process.exit(1); }
+}
+
 const { w, h, rgba } = decodePNG(fs.readFileSync(abs));
 if (w !== h) console.warn(`внимание: не квадрат ${w}x${h}, ужмётся в ${size}x${size}`);
 fs.writeFileSync(abs, encodePNG(size, size, downscale(rgba, w, h, size)));

@@ -108,82 +108,94 @@ async function setupWebhook(app) {
         const firstName = ctx.from.first_name || '';
         const lastName = ctx.from.last_name || '';
 
-        try {
-            // Проверяем, есть ли игрок
-            let player = await queryOne(
-                'SELECT * FROM players WHERE telegram_id = $1',
-                [telegramId]
-            );
-
-            if (!player) {
-                // Создаём нового игрока
-                player = await queryOne(`
+            try {
+                // Атомарное создание: ON CONFLICT DO NOTHING + RETURNING.
+                // Два параллельных /start от одного пользователя — только один
+                // создаст строку, второй получит существующего игрока.
+                let player = await queryOne(`
                     INSERT INTO players (telegram_id, username, first_name, last_name, created_at, updated_at)
                     VALUES ($1, $2, $3, $4, NOW(), NOW())
+                    ON CONFLICT (telegram_id) DO NOTHING
                     RETURNING *
                 `, [telegramId, username, firstName, lastName]);
 
-                // Стартовый инвентарь берём из каталога по ИМЕНИ, а не по захардкоженным
-                // id. Раньше здесь стояли {id: 1} и {id: 2} — таких id в
-                // таблице items нет (реальные начинаются со 150480), поэтому
-                // предметы нельзя было ни продать, ни применить, ни увидеть
-                // в магазине: они были фантомами мёртвой версии игры.
-                // Стартовый набор. Раньше здесь были только «Консервы» и «Вода»:
-// игрок начинал без оружия, хотя в бою с боссом урон теперь даёт и снаряжение
-// (ближний бой +40% к боссам). Нож — 20 монет, 50 прочности и +5 урона:
-// он же учит механике износа и ремонта.
-                const starterNames = ['Нож', 'Консервы', 'Вода'];
-                const starterResult = await query(
-                    `SELECT id, name, type, category, rarity, icon, slot, price, stats, durability, max_durability
-                       FROM items WHERE name = ANY($1::text[])`,
-                    [starterNames]
-                );
-                const starterItems = [];
-                for (const name of starterNames) {
-                    const row = starterResult.rows.find((item) => item.name === name);
-                    if (!row) {
-                        logger.warn('[bot] Стартовый предмет не найден в каталоге', { name });
-                        continue;
-                    }
-                    // stats приходит из jsonb-колонки (уже объект), но исторически мог быть
-                    // строкой — разбор без try/catch ронял весь обработчик /start.
-                    let stats = row.stats;
-                    if (typeof stats === 'string') {
-                        try {
-                            stats = JSON.parse(stats);
-                        } catch {
-                            stats = {};
-                        }
-                    } else if (!stats || typeof stats !== 'object') {
-                        stats = {};
-                    }
-                    starterItems.push({
-                        id: row.id,
-                        name: row.name,
-                        type: row.type,
-                        category: row.category || row.type,
-                        rarity: row.rarity || 'common',
-                        icon: row.icon || '📦',
-                        // Слот нужен, чтобы нож можно было надеть, а прочность —
-                        // чтобы износ и ремонт работали с первого боя.
-                        slot: row.slot || null,
-                        stats,
-                        damage: Number(stats.damage) || 0,
-                        durability: Number(row.durability) || 100,
-                        max_durability: Number(row.max_durability) || 100,
-                        upgrade_level: 0,
-                        modifications: {},
-                        price: row.price || 0,
-                        quantity: 1
-                    });
+                if (!player) {
+                    // Уже существует — читаем текущего
+                    player = await queryOne(
+                        'SELECT * FROM players WHERE telegram_id = $1',
+                        [telegramId]
+                    );
                 }
 
-                if (starterItems.length > 0) {
-                    await query(`
-                        UPDATE players SET inventory = $1 WHERE telegram_id = $2
-                    `, [JSON.stringify(starterItems), telegramId]);
+                if (!player) {
+                    // Не удалось создать и не нашли — ошибка
+                    throw new Error('Не удалось создать или найти игрока');
                 }
-            } else {
+
+                // Если игрок только что создан (старые поля пусты), выдаём стартовый инвентарь
+                const isNewPlayer = !player.inventory || player.inventory === '[]' || player.inventory === null;
+                if (isNewPlayer) {
+                    // Стартовый инвентарь берём из каталога по ИМЕНИ, а не по захардкоженным
+                    // id. Раньше здесь стояли {id: 1} и {id: 2} — таких id в
+                    // таблице items нет (реальные начинаются со 150480), поэтому
+                    // предметы нельзя было ни продать, ни применить, ни увидеть
+                    // в магазине: они были фантомами мёртвой версии игры.
+                    // Стартовый набор. Раньше здесь были только «Консервы» и «Вода»:
+                    // игрок начинал без оружия, хотя в бою с боссом урон теперь даёт и снаряжение
+                    // (ближний бой +40% к боссам). Нож — 20 монет, 50 прочности и +5 урона:
+                    // он же учит механике износа и ремонта.
+                    const starterNames = ['Нож', 'Консервы', 'Вода'];
+                    const starterResult = await query(
+                        `SELECT id, name, type, category, rarity, icon, slot, price, stats, durability, max_durability
+                           FROM items WHERE name = ANY($1::text[])`,
+                        [starterNames]
+                    );
+                    const starterItems = [];
+                    for (const name of starterNames) {
+                        const row = starterResult.rows.find((item) => item.name === name);
+                        if (!row) {
+                            logger.warn('[bot] Стартовый предмет не найден в каталоге', { name });
+                            continue;
+                        }
+                        // stats приходит из jsonb-колонки (уже объект), но исторически мог быть
+                        // строкой — разбор без try/catch ронял весь обработчик /start.
+                        let stats = row.stats;
+                        if (typeof stats === 'string') {
+                            try {
+                                stats = JSON.parse(stats);
+                            } catch {
+                                stats = {};
+                            }
+                        } else if (!stats || typeof stats !== 'object') {
+                            stats = {};
+                        }
+                        starterItems.push({
+                            id: row.id,
+                            name: row.name,
+                            type: row.type,
+                            category: row.category || row.type,
+                            rarity: row.rarity || 'common',
+                            icon: row.icon || '📦',
+                            // Слот нужен, чтобы нож можно было надеть, а прочность —
+                            // чтобы износ и ремонт работали с первого боя.
+                            slot: row.slot || null,
+                            stats,
+                            damage: Number(stats.damage) || 0,
+                            durability: Number(row.durability) || 100,
+                            max_durability: Number(row.max_durability) || 100,
+                            upgrade_level: 0,
+                            modifications: {},
+                            price: row.price || 0,
+                            quantity: 1
+                        });
+                    }
+
+                    if (starterItems.length > 0) {
+                        await query(`
+                            UPDATE players SET inventory = $1 WHERE telegram_id = $2
+                        `, [JSON.stringify(starterItems), telegramId]);
+                    }
+                } else {
                 // Обновляем username при повторном входе
                 if (username && player.username !== username) {
                     await query(`

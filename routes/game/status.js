@@ -93,7 +93,11 @@ async function runStatusCheck(client, playerId) {
 router.post('/check', async (req, res) => {
     try {
         const player = req.player;
-        const playerId = player.id;
+        const playerId = player?.id;
+        
+        if (!playerId) {
+            return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+        }
         
         // Используем транзакцию с блокировкой строки
         const result = await transaction(async (client) => runStatusCheck(client, playerId));

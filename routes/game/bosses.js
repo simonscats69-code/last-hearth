@@ -1934,11 +1934,24 @@ router.post('/raid/:id/attack', async (req, res) => {
             await client.query('UPDATE raid_progress SET current_health = $1 WHERE id = $2', [newHp, raidId]);
             // first_hit отмечается здесь, а не в момент входа: участник,
             // вошедший первым, но никем не тронутый босса, бонуса не стоит.
+            // damage_dealt в CASE — СТАРОЕ значение (до этого UPDATE).
+            // first_hitter = TRUE только тому, кто первым нанёс урон боссу
+            // в этом рейде (урон игрока = 0 и никто другой ещё не бился).
             await client.query(
                 `UPDATE boss_sessions
                     SET damage_dealt = $1,
                         last_hit_at = NOW(),
-                        first_hitter = CASE WHEN damage_dealt = 0 THEN TRUE ELSE first_hitter END
+                        first_hitter = CASE
+                            WHEN damage_dealt = 0
+                                 AND NOT EXISTS (
+                                     SELECT 1 FROM boss_sessions bs2
+                                     WHERE bs2.raid_id = boss_sessions.raid_id
+                                       AND bs2.player_id != boss_sessions.player_id
+                                       AND bs2.damage_dealt > 0
+                                 )
+                            THEN TRUE
+                            ELSE first_hitter
+                        END
                   WHERE player_id = $2 AND raid_id = $3`,
                 [newTotalDamage, playerId, raidId]
             );
@@ -2173,13 +2186,15 @@ router.post('/raid/:id/attack', async (req, res) => {
                     },
                 }
             };
+
+            // Логи опыта уходят после начисления, но ещё внутри транзакции,
+            // чтобы expLogs (объявленная через const) была доступна.
+            for (const { playerId: pid, logData } of expLogs) {
+                await logPlayerAction(pid, logData.action, logData.data);
+            }
+
+            return res.status(outcome.status).json(outcome.body);
         });
-
-        for (const { playerId: pid, logData } of expLogs) {
-            await logPlayerAction(pid, logData.action, logData.data);
-        }
-
-        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
         if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'mass_attack');

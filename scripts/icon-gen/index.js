@@ -21,7 +21,6 @@ const fs = require('fs');
 const path = require('path');
 
 const { Canvas, drawFrame, applyGrain } = require('./draw');
-const bosses = require('./icons/bosses');
 const bossesHi = require('./icons/bosses-hi');
 const weapons = require('./icons/weapons');
 const armor = require('./icons/armor');
@@ -33,8 +32,8 @@ const OUT_DIR = path.join(__dirname, '..', '..', 'public', 'icons');
 const SIZE = 64;
 const BOSS_SIZE = 256;
 
-/** Все определения иконок в одном словаре (боссы — в обычном разрешении). */
-const ICONS = { ...bosses, ...weapons, ...armor, ...consumables, ...resources, ...misc };
+/** Все определения иконок в одном словаре (боссы — bosses-hi, 256×256). */
+const ICONS = { ...bossesHi, ...weapons, ...armor, ...consumables, ...resources, ...misc };
 
 /** Ключи иконок боссов — для них используется bosses-hi (256×256). */
 const BOSS_KEYS = Object.keys(bossesHi);
@@ -148,6 +147,7 @@ const BY_NAME = {
     'Ключ от Гигантского монстра': 'res-key',
     'Ключ от Профессора безумия': 'res-key',
     'Ключ от Последнего стража': 'res-key',
+    'Ключ от Крысного короля': 'res-key',
 
     // Локации
     'Спальный район': 'loc-home',
@@ -161,6 +161,8 @@ const BY_NAME = {
 /** Fallback по эмодзи — для ачивок и всего, где имя неизвестно. */
 const BY_EMOJI = {
     '🐀': 'boss-rat',
+    '🤡': 'boss-psych',
+    '🛸': 'boss-drone',
     '🔪': 'wpn-knife',
     '🐻': 'boss-bear',
     '🤖': 'arm-exo',
@@ -169,6 +171,7 @@ const BY_EMOJI = {
     '💂': 'boss-officer',
     '🦖': 'boss-monster',
     '🧑‍🔬': 'boss-professor',
+    '👑': 'boss-warden',
     '🛡️': 'med-radiashield',
     '🏏': 'wpn-bat',
     '🔫': 'wpn-pistol',
@@ -304,6 +307,11 @@ window.IconManifest = ${JSON.stringify(manifest)};
     console.log(`[icon-gen] манифест: ${Object.keys(manifest.byName).length} имён, ${Object.keys(manifest.byEmoji).length} эмодзи`);
 }
 
-main();
+try {
+    main();
+} catch (err) {
+    console.error('[icon-gen] Ошибка генерации иконок:', err.message);
+    process.exitCode = 1;
+}
 
 
