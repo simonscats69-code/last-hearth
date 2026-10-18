@@ -8580,8 +8580,25 @@ function generateScreens() {
     // Собираем экраны через генераторы. Проверка на функцию — страховка:
     // если генератор не объявлен (опечатка в имени из списка выше), экран
     // пропускается, а не роняет всю инициализацию.
+    //
+    // try/catch на каждый генератор: раньше исключение из ЛЮБОГО шаблона
+    // убивало generateScreens целиком → startGame обрывался → не работало
+    // всё, включая главный экран. Теперь сломанный шаблон логируется и
+    // пропускается, остальные экраны создаются.
     const screensHtml = SCREEN_BUILDERS
-        .map(name => (typeof window[name] === 'function' || orGlobal(name)) ? window[name]() : '')
+        .map(name => {
+            const builder = (typeof window[name] === 'function' || orGlobal(name)) ? globalThis[name] : null;
+            if (typeof builder !== 'function') {
+                console.warn('[generateScreens] Генератор экрана не найден:', name);
+                return '';
+            }
+            try {
+                return builder();
+            } catch (err) {
+                console.error('[generateScreens] Ошибка генерации экрана', name, err);
+                return '';
+            }
+        })
         .filter(Boolean)
         .join('\n');
 
@@ -8775,6 +8792,7 @@ function mapScreenHtml() {
                 <div class="location-risk-hint" id="location-risk-hint" aria-live="polite">Выберите локацию для просмотра рисков</div>
             </div>
         </div>
+    </div>
     `;
 }
 
