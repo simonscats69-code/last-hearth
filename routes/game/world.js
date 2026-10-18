@@ -750,7 +750,7 @@ router.post('/move', async (req, res) => {
                 UPDATE players
                    SET current_location_id = $1,
                        updated_at = NOW(),
-                       energy = GREATEST(0, energy - 1)
+                       energy = GREATEST(0, energy - 1),
                        -- locations_visited читает достижение «Путешественник»
                        -- (3 локации) и «Искатель» (7). Хранит объекты {id, name}.
                        locations_visited = (

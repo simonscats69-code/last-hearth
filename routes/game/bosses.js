@@ -1144,6 +1144,20 @@ router.get('/', async (req, res) => {
             const playerId = req.player.id;
             logger.info('[bosses/get] Получение данных игрока', { playerId });
             const player = await getPlayerBaseState(client, playerId);
+
+            // Игрок не найден в базе — отдаём 404 вместо падения на player.equipment
+            // (TypeError: Cannot read properties of null -> 500).
+            if (!player) {
+                return {
+                    status: 404,
+                    body: {
+                        success: false,
+                        error: 'Игрок не найден',
+                        code: 'PLAYER_NOT_FOUND'
+                    }
+                };
+            }
+
             const activeBattle = await resolveActiveBattle(client, playerId);
             const masteries = await getBossMasteries(client, playerId);
             const masteryMap = {};
