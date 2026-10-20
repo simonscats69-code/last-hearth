@@ -119,7 +119,7 @@ const handleError = (res, error, action, playerId) => {
  * @param {object} res ответ express
  * @param {object} [data] данные ответа
  */
-const ok = (res, data = {}) => res.json({ success: true, ...data });
+const ok = (res, data = {}) => res.json({ success: true, data });
 
 /**
  * Ошибка клиентского запроса PvP (4xx).
@@ -342,7 +342,7 @@ router.post('/attack', async (req, res) => {
             const startBuffs = getActiveBuffs(lockedPlayer.buffs);
 
             // Проверяем наличие энергии ДО списания
-            if (!lockedPlayer || (!startBuffs.free_energy && Number(lockedPlayer.energy || 0) < 1)) {
+            if (!startBuffs.free_energy && Number(lockedPlayer.energy || 0) < 1) {
                 throwPvpError(PvpError.INSUFFICIENT_ENERGY);
             }
 
@@ -739,15 +739,15 @@ await client.query(`
                 const cooldownMin = 5;
                 // Атомарно ставим кулдауны обоим игрокам одним запросом:
                 // ON CONFLICT (player_id, cooldown_type) работает для каждой строки VALUES отдельно.
-                await client.query(
-                    `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)
-                     VALUES
-                         ($1, 'pvp_battle', NOW() + ($3 || ' minutes')::interval),
-                         ($2, 'pvp_battle', NOW() + ($3 || ' minutes')::interval)
-                     ON CONFLICT (player_id, cooldown_type)
-                     DO UPDATE SET expires_at = NOW() + ($3 || ' minutes')::interval`,
-                    [attackerId, defenderId, cooldownMin]
-                );
+                 await client.query(
+                     `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)
+                      VALUES
+                          ($1, 'pvp_battle', NOW() + $3 * interval '1 minute'),
+                          ($2, 'pvp_battle', NOW() + $3 * interval '1 minute')
+                      ON CONFLICT (player_id, cooldown_type)
+                      DO UPDATE SET expires_at = NOW() + $3 * interval '1 minute'`,
+                     [attackerId, defenderId, cooldownMin]
+                 );
                 // Защита от повторной атаки одной цели (10 мин)
                 await client.query(
                     `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at)

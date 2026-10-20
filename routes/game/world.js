@@ -160,7 +160,11 @@ async function handleLocationsList(req, res) {
     logger.info('[world] GET /locations вызван', { playerId: req.player?.id, query: req.query });
     try {
         const player = req.player;
-        
+
+        if (!player) {
+            return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+        }
+
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
         const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
         
@@ -224,6 +228,10 @@ router.post('/search', async (req, res) => {
     // Фильтруем чувствительные заголовки перед логированием
     const safeHeaderKeys = Object.keys(req.headers).filter(k => !['authorization', 'cookie', 'x-init-data'].includes(k.toLowerCase()));
     logger.info('[world] POST /search вызван', { playerId: req.player?.id, body: req.body, headers: safeHeaderKeys });
+
+    if (!req.player) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
     const playerId = req.player.id;
 
     // Раньше здесь вручную бралось соединение, а ветки отказа («нет
@@ -296,7 +304,7 @@ router.post('/search', async (req, res) => {
             }
 
             const location = await client.query(`
-                SELECT id, name, radiation FROM locations WHERE id = $1
+                SELECT id, name, radiation, is_available, min_level, loot_table FROM locations WHERE id = $1
             `, [updatedPlayer.current_location_id]);
 
             if (location.rows.length === 0) {
@@ -308,6 +316,31 @@ router.post('/search', async (req, res) => {
             }
 
             const locationData = location.rows[0];
+
+            if (!locationData.is_available) {
+                return {
+                    status: 403,
+                    body: {
+                        success: false,
+                        error: 'Эта локация сейчас недоступна для исследований',
+                        code: 'LOCATION_UNAVAILABLE'
+                    }
+                };
+            }
+
+            if (Number(updatedPlayer.level || 1) < Number(locationData.min_level || 1)) {
+                return {
+                    status: 403,
+                    body: {
+                        success: false,
+                        error: `Для исследований в этой зоне нужен уровень ${locationData.min_level}+`,
+                        code: 'INSUFFICIENT_LEVEL',
+                        required_level: Number(locationData.min_level),
+                        current_level: Number(updatedPlayer.level || 1)
+                    }
+                };
+            }
+
             const equipment = safeJsonParse(updatedPlayer.equipment, {});
             const riskProfile = calculateLocationRiskProfile(locationData, equipment);
         
@@ -403,7 +436,7 @@ router.post('/search', async (req, res) => {
                     boss_name: foundKey.bossName
                 };
             } else {
-                itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck);
+                itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck, locationData.loot_table);
 
                 foundItem = await getRandomLootItem(client, itemRarity, locationData.id);
             }
@@ -652,6 +685,10 @@ router.post('/move', async (req, res) => {
     // в прежней записи стоял после этих проверок. Заодно уходит лишнее
     // занятие соединения из пула на время валидации.
     const { location_id } = req.body;
+
+    if (!req.player) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
     const playerId = req.player.id;
     const locationIdNum = Number(location_id);
 
@@ -696,7 +733,7 @@ router.post('/move', async (req, res) => {
             }
 
             const targetLocation = await client.query(`
-                SELECT id, name, radiation, description, min_level, danger_level, icon
+                SELECT id, name, radiation, description, min_level, danger_level, icon, is_available
                 FROM locations WHERE id = $1
             `, [locationIdNum]);
 
@@ -713,7 +750,18 @@ router.post('/move', async (req, res) => {
 
             const locationData = targetLocation.rows[0];
 
-            const requiredLevel = locationData.min_level || 1;
+            if (!locationData.is_available) {
+                return {
+                    status: 403,
+                    body: {
+                        success: false,
+                        error: 'Эта локация сейчас недоступна для перехода',
+                        code: 'LOCATION_UNAVAILABLE'
+                    }
+                };
+            }
+
+            const requiredLevel = Number(locationData.min_level || 1);
             if (player.level < requiredLevel) {
                 return {
                     status: 200,

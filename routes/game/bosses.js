@@ -143,7 +143,7 @@ function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
     // Усиливаем базовую прогрессию, чтобы ранние боссы не были чрезмерно затянутыми.
     const levelDamage = Math.max(1, Number(player.level || 1));
     const baseDamage = BOSS_BASE_DAMAGE + (levelDamage * BOSS_DAMAGE_PER_LEVEL);
-    return Math.floor(baseDamage + killBonus + setDamage + weaponDamage);
+    return Math.max(1, Math.floor(baseDamage + killBonus + setDamage + weaponDamage));
 }
 
 /**
@@ -1487,6 +1487,9 @@ router.get('/raids', async (req, res) => {
 router.post('/raid/start', async (req, res) => {
     // Валидация до открытия транзакции — как в POST /bosses/start.
     const bossId = Number(req.body?.boss_id);
+    if (!req.player) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
     const playerId = req.player.id;
     const playerName = req.player.first_name || 'Игрок';
 
@@ -1653,6 +1656,9 @@ router.post('/raid/start', async (req, res) => {
 router.post('/raid/:id/join', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const raidId = Number(req.params.id);
+    if (!req.player) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
     const playerId = req.player.id;
 
     if (!raidId || raidId <= 0) {
@@ -1784,6 +1790,9 @@ router.post('/raid/:id/join', async (req, res) => {
 router.post('/raid/:id/leave', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const raidId = Number(req.params.id);
+    if (!req.player) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
     const playerId = req.player.id;
 
     if (!raidId || raidId <= 0) {
@@ -1821,6 +1830,9 @@ router.post('/raid/:id/leave', async (req, res) => {
 router.post('/raid/:id/attack', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const raidId = Number(req.params.id);
+    if (!req.player) {
+        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    }
     const playerId = req.player.id;
 
     if (!raidId || raidId <= 0) {
@@ -2144,6 +2156,12 @@ router.post('/raid/:id/attack', async (req, res) => {
                 await client.query('DELETE FROM raid_progress WHERE id = $1', [raidId]);
             }
 
+            // Логи опыта уходят после начисления, но ещё внутри транзакции,
+            // чтобы expLogs (объявленная через const) была доступна.
+            for (const { playerId: pid, logData } of expLogs) {
+                await logPlayerAction(pid, logData.action, logData.data);
+            }
+
             return {
                 status: 200,
                 body: {
@@ -2173,12 +2191,12 @@ router.post('/raid/:id/attack', async (req, res) => {
                             raidBoss,
                             player.max_health,
                             safeJsonParse(player.equipment, {}),
-                                { currentHealth: newHp, playerLevel: player.level }
-                            ),
-                            // Итоговая защита: экипировка + 3 за уровень.
-                            player_defense: equipmentRules.calculateDefenseTotal(safeJsonParse(player.equipment, {}))
-                                + equipmentRules.calculateLevelDefense(player.level),
-                            player_energy: energyResult.rows[0]?.energy ?? player.energy,
+                            { currentHealth: newHp, playerLevel: player.level }
+                        ),
+                        // Итоговая защита: экипировка + 3 за уровень.
+                        player_defense: equipmentRules.calculateDefenseTotal(safeJsonParse(player.equipment, {}))
+                            + equipmentRules.calculateLevelDefense(player.level),
+                        player_energy: energyResult.rows[0]?.energy ?? player.energy,
                         last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                         your_total_damage: newTotalDamage,
                         killed,
@@ -2186,15 +2204,9 @@ router.post('/raid/:id/attack', async (req, res) => {
                     },
                 }
             };
-
-            // Логи опыта уходят после начисления, но ещё внутри транзакции,
-            // чтобы expLogs (объявленная через const) была доступна.
-            for (const { playerId: pid, logData } of expLogs) {
-                await logPlayerAction(pid, logData.action, logData.data);
-            }
-
-            return res.status(outcome.status).json(outcome.body);
         });
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
         if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'mass_attack');

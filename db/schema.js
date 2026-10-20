@@ -116,6 +116,13 @@ async function createTables() {
     // и выполняется в runMigrations()
 
     // Таблица локаций
+    //
+    // min_level — минимальный уровень игрока для входа и поиска лута.
+    // min_luck — устаревшая колонка со старой системы удачи, мигрируется
+    // в min_level при старте (строки 134-151), сама больше не используется.
+    // loot_table — JSONB с распределением редкостей лута для этой локации.
+    // Если заполнена, имеет приоритет над хардкодом в utils/gameConstants.js.
+    // Это позволяет менять баланс лута без деплоя кода.
     await query(`
         CREATE TABLE IF NOT EXISTS locations (
             id SERIAL PRIMARY KEY,
@@ -127,7 +134,8 @@ async function createTables() {
             loot_table JSONB DEFAULT '[]',
             is_available BOOLEAN DEFAULT true,
             icon VARCHAR(50),
-            color VARCHAR(20)
+            color VARCHAR(20),
+            min_level INTEGER DEFAULT 1
         );
     `);
     
@@ -334,7 +342,7 @@ async function createTables() {
             rewards_earned BOOLEAN DEFAULT false,
             joined_at TIMESTAMP DEFAULT NOW(),
             last_hit_at TIMESTAMP DEFAULT NOW(),
-            UNIQUE(boss_id, player_id)
+            UNIQUE(boss_id, player_id, COALESCE(raid_id, -1))
         );
     `);
 
@@ -555,6 +563,10 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_chat_clan ON clan_chat(clan_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_chat_created ON clan_chat(created_at DESC)`);
 
+    // Индексы для locations
+    await query(`CREATE INDEX IF NOT EXISTS idx_locations_min_level ON locations(min_level)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_locations_available ON locations(is_available)`);
+
     // Индексы для clan_applications и player_sessions удалены вместе с таблицами.
 
     // Индексы для pvp_cooldowns
@@ -682,6 +694,14 @@ async function runMigrations() {
     // Все проверки идемпотентны через information_schema, поэтому на чистой БД
     // (где constraint ещё нет) миграция просто создаст его.
     const missingForeignKeys = [
+        {
+            constraint: 'fk_clans_leader_id',
+            table: 'clans',
+            column: 'leader_id',
+            references: 'players(id)',
+            onDelete: 'ON DELETE SET NULL',
+            checkColumn: true
+        },
         {
             constraint: 'fk_players_clan_id',
             table: 'players',
@@ -841,17 +861,13 @@ async function runMigrations() {
     `);
 
     await queryTx(`CREATE INDEX IF NOT EXISTS idx_clans_leader_id ON clans(leader_id)`);
-    // Индексы idx_players_telegram_id и idx_players_clan_id уже созданы в createTables()
-    await queryTx(`CREATE INDEX IF NOT EXISTS idx_player_achievements_player_id ON player_achievements(player_id)`);
-    await queryTx(`CREATE INDEX IF NOT EXISTS idx_boss_mastery_player_id ON boss_mastery(player_id)`);
-    await queryTx(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_id ON daily_tasks(player_id)`);
+    // Индексы idx_players_telegram_id, idx_players_clan_id, idx_player_achievements_player,
+    // idx_boss_mastery_player, idx_daily_tasks_player уже созданы в createTables()
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
 
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_collected INTEGER DEFAULT 0`);
 
-    // Миграции для achievements
-    await queryTx(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'survival'`);
-    await queryTx(`ALTER TABLE achievements ADD COLUMN IF NOT EXISTS rarity VARCHAR(20) DEFAULT 'common'`);
+    // Миграции для achievements — колонки category и rarity уже в CREATE TABLE (стр. 444, 448)
 
     // Здоровье и лечение: пассивный реген.
     // last_hp_regen хранит метку времени последнего начисления: по ней
@@ -863,14 +879,12 @@ async function runMigrations() {
     // колонки, если они остались в БД от прошлой версии, никем не читаются.
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMESTAMP`);
 
-    // Миграции для player_achievements
-    await queryTx(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS progress_value INTEGER DEFAULT 0`);
-    await queryTx(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS reward_claimed BOOLEAN DEFAULT false`);
-    await queryTx(`ALTER TABLE player_achievements ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP`);
+    // Миграции для player_achievements — колонки progress_value, reward_claimed, claimed_at
+    // уже в CREATE TABLE (стр. 460, 463, 464)
 
 // Тип боеприпасов оружия: none / ammo / rockets. Мастерская знает по нему,
     // что тратить на улучшение — патроны или реактивные гранаты.
-    await queryTx(`ALTER TABLE items ADD COLUMN IF NOT EXISTS ammo_type VARCHAR(20) DEFAULT 'none'`);
+// Колонка ammo_type уже в CREATE TABLE (стр. 169)
 
     // Миграция: заменяем UNIQUE(name, type) на UNIQUE(name, type, rarity)
     // чтобы разрешить одинаковые имена для разных редкостей.
@@ -1119,13 +1133,6 @@ async function seedDatabase() {
         //   Бинт 0.50 -> Витамины 0.57 -> Аптечка/Спирт 0.60 -> Нано 0.63 -> Реаниматор 0.67
         // Крупные лекарства выгоднее на HP, но требуют звёзд и места в инвентаре.
         { name: 'Витамины', description: 'Комплекс витаминов', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 160, icon: '💊', stats: { health: 20 } },
-        // Еда / расходники (продолжение)
-        { name: 'Снеки', description: 'Сухие пайки', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '🍪', stats: { energy: 2 } },
-        { name: 'Энергетик', description: 'Баночка энергетика', type: 'food', category: 'consumable', rarity: 'uncommon', price: 200, icon: '⚡', stats: { energy: 10 } },
-        { name: 'Вода', description: 'Бутылка чистой воды', type: 'food', category: 'consumable', rarity: 'common', price: 50, icon: '💧', stats: { energy: 3 } },
-        { name: 'Стимулятор', description: 'Мощный допинг', type: 'food', category: 'consumable', rarity: 'epic', price: 5000, stars_price: 6, icon: '💥', stats: { energy: 30 } },
-        { name: 'Сыворотка мутанта', description: 'Мутантная сыворотка: энергия как у зверя', type: 'food', category: 'consumable', rarity: 'legendary', price: 50000, icon: '🧬', stats: { energy: 50 } },
-        { name: 'Нейроимплант', description: 'Улучшает реакцию и интеллект', type: 'food', category: 'consumable', rarity: 'epic', price: 5000, stars_price: 5, icon: '🧠', stats: { energy: 25 } },
         // Оружие: только то, что реально встречается в постапокалипсисе.
         //
         // Два типа боя с разными ролями (stats.boss_bonus / stats.pvp_bonus):

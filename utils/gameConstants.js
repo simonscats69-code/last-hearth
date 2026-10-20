@@ -29,7 +29,12 @@ const { calculateDropChance } = sharedEquipment;
 // public/shared/equipment.js. Прежняя локальная копия снята: она не
 // экспортировалась и не использовалась — мёртвый дубль.
 
-// Таблицы лута по локациям
+/**
+ * Таблицы лута по локациям (хардкод как фоллбэк на случай, если в БД
+ * не заполнена колонка locations.loot_table).
+ *
+ * Структура: { locationId: { common: %, uncommon: %, rare: %, epic: %, legendary: % } }
+ */
 const LOOT_TABLES = {
     1: { common: 100, uncommon: 0, rare: 0, epic: 0, legendary: 0 },
     2: { common: 65, uncommon: 28, rare: 6, epic: 1, legendary: 0 },
@@ -41,11 +46,20 @@ const LOOT_TABLES = {
 };
 
 /**
- * Получить таблицу лута для локации
+ * Получить таблицу лута для локации.
+ *
+ * Приоритет: переданный dbLootTable (из колонки locations.loot_table в БД),
+ * иначе хардкодный фоллбэк. Это позволяет менять баланс лута без деплоя кода,
+ * просто обновив строку в БД.
+ *
  * @param {number} locationId - ID локации
+ * @param {object|null} dbLootTable - JSONB из locations.loot_table (опционально)
  * @returns {object} Таблица вероятностей
  */
-function getLootTable(locationId) {
+function getLootTable(locationId, dbLootTable = null) {
+    if (dbLootTable && typeof dbLootTable === 'object' && Object.keys(dbLootTable).length > 0) {
+        return dbLootTable;
+    }
     return LOOT_TABLES[locationId] || LOOT_TABLES[1];
 }
 
@@ -53,10 +67,11 @@ function getLootTable(locationId) {
  * Определить редкость выпавшего предмета
  * @param {number} locationId - ID локации
  * @param {number} luck - Удача игрока (влияет на шанс редкости)
+ * @param {object|null} dbLootTable - JSONB из locations.loot_table (опционально)
  * @returns {string} Редкость предмета
  */
-function rollItemRarity(locationId, luck = 1) {
-    const table = getLootTable(locationId);
+function rollItemRarity(locationId, luck = 1, dbLootTable = null) {
+    const table = getLootTable(locationId, dbLootTable);
     const roll = Math.random() * 100;
     
     // Бонус удачи к редкости: каждый пункт удачи даёт +0.1% к редким предметам
@@ -376,6 +391,8 @@ module.exports = {
     // Лут — читает routes/game/world.js
     calculateDropChance,
     rollItemRarity,
+    getLootTable,
+    LOOT_TABLES,
 
     // Риск локации — читает routes/game/world.js
     calculateLocationRiskProfile

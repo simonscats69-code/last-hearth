@@ -67,9 +67,9 @@ async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = '
 
     await executeQuery(
         `INSERT INTO pvp_cooldowns (player_id, cooldown_type, expires_at, reason)
-         VALUES ($1, $2, NOW() + make_interval(mins => $3), $4)
+         VALUES ($1, $2, NOW() + ($3 * interval '1 minute'), $4)
          ON CONFLICT (player_id, cooldown_type)
-         DO UPDATE SET expires_at = NOW() + make_interval(mins => $3), reason = $4`,
+         DO UPDATE SET expires_at = NOW() + ($3 * interval '1 minute'), reason = $4`,
         [playerId, type, validatedMinutes, reason]
     );
 }

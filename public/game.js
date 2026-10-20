@@ -1565,20 +1565,43 @@ const Templates = {
         `;
     },
     
-    // Карточка босса
+    // Карточка босса (список боссов).
+    // Крупная иконка (64px), шкала HP с сегментами, кнопка атаки акцентом.
     bossCard(boss) {
         const hpPercent = boss.current_hp / boss.max_hp * 100;
+        const locked = boss.locked || boss.required_level && boss.required_level > (gameState?.player?.level || 1);
+        const reqLevel = boss.required_level || boss.min_level || 1;
         return `
-            <div class="boss-card" data-id="${escapeAttribute(boss.id)}">
+            <div class="boss-card${locked ? ' locked' : ''}" data-id="${escapeAttribute(boss.id)}">
                 <div class="boss-header">
-                    <span class="boss-icon">${iconHtml(boss.name, boss.icon, 'icon-img boss-card-icon')}</span>
-                    <span class="boss-name">${escapeHtml(boss.name)}</span>
+                    <div class="boss-portrait-wrapper">
+                        <span class="boss-icon boss-card-icon">${iconHtml(boss.name, boss.icon, 'icon-img boss-card-icon')}</span>
+                        ${locked ? '<span class="boss-lock-badge">🔒</span>' : ''}
+                    </div>
+                    <div class="boss-info">
+                        <div class="boss-name-row">
+                            <span class="boss-name">${escapeHtml(boss.name)}</span>
+                            ${locked ? `<span class="boss-req-level">требуется ур. ${reqLevel}</span>` : ''}
+                        </div>
+                        <div class="boss-desc">${escapeHtml(boss.description || 'Теневой враг Очага')}</div>
+                    </div>
                 </div>
-                <div class="battle-health">
-                    <div class="battle-health-fill" style="width: ${hpPercent}%"></div>
+                <div class="boss-hp-section">
+                    <div class="boss-hp-row">
+                        <span class="boss-hp-label">Здоровье</span>
+                        <span class="boss-hp-value">${Number(boss.current_hp)}/${Number(boss.max_hp)}</span>
+                    </div>
+                    <div class="battle-health">
+                        <div class="battle-health-fill boss-hp-fill" style="width: ${hpPercent}%; background: linear-gradient(90deg, var(--health-color), #ff8a5c, #ffc44d)"></div>
+                    </div>
                 </div>
-                <div class="battle-health-text">${Number(boss.current_hp)}/${Number(boss.max_hp)} HP</div>
-                <button class="btn attack-btn" data-attack-boss>Атаковать</button>
+                <div class="boss-footer">
+                    ${!locked ? `<button class="btn btn-primary attack-btn" data-attack-boss data-boss-id="${escapeAttribute(boss.id)}">⚔️ Атаковать</button>` : `<button class="btn btn-secondary disabled">Заблокировано</button>`}
+                    <div class="boss-keys-line">
+                        <span class="boss-keys-icon">🗝️</span>
+                        <span class="boss-keys-text">${boss.keys_owned || 0} / ${boss.keys_needed || 1}</span>
+                    </div>
+                </div>
             </div>
         `;
     },
@@ -3562,7 +3585,7 @@ function syncUnlockedLocations(announce = false) {
     }
 
     const currentUnlocked = gameState.locations
-        .filter((location) => gameState.player.level >= (location.required_level || location.min_level || 1))
+        .filter((location) => gameState.player.level >= (location.min_level || 1))
         .map((location) => location.id);
 
     if (!Array.isArray(gameState.seenUnlockedLocations) || !gameState.seenUnlockedLocations.length) {
@@ -4023,10 +4046,8 @@ async function searchLoot() {
                 updateConditionsUI(gameState.player.status);
             }
 
-            // Финальная синхронизация статуса/локации с сервером,
-            // чтобы исключить рассинхрон UI после лута и дебаффов.
-            await loadProfile();
-
+            // Обновляем статус/локацию с сервера — все нужные поля уже в ответе,
+            // лишний loadProfile() не требуется.
             if (result.risk_profile) {
                 const riskHint = document.getElementById('location-risk-hint');
                 if (riskHint) {
@@ -4079,7 +4100,7 @@ async function moveToLocation(locationId) {
         const result = response.data || response;
         
         if (result.success) {
-            const locationData = result.location || result.data?.location;
+            const locationData = result.data?.location;
             gameState.player.current_location_id = locationData?.id || locationId;
             gameState.player.location = locationData;
             updateProfileUI(gameState.player);
@@ -5368,38 +5389,51 @@ function renderBosses(bosses) {
         const hpPercent = Math.max(0, Math.min(100, (currentHp / maxHp) * 100));
 
         const item = document.createElement('div');
-        item.className = `boss-item ${isUnlocked ? '' : 'locked'} ${isUnlocked ? 'available' : 'unavailable'}`;
+        item.className = `boss-card${!isUnlocked ? ' locked' : ''}`;
+
+        const reqLevel = boss.required_level || boss.min_level || 1;
+        const locked = !isUnlocked;
 
         item.innerHTML = `
-            <div class="boss-icon">${iconHtml(boss.name, boss.icon, 'icon-img boss-list-icon')}</div>
-            <div class="boss-info">
-                <div class="boss-name">${escapeHtml(boss.name)}</div>
-                <div class="boss-desc">${escapeHtml(boss.description || '')}</div>
-                <div class="battle-health">
-                    <div class="battle-health-fill" style="width: ${hpPercent}%"></div>
+            <div class="boss-header">
+                <div class="boss-portrait-wrapper">
+                    <span class="boss-icon boss-card-icon">${iconHtml(boss.name, boss.icon, 'icon-img boss-card-icon')}</span>
+                    ${locked ? '<span class="boss-lock-badge">🔒</span>' : ''}
                 </div>
-                <div class="battle-health-text">${formatNumber(currentHp)} / ${formatNumber(maxHp)} HP</div>
-                <div class="boss-mastery">Побеждено: ${defeatedCount}</div>
-                <div class="boss-damage">Урон по боссу: ${currentDamage}</div>
-                ${boss.counter_damage ? `<div class="boss-counter">Ответный удар: ~${boss.counter_damage} (защита и уровень снижают)</div>` : ''}
-                <div class="boss-reward">💰 ${boss.reward_coins || 0} | ✨ ${boss.reward_experience || 0} XP</div>
-                <div class="boss-keys ${isUnlocked ? 'unlocked' : ''}">
-                    <span class="keys-owned">🔑 ${playerKeys}/${keysRequired}</span>
-                    ${boss.id > 1 ? `<span class="keys-needed">нужно ${keysRequired} ключей</span>` : '<span class="keys-needed">первый босс без ключей</span>'}
+                <div class="boss-info">
+                    <div class="boss-name-row">
+                        <span class="boss-name">${escapeHtml(boss.name)}</span>
+                        ${locked ? `<span class="boss-req-level">требуется ур. ${reqLevel}</span>` : ''}
+                    </div>
+                    <div class="boss-desc">${escapeHtml(boss.description || 'Теневой враг Очага')}</div>
                 </div>
             </div>
-            <div class="battle-actions">
-                ${isUnlocked && canStartSolo
-                    ? `<button class="attack-btn start-solo-btn" data-boss-id="${boss.id}">⚔️ Начать бой</button>`
-                    : `<button class="attack-btn disabled" disabled>🔒 Соло-бой недоступен</button>`}
-                ${isUnlocked && canStartMass
-                    ? `<button class="attack-btn mass-btn" data-boss-id="${boss.id}">👥 Массовый бой</button>`
-                    : `<button class="attack-btn disabled" disabled>👥 Массовый бой недоступен</button>`}
+            <div class="boss-hp-section">
+                <div class="boss-hp-row">
+                    <span class="boss-hp-label">Здоровье</span>
+                    <span class="boss-hp-value">${formatNumber(currentHp)} / ${formatNumber(maxHp)}</span>
+                </div>
+                <div class="battle-health">
+                    <div class="battle-health-fill boss-hp-fill" style="width: ${hpPercent}%; background: linear-gradient(90deg, var(--health-color), #ff8a5c, #ffc44d)"></div>
+                </div>
+            </div>
+            <div class="boss-footer">
+                ${!locked && canStartSolo
+                    ? `<button class="btn btn-primary attack-btn start-solo-btn" data-boss-id="${escapeAttribute(boss.id)}">⚔️ Начать бой</button>`
+                    : `<button class="btn btn-secondary disabled" disabled>🔒 Соло-бой недоступен</button>`}
+                ${!locked && canStartMass
+                    ? `<button class="btn btn-primary attack-btn mass-btn" data-boss-id="${escapeAttribute(boss.id)}" style="margin-left:8px">👥 Массовый бой</button>`
+                    : `<button class="btn btn-secondary disabled" disabled style="margin-left:8px">👥 Массовый бой недоступен</button>`}
+                <div class="boss-keys-line">
+                    <span class="boss-keys-icon">🗝️</span>
+                    <span class="boss-keys-text">${playerKeys}/${keysRequired}</span>
+                    ${boss.id > 1 ? `<span class="boss-keys-needed">нужно ${keysRequired} ключей</span>` : '<span class="boss-keys-needed">без ключей</span>'}
+                </div>
             </div>
         `;
 
         const soloBtn = item.querySelector('.start-solo-btn');
-        if (soloBtn) {
+        if (soloBtn && !soloBtn.disabled) {
             soloBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 await startSoloBossFight(boss.id);
@@ -5407,7 +5441,7 @@ function renderBosses(bosses) {
         }
 
         const massBtn = item.querySelector('.mass-btn');
-        if (massBtn) {
+        if (massBtn && !massBtn.disabled) {
             massBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 await startMassBossFight(boss.id);
@@ -7122,7 +7156,7 @@ function selectMapLocation(loc) {
         equipment: gameState.player?.equipment || {}
     });
     const level = Math.max(1, Number(gameState.player?.level) || 1);
-    const requiredLevel = Number(loc.required_level ?? loc.min_level ?? 1);
+    const requiredLevel = Number(loc.min_level ?? 1);
     const isCurrent = Number(gameState.player?.current_location_id) === locationId;
 
     if (infoEl) {
@@ -8910,9 +8944,8 @@ function bossFightScreenHtml() {
                 <h2>⚔️ Бой с боссом</h2>
             </div>
             <div class="boss-fight-container">
-                <!-- Игрок слева, босс справа -->
+                <!-- Игрок слева -->
                 <div class="battle-arena">
-                    <!-- Игрок -->
                     <div class="battle-participant battle-participant--player">
                         <div class="battle-participant-info">
                             <div class="battle-participant-name" id="player-name-display">Игрок</div>
@@ -8924,37 +8957,17 @@ function bossFightScreenHtml() {
                                 </div>
                                 <div class="stat-row">
                                     <span class="stat-label">⚡</span>
-                                    <!-- Энергия показывается ТОЛЬКО здесь: дубль
-                                         внизу экрана убран, чтобы освободить
-                                         вертикаль. energy-used-inline — мигающий «−1». -->
                                     <span class="stat-value" id="player-energy-display">50/50</span>
                                     <span class="energy-used-inline" id="boss-energy-used"></span>
                                 </div>
-                            </div>
-                        </div>
-
-                        <!-- Свой урон: из calculateDamage на сервере, обновляется
-                             после каждого удара. Без него игрок снимал 40, потом 12
-                             и не понимал почему. -->
-                        <div class="battle-participant-info">
-                            <div class="battle-participant-stats">
                                 <div class="stat-row">
                                     <span class="stat-label">⚔️</span>
                                     <span class="stat-value" id="player-damage-display">—</span>
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- Слоты экипировки (RPG-style).
-                             ДВА ряда: 7 слотов в четырёх рядах занимали больше
-                             места, чем блок босса с его HP — бой уходил под
-                             «шмот». Теперь верхний ряд — «шлем/лицо/броня»,
-                             средний — «костюм/руки/ноги», нижний —
-                             «сапоги/оружие/аксессуар».
-                             Каждый слот идёт через Templates.equipmentFightSlot:
-                             раньше семь слотов были вписаны копипастой, и слот
-                             обуви («Сапоги») был подписан «Ноги» — тот же ярлык,
-                             что и у штанов. -->
+
+                        <!-- Слоты экипировки (RPG-style, 3 ряда по 3) -->
                         <div class="equipment-slots player-equipment" id="player-equipment-slots">
                             <div class="equipment-row">
 ${Templates.equipmentFightSlot('helmet', '🪖', 'Шлем', 'Каска')}
@@ -8973,8 +8986,8 @@ ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксесс
                             </div>
                         </div>
                     </div>
-                    
-                    <!-- Центр - VS -->
+
+                    <!-- Центр - VS + таймер -->
                     <div class="battle-vs">
                         <span class="battle-vs-label">VS</span>
                         <div class="battle-timer" id="boss-fight-timer" style="display:none">
@@ -8982,11 +8995,13 @@ ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксесс
                             <span id="boss-timer-text">00:00:00</span>
                         </div>
                     </div>
-                    
-                    <!-- Босс справа -->
+
+                    <!-- Босс справа - крупный портрет -->
                     <div class="battle-participant battle-participant--enemy">
                         <div class="boss-fight-header">
-                            <div class="boss-icon-large" id="boss-icon">👹</div>
+                            <div class="boss-portrait-wrapper-fight">
+                                <div class="boss-icon-large" id="boss-icon">👹</div>
+                            </div>
                             <div class="boss-name-large" id="boss-name">Босс</div>
                         </div>
                         <div class="battle-participant-health">
@@ -8995,19 +9010,18 @@ ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксесс
                             </div>
                             <div class="battle-health-text" id="boss-health-text">0/0</div>
                         </div>
-                        <!-- Ответный удар босса: сервер шлёт counter_damage
-                             (единицы урона при текущем HP босса), без него
-                             игрок не понимал, почему теряет здоровье. -->
                         <div class="battle-participant-meta" id="boss-counter-label" style="display:none"></div>
                     </div>
                 </div>
 
-                <!-- Лог боя (общий компонент .battle-log) -->
+                <!-- Лог боя -->
                 <div class="battle-log" id="fight-log"></div>
 
+                <!-- Действия -->
                 <div class="battle-actions">
-                    <button class="btn attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать</button>
+                    <button class="btn btn-primary attack-btn" id="attack-boss-btn" style="display:none">⚔️ Атаковать (1 ⚡)</button>
                     <div class="attack-progress-container" id="attack-progress-container" style="display:none"></div>
+                    <button class="btn btn-secondary" id="flee-boss-btn" style="display:none">🏃 Сдаться</button>
                 </div>
             </div>
         </div>
@@ -9463,7 +9477,7 @@ function renderShopCategory(category) {
         const buyBtn = itemEl.querySelector('.shop-buy-btn');
         const itemId = itemEl.dataset.itemId;
         
-        buyBtn.addEventListener('click', () => buyShopItem(itemId, category));
+        buyBtn.addEventListener('click', (e) => buyShopItem(itemId, category, e));
     });
 }
 
@@ -9472,7 +9486,7 @@ function renderShopCategory(category) {
  * @param {string} itemId - ID товара
  * @param {string} category - категория
  */
-async function buyShopItem(itemId, category) {
+async function buyShopItem(itemId, category, event) {
     const item = SHOP_ITEMS[category]?.find(i => i.id === itemId);
     if (!item) return;
     
@@ -9504,8 +9518,8 @@ async function buyShopItem(itemId, category) {
     // Без неё два быстрых тапа списывали валюту дважды (или покупали два баффа)
     if (!lockAction('purchase')) return;
 
-    const buyButtons = document.querySelectorAll('.shop-buy-btn:not([disabled])');
-    buyButtons.forEach((button) => { button.disabled = true; });
+    const buyButton = event.currentTarget || document.querySelector(`.shop-buy-btn[data-id="${itemId}"]`);
+    if (buyButton) buyButton.disabled = true;
 
     // Покупка
     try {
@@ -9992,8 +10006,32 @@ function spinWheelAnimation(prize, isPaid) {
     const prizeIndex = prizes.findIndex(p => p.type === prize?.type && p.value === prize?.value);
     if (prizeIndex < 0) {
         console.warn('[spinWheelAnimation] Приз с сервера не найден в списке призов:', prize);
+        // Показываем первый сектор, но не вращаем — награда уже начислена сервером
+        const finalAngle = rotations * 360;
+        wheel.style.transition = 'transform 3s ease-out';
+        wheel.style.transform = `rotate(${finalAngle}deg)`;
+        setTimeout(() => {
+            // Выдача приза (уже начислена сервером)
+            if (prize?.type === 'coins') {
+                showModal('🎉 Выигрыш!', `Выпало: ${prize.text}`, 'success');
+            } else if (prize?.type === 'multiplier') {
+                showModal('🎉 Удвоение!', `Множитель x${Number(prize.value) || 0}!`, 'success');
+            } else if (prize?.type === 'energy') {
+                showModal('⚡ Энергия!', `+${Number(prize.value) || 0} энергии!`, 'success');
+            }
+            showConfetti(80);
+            loadProfile().catch(e => console.error('Failed to update player:', e));
+            setTimeout(() => {
+                wheel.style.transition = 'none';
+                wheel.style.transform = 'rotate(0deg)';
+            }, 2000);
+            loadWheelInfo()
+                .catch(e => console.error('Не удалось обновить состояние колеса:', e))
+                .finally(() => unlockAction('wheelSpin'));
+        }, 3000);
+        return;
     }
-    const finalAngle = rotations * 360 + (360 / prizes.length) * (prizeIndex >= 0 ? prizeIndex : 0);
+    const finalAngle = rotations * 360 + (360 / prizes.length) * prizeIndex;
     
     wheel.style.transition = 'transform 3s ease-out';
     wheel.style.transform = `rotate(${finalAngle}deg)`;
