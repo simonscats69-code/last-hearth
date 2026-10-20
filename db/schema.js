@@ -337,12 +337,12 @@ async function createTables() {
             id SERIAL PRIMARY KEY,
             boss_id INTEGER REFERENCES bosses(id),
             player_id BIGINT REFERENCES players(id),
-            raid_id INTEGER,
+            raid_id INTEGER NOT NULL DEFAULT -1,
             damage_dealt INTEGER DEFAULT 0,
             rewards_earned BOOLEAN DEFAULT false,
             joined_at TIMESTAMP DEFAULT NOW(),
             last_hit_at TIMESTAMP DEFAULT NOW(),
-            UNIQUE(boss_id, player_id, COALESCE(raid_id, -1))
+            UNIQUE(boss_id, player_id, raid_id)
         );
     `);
 
@@ -1013,6 +1013,13 @@ async function runMigrations() {
             END LOOP;
         END $$;
     `);
+
+    // Миграция boss_sessions: raid_id теперь NOT NULL DEFAULT -1.
+    // Существующие NULL заменяем на -1, затем ставим NOT NULL и DEFAULT -1,
+    // чтобы UNIQUE(boss_id, player_id, raid_id) работал корректно.
+    await queryTx(`UPDATE boss_sessions SET raid_id = -1 WHERE raid_id IS NULL`);
+    await queryTx(`ALTER TABLE boss_sessions ALTER COLUMN raid_id SET NOT NULL`);
+    await queryTx(`ALTER TABLE boss_sessions ALTER COLUMN raid_id SET DEFAULT -1`);
 });
 }
 
