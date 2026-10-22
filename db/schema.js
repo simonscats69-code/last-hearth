@@ -141,6 +141,7 @@ async function createTables() {
     
     // Миграция: добавить колонку min_level если не существует (вместо min_luck для входа на локации)
     await query(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS min_level INTEGER DEFAULT 1`);
+    await query(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT true`);
     
     // Обновляем min_level на основе min_luck для существующих локаций, если min_level ещё не установлен
     await query(`
