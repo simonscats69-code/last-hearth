@@ -1566,11 +1566,9 @@ const Templates = {
     },
     
     // Карточка босса (список боссов).
-    // Крупная иконка (64px), шкала HP с сегментами, кнопка атаки акцентом.
+    // Крупная иконка (64px), текст здоровья, кнопка атаки акцентом.
     bossCard(boss) {
-        const hpPercent = boss.current_hp / boss.max_hp * 100;
         const locked = boss.locked || boss.required_level && boss.required_level > (gameState?.player?.level || 1);
-        const reqLevel = boss.required_level || boss.min_level || 1;
         return `
             <div class="boss-card${locked ? ' locked' : ''}" data-id="${escapeAttribute(boss.id)}">
                 <div class="boss-header">
@@ -1581,19 +1579,13 @@ const Templates = {
                     <div class="boss-info">
                         <div class="boss-name-row">
                             <span class="boss-name">${escapeHtml(boss.name)}</span>
-                            ${locked ? `<span class="boss-req-level">требуется ур. ${reqLevel}</span>` : ''}
                         </div>
                         <div class="boss-desc">${escapeHtml(boss.description || 'Теневой враг Очага')}</div>
                     </div>
                 </div>
-                <div class="boss-hp-section">
-                    <div class="boss-hp-row">
-                        <span class="boss-hp-label">Здоровье</span>
-                        <span class="boss-hp-value">${Number(boss.current_hp)}/${Number(boss.max_hp)}</span>
-                    </div>
-                    <div class="battle-health">
-                        <div class="battle-health-fill boss-hp-fill" style="width: ${hpPercent}%; background: linear-gradient(90deg, var(--health-color), #ff8a5c, #ffc44d)"></div>
-                    </div>
+                <div class="boss-hp-row">
+                    <span class="boss-hp-label">Здоровье</span>
+                    <span class="boss-hp-value">${Number(boss.current_hp)}/${Number(boss.max_hp)}</span>
                 </div>
                 <div class="boss-footer">
                     ${!locked ? `<button class="btn btn-primary attack-btn" data-attack-boss data-boss-id="${escapeAttribute(boss.id)}">⚔️ Атаковать</button>` : `<button class="btn btn-secondary disabled">Заблокировано</button>`}
@@ -5391,7 +5383,6 @@ function renderBosses(bosses) {
         const item = document.createElement('div');
         item.className = `boss-card${!isUnlocked ? ' locked' : ''}`;
 
-        const reqLevel = boss.required_level || boss.min_level || 1;
         const locked = !isUnlocked;
 
         item.innerHTML = `
@@ -5403,19 +5394,13 @@ function renderBosses(bosses) {
                 <div class="boss-info">
                     <div class="boss-name-row">
                         <span class="boss-name">${escapeHtml(boss.name)}</span>
-                        ${locked ? `<span class="boss-req-level">требуется ур. ${reqLevel}</span>` : ''}
                     </div>
                     <div class="boss-desc">${escapeHtml(boss.description || 'Теневой враг Очага')}</div>
                 </div>
             </div>
-            <div class="boss-hp-section">
-                <div class="boss-hp-row">
-                    <span class="boss-hp-label">Здоровье</span>
-                    <span class="boss-hp-value">${formatNumber(currentHp)} / ${formatNumber(maxHp)}</span>
-                </div>
-                <div class="battle-health">
-                    <div class="battle-health-fill boss-hp-fill" style="width: ${hpPercent}%; background: linear-gradient(90deg, var(--health-color), #ff8a5c, #ffc44d)"></div>
-                </div>
+            <div class="boss-hp-row">
+                <span class="boss-hp-label">Здоровье</span>
+                <span class="boss-hp-value">${formatNumber(currentHp)} / ${formatNumber(maxHp)}</span>
             </div>
             <div class="boss-footer">
                 ${!locked && canStartSolo

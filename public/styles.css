@@ -5525,17 +5525,6 @@ html, body {
     flex-wrap: wrap;
 }
 
-.boss-req-level {
-    font-size: var(--text-xs);
-    font-weight: 700;
-    color: var(--accent-orange);
-    background: rgba(224, 122, 47, 0.15);
-    border: 1px solid rgba(224, 122, 47, 0.35);
-    border-radius: 999px;
-    padding: 2px 8px;
-    white-space: nowrap;
-}
-
 .boss-desc {
     font-size: var(--text-xs);
     color: var(--text-secondary);
@@ -5547,17 +5536,11 @@ html, body {
     -webkit-box-orient: vertical;
 }
 
-/* Секция здоровья под карточкой */
-.boss-hp-section {
-    margin-top: 6px;
-    width: 100%;
-}
-
 .boss-hp-row {
     display: flex;
     justify-content: space-between;
     gap: 8px;
-    margin-bottom: 4px;
+    margin-top: 6px;
     font-size: var(--text-xs);
     font-weight: 700;
     color: var(--text-primary);
@@ -5572,13 +5555,6 @@ html, body {
     font-variant-numeric: tabular-nums;
 }
 
-/* Заливка HP босса — особый градиент, более насыщенный */
-.boss-hp-fill {
-    background: linear-gradient(90deg, var(--health-color), #ff8a5c, #ffc44d);
-    box-shadow: 0 0 12px rgba(224, 122, 47, 0.35);
-}
-
-/* Нижняя часть карточки: кнопка атаки + строка ключей */
 .boss-footer {
     display: flex;
     justify-content: space-between;
