@@ -146,12 +146,12 @@ function calculatePVPDamage(attacker, defender) {
     // Влияние уровня: ±1% за разницу уровней
     damage *= 1 + (Number(a.level || 1) - Number(d.level || 1)) * 0.01;
 
-    // Защита от выносливости (soft cap 60%)
+    // Защита от выносливости (без потолка — может снизить урон до 0)
     const endurance = Number(d.endurance || 0);
-    const defenseReduction = Math.min(60, endurance / (endurance + 60) * 60);
+    const defenseReduction = endurance / (endurance + 60) * 60;
     damage = Math.floor(damage * (1 - defenseReduction / 100));
 
-    // Защита снаряжения защитника (мягкий предел 60%).
+    // Защита снаряжения защитника (без лимита — может снизить урон до 0).
     //
     // Math.max(1, ...) — здесь, а не внутри applyDefenseReduction: общая
     // функция урона больше не навязывает пол, потому что ответный удар
