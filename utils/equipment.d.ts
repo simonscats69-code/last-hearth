@@ -80,7 +80,6 @@ export interface EquipmentRules {
   GAME_CONFIG: Record<string, unknown>;
   ENERGY_REGEN_INTERVAL_MS: number;
   HEALTH_REGEN_INTERVAL_MS: number;
-  HEALTH_REGEN_CAP_RATIO: number;
   DEFAULT_AUTO_HEAL_THRESHOLD: number;
   AUTO_HEAL_THRESHOLD_MIN: number;
   AUTO_HEAL_THRESHOLD_MAX: number;
@@ -116,13 +115,11 @@ export interface EquipmentRules {
   rollVarianceDamage(baseDamage: number, variancePercent: number): number;
   collectSetPieceCounts(equipment: unknown): Record<number, number>;
   calculateSetBonuses(equipment: unknown, sets: unknown[]): Record<string, number>;
-  getRegenerableHealth(health: number, maxHealth: number): number;
   getAutoHealThreshold(maxHealth: number, threshold: number | null): number;
   selectHealItem(items: unknown[], options: unknown): unknown | null;
   getRiskTierByScore(score: number): unknown;
   getExpForLevel(level: number): number;
   getTotalExpForLevel(level: number): number;
-  getHealthRegenCap(maxHealth: number): number;
 }
 
 declare const equipmentRules: EquipmentRules;

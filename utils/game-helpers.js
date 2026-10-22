@@ -8,7 +8,7 @@
  */
 
 const { query, transaction } = require('../db/database');
-// Один импорт вместо двух: и logger, и safeParseJson берутся из того же
+// Один импорт вместо двух: и logger, и safeJsonParse берутся из того же
 // модуля. Два отдельных require одного файла выглядят мелкой безобидной
 // правдой, пока однажды не появится третья строка, взятая не оттуда.
 const { logger, safeJsonParse, logPlayerAction } = require('./serverApi');
@@ -18,16 +18,10 @@ const { logger, safeJsonParse, logPlayerAction } = require('./serverApi');
 // ==========================================
 
 /**
- * Безопасный парсинг JSON с fallback значением.
- * Псевдоним сохранён: в файле сотни вызовов safeParseJson.
- */
-const safeParseJson = safeJsonParse;
-
-/**
  * Нормализация инвентаря
  */
 function normalizeInventory(value) {
-    const parsed = safeParseJson(value, []);
+    const parsed = safeJsonParse(value, []);
 
     if (Array.isArray(parsed)) {
         return parsed;
@@ -44,7 +38,7 @@ function normalizeInventory(value) {
  * Общая нормализация: любой JSON в чистый объект (не массив, не null).
  */
 function normalizePlainObject(value) {
-    const parsed = safeParseJson(value, {});
+    const parsed = safeJsonParse(value, {});
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
@@ -105,7 +99,7 @@ function createInventoryItem(item, options = {}) {
  * Нормализация радиации
  */
 function normalizeRadiation(value) {
-    const parsed = safeParseJson(value, { level: 0 });
+    const parsed = safeJsonParse(value, { level: 0 });
 
     if (typeof parsed === 'number') {
         return {
@@ -364,7 +358,7 @@ async function regenerateHealth(client, player) {
     const maxHealth = Math.max(1, Number(player.max_health) || 1);
     const current = Math.max(0, Number(player.health) || 0);
 
-    const regenerable = equipmentRules.getRegenerableHealth(current, maxHealth);
+    const regenerable = Math.max(0, maxHealth - current);
     const stamp = () => new Date().toISOString();
 
     if (regenerable <= 0) {
@@ -426,7 +420,7 @@ async function regenerateHealth(client, player) {
  * каталога — его можно будет снять или перенести миграцией.
  */
 function normalizeEquipment(raw) {
-    const eq = safeParseJson(raw, {});
+    const eq = safeJsonParse(raw, {});
     if (!eq || typeof eq !== 'object' || Array.isArray(eq)) return {};
 
     const out = {};
@@ -475,9 +469,9 @@ async function getSetBonuses(equipment, client) {
     const sets = await client.query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
     return equipmentRules.calculateSetBonuses(equipment, (sets.rows || []).map((row) => ({
         id: row.id,
-        bonus_2: safeParseJson(row.bonus_2, {}),
-        bonus_3: safeParseJson(row.bonus_3, {}),
-        bonus_4: safeParseJson(row.bonus_4, {})
+        bonus_2: safeJsonParse(row.bonus_2, {}),
+        bonus_3: safeJsonParse(row.bonus_3, {}),
+        bonus_4: safeJsonParse(row.bonus_4, {})
     })));
 }
 
@@ -691,7 +685,7 @@ async function checkAchievements(playerId, client = null) {
         for (const ach of achievements) {
             if (owned.has(ach.id)) continue;
 
-            const condition = safeParseJson(ach.condition, {});
+            const condition = safeJsonParse(ach.condition, {});
             if (!condition.type) continue;
 
             const currentValue = getAchievementCurrentValue(condition, player, runtimeContext);
@@ -706,7 +700,7 @@ async function checkAchievements(playerId, client = null) {
                     });
 
                 if (wasInserted) {
-                    const reward = safeParseJson(ach.reward, {});
+                    const reward = safeJsonParse(ach.reward, {});
                     newAchievements.push({
                         id: ach.id,
                         name: ach.name,
@@ -732,7 +726,7 @@ async function checkAchievements(playerId, client = null) {
  * двойную награду за каждое достижение.
  */
 async function insertAchievement(client, playerId, ach, progressValue) {
-    const reward = safeParseJson(ach.reward, {});
+    const reward = safeJsonParse(ach.reward, {});
 
     // Вставляем или обновляем достижение. ON CONFLICT НЕ трогает
     // reward_claimed: уже полученная награда остаётся полученной.
@@ -780,8 +774,8 @@ async function getPlayerAchievements(playerId) {
             category: row.category,
             icon: row.icon,
             rarity: row.rarity,
-            req: safeParseJson(row.condition, {}).count || 0,
-            reward: safeParseJson(row.reward, {}).stars || 0,
+            req: safeJsonParse(row.condition, {}).count || 0,
+            reward: safeJsonParse(row.reward, {}).stars || 0,
             obtained: row.completed || false,
             rewarded_at: row.completed_at,
             reward_claimed: row.reward_claimed || false,
@@ -823,7 +817,7 @@ async function getPlayerProgress(playerId) {
         const achievements = achievementsResult.rows || [];
 
         for (const ach of achievements) {
-            const condition = safeParseJson(ach.condition, {});
+            const condition = safeJsonParse(ach.condition, {});
             const type = condition.type || '';
             const category = ach.category || '';
 
@@ -977,7 +971,7 @@ async function claimAchievementReward(playerId, achievementId) {
         }
 
         // Парсим награду
-        const reward = safeParseJson(ach.reward, {});
+        const reward = safeJsonParse(ach.reward, {});
         const coins = Math.max(0, Math.floor(Number(reward.coins) || 0));
         const stars = Math.max(0, Math.floor(Number(reward.stars) || 0));
 
@@ -1071,7 +1065,7 @@ module.exports = {
     // отвечать на вопрос «что зовут другие модули» — иначе мёртвые имена
     // маскируют настоящие дубли (см. историю ITEM_CATEGORIES в
     // gameConstants.js).
-    safeParseJson,
+    safeJsonParse,
     normalizeInventory,
     createInventoryItem,
     normalizeRadiation,

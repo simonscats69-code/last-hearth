@@ -84,12 +84,6 @@ export function normalizeResistanceToThreatPoints(totalResistance: number): numb
  * Одна функция вместо прежних calculateRadiationDefense /
  * calculateInfectionDefense: инфекции объединены с радиацией.
  */
-export function calculateContaminationDefense(equipment: PlayerEquipment | null | undefined): number {
-  return normalizeResistanceToThreatPoints(
-    sumEquipmentResistance(equipment, CONTAMINATION_KEYS)
-  );
-}
-
 /**
  * Суммарная угроза локации: радиация + инфекция дают одно заражение.
  */
@@ -147,17 +141,6 @@ export function getTotalExpForLevel(level: number): number {
     total += getExpForLevel(i);
   }
   return total;
-}
-
-/** Потолок здоровья для пассивного регена */
-export function getHealthRegenCap(maxHealth: number): number {
-  const max = Math.max(1, Number(maxHealth) || 1);
-  return Math.max(1, Math.floor(max * GAME_CONFIG.HEALTH_REGEN_CAP_RATIO));
-}
-
-/** Сколько HP можно восстановить бесплатно */
-export function getRegenerableHealth(health: number, maxHealth: number): number {
-  return Math.max(0, getHealthRegenCap(maxHealth) - Math.max(0, Number(health) || 0));
 }
 
 /** Определить слот экипировки для предмета */
@@ -278,7 +261,7 @@ export function applyDefenseReduction(damage: number, defense: number): number {
   const defenseTotal = Math.max(0, Number(defense) || 0);
   if (defenseTotal <= 0) return Math.max(1, Math.round(incoming));
 
-  const reduction = Math.min(60, (defenseTotal / (defenseTotal + 100)) * 60);
+  const reduction = (defenseTotal / (defenseTotal + 100)) * 100;
   return Math.max(1, Math.floor(incoming * (1 - reduction / 100)));
 }
 

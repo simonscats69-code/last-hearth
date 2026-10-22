@@ -59,7 +59,7 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
             [playerId, newExperience, maxLuck]
         )
         : await exec(
-            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + ($1 * 1), max_health = max_health + ($1 * 1), boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST($5, luck + $3), energy = LEAST(energy + ($1 * 1), max_energy + ($1 * 1)), health = LEAST(health + ($1 * 1), max_health + ($1 * 1)), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + $1, max_health = max_health + $1, boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST($5, luck + $3), energy = LEAST(energy + $1, max_energy + $1), health = LEAST(health + $1, max_health + $1), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
             [levelsGained, newExperience, luckBonus, playerId, maxLuck]
         );
     

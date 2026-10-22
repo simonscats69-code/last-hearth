@@ -261,10 +261,6 @@ function getDebuffTier(level) {
  * calculateInfectionDefense: инфекции объединены, все ключи сопротивления
  * (radiation_* и infection_*) дают одну защиту.
  */
-function calculateContaminationDefense(equipmentMap) {
-    return sharedEquipment.calculateContaminationDefense(equipmentMap);
-}
-
 // getRiskTierByScore берётся из общего файла правил выше.
 
 /**
@@ -276,7 +272,9 @@ function calculateContaminationDefense(equipmentMap) {
  */
 function calculateLocationRiskProfile(location = {}, equipment = {}) {
     const contaminationThreat = sharedEquipment.calculateLocationContaminationThreat(location);
-    const contaminationDefense = calculateContaminationDefense(equipment);
+    const contaminationDefense = sharedEquipment.normalizeResistanceToThreatPoints(
+        sharedEquipment.sumEquipmentResistance(equipment, sharedEquipment.CONTAMINATION_KEYS)
+    );
 
     const contaminationPressure = Math.max(0, contaminationThreat - contaminationDefense);
     const riskScore = contaminationPressure;
@@ -379,7 +377,6 @@ module.exports = {
     DEBUFF_EFFECTS,
     getDebuffTier,
     calculateDebuffModifiers,
-    calculateContaminationDefense,
 
     // Опыт — читает utils/serverApi.js (PlayerHelper.addExperience)
     getExpForLevel,

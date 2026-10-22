@@ -135,12 +135,6 @@
      * @param {object|null} equipment
      * @returns {number}
      */
-    function calculateContaminationDefense(equipment) {
-        return normalizeResistanceToThreatPoints(
-            sumEquipmentResistance(equipment, CONTAMINATION_KEYS)
-        );
-    }
-
     /**
      * Сколько очков угрозы даёт «сырое» значение зоны (10 -> 1 очко).
      * Зеркало normalizeResistanceToThreatPoints, но с округлением ВВЕРХ:
@@ -276,13 +270,12 @@
     /* ================= БРОНЯ И ЗАЩИТА =================
      *
      * Защита снижает долю входящего урона (см. applyDefenseReduction):
-     * reduction = min(DEFENSE_CAP_PERCENT, defense/(defense+100)
-     * * DEFENSE_CAP_PERCENT). Потолок DEFENSE_CAP_PERCENT гарантирует,
-     * что броня никогда не режет урон сильнее, чем на 60%.
+     * reduction = defense/(defense+100) * 100 — без потолка, защита может
+     * снижать урон до 100% (полное поглощение).
      */
 
-    /** Потолок снижения брони: сколько % входящего урона защита может забрать */
-    const DEFENSE_CAP_PERCENT = 60;
+    /** Потолок снижения брони: убран. Защита может снижать урон до 100%. */
+    // const DEFENSE_CAP_PERCENT = 60;
 
     /** Сколько защиты даёт каждый новый уровень игрока */
     const DEFENSE_PER_PLAYER_LEVEL = 3;
@@ -368,7 +361,6 @@
         // Регенерация
         ENERGY_REGEN_INTERVAL_MS: 60 * 1000,
         HEALTH_REGEN_INTERVAL_MS: 90 * 1000,
-        HEALTH_REGEN_CAP_RATIO: 0.6,
 
         // Износ и ремонт
         WEAR_PER_HIT: 0.5,
@@ -454,23 +446,11 @@
     /** +1 HP за столько миллисекунд */
     const HEALTH_REGEN_INTERVAL_MS = 90 * 1000;
 
-    /** Потолок регена: 60% от максимума (при 100 HP это 60 HP) */
-    const HEALTH_REGEN_CAP_RATIO = 0.6;
-
     /** Порог автолечения по умолчанию, % от максимума */
 
     /** Границы настройки порога автолечения */
 
-    /** Потолок здоровья для пассивного регена */
-    function getHealthRegenCap(maxHealth) {
-        const max = Math.max(1, Number(maxHealth) || 1);
-        return Math.max(1, Math.floor(max * HEALTH_REGEN_CAP_RATIO));
-    }
-
-    /** Сколько HP можно восстановить бесплатно (не выше потолка регена) */
-    function getRegenerableHealth(health, maxHealth) {
-        return Math.max(0, getHealthRegenCap(maxHealth) - Math.max(0, Number(health) || 0));
-    }
+    /** Регенерация здоровья без ограничений — реген может вернуть до 100% максимума. */
 
     /**
      * Определить слот экипировки для предмета.
@@ -901,7 +881,7 @@ function resolveEquipmentSlot(item) {
         const defenseTotal = Math.max(0, Math.floor(Number(defense) || 0));
         if (defenseTotal <= 0) return incoming;
 
-        const reduction = Math.min(DEFENSE_CAP_PERCENT, (defenseTotal / (defenseTotal + 100)) * DEFENSE_CAP_PERCENT);
+        const reduction = (defenseTotal / (defenseTotal + 100)) * 100;
         return Math.max(0, Math.floor(incoming * (1 - reduction / 100)));
     }
 
@@ -1164,12 +1144,8 @@ function resolveEquipmentSlot(item) {
     CLAN_NAME_MAX,
     WHEEL_PRIZES,
     WHEEL_FREE_SPIN_COOLDOWN_MS,
-    HEALTH_REGEN_CAP_RATIO,
-    DEFENSE_CAP_PERCENT,
     DEFENSE_PER_PLAYER_LEVEL,
     calculateLevelDefense,
-    getHealthRegenCap,
-    getRegenerableHealth,
     MAX_UPGRADE_LEVEL,
     UPGRADE_BONUS_PER_LEVEL,
     RARITY_ORDER,
@@ -1188,7 +1164,6 @@ function resolveEquipmentSlot(item) {
     sumEquipmentResistance,
     normalizeResistanceToThreatPoints,
     normalizeThreatLevelToPoints,
-    calculateContaminationDefense,
     calculateLocationContaminationThreat,
     normalizeRarity,
     getUpgradeLevel,

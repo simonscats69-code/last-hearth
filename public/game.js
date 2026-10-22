@@ -3510,7 +3510,7 @@ function calculatePlayerPreparation(player) {
 
     return {
         // Защита от зоны одна: инфекции объединены с радиацией.
-        contaminationDefense: shared.calculateContaminationDefense(equipment)
+        contaminationDefense: shared.normalizeResistanceToThreatPoints(shared.sumEquipmentResistance(equipment, shared.CONTAMINATION_KEYS))
     };
 }
 
@@ -3764,7 +3764,7 @@ function updateHealPanel(player) {
     // смены баланса подсказка врала бы.
     const hintEl = document.getElementById('heal-panel-hint');
     if (hintEl && shared) {
-        const cap = shared.getHealthRegenCap(maxHealth);
+        const cap = maxHealth;
         const interval = Math.round(shared.HEALTH_REGEN_INTERVAL_MS / 1000);
         hintEl.textContent = missing <= 0
             ? `Здоровье полное · восстановление до ${cap}/${maxHealth} идёт само (+1 HP / ${interval} с)`
