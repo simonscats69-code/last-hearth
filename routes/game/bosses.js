@@ -1983,6 +1983,7 @@ router.post('/raid/:id/attack', async (req, res) => {
 
             let killed = false;
             let rewards = null;
+            const expLogs = [];
 
             if (newHp <= 0) {
                 killed = true;
@@ -2054,9 +2055,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                     ? Math.max(0, expPool - shares.reduce((s, r) => s + Math.floor(expPool * r.share * r.bonusMultiplier), 0))
                     : 0;
 
-                let leaderKey = null;
-
-                const expLogs = [];
+            let leaderKey = null;
 
                 // Батч-загрузка шаблонов наград ДО цикла по участникам:
                 // раньше grantRewardItems() делал SELECT ... FROM items для
