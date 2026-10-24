@@ -27,7 +27,7 @@ const { getGameHelpers } = require('../../utils/getGameHelpers');
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
-const { normalizeInventory, normalizeRadiation, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = helpers;
+const { normalizeInventory, normalizeRadiation, normalizeEquipment, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = helpers;
 const { lootPoolCache, getLootCacheReady, buildLootCache, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
 const crypto = require('crypto');
 // Один require на файл правил: раньше путь '../../public/shared/equipment.js'
@@ -40,7 +40,6 @@ const {
     MAX_INVENTORY_SLOTS,
     SEARCH_BASE_XP,
     SEARCH_RARITY_XP,
-    LOCATION_XP_BONUS_PER_ID,
     SEARCH_COMBO_EVERY,
     SEARCH_COMBO_MULTIPLIER
 } = equipmentShared;
@@ -175,25 +174,47 @@ async function handleLocationsList(req, res) {
         
         const locations = await queryAll(`
             SELECT id, name, icon, color, radiation, danger_level,
-                   min_level as required_level, description
+                   min_level as required_level, description,
+                   loot_table, exhaustion, is_available
             FROM locations
             ORDER BY min_level ASC
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
         
-        const availableLocations = locations.map(loc => ({
-            id: loc.id,
-            name: loc.name,
-            icon: loc.icon,
-            color: loc.color,
-            radiation: loc.radiation,
-            danger_level: loc.danger_level,
-            required_level: loc.required_level,
-            min_level: loc.required_level,
-            description: loc.description,
-            unlocked: player.level >= loc.required_level,
-            current: loc.id === player.current_location_id
-        }));
+        const availableLocations = locations.map(loc => {
+            // Строим превью лута для клиента: типы предметов, шансы редкостей,
+            // примерные предметы и информацию о ключе босса.
+            const lootTable = loc.loot_table && typeof loc.loot_table === 'object' && Object.keys(loc.loot_table).length > 0
+                ? loc.loot_table
+                : null;
+            const preferredTypes = getLootTypePool(loc.id);
+            const rarityChances = lootTable || {};
+            const exhaustionLevel = Number(loc.exhaustion || 0);
+
+            return {
+                id: loc.id,
+                name: loc.name,
+                icon: loc.icon,
+                color: loc.color,
+                radiation: loc.radiation,
+                danger_level: loc.danger_level,
+                required_level: loc.required_level,
+                min_level: loc.required_level,
+                description: loc.description,
+                is_available: loc.is_available,
+                unlocked: player.level >= loc.required_level,
+                current: loc.id === player.current_location_id,
+                loot_preview: {
+                    types: preferredTypes,
+                    rarity_chances: rarityChances,
+                    exhaustion: exhaustionLevel,
+                    exhaustion_penalty: Math.round(Math.min(0.5, exhaustionLevel / 200) * 100),
+                    can_drop_boss_key: false, // заполняется ниже, если есть ключ
+                    boss_key_chance: 0,
+                    boss_key_name: null
+                }
+            };
+        });
         
         res.json({
             success: true,
@@ -292,17 +313,10 @@ router.post('/search', async (req, res) => {
             await regenerateHealth(client, updatedPlayer);
 
             const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
-            const energyCost = activeBuffs.free_energy ? 0 : 1;
-            if (updatedPlayer.energy < energyCost) {
-                throw {
-                    message: 'Недостаточно энергии',
-                    code: 'INSUFFICIENT_ENERGY',
-                    statusCode: 400,
-                    energy: Math.max(0, updatedPlayer.energy),
-                    max_energy: updatedPlayer.max_energy
-                };
-            }
 
+            // Запрос локации вынесен ПЕРЕД проверкой энергии: сначала убеждаемся,
+            // что зона доступна и игрок соответствует уровню, и только потом
+            // считаем стоимость действия.
             const location = await client.query(`
                 SELECT id, name, radiation, is_available, min_level, loot_table FROM locations WHERE id = $1
             `, [updatedPlayer.current_location_id]);
@@ -341,11 +355,33 @@ router.post('/search', async (req, res) => {
                 };
             }
 
-            const equipment = safeJsonParse(updatedPlayer.equipment, {});
+            // Валидация экипировки через normalizeEquipment: гарантирует чистую
+            // структуру слотов перед расчётом защиты и риска.
+            const equipment = normalizeEquipment(updatedPlayer.equipment);
             const riskProfile = calculateLocationRiskProfile(locationData, equipment);
+
+            // Дифференцированная стоимость поиска по типу зоны.
+            // Безопасные зоны дешевле, опасные — стоят больше энергии.
+            const ENERGY_COST_BY_TIER = {
+                safe: 1,
+                warning: 1,
+                danger: 2,
+                deadly: 3
+            };
+            const energyCost = activeBuffs.free_energy ? 0 : (ENERGY_COST_BY_TIER[riskProfile.tier] || 1);
+            if (updatedPlayer.energy < energyCost) {
+                throw {
+                    message: 'Недостаточно энергии',
+                    code: 'INSUFFICIENT_ENERGY',
+                    statusCode: 400,
+                    energy: Math.max(0, updatedPlayer.energy),
+                    max_energy: updatedPlayer.max_energy
+                };
+            }
         
-        // Заражение зоной считается unified: radiация + любые угрозы зоны.
+        // Заражение зоной считается unified: radiation + любые угрозы зоны.
         let radiationGain = 0;
+        let radiationExpiresAt = null;
         const contaminationDefense = riskProfile.contaminationDefense;
         let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         
@@ -361,6 +397,7 @@ router.post('/search', async (req, res) => {
                 const expiresAt = new Date(
                     now.getTime() + radiationConfig.baseDurationMs + (radiationGain - 1) * radiationConfig.durationPerLevelMs
                 );
+                radiationExpiresAt = expiresAt.toISOString();
                 
                 resultingRadiationLevel = Math.min(radiationConfig.maxLevel, currentRadiation.level + radiationGain);
                 
@@ -390,11 +427,21 @@ router.post('/search', async (req, res) => {
         let expGained = 0;
         let itemsCollected = 0;
         let inventoryUpdate = null;
-        // coinDrop объявлен здесь, а не внутри блока лута: значение нужно
-        // и в setParts, и в теле ответа, которое идёт после блока.
         let coinDrop = null;
+        let lootRolled = false;
         
-        if (rolled <= dropChance) {
+        // Pity timer: после PITY_THRESHOLD подряд пустых поисков следующая
+        // вылазка гарантированно даёт предмет редкостью не ниже uncommon.
+        const PITY_THRESHOLD = 10;
+        const emptyStreak = Number(updatedPlayer.empty_searches_streak || 0);
+        const pityActive = emptyStreak >= PITY_THRESHOLD;
+        
+        // Учёт истощения зоны: чем выше exhaustion, тем ниже шанс редкого лута.
+        const locationExhaustion = Number(locationData.exhaustion || 0);
+        const exhaustionPenalty = Math.min(0.5, locationExhaustion / 200); // до -50% шанса
+        const adjustedDropChance = Math.max(0.01, dropChance * (1 - exhaustionPenalty));
+        
+        if (rolled <= adjustedDropChance) {
             // Ключи боссов. Шансы берём из bosses.key_drop_chance (в процентах
             // от дропа), а предмет — джойном items -> bosses по
             // required_key_id: без этого джойна ключ не находится вовсе,
@@ -418,6 +465,7 @@ router.post('/search', async (req, res) => {
             }
 
             if (foundKey) {
+                lootRolled = true;
                 // Ключ «Ключ от X» открывает бой с X, а хранится он под
                 // владельцем предыдущего босса: boss_keys.boss_id = X - 1.
                 const ownerBossId = Math.max(1, foundKey.bossId - 1);
@@ -436,12 +484,18 @@ router.post('/search', async (req, res) => {
                     boss_name: foundKey.bossName
                 };
             } else {
-                itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck, locationData.loot_table);
+                // Pity timer: если активен, принудительно выбираем редкость не ниже uncommon.
+                let forcedRarity = null;
+                if (pityActive) {
+                    forcedRarity = 'uncommon';
+                }
+                itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck, locationData.loot_table, forcedRarity);
 
                 foundItem = await getRandomLootItem(client, itemRarity, locationData.id);
             }
             
             if (foundItem) {
+                lootRolled = true;
                 const inventory = normalizeInventory(updatedPlayer.inventory);
 
                 const newItem = createInventoryItem({
@@ -483,8 +537,10 @@ router.post('/search', async (req, res) => {
                 
                 // Опыт: базовый + бонус редкости, домножается на бонус
                 // локации и на комбо за серию действий.
+                // Бонус локации растёт нелинейно: каждая следующая зона
+                // даёт пропорционально больше опыта за риск.
                 const rarityExp = SEARCH_RARITY_XP[itemRarity] ?? 0;
-                const locBonus = 1 + (locationData.id - 1) * LOCATION_XP_BONUS_PER_ID;
+                const locBonus = Math.pow(1.2, locationData.id - 1);
                 const comboBonus = (updatedPlayer.total_actions + 1) % SEARCH_COMBO_EVERY === 0 ? SEARCH_COMBO_MULTIPLIER : 1;
                 const baseExpReward = Math.floor(SEARCH_BASE_XP + rarityExp) * locBonus * comboBonus;
                 expGained = Math.max(1, Math.floor(baseExpReward * riskProfile.expMultiplier));
@@ -493,26 +549,24 @@ router.post('/search', async (req, res) => {
                     expGained *= 2;
                 }
             }
+        }
 
-            // Выпадение монет при поиске (30% шанс, зависит от риска, удачи, уровня).
-            // Здесь только считаем: параметры в UPDATE добавляются ниже, после
-            // сборки setParts — раньше push вызывался до объявления setParts,
-            // и выпадение монет падало с ReferenceError.
-            try {
-                const playerLuck = updatedPlayer.luck || 0;
-                const playerLevel = updatedPlayer.level || 1;
-                const riskTier = riskProfile.tier;
-                const coinDropResult = calculateCoinDrop({
-                    riskTier: riskTier,
-                    luck: playerLuck,
-                    playerLevel: playerLevel
-                });
-                if (coinDropResult) {
-                    coinDrop = coinDropResult.amount;
-                }
-            } catch (err) {
-                logger.warn('Ошибка расчёта выпадения монет', { error: err.message });
+        // Выпадение монет при поиске — независимо от выпадения лута/ключа.
+        // 30% шанс, зависит от риска, удачи, уровня.
+        try {
+            const playerLuck = updatedPlayer.luck || 0;
+            const playerLevel = updatedPlayer.level || 1;
+            const riskTier = riskProfile.tier;
+            const coinDropResult = calculateCoinDrop({
+                riskTier: riskTier,
+                luck: playerLuck,
+                playerLevel: playerLevel
+            });
+            if (coinDropResult) {
+                coinDrop = coinDropResult.amount;
             }
+        } catch (err) {
+            logger.warn('Ошибка расчёта выпадения монет', { error: err.message });
         }
 
         // Вычисляем урон от радиации ВНЕ блока лута: здоровье теряется при
@@ -563,13 +617,50 @@ router.post('/search', async (req, res) => {
         }
         
         params.push(playerId);
-        const updateSql = `UPDATE players SET ${setParts.join(', ')} WHERE id = $${params.length} RETURNING energy, max_energy, last_energy_update, coins`;
+        const updateSql = `UPDATE players SET ${setParts.join(', ')} WHERE id = $${params.length} RETURNING energy, max_energy, last_energy_update, coins, health`;
         
         const energyResult = await client.query(updateSql, params);
 
         const newEnergy = energyResult.rows[0].energy;
         const newMaxEnergy = energyResult.rows[0].max_energy;
         const lastEnergyUpdate = energyResult.rows[0].last_energy_update;
+        const newHealth = energyResult.rows[0].health;
+
+        // Проверка смерти от радиации: если здоровье упало до 0, игрок погиб.
+        if (newHealth <= 0) {
+            return {
+                status: 200,
+                body: {
+                    success: false,
+                    error: 'Вы погибли от радиации в этой зоне. Нужно восстановить здоровье.',
+                    code: 'PLAYER_DEAD_FROM_RADIATION',
+                    health: 0,
+                    max_health: updatedPlayer.max_health,
+                    radiation: {
+                        level: resultingRadiationLevel,
+                        gained: radiationGain,
+                        expires_at: radiationExpiresAt,
+                        defense: contaminationDefense,
+                        effect: radiationEffect
+                    },
+                    search_performed: true
+                }
+            };
+        }
+
+        // Обновление истощения локации: каждый поиск увеличивает exhaustion.
+        // Истощение снижает шансы редкого лута, восстанавливается со временем.
+        await client.query(
+            `UPDATE locations SET exhaustion = LEAST(100, exhaustion + 5) WHERE id = $1`,
+            [locationData.id]
+        );
+
+        // Pity timer: сбрасываем при находке предмета или ключа, иначе инкрементируем.
+        const newStreak = (foundItem || foundKeyInfo) ? 0 : (emptyStreak + 1);
+        await client.query(
+            `UPDATE players SET empty_searches_streak = $1 WHERE id = $2`,
+            [newStreak, playerId]
+        );
 
         // Счётчики прогресса: без них достижения «Коллекционер»/«Ежедневная
         // победа» и ежедневные задания остаются на нуле при любых действиях.
@@ -613,6 +704,7 @@ router.post('/search', async (req, res) => {
                 radiation: {
                     level: resultingRadiationLevel,
                     gained: radiationGain,
+                    expires_at: radiationExpiresAt,
                     defense: contaminationDefense,
                     effect: radiationEffect
                 },
@@ -631,12 +723,16 @@ router.post('/search', async (req, res) => {
                 location: {
                     name: locationData.name,
                     // Данные мира, по ним клиент рисует карточку локации.
-                    radiation: locationData.radiation
+                    radiation: locationData.radiation,
+                    exhaustion: locationData.exhaustion,
+                    is_available: locationData.is_available
                 },
                 effective_luck: effectiveLuck,
                 risk_adjusted_luck: riskAdjustedLuck,
-                drop_chance: dropChance,
+                drop_chance: adjustedDropChance,
                 rolled: rolled.toFixed(2),
+                loot_rolled: lootRolled,
+                pity_active: pityActive,
                 exp_gained: expGained,
                 coin_drop: coinDrop
             },

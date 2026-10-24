@@ -71,11 +71,10 @@ function splitSslmode(rawUrl) {
  */
 function buildPoolConfig() {
     const base = {
-        max: parseInt(process.env.DB_POOL_MAX || '20', 10),
+        max: parseInt(process.env.DB_POOL_MAX || '50', 10),
         idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '30000', 10),
-        connectionTimeoutMillis: parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT || '5000', 10)
+        connectionTimeoutMillis: parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT || '3000', 10)
     };
-
     if (process.env.DATABASE_URL) {
         const { url, sslmode } = splitSslmode(process.env.DATABASE_URL);
         // sslmode=disable -> без TLS; иначе TLS без строгой проверки цепочки
@@ -157,6 +156,50 @@ function describeDbTarget() {
 pool.on('error', (err) => {
     logger.error('Неожиданная ошибка пула БД: ' + describeError(err));
 });
+
+// statement_timeout на уровне соединения: отменяем запросы, висящие дольше 10с.
+// Защита от каскадного забивания пула долго выполняющимися запросами (logPlayerAction,
+// тяжёлые обновления при убийстве босса и т.д.).
+const STATEMENT_TIMEOUT_MS = parseInt(process.env.DB_STATEMENT_TIMEOUT || '10000', 10);
+pool.on('connect', (client) => {
+    void client.query(`SET statement_timeout = ${STATEMENT_TIMEOUT_MS}`).catch((err) => {
+        logger.warn('Не удалось установить statement_timeout: ' + describeError(err));
+    });
+});
+
+/**
+ * Текущая загрузка пула: занято / всего. Возвращает число от 0 до 1.
+ * Используется для backpressure-мiddleware: если пул заполнен больше 85%,
+ * новые запросы получают 503 вместо бесконечного ожидания.
+ */
+function getPoolUtilization() {
+    // pg Pool не exposes totalCount напрямую до v8.10, но waitingCount + availableCount
+    // дают достаточно для оценки. Используем totalCount если доступен.
+    const total = pool.totalCount || (pool.max || 50);
+    const waiting = pool.waitingCount || 0;
+    const used = Math.max(0, total - waiting);
+    return used / total;
+}
+
+/**
+ * Middleware backpressure: если пул БД заполнен больше порога,
+ * отдаём 503 сразу, неoccupying соединение на время ожидания.
+ * @param {number} [threshold=0.85] доля заполнения пула (0..1)
+ */
+function poolBackpressureMiddleware(threshold = 0.85) {
+    return (req, res, next) => {
+        const util = getPoolUtilization();
+        if (util >= threshold) {
+            logger.warn('[backpressure] Пул БД заполнен', { utilization: Math.round(util * 100) + '%', threshold: Math.round(threshold * 100) + '%' });
+            return res.status(503).json({
+                error: 'Сервер временно перегружен. Попробуйте через несколько секунд.',
+                code: 'SERVER_BUSY',
+                retry_after: 5
+            });
+        }
+        next();
+    };
+}
 
 async function query(sql, params = []) {
     const client = await pool.connect();
@@ -295,5 +338,7 @@ module.exports = {
     setLogger,
     describeError,
     describeDbTarget,
-    isConnectionError
+    isConnectionError,
+    getPoolUtilization,
+    poolBackpressureMiddleware
 };

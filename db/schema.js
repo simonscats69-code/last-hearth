@@ -868,6 +868,14 @@ async function runMigrations() {
 
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS items_collected INTEGER DEFAULT 0`);
 
+    // Счётчик подряд идущих пустых поисков — используется pity-таймером:
+    // после N неудач подряд следующая вылазка гарантированно даёт uncommon+.
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS empty_searches_streak INTEGER DEFAULT 0`);
+
+    // Уровень истощения локации: растёт при каждом поиске, снижается со временем.
+    // Влияет на шансы редкого лута.
+    await queryTx(`ALTER TABLE locations ADD COLUMN IF NOT EXISTS exhaustion INTEGER DEFAULT 0`);
+
     // Миграции для achievements — колонки category и rarity уже в CREATE TABLE (стр. 444, 448)
 
     // Здоровье и лечение: пассивный реген.

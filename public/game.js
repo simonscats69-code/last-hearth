@@ -942,10 +942,21 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
                     await new Promise(r => setTimeout(r, retryDelay));
                     continue;
                 }
-                // Попытки исчерпаны — сбрасываем счётчик и выбрасываем ошибку
+                apiRequest._serviceStartingAttempts = 0;
+            } else if (status === 503 && error.code === 'SERVER_BUSY') {
+                // 503 SERVER_BUSY: пул БД перегружен (backpressure). Повторяем
+                // с короткой задержкой, чтобы дать пулу освободиться.
+                if (!apiRequest._serviceStartingAttempts) {
+                    apiRequest._serviceStartingAttempts = 0;
+                }
+                const maxServiceStartingAttempts = 5;
+                if (apiRequest._serviceStartingAttempts < maxServiceStartingAttempts) {
+                    apiRequest._serviceStartingAttempts++;
+                    await new Promise(r => setTimeout(r, 3000));
+                    continue;
+                }
                 apiRequest._serviceStartingAttempts = 0;
             } else {
-                // Любая другая ошибка (не 503 SERVICE_STARTING) сбрасывает счётчик
                 if (apiRequest._serviceStartingAttempts) {
                     apiRequest._serviceStartingAttempts = 0;
                 }
@@ -4027,15 +4038,23 @@ async function searchLoot() {
             }
             
             // Обновляем радиацию после поиска (всегда, не только при увеличении).
-            //
-            // Дубля здесь больше нет: раньше ниже лежал побайтово такой же
-            // блок (оставшийся от старого infection-блока — задумывалось его
-            // удалить, но вместо этого вставили копию radiation). Он писал те
-            // же значения и второй раз звал updateConditionsUI на каждый поиск.
             if (result.radiation) {
                 if (!gameState.player.status) gameState.player.status = {};
                 gameState.player.status.radiation = result.radiation.level || 0;
+                gameState.player.status.radiation_expires_at = result.radiation.expires_at || null;
                 updateConditionsUI(gameState.player.status);
+            }
+
+            // Показываем подсказку о pity timer и истощении зоны.
+            const statusMessages = [];
+            if (result.pity_active) {
+                statusMessages.push('🎯 Pity timer активен — следующая находка гарантированно не ниже uncommon!');
+            }
+            if (result.location?.exhaustion && result.location.exhaustion > 50) {
+                statusMessages.push(`📉 Зона истощена на ${result.location.exhaustion}% — шансы редкого лута снижены.`);
+            }
+            if (statusMessages.length > 0) {
+                showNotification(statusMessages.join(' '), 'info', 4000);
             }
 
             // Обновляем статус/локацию с сервера — все нужные поля уже в ответе,
@@ -4043,9 +4062,10 @@ async function searchLoot() {
             if (result.risk_profile) {
                 const riskHint = document.getElementById('location-risk-hint');
                 if (riskHint) {
+                    const dropInfo = result.drop_chance ? ` | шанс дропа: ${result.drop_chance.toFixed(1)}%` : '';
                     riskHint.textContent = result.risk_profile.is_prepared
-                        ? 'Подготовка достаточная — можно стабильно фармить эту зону.'
-                        : `Зона ${result.risk_profile.label}: шанс на лучший лут выше, но подготовка пока недостаточна.`;
+                        ? `Подготовка достаточная — можно стабильно фармить эту зону.${dropInfo}`
+                        : `Зона ${result.risk_profile.label}: шанс на лучший лут выше, но подготовка пока недостаточна.${dropInfo}`;
                 }
             }
 
@@ -4059,8 +4079,22 @@ async function searchLoot() {
             // Обработка ошибок
             let errorMsg = result.message || result.error || 'Неизвестная ошибка';
             
+            // Смерть от радиации — показываем экран смерти с информацией о радиации.
+            if (result?.code === 'PLAYER_DEAD_FROM_RADIATION') {
+                const rad = result.radiation || {};
+                errorMsg = `☢️ Вы погибли от радиации (уровень ${rad.level || 0}). Нужно восстановить здоровье.`;
+                showModal('💀 Смерть от радиации', errorMsg);
+                // Обновляем статус радиации даже при смерти.
+                if (rad.level) {
+                    if (!gameState.player.status) gameState.player.status = {};
+                    gameState.player.status.radiation = rad.level;
+                    updateConditionsUI(gameState.player.status);
+                }
+                return;
+            }
+            
             // Особая обработка для недостатка энергии
-            if (result.code === 'INSUFFICIENT_ENERGY') {
+            if (result?.code === 'INSUFFICIENT_ENERGY') {
                 const currentEnergy = Number(result?.energy?.current ?? result?.energy ?? 0);
                 errorMsg = `Недостаточно энергии! Требуется: 1, у вас: ${currentEnergy}`;
             }
@@ -7118,12 +7152,6 @@ let mapRepaintPending = false;
 function selectMapLocation(loc) {
     if (!loc) return;
 
-    // Ключевая строка против «карта прыгает при наведении»: раньше
-    // обработчик mousemove вызывал эту функцию на КАЖДОЕ движение мыши,
-    // а функция переключала display у блока деталей и кнопки «Перейти».
-    // Блок то появлялся, то исчезал — карта под ним сдвигалась вверх-вниз
-    // на несколько пикселей, и наводиться на локации становилось невозможно.
-    // Теперь обновляем DOM только когда выбранная локация реально изменилась.
     const locationId = Number(loc.id) || 0;
     if (locationId === lastSelectedMapLocationId) return;
     lastSelectedMapLocationId = locationId;
@@ -7134,8 +7162,7 @@ function selectMapLocation(loc) {
     const infoEl = document.getElementById('map-location-info');
     const travelBtn = document.getElementById('map-travel-btn');
 
-    // Оценка риска зоны считается для подготовки игрока: если он без защиты,
-    // это честнее, чем просто «радиация 40».
+    // Оценка риска зоны считается для подготовки игрока.
     const risk = getCurrentZoneRiskProfile({
         location: loc,
         equipment: gameState.player?.equipment || {}
@@ -7144,19 +7171,61 @@ function selectMapLocation(loc) {
     const requiredLevel = Number(loc.min_level ?? 1);
     const isCurrent = Number(gameState.player?.current_location_id) === locationId;
 
+    // Подсветка маркера по типу доминирующего лута (цветная обводка).
+    const lootPreview = loc.loot_preview || {};
+    const lootTypes = lootPreview.types || [];
+    const dominantType = lootTypes[0] || 'resource';
+    const typeColorMap = {
+        weapon: '#ef4444',
+        armor: '#3b82f6',
+        food: '#22c55e',
+        medicine: '#a855f7',
+        resource: '#6b7280'
+    };
+    const markerColor = typeColorMap[dominantType] || typeColorMap.resource;
+
     if (infoEl) {
-        // textContent, а не innerHTML: значения приходят с сервера.
-        // Заражение зоны — только радиация.
         const contamination = Number(loc.radiation || 0);
-        infoEl.textContent =
-            `☢️ ${contamination} · ⚠️ риск ${Number(loc.danger_level) || 1}/7 · ${risk.label}`;
+        const exhaustion = Number(loc.exhaustion || 0);
+        const exhaustionPct = Math.round(Math.min(0.5, exhaustion / 200) * 100);
+
+        // Строим строку с информацией о луте.
+        const rarityChances = lootPreview.rarity_chances || {};
+        const rarityParts = Object.entries(rarityChances)
+            .filter(([_, chance]) => Number(chance) > 0)
+            .map(([rarity, chance]) => {
+                const rarityEmoji = { common: '⚪', uncommon: '🟢', rare: '🔵', epic: '🟣', legendary: '🟡' }[rarity] || '⚪';
+                return `${rarityEmoji} ${rarity}: ${Math.round(Number(chance))}%`;
+            })
+            .slice(0, 4)
+            .join(' · ');
+
+        let infoText = `☢️ ${contamination} · ⚠️ риск ${Number(loc.danger_level) || 1}/7 · ${risk.label}`;
+        if (exhaustion > 0) {
+            infoText += ` · 📉 истощение ${exhaustionPct}%`;
+        }
+        if (rarityParts) {
+            infoText += ` · 🎁 ${rarityParts}`;
+        }
+        infoEl.textContent = infoText;
         infoEl.dataset.locked = requiredLevel > level ? 'true' : 'false';
+        // Цветная подсветка блока по типу лута.
+        infoEl.style.borderLeft = `3px solid ${markerColor}`;
     }
 
     if (travelBtn) {
         if (isCurrent) {
-            travelBtn.style.display = 'none';
+            // В текущей локации — кнопка «Искать здесь» вместо «Перейти».
+            // Удаляем обработчик перехода, чтобы не срабатывали оба сразу.
+            travelBtn.removeEventListener('click', travelToSelectedLocation);
+            travelBtn.style.display = '';
+            travelBtn.textContent = '🔍 Искать здесь';
+            travelBtn.disabled = false;
             delete travelBtn.dataset.locationId;
+            travelBtn.onclick = (e) => {
+                e.preventDefault();
+                searchLoot();
+            };
         } else {
             travelBtn.style.display = '';
             travelBtn.textContent = requiredLevel > level
@@ -7164,6 +7233,8 @@ function selectMapLocation(loc) {
                 : 'Перейти';
             travelBtn.disabled = requiredLevel > level;
             travelBtn.dataset.locationId = loc.id;
+            travelBtn.onclick = null;
+            travelBtn.addEventListener('click', travelToSelectedLocation);
         }
     }
 }
@@ -7177,6 +7248,12 @@ function travelToSelectedLocation() {
     const loc = (gameState.locations || []).find((item) => Number(item.id) === locationId);
     if (!loc) {
         showModal('⚠️ Внимание', 'Локация не найдена в списке. Обновите карту.');
+        return;
+    }
+
+    // Проверяем доступность локации на клиенте, чтобы не слать лишний запрос на сервер.
+    if (loc.is_available === false) {
+        showModal('⚠️ Внимание', 'Эта локация сейчас недоступна для перехода.');
         return;
     }
 
@@ -7488,7 +7565,9 @@ async function attackRaid(raidId) {
 
     try {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/attack`, {
-            method: 'POST'
+            method: 'POST',
+            idempotent: true,
+            idempotencyKey: `raid-attack-${raidId}-${gameState.player?.id}`
         });
         
         if (result.success) {

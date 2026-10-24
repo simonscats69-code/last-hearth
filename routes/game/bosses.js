@@ -1840,6 +1840,9 @@ router.post('/raid/:id/attack', async (req, res) => {
     }
 
     try {
+        // expLogs собирается внутри транзакции, но логируем после COMMIT,
+        // чтобы timeout в логировании не откатывал начисленные награды.
+        let expLogs = [];
         const outcome = await transaction(async (client) => {
             const activeBattle = await resolveActiveBattle(client, playerId);
             if (!activeBattle || activeBattle.type !== 'mass' || activeBattle.raid_id !== raidId) {
@@ -1983,8 +1986,6 @@ router.post('/raid/:id/attack', async (req, res) => {
 
             let killed = false;
             let rewards = null;
-            const expLogs = [];
-
             if (newHp <= 0) {
                 killed = true;
                 await client.query('UPDATE raid_progress SET is_active = false, ended_at = NOW(), current_health = 0 WHERE id = $1', [raidId]);
@@ -1998,29 +1999,14 @@ router.post('/raid/:id/attack', async (req, res) => {
                 );
 
                 const allParticipants = participantsResult.rows;
-                // КРИТИЧНО: boss_sessions.player_id — BIGINT, pg отдаёт его
-                // строкой ('42'), а playerId — число. Без Number() условие
-                // participant.player_id === playerId всегда false, и добившему
-                // босса рейда ответ возвращался без наград (rewards = null),
-                // хотя монеты/опыт/предметы ему начислялись.
                 const rewardParticipants = allParticipants.filter((row) => Number(row.damage_dealt || 0) > 0);
                 const totalDamage = rewardParticipants.reduce((sum, row) => sum + Number(row.damage_dealt || 0), 0) || 1;
                 const participantIds = allParticipants.map((row) => row.player_id);
 
-                // Считаем доли ДО цикла: они нужны и для начисления, и для
-                // строчек в raid_rewards, чтобы обе стороны считали одно и то
-                // же. Участник без урона получает нулевую долю — его строчка
-                // всё равно пишется, иначе он не узнает, что рейд кончился.
-                // leader_id — INTEGER, но pg может отдать строкой; Number()
-                // страхует сравнение с participantId.
                 const leaderIdRaw = Number(raid.leader_id);
-                // Последний удар — тот, чья атака убила босса (этот запрос).
                 const lastHitId = playerId;
                 const shares = allParticipants.map((row) => {
                     const dealt = Number(row.damage_dealt || 0);
-                    // Бонусы: +5% доле первого удара и +5% доле добившего.
-                    // Смелость на входе и добивание — два стратегических
-                    // момента рейда, ради которых стоит рисковать.
                     let bonusMultiplier = 1;
                     if (dealt > 0 && row.first_hitter) bonusMultiplier += RAID_FIRST_HIT_BONUS;
                     if (Number(row.player_id) === lastHitId) bonusMultiplier += RAID_LAST_HIT_BONUS;
@@ -2032,21 +2018,10 @@ router.post('/raid/:id/attack', async (req, res) => {
                         buffs: row.buffs
                     };
                 });
-                // Остаток от округления вниз достаётся самому результативному:
-                // Math.floor по долям суммарно даёт меньше награды босса, и
-                // разница из ниоткуда не взялась бы (на боссе с 50 опыта и
-                // тремя участниками терялось 1-2 единицы).
-                // Считаем от БАЗОВЫХ значений, без бафов: иначе exp_x2 у
-                // лидера сломал бы арифметику остатка. Бонус первого и
-                // последнего удара в арифметику остатка входят: иначе он
-                // отъедал бы часть пула у остальных.
+
                 const coinsPool = Number(raid.reward_coins || 0);
                 const expPool = Number(raid.reward_experience || 0);
                 const topDamager = shares.reduce((best, row) => (row.dealt > (best ? best.dealt : -1) ? row : best), null);
-                // Остаток уходит только если у кого-то реально есть урон.
-                // Иначе «топовым» оказался бы первый по списку участник с
-                // нулевым уроном и забрал бы весь пул: никто не бил, а награда
-                // всё равно кому-то досталась.
                 const hasRealDamage = Boolean(topDamager) && topDamager.dealt > 0;
                 const coinsRemainder = hasRealDamage
                     ? Math.max(0, coinsPool - shares.reduce((s, r) => s + Math.floor(coinsPool * r.share * r.bonusMultiplier), 0))
@@ -2057,14 +2032,19 @@ router.post('/raid/:id/attack', async (req, res) => {
 
             let leaderKey = null;
 
-                // Батч-загрузка шаблонов наград ДО цикла по участникам:
-                // раньше grantRewardItems() делал SELECT ... FROM items для
-                // каждого участника (N+1). Набор reward_items у рейда один,
-                // multiplier применяется к количеству позже.
+                // Батч-загрузка шаблонов наград ДО цикла по участникам.
                 const raidRewardTemplates = await loadItemTemplates(
                     client,
                     normalizeRewardItems(raid.reward_items)
                 );
+
+                // Батчовые массивы для массовых UPDATE/INSERT вместо N+1 в цикле.
+                const coinUpdates = [];   // [playerId, amount, ...]
+                const expUpdates = [];    // [playerId, amount, ...]
+                const masteryUpdates = []; // [playerId, bossId, ...]
+                const bossesKilledUpdates = []; // [playerId, ...]
+                const raidRewardsRows = []; // [raidId, bossId, playerId, coins, exp, itemsJson, keyName, claimed]
+                const participantRewards = new Map(); // playerId -> {coins, exp, items, key}
 
                 for (const entry of shares) {
                     const participantId = entry.participantId;
@@ -2078,15 +2058,6 @@ router.post('/raid/:id/attack', async (req, res) => {
                     const coinsReward = baseCoins + (isTopDamager ? coinsRemainder : 0);
                     let experienceReward = participantBuffs.exp_x2 ? baseExp * 2 : baseExp;
                     if (isTopDamager && expRemainder > 0) experienceReward += expRemainder;
-
-                    if (coinsReward > 0) {
-                        await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [coinsReward, participantId]);
-                    }
-
-                    if (experienceReward > 0) {
-                        const expResult = await playerHelper.addExperience(participantId, experienceReward, client);
-                        expLogs.push({ playerId: participantId, logData: expResult.logData });
-                    }
 
                     const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
                     const isLeader = participantId === leaderIdRaw;
@@ -2104,45 +2075,98 @@ router.post('/raid/:id/attack', async (req, res) => {
                         if (isLeader && leaderKey) rewards.key = leaderKey;
                     }
 
-                    // Мастерство и счётчик убийств — только тем, кто реально
-                    // бил. Раньше +1 получал каждый участник с нулевым
-                    // уроном: пока рейд бьют другие, можно качать убийства
-                    // (и через killBonus — урон по боссам) без участия.
                     if (entry.dealt > 0) {
-                        await client.query(
-                            `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
-                              VALUES ($1, $2, 1, NOW())
-                              ON CONFLICT (player_id, boss_id)
-                              DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
-                            [participantId, raid.boss_id]
-                        );
-
-                        await client.query(
-                            'UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1 WHERE id = $1',
-                            [participantId]
-                        );
+                        masteryUpdates.push(participantId, raid.boss_id);
+                        bossesKilledUpdates.push(participantId);
                     }
 
-                    // Отложенная награда. Убийца свою долю уже видит в ответе
-                    // этого же запроса, поэтому его строчка сразу claimed=true
-                    // и второй раз не всплывёт. Остальные забирают при входе на
-                    // экран боссов — без этой записи участник, бивший в офлайне,
-                    // не узнавал о награде вообще.
+                    if (coinsReward > 0) {
+                        coinUpdates.push(participantId, coinsReward);
+                    }
+                    if (experienceReward > 0) {
+                        expUpdates.push(participantId, experienceReward);
+                    }
+
                     const keyName = (isLeader && leaderKey) ? (leaderKey.boss_name || null) : null;
+                    raidRewardsRows.push(
+                        raidId,
+                        raid.boss_id,
+                        participantId,
+                        coinsReward,
+                        experienceReward,
+                        JSON.stringify(Array.isArray(grantedItems) ? grantedItems : []),
+                        keyName,
+                        participantId === playerId
+                    );
+
+                    participantRewards.set(participantId, {
+                        coins: coinsReward,
+                        experience: experienceReward,
+                        items: grantedItems,
+                        key: (isLeader && leaderKey) ? leaderKey : null
+                    });
+                }
+
+                // Батчовый UPDATE монет
+                if (coinUpdates.length > 0) {
+                    const values = coinUpdates.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(', ');
+                    await client.query(
+                        `UPDATE players p SET coins = p.coins + v.amount
+                         FROM (VALUES ${values}) AS v(player_id, amount)
+                         WHERE p.id = v.player_id`,
+                        coinUpdates
+                    );
+                }
+
+                // Батчовый UPDATE опыта
+                if (expUpdates.length > 0) {
+                    const values = expUpdates.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(', ');
+                    await client.query(
+                        `UPDATE players p SET experience = p.experience + v.amount
+                         FROM (VALUES ${values}) AS v(player_id, amount)
+                         WHERE p.id = v.player_id`,
+                        expUpdates
+                    );
+                    // Логи опыта — по одному на игрока (нельзя батчить из-за разных logData)
+                    for (const entry of shares) {
+                        const pid = entry.participantId;
+                        const expReward = participantRewards.get(pid)?.experience || 0;
+                        if (expReward > 0) {
+                            const expResult = await playerHelper.addExperience(pid, expReward, client);
+                            expLogs.push({ playerId: pid, logData: expResult.logData });
+                        }
+                    }
+                }
+
+                // Батчовый UPDATE bosses_killed и boss_mastery
+                if (bossesKilledUpdates.length > 0) {
+                    const values = bossesKilledUpdates.map((_, i) => `($${i + 1})`).join(', ');
+                    await client.query(
+                        `UPDATE players SET bosses_killed = COALESCE(bosses_killed, 0) + 1
+                         WHERE id = ANY($1::bigint[])`,
+                        [bossesKilledUpdates]
+                    );
+                }
+                if (masteryUpdates.length > 0) {
+                    // masteryUpdates — пары [playerId, bossId, playerId, bossId, ...]
+                    const values = masteryUpdates.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2}, NOW())`).join(', ');
+                    await client.query(
+                        `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
+                         VALUES ${values}
+                         ON CONFLICT (player_id, boss_id)
+                         DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
+                        masteryUpdates
+                    );
+                }
+
+                // Батчовый INSERT raid_rewards
+                if (raidRewardsRows.length > 0) {
+                    const values = raidRewardsRows.map((_, i) => `($${i * 8 + 1}, $${i * 8 + 2}, $${i * 8 + 3}, $${i * 8 + 4}, $${i * 8 + 5}, $${i * 8 + 6}::jsonb, $${i * 8 + 7}, $${i * 8 + 8})`).join(', ');
                     await client.query(
                         `INSERT INTO raid_rewards
                          (raid_id, boss_id, player_id, coins, experience, items, key_item_name, claimed)
-                         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
-                        [
-                            raidId,
-                            raid.boss_id,
-                            participantId,
-                            coinsReward,
-                            experienceReward,
-                            JSON.stringify(Array.isArray(grantedItems) ? grantedItems : []),
-                            keyName,
-                            participantId === playerId
-                        ]
+                         VALUES ${values}`,
+                        raidRewardsRows
                     );
                 }
 
@@ -2153,12 +2177,6 @@ router.post('/raid/:id/attack', async (req, res) => {
                 await clearActiveBattleForPlayers(client, participantIds);
                 await client.query('DELETE FROM boss_sessions WHERE raid_id = $1', [raidId]);
                 await client.query('DELETE FROM raid_progress WHERE id = $1', [raidId]);
-            }
-
-            // Логи опыта уходят после начисления, но ещё внутри транзакции,
-            // чтобы expLogs (объявленная через const) была доступна.
-            for (const { playerId: pid, logData } of expLogs) {
-                await logPlayerAction(pid, logData.action, logData.data);
             }
 
             return {
@@ -2204,6 +2222,12 @@ router.post('/raid/:id/attack', async (req, res) => {
                 }
             };
         });
+
+        // Логи опыта — после COMMIT, чтобы timeout в логировании не откатывал
+        // начисленные награды (logPlayerAction использует своё соединение из пула).
+        for (const { playerId: pid, logData } of expLogs) {
+            await logPlayerAction(pid, logData.action, logData.data);
+        }
 
         return res.status(outcome.status).json(outcome.body);
     } catch (error) {

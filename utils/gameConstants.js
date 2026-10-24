@@ -14,6 +14,7 @@ const sharedEquipment = require('../public/shared/equipment.js');
 // сервер по ним же начисляет множители за лут, опыт и шанс ключа.
 // Сам RISK_TIERS не нужен здесь: используется только getRiskTierByScore.
 const { RISK_PREPARED_MAX_SCORE, getRiskTierByScore } = sharedEquipment;
+const { RARITY_ORDER } = sharedEquipment;
 
 // Формула опыта (getTotalExpForLevel) читается только клиентом —
 // на сервере никогда не понадобилась.
@@ -46,6 +47,25 @@ const LOOT_TABLES = {
 };
 
 /**
+ * Валидация таблицы лута: все значения должны быть неотрицательными числами,
+ * сумма вероятностей должна равняться 100 (с допуском ±0.01).
+ * @param {object|null} table таблица лута из БД
+ * @returns {boolean} true если таблица валидная
+ */
+function validateLootTable(table) {
+    if (!table || typeof table !== 'object' || Array.isArray(table)) return false;
+    const validRarities = new Set(RARITY_ORDER);
+    let sum = 0;
+    for (const [key, value] of Object.entries(table)) {
+        if (!validRarities.has(key)) return false;
+        const num = Number(value);
+        if (!Number.isFinite(num) || num < 0) return false;
+        sum += num;
+    }
+    return Math.abs(sum - 100) <= 0.01;
+}
+
+/**
  * Получить таблицу лута для локации.
  *
  * Приоритет: переданный dbLootTable (из колонки locations.loot_table в БД),
@@ -58,7 +78,11 @@ const LOOT_TABLES = {
  */
 function getLootTable(locationId, dbLootTable = null) {
     if (dbLootTable && typeof dbLootTable === 'object' && Object.keys(dbLootTable).length > 0) {
-        return dbLootTable;
+        if (validateLootTable(dbLootTable)) {
+            return dbLootTable;
+        }
+        // Таблица из БД невалидна — фоллбэк на хардкод, чтобы не сломать дроп.
+        logger.warn('[lootTable] Невалидная loot_table для локации', { locationId, table: dbLootTable });
     }
     return LOOT_TABLES[locationId] || LOOT_TABLES[1];
 }
@@ -68,9 +92,14 @@ function getLootTable(locationId, dbLootTable = null) {
  * @param {number} locationId - ID локации
  * @param {number} luck - Удача игрока (влияет на шанс редкости)
  * @param {object|null} dbLootTable - JSONB из locations.loot_table (опционально)
+ * @param {string|null} forcedRarity - если задан, принудительно вернуть эту редкость (pity timer)
  * @returns {string} Редкость предмета
  */
-function rollItemRarity(locationId, luck = 1, dbLootTable = null) {
+function rollItemRarity(locationId, luck = 1, dbLootTable = null, forcedRarity = null) {
+    // Pity timer: если задан forcedRarity, возвращаем его напрямую.
+    if (forcedRarity && RARITY_ORDER.includes(forcedRarity)) {
+        return forcedRarity;
+    }
     const table = getLootTable(locationId, dbLootTable);
     const roll = Math.random() * 100;
     
@@ -390,6 +419,7 @@ module.exports = {
     rollItemRarity,
     getLootTable,
     LOOT_TABLES,
+    RARITY_ORDER,
 
     // Риск локации — читает routes/game/world.js
     calculateLocationRiskProfile

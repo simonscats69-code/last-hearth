@@ -245,16 +245,17 @@
 
 /** Порядок редкостей от обычной к легендарной */
     const RARITY_ORDER = Object.freeze(['common', 'uncommon', 'rare', 'epic', 'legendary']);
-/**
- * Формула опыта до следующего уровня.
-     * Начисление (сервер) и полоска опыта (клиент) обязаны считать одно и то же.
+    /**
+     * Формула опыта до следующего уровня.
+     * Мягкая экспонента: 400 * level^1.25 — растёт плавнее, чем линейная,
+     * но всё ещё требует всё больше фарма на высоких уровнях.
      *
      * @param {number} level текущий уровень
      * @returns {number} сколько опыта нужно до следующего уровня
      */
     function getExpForLevel(level) {
         const lvl = Math.max(1, Number(level) || 1);
-        return Math.round(500 * lvl * (1 + lvl / 25));
+        return Math.round(400 * Math.pow(lvl, 1.25));
     }
 
     /** Общий опыт, необходимый для достижения уровня */
@@ -1024,7 +1025,7 @@ function resolveEquipmentSlot(item) {
      */
 
     /** Базовый опыт за находку до множителей локации, комбо и риска. */
-    const SEARCH_BASE_XP = 6;
+    const SEARCH_BASE_XP = 15;
 
     /** Бонус опыта по редкости. common не даёт прибавки. */
     const SEARCH_RARITY_XP = Object.freeze({
@@ -1034,9 +1035,6 @@ function resolveEquipmentSlot(item) {
         epic: 11,
         legendary: 15
     });
-
-    /** Прирост бонуса локации за каждый id; локация 1 — базовая. */
-    const LOCATION_XP_BONUS_PER_ID = 0.15;
 
     /** Каждый N-й поиск даёт комбо-бонус. */
     const SEARCH_COMBO_EVERY = 10;
@@ -1193,7 +1191,6 @@ function resolveEquipmentSlot(item) {
     // Поиск лута
     SEARCH_BASE_XP,
     SEARCH_RARITY_XP,
-    LOCATION_XP_BONUS_PER_ID,
     SEARCH_COMBO_EVERY,
     SEARCH_COMBO_MULTIPLIER,
     // Кланы
