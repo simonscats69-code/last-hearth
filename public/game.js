@@ -7565,9 +7565,7 @@ async function attackRaid(raidId) {
 
     try {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/attack`, {
-            method: 'POST',
-            idempotent: true,
-            idempotencyKey: `raid-attack-${raidId}-${gameState.player?.id}`
+            method: 'POST'
         });
         
         if (result.success) {
