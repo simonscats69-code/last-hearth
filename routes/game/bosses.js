@@ -2109,7 +2109,7 @@ router.post('/raid/:id/attack', async (req, res) => {
 
                 // Батчовый UPDATE монет
                 if (coinUpdates.length > 0) {
-                    const values = coinUpdates.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(', ');
+                    const values = coinUpdates.map((_, i) => `($${i * 2 + 1}::bigint, $${i * 2 + 2}::integer)`).join(', ');
                     await client.query(
                         `UPDATE players p SET coins = p.coins + v.amount
                          FROM (VALUES ${values}) AS v(player_id, amount)
@@ -2120,7 +2120,7 @@ router.post('/raid/:id/attack', async (req, res) => {
 
                 // Батчовый UPDATE опыта
                 if (expUpdates.length > 0) {
-                    const values = expUpdates.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(', ');
+                    const values = expUpdates.map((_, i) => `($${i * 2 + 1}::bigint, $${i * 2 + 2}::integer)`).join(', ');
                     await client.query(
                         `UPDATE players p SET experience = p.experience + v.amount
                          FROM (VALUES ${values}) AS v(player_id, amount)
@@ -2149,7 +2149,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                 }
                 if (masteryUpdates.length > 0) {
                     // masteryUpdates — пары [playerId, bossId, playerId, bossId, ...]
-                    const values = masteryUpdates.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2}, NOW())`).join(', ');
+                    const values = masteryUpdates.map((_, i) => `($${i * 2 + 1}::bigint, $${i * 2 + 2}::bigint, NOW())`).join(', ');
                     await client.query(
                         `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
                          VALUES ${values}
@@ -2161,7 +2161,7 @@ router.post('/raid/:id/attack', async (req, res) => {
 
                 // Батчовый INSERT raid_rewards
                 if (raidRewardsRows.length > 0) {
-                    const values = raidRewardsRows.map((_, i) => `($${i * 8 + 1}, $${i * 8 + 2}, $${i * 8 + 3}, $${i * 8 + 4}, $${i * 8 + 5}, $${i * 8 + 6}::jsonb, $${i * 8 + 7}, $${i * 8 + 8})`).join(', ');
+                    const values = raidRewardsRows.map((_, i) => `($${i * 8 + 1}::bigint, $${i * 8 + 2}::bigint, $${i * 8 + 3}::bigint, $${i * 8 + 4}::integer, $${i * 8 + 5}::integer, $${i * 8 + 6}::jsonb, $${i * 8 + 7}, $${i * 8 + 8}::boolean)`).join(', ');
                     await client.query(
                         `INSERT INTO raid_rewards
                          (raid_id, boss_id, player_id, coins, experience, items, key_item_name, claimed)
