@@ -1411,6 +1411,10 @@ const actionLocks = {
 // параллельным loadProfile() перезаписать state вразнобой.
 let loadProfileInFlight = null;
 
+// Признак «холодного» кэша: на первом вызове loadProfile кэш пуст,
+// invalidateCache('profile') не нужен — пропускаем лишнюю операцию.
+let profileCacheCold = true;
+
 /** Через сколько мс принудительно снимать блокировку */
 const ACTION_LOCK_TIMEOUT_MS = 30000;
 
@@ -2639,7 +2643,7 @@ window.backToBosses = backToBosses;
  */
 async function waitForServerReady(maxWait = 30000) {
     const startTime = Date.now();
-    const pollInterval = 2000;
+    let pollInterval = 500; // начинаем часто, потом реже
 
     // Обновляем текст загрузки
     const loadingText = document.querySelector('.loading-text');
@@ -2672,6 +2676,8 @@ async function waitForServerReady(maxWait = 30000) {
         }
 
         await new Promise(resolve => setTimeout(resolve, pollInterval));
+        // Экспоненциальный бэкофф: 500 → 750 → 1125 → 1687 → 2531 → 3000 (макс)
+        pollInterval = Math.min(pollInterval * 1.5, 3000);
     }
 
     // Сервер не ответил за maxWait
@@ -2779,9 +2785,9 @@ async function initGame() {
         if (gameState.player) return; // игра уже запущена
         const loadingScreen = document.getElementById('loading-screen');
         if (!loadingScreen || loadingScreen.style.display === 'none') return;
-        console.error('[initGame] Watchdog: инициализация не завершилась за 20 секунд');
+        console.error('[initGame] Watchdog: инициализация не завершилась за 30 секунд');
         renderInitError('⏳', 'Загрузка затянулась', 'Сервер долго не отвечает. Проверь интернет и попробуй ещё раз.');
-    }, 20000);
+    }, 30000);
 
     // Обработчик для отлова unhandled rejections во время инициализации
     const unhandledRejectionHandler = (event) => {
@@ -2793,29 +2799,33 @@ async function initGame() {
     try {
         gameLog('[initGame] Starting initialization...');
 
-        // Ждём готовности сервера: пока БД не инициализирована, /api/game/*
-        // отвечает 503. Опрашиваем /ready (без auth) чтобы не конфликтовать
-        // с withTimeout в дальнейших apiRequest.
-        gameLog('[initGame] Waiting for server to be ready...');
+        // Ждём готовности сервера и Telegram WebApp параллельно — операции
+        // независимы: Telegram SDK загружается на стороне клиента, сервер —
+        // через HTTP. Раньше они шли последовательно (до 35с суммарно),
+        // теперь — до 30с макс.
+        gameLog('[initGame] Waiting for server and Telegram...');
         const loadingText = document.querySelector('.loading-text');
-        if (loadingText) loadingText.textContent = 'Ожидание сервера...';
-        await waitForServerReady(30000);
-        gameLog('[initGame] Server is ready');
+        if (loadingText) loadingText.textContent = 'Ожидание сервера и Telegram...';
 
-        // Ждём пока загрузится Telegram WebApp.
-        // В production отсутствие Telegram — фатально: продолжать нельзя,
-        // иначе запросы уйдут без валидного initData.
         try {
-            gameLog('[initGame] Waiting for Telegram WebApp...');
-            await waitForTelegramWebApp();
-            gameLog('[initGame] Telegram WebApp ready');
+            await Promise.all([
+                waitForServerReady(30000),
+                waitForTelegramWebApp()
+            ]);
+            gameLog('[initGame] Server and Telegram ready');
         } catch (waitError) {
-            console.error('[initGame] Telegram WebApp не загрузился:', waitError);
-            renderInitError(
-                '😿',
-                'Ошибка авторизации',
-                'Не удалось получить данные Telegram. Откройте игру через бота @LastHearthBot'
-            );
+            if (waitError.message?.includes('Telegram WebApp')) {
+                console.error('[initGame] Telegram WebApp не загрузился:', waitError);
+                renderInitError(
+                    '😿',
+                    'Ошибка авторизации',
+                    'Не удалось получить данные Telegram. Откройте игру через бота @LastHearthBot'
+                );
+                return;
+            }
+            // Ошибка сервера — waitForServerReady бросил после 30с ожидания
+            console.error('[initGame] Сервер не готов:', waitError);
+            renderInitError('⏳', 'Загрузка затянулась', 'Сервер долго не отвечает. Проверь интернет и попробуй ещё раз.');
             return;
         }
         
@@ -2845,17 +2855,23 @@ async function initGame() {
             return;
         }
 
-        // loadProfile() и loadLocations() сами гасят свои ошибки (не бросают
-        // наружу), чтобы падение перерисовки не выглядело как провал операции.
-        // Отдельные try/catch здесь были лишними и никогда не срабатывали.
-        // Сервер валидирует игрока через middleware validatePlayer на всех роутах.
-        gameLog('[initGame] Loading profile...');
-        await withTimeout(loadProfile(), 30000, 'Таймаут загрузки профиля');
-        gameLog('[initGame] Profile loaded, player:', !!gameState.player);
-        
-        gameLog('[initGame] Loading locations...');
-        await withTimeout(loadLocations(), 30000, 'Таймаут загрузки локаций');
-        gameLog('[initGame] Locations loaded');
+        // loadProfile() и loadLocations() — два независимых GET-запроса.
+        // Загружаем параллельно, затем синхронизируем текущую локацию
+        // (loadLocations мог выполниться раньше профиля и пропустить привязку).
+        gameLog('[initGame] Loading profile and locations in parallel...');
+        await Promise.all([
+            withTimeout(loadProfile(), 30000, 'Таймаут загрузки профиля'),
+            withTimeout(loadLocations(), 30000, 'Таймаут загрузки локаций')
+        ]);
+        gameLog('[initGame] Profile and locations loaded');
+
+        // Явная синхронизация текущей локации: loadLocations мог выполниться
+        // раньше loadProfile, тогда gameState.player ещё не был установлен.
+        if (gameState.player?.current_location_id && Array.isArray(gameState.locations) && gameState.locations.length) {
+            gameState.player.location = gameState.locations.find(
+                loc => loc.id === gameState.player.current_location_id
+            ) || null;
+        }
 
         // Проверяем, успешно ли загрузился профиль
         if (!gameState.player) {
@@ -2955,7 +2971,11 @@ async function loadProfile() {
     // Сбрасываем кэш ДО запроса: gameApi кэширует GET на 30 секунд, и после
     // мутаций (атака, покупка, колесо) закэшированный профиль отдавал бы
     // устаревшие монеты/XP/инвентарь даже при явном loadProfile()
-    invalidateCache('profile');
+    // На первом (холодном) вызове кэш пуст — invalidateCache не нужен.
+    if (!profileCacheCold) {
+        invalidateCache('profile');
+    }
+    profileCacheCold = false;
 
     // Уже идёт загрузка — дожидаемся её вместо второго параллельного запроса.
     if (loadProfileInFlight) {
@@ -3277,23 +3297,38 @@ async function refreshMainScreenInsights(force = false) {
         return store;
     }
 
-    const [bossesResult, achievementsResult] = await Promise.allSettled([
-        gameApi.bosses(),
-        gameApi.achievements()
-    ]);
+    // Загрузка боссов и достижений откладываем, чтобы не блокировать показ
+    // главного экрана. Это фоновые данные — они не нужны для отображения
+    // уровня, энергии, инвентаря. Пользователь увидит главный экран мгновенно,
+    // боссы и достижения подгрузятся через мгновение.
+    setTimeout(async () => {
+        try {
+            const [bossesResult, achievementsResult] = await Promise.allSettled([
+                gameApi.bosses(),
+                gameApi.achievements()
+            ]);
 
-    if (bossesResult.status === 'fulfilled') {
-        const bossesPayload = bossesResult.value?.data || bossesResult.value || {};
-        store.bosses = Array.isArray(bossesPayload.bosses) ? bossesPayload.bosses : [];
-    }
+            if (bossesResult.status === 'fulfilled') {
+                const bossesPayload = bossesResult.value?.data || bossesResult.value || {};
+                store.bosses = Array.isArray(bossesPayload.bosses) ? bossesPayload.bosses : [];
+            }
 
-    if (achievementsResult.status === 'fulfilled') {
-        store.achievements = Array.isArray(achievementsResult.value?.progress)
-            ? achievementsResult.value.progress
-            : [];
-    }
+            if (achievementsResult.status === 'fulfilled') {
+                store.achievements = Array.isArray(achievementsResult.value?.progress)
+                    ? achievementsResult.value.progress
+                    : [];
+            }
 
-    store.loadedAt = Date.now();
+            store.loadedAt = Date.now();
+
+            if (gameState.player) {
+                updateMainScreenInsights(gameState.player);
+            }
+        } catch (e) {
+            // Фоновая загрузка не должна ломать инициализацию
+            console.debug('[refreshMainScreenInsights] Фоновая загрузка не удалась:', e);
+        }
+    }, 0);
 
     if (gameState.player) {
         updateMainScreenInsights(gameState.player);
