@@ -173,12 +173,18 @@ pool.on('connect', (client) => {
  * новые запросы получают 503 вместо бесконечного ожидания.
  */
 function getPoolUtilization() {
-    // pg Pool не exposes totalCount напрямую до v8.10, но waitingCount + availableCount
-    // дают достаточно для оценки. Используем totalCount если доступен.
-    const total = pool.totalCount || (pool.max || 50);
+    // pg Pool не гарантирует наличие totalCount/waitingCount/idleCount в
+    // всех версиях — используем безопасные fallback-значения.
+    const max = pool.max || 50;
+    const idle = pool.idleCount !== undefined ? pool.idleCount : max;
     const waiting = pool.waitingCount || 0;
-    const used = Math.max(0, total - waiting);
-    return used / total;
+
+    // Если есть ожидающие запросы — пул под давлением.
+    if (waiting > 0) return 1.0;
+
+    // Иначе доля не-idle соединений.
+    const used = Math.max(0, max - idle);
+    return used / max;
 }
 
 /**
