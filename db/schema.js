@@ -400,6 +400,7 @@ async function createTables() {
             coins INTEGER NOT NULL DEFAULT 0,
             experience INTEGER NOT NULL DEFAULT 0,
             items JSONB NOT NULL DEFAULT '[]',
+            undropped_items JSONB NOT NULL DEFAULT '[]',
             key_item_name VARCHAR(255),
             claimed BOOLEAN NOT NULL DEFAULT false,
             created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -887,6 +888,9 @@ async function runMigrations() {
     // настраивать нечего. ADD COLUMN для них больше не выполняется, а сами
     // колонки, если они остались в БД от прошлой версии, никем не читаются.
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMESTAMP`);
+
+    // raid_rewards: поле о невыданных предметах из-за переполнения инвентаря.
+    await queryTx(`ALTER TABLE raid_rewards ADD COLUMN IF NOT EXISTS undropped_items JSONB NOT NULL DEFAULT '[]'`);
 
     // Миграции для player_achievements — колонки progress_value, reward_claimed, claimed_at
     // уже в CREATE TABLE (стр. 460, 463, 464)

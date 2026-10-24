@@ -228,8 +228,12 @@ router.post('/attack', async (req, res) => {
 
     try {
         // Валидация входных данных
+        if (!req.body || typeof req.body !== 'object') {
+            return fail(res, 'Некорректное тело запроса', 'INVALID_REQUEST_BODY', 400);
+        }
+
         const { target_id } = req.body;
-        
+
         // Общая валидация ID (utils/validate.js). Возвращает нормализованное
         // число, поэтому id, пришедший строкой из JSON, тоже валиден.
         const targetIdCheck = validateId(target_id, 'ID цели');

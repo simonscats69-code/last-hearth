@@ -598,14 +598,15 @@ async function loadItemTemplates(client, rewardItems) {
  */
 async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, preloadedTemplates = null) {
     const normalizedItems = normalizeRewardItems(rewardItems);
-    if (!normalizedItems.length || multiplier <= 0) return [];
+    if (!normalizedItems.length || multiplier <= 0) return { granted: [], undropped: [] };
 
     const templates = preloadedTemplates || await loadItemTemplates(client, normalizedItems);
-    if (!templates.length) return [];
+    if (!templates.length) return { granted: [], undropped: [] };
 
     const playerResult = await client.query('SELECT inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
     const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
     const granted = [];
+    const undropped = [];
     let totalGrantedCount = 0;
 
     for (const template of templates) {
@@ -614,12 +615,8 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
 
         if (grantedQuantity <= 0) continue;
 
-        // Реально выданное количество: бафф loot_x2 мог дать больше, чем
-        // помещается в инвентарь, и разница просто не выдаётся.
         let actuallyGranted = 0;
 
-        // Итерация нужна ради стакования и проверки лимита: без них награда за
-        // босса довела бы инвентарь до 200+ слотов в обход лимита 100.
         for (let i = 0; i < grantedQuantity; i++) {
             if (inventory.length >= MAX_INVENTORY_SLOTS) break;
 
@@ -629,33 +626,35 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
                 modifications: {}
             });
 
-            // Стакуем, если предмет для этого пригоден: стопка аптечек
-            // не должна занимать по отдельному слоту каждую.
             const slotsAdded = addItemToInventory(inventory, item, template);
             if (slotsAdded > 0 && inventory.length > MAX_INVENTORY_SLOTS) {
-                // Новый слот уже создан сверх лимита — откатываем его.
                 inventory.pop();
                 break;
             }
             actuallyGranted++;
         }
 
-        if (actuallyGranted === 0) {
-            logger.warn('Награда за босса не выдана: инвентарь заполнен', {
+        const skipped = grantedQuantity - actuallyGranted;
+        if (skipped > 0) {
+            undropped.push({
+                id: template.id,
+                name: template.name,
+                icon: template.icon || '📦',
+                wanted: grantedQuantity,
+                skipped,
+                reason: 'INVENTORY_FULL'
+            });
+            logger.warn('Награда за босса частично или полностью не выдана: инвентарь заполнен', {
                 playerId,
+                item: template.name,
+                wanted: grantedQuantity,
+                granted: actuallyGranted,
                 slots: inventory.length,
                 maxSlots: MAX_INVENTORY_SLOTS
             });
-            continue;
         }
-        if (actuallyGranted < grantedQuantity) {
-            logger.warn('Награда за босса обрезана по лимиту инвентаря', {
-                playerId,
-                wanted: grantedQuantity,
-                granted: actuallyGranted,
-                maxSlots: MAX_INVENTORY_SLOTS
-            });
-        }
+
+        if (actuallyGranted === 0) continue;
 
         granted.push({
             id: template.id,
@@ -676,7 +675,7 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
         );
     }
 
-    return granted;
+    return { granted, undropped };
 }
 
 async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteries) {
@@ -699,8 +698,9 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
     // Множитель 1, а не 0.5: каждый предмет из reward_items выдавался с шансом
     // 50% (calculateGrantedQuantity), из-за чего обещанная награда за босса
     // терялась половину раз. Бафф loot_x2 удваивает количество.
-    const grantedItems = await grantRewardItems(client, playerId, boss.reward_items, lootMultiplier);
+    const { granted: grantedItems, undropped: soloUndropped } = await grantRewardItems(client, playerId, boss.reward_items, lootMultiplier);
     if (grantedItems.length) rewards.items = grantedItems;
+    if (soloUndropped.length) rewards.undropped_items = soloUndropped;
 
     await client.query(
         `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
@@ -1376,6 +1376,16 @@ router.post('/attack-boss', async (req, res) => {
                 ? await applyBossCounterHit(client, playerId, boss, player, activeBattle.boss.hp)
                 : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
 
+            // applyBossCounterHit пишет изношенную экипировку в БД, но
+            // объект player.equipment в JS не обновляется. Перечитываем
+            // оборудование из БД, чтобы player_defense ниже считал по
+            // актуальному состоянию после износа.
+            const eqRow = await client.query(
+                `SELECT equipment FROM players WHERE id = $1`,
+                [playerId]
+            );
+            player.equipment = safeJsonParse(eqRow.rows[0]?.equipment || '{}', {});
+
             // Ежедневное задание «Нанеси 100 урона боссам».
             await progressDailyTask(client, playerId, 'boss_damage', damage);
 
@@ -1935,6 +1945,16 @@ router.post('/raid/:id/attack', async (req, res) => {
             const counterHit = raidBoss
                 ? await applyBossCounterHit(client, playerId, raidBoss, player, raid.current_health)
                 : { damage: 0, health: Number(player.health || 0), broken_slots: [] };
+
+            // applyBossCounterHit пишет изношенную экипировку в БД, но
+            // объект player.equipment в JS не обновляется. Перечитываем
+            // оборудование из БД, чтобы player_defense ниже считал по
+            // актуальному состоянию после износа.
+            const eqRow = await client.query(
+                `SELECT equipment FROM players WHERE id = $1`,
+                [playerId]
+            );
+            player.equipment = safeJsonParse(eqRow.rows[0]?.equipment || '{}', {});
             await progressDailyTask(client, playerId, 'boss_damage', damage);
 
             // См. комментарий выше: реген не сбрасывается при трате.
@@ -2030,7 +2050,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                     ? Math.max(0, expPool - shares.reduce((s, r) => s + Math.floor(expPool * r.share * r.bonusMultiplier), 0))
                     : 0;
 
-            let leaderKey = null;
+                let leaderKey = null;
 
                 // Батч-загрузка шаблонов наград ДО цикла по участникам.
                 const raidRewardTemplates = await loadItemTemplates(
@@ -2059,7 +2079,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                     let experienceReward = participantBuffs.exp_x2 ? baseExp * 2 : baseExp;
                     if (isTopDamager && expRemainder > 0) experienceReward += expRemainder;
 
-                    const grantedItems = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
+                    const { granted: grantedItems, undropped: participantUndropped } = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
                     const isLeader = participantId === leaderIdRaw;
 
                     if (isLeader) {
@@ -2073,6 +2093,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                             items: grantedItems
                         };
                         if (isLeader && leaderKey) rewards.key = leaderKey;
+                        if (participantUndropped.length) rewards.undropped_items = participantUndropped;
                     }
 
                     if (entry.dealt > 0) {
@@ -2095,6 +2116,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         coinsReward,
                         experienceReward,
                         JSON.stringify(Array.isArray(grantedItems) ? grantedItems : []),
+                        participantUndropped.length > 0 ? JSON.stringify(participantUndropped) : null,
                         keyName,
                         participantId === playerId
                     );
@@ -2170,13 +2192,26 @@ router.post('/raid/:id/attack', async (req, res) => {
 
                 // Батчовый INSERT raid_rewards
                 if (raidRewardsRows.length > 0) {
-                    const numRows = raidRewardsRows.length / 8;
+                    // raidRewardsRows содержит группы по 9 элементов на участника:
+                    // [raidId, bossId, playerId, coins, exp, itemsJson, undroppedItemsJson, keyName, claimed]
+                    // Проверяем кратность, чтобы не образовались битые плейсхолдеры $n.
+                    if (raidRewardsRows.length % 9 !== 0) {
+                        logger.warn('[bosses] raidRewardsRows длина не кратна 9', {
+                            length: raidRewardsRows.length
+                        });
+                        throw {
+                            message: 'Внутренняя ошибка формирования наград рейда',
+                            code: 'INTERNAL_ERROR',
+                            statusCode: 500
+                        };
+                    }
+                    const numRows = raidRewardsRows.length / 9;
                     const values = Array.from({ length: numRows }, (_, i) =>
-                        `($${i * 8 + 1}::bigint, $${i * 8 + 2}::bigint, $${i * 8 + 3}::bigint, $${i * 8 + 4}::integer, $${i * 8 + 5}::integer, $${i * 8 + 6}::jsonb, $${i * 8 + 7}, $${i * 8 + 8}::boolean)`
+                        `($${i * 9 + 1}::bigint, $${i * 9 + 2}::bigint, $${i * 9 + 3}::bigint, $${i * 9 + 4}::integer, $${i * 9 + 5}::integer, $${i * 9 + 6}::jsonb, $${i * 9 + 7}::jsonb, $${i * 9 + 8}, $${i * 9 + 9}::boolean)`
                     ).join(', ');
                     await client.query(
                         `INSERT INTO raid_rewards
-                         (raid_id, boss_id, player_id, coins, experience, items, key_item_name, claimed)
+                         (raid_id, boss_id, player_id, coins, experience, items, undropped_items, key_item_name, claimed)
                          VALUES ${values}`,
                         raidRewardsRows
                     );

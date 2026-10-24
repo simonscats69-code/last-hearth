@@ -7602,10 +7602,10 @@ async function attackRaid(raidId) {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/attack`, {
             method: 'POST'
         });
-        
+
         if (result.success) {
             const data = result.data;
-            
+
             // Показываем урон (число с сервера — плоское damage_dealt).
             showDamageAnimation(Number(data.damage_dealt ?? data.damage) || 0);
 
@@ -7619,17 +7619,15 @@ async function attackRaid(raidId) {
                 );
                 refreshPlayerEnergyUI();
             }
-            
+
             // Ответный удар СЛЕДУЮЩЕГО удара — по уже побитому боссу.
-            // Подпись живёт в карточке рейда: updateBossCounterLabel умеет
-            // писать в произвольный элемент, переданный напрямую.
             const counterLabel = document.querySelector(`[data-raid-counter-label="${raidId}"]`);
             if (counterLabel) {
                 updateBossCounterLabel(data.counter_damage, data.player_defense, null, counterLabel);
             }
 
-            // Если босс убит
-            if (data.boss_defeated ?? data.killed) {
+            // Если босс убит (в этом или предыдущем ударе другого игрока)
+            if (data.boss_defeated ?? data.killed ?? data.raid?.hp <= 0) {
                 // Финальные награды, pending rewards и очистка списка —
                 // только полная перезагрузка.
                 showVictoryFlash?.();
@@ -7653,12 +7651,33 @@ async function attackRaid(raidId) {
                 renderRaids(gameState.raids);
             }
         } else {
-            showNotification(result.error || 'Ошибка атаки', 'error');
+            // Ошибка атаки — обрабатываем конкретные коды, чтобы не залипало
+            // состояние «в активном бое» после завершения рейда другим игроком.
+            const errorCode = result.code || result.error_code;
+            const errorMsg = result.error || 'Ошибка атаки';
+
+            if (errorCode === 'RAID_FINISHED' || errorCode === 'NOT_PARTICIPATING' || errorCode === 'RAID_NOT_FOUND') {
+                // Рейд уже завершён другим игроком или игрок вылетел из боя.
+                // Сбрасываем локальное состояние и перезагружаем список рейдов.
+                gameState.activeBattle = null;
+                showNotification(errorMsg || 'Рейд завершён.', 'info');
+                try {
+                    await loadRaids();
+                    renderRaids(gameState.raids);
+                } catch (reloadError) {
+                    console.error('Не удалось перезагрузить рейды после ошибки:', reloadError);
+                }
+            } else {
+                showNotification(errorMsg, 'error');
+            }
         }
-        
+
         return result;
     } catch (error) {
         console.error('Ошибка атаки в рейде:', error);
+        // При сетевой ошибке тоже сбрасываем активный бой, чтобы не залипало:
+        // сервер мог обработать удар, а ответ не дошёл.
+        gameState.activeBattle = null;
         showNotification(clientErrorMessage(error, 'Ошибка при атаке'), 'error');
     } finally {
         unlockAction('attackBoss');

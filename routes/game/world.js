@@ -514,14 +514,17 @@ router.post('/search', async (req, res) => {
                 itemsCollected += 1;
 
                 // Бафф x2 к добыче дублирует обычный предмет, но не ключ.
+                // Проверяем место в инвентаре ДО добавления второго экземпляра,
+                // чтобы бафф не вызвал полный откат транзакции из-за переполнения.
                 if (activeBuffs.loot_x2 && newItem.type !== 'key') {
-                    addItemToInventory(inventory, { ...newItem }, foundItem);
-                    itemsCollected += 1;
+                    const wouldExceed = inventory.length >= MAX_INVENTORY_SLOTS;
+                    if (!wouldExceed) {
+                        addItemToInventory(inventory, { ...newItem }, foundItem);
+                        itemsCollected += 1;
+                    }
                 }
 
                 // Проверка лимита слотов ПОСЛЕ всех добавлений (включая loot_x2).
-                // При 99 слотах и нестакуемом предмете бафф x2 добавлял 2 слота
-                // и инвентарь становился 101 — лимит 100 молча превышался.
                 // Бросаем ошибку вместо возврата объекта: transaction() сделает
                 // ROLLBACK всех изменений (радиация, ключ босса, реген энергии),
                 // и клиент получит корректный ответ об ошибке.
