@@ -2850,11 +2850,11 @@ async function initGame() {
         // Отдельные try/catch здесь были лишними и никогда не срабатывали.
         // Сервер валидирует игрока через middleware validatePlayer на всех роутах.
         gameLog('[initGame] Loading profile...');
-        await withTimeout(loadProfile(), 15000, 'Таймаут загрузки профиля');
+        await withTimeout(loadProfile(), 30000, 'Таймаут загрузки профиля');
         gameLog('[initGame] Profile loaded, player:', !!gameState.player);
         
         gameLog('[initGame] Loading locations...');
-        await withTimeout(loadLocations(), 15000, 'Таймаут загрузки локаций');
+        await withTimeout(loadLocations(), 30000, 'Таймаут загрузки локаций');
         gameLog('[initGame] Locations loaded');
 
         // Проверяем, успешно ли загрузился профиль
