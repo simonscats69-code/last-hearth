@@ -167,46 +167,6 @@ pool.on('connect', (client) => {
     });
 });
 
-/**
- * Текущая загрузка пула: занято / всего. Возвращает число от 0 до 1.
- * Используется для backpressure-мiddleware: если пул заполнен больше 85%,
- * новые запросы получают 503 вместо бесконечного ожидания.
- */
-function getPoolUtilization() {
-    // pg Pool не гарантирует наличие totalCount/waitingCount/idleCount в
-    // всех версиях — используем безопасные fallback-значения.
-    const max = pool.max || 50;
-    const idle = pool.idleCount !== undefined ? pool.idleCount : max;
-    const waiting = pool.waitingCount || 0;
-
-    // Если есть ожидающие запросы — пул под давлением.
-    if (waiting > 0) return 1.0;
-
-    // Иначе доля не-idle соединений.
-    const used = Math.max(0, max - idle);
-    return used / max;
-}
-
-/**
- * Middleware backpressure: если пул БД заполнен больше порога,
- * отдаём 503 сразу, неoccupying соединение на время ожидания.
- * @param {number} [threshold=0.85] доля заполнения пула (0..1)
- */
-function poolBackpressureMiddleware(threshold = 0.85) {
-    return (req, res, next) => {
-        const util = getPoolUtilization();
-        if (util >= threshold) {
-            logger.warn('[backpressure] Пул БД заполнен', { utilization: Math.round(util * 100) + '%', threshold: Math.round(threshold * 100) + '%' });
-            return res.status(503).json({
-                error: 'Сервер временно перегружен. Попробуйте через несколько секунд.',
-                code: 'SERVER_BUSY',
-                retry_after: 5
-            });
-        }
-        next();
-    };
-}
-
 async function query(sql, params = []) {
     const client = await pool.connect();
     try {
@@ -344,7 +304,5 @@ module.exports = {
     setLogger,
     describeError,
     describeDbTarget,
-    isConnectionError,
-    getPoolUtilization,
-    poolBackpressureMiddleware
+    isConnectionError
 };
