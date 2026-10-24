@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, describeError, poolBackpressureMiddleware } = require('../../db/database');
+const { query, queryOne, describeError } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger, idempotencyMiddleware } = require('../../utils/serverApi');
 
@@ -288,11 +288,6 @@ router.use(ipFloodLimiter);
 
 // ====== 2. ВАЛИДАЦИЯ ИГРОКА ======
 router.use(validatePlayer);
-
-// Backpressure: защита от исчерпания пула БД под массовой нагрузкой.
-// Если пул заполнен на 85% и более — новые запросы получают 503 сразу,
-// не occupy-вая соединение на время ожидания.
-router.use(poolBackpressureMiddleware(0.85));
 
 // ====== 3. ЛИМИТЫ ОТДЕЛЬНЫХ ДЕЙСТВИЙ (уже по id игрока) ======
 //
