@@ -407,7 +407,7 @@ router.get('/achievements/progress', async (req, res) => {
             getAchievementRuntimeContext,
             getAchievementTargetValue,
             getAchievementCurrentValue,
-            safeParseJson: parseJson
+            safeJsonParse: parseJson
         } = helpers;
 
         // Достижения + прогресс игрока
