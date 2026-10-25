@@ -2116,7 +2116,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         coinsReward,
                         experienceReward,
                         JSON.stringify(Array.isArray(grantedItems) ? grantedItems : []),
-                        participantUndropped.length > 0 ? JSON.stringify(participantUndropped) : null,
+                        participantUndropped.length > 0 ? JSON.stringify(participantUndropped) : '[]',
                         keyName,
                         participantId === playerId
                     );
