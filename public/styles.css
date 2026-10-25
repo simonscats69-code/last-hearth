@@ -858,14 +858,10 @@ html, body {
    а не наклеенной плашкой сверху. */
 .stat-bar {
     position: relative;
-    /* isolation: isolate — свой stacking context. Нужен, чтобы z-index: 2
-       у .bar-text срабатывал относительно этой полоски, а не «утекал» во
-       внешний контекст и не зависел от соседей. */
     isolation: isolate;
     height: 24px;
     background: var(--surface-sunken);
     border-radius: var(--radius-md);
-    overflow: hidden;
     border: 1px solid var(--metal-400);
     box-shadow:
         inset 0 2px 5px rgba(0, 0, 0, 0.6),
@@ -924,12 +920,9 @@ html, body {
     background: linear-gradient(90deg, var(--accent-purple), var(--rarity-epic));
     color: var(--accent-purple);
 }
-    /* Дефолт 0%: раньше стоял в инлайне style="width:0%" у #exp-bar. */
-    width: 0;
 
 /* Текст поверх полоски: сколько HP / энергии / опыта числом.
-   z-index: 2 — гарантия, что число рисуется поверх заливки (.bar имеет
-   position: relative и может перекрыть абсолютный сосед).
+   z-index: 2 — гарантия, что число рисуется поверх заливки.
    background — чтобы цифры читались на любой заливке: на жёлтой энергии
    белый текст без подложки даёт контраст всего 1.8:1. */
 .bar-text {
