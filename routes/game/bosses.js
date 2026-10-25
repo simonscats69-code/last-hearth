@@ -2179,7 +2179,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                     // masteryUpdates — пары [playerId, bossId, playerId, bossId, ...]
                     const numRows = masteryUpdates.length / 2;
                     const values = Array.from({ length: numRows }, (_, i) =>
-                        `($${i * 2 + 1}::bigint, $${i * 2 + 2}::bigint, NOW())`
+                        `($${i * 2 + 1}::bigint, $${i * 2 + 2}::bigint, 1, NOW())`
                     ).join(', ');
                     await client.query(
                         `INSERT INTO boss_mastery (player_id, boss_id, kills, last_killed_at)
