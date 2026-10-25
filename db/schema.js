@@ -133,7 +133,7 @@ async function createTables() {
             danger_level INTEGER DEFAULT 1,
             loot_table JSONB DEFAULT '[]',
             is_available BOOLEAN DEFAULT true,
-            icon VARCHAR(50),
+            icon TEXT,
             color VARCHAR(20),
             min_level INTEGER DEFAULT 1
         );
@@ -156,7 +156,7 @@ async function createTables() {
                 WHEN min_luck >= 10 THEN 3
                 ELSE 1
             END
-        WHERE min_level IS NULL OR min_level = 1
+        WHERE min_level IS NULL
     `);
 
     // Таблица предметов
@@ -1106,26 +1106,27 @@ async function mergeDuplicateInventoryStacks() {
 async function seedDatabase() {
     // Локации
     const locations = [
-        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, min_level: 1, danger_level: 1, icon: '🏠', color: '#4CAF50' },
-        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, min_level: 3, danger_level: 2, icon: '🛒', color: '#FF9800' },
-        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, min_level: 5, danger_level: 3, icon: '🏥', color: '#E91E63' },
-        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, min_level: 8, danger_level: 4, icon: '🏭', color: '#9C27B0' },
-        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, min_level: 12, danger_level: 5, icon: '🌆', color: '#F44336' },
-        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, min_level: 18, danger_level: 6, icon: '🎖️', color: '#607D8B' },
-        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, min_level: 25, danger_level: 7, icon: '🔒', color: '#000000' }
+        { name: 'Спальный район', description: 'Тихий жилой комплекс на окраине города', radiation: 0, min_level: 1, danger_level: 1, icon: '🏠', color: '#4CAF50', loot_table: { common: 100, uncommon: 0, rare: 0, epic: 0, legendary: 0 } },
+        { name: 'Рынок', description: 'Центральный рынок, кишащий мародёрами', radiation: 5, min_level: 3, danger_level: 2, icon: '🛒', color: '#FF9800', loot_table: { common: 65, uncommon: 28, rare: 6, epic: 1, legendary: 0 } },
+        { name: 'Больница', description: 'Заброшенная больница с радиоактивными очагами', radiation: 15, min_level: 5, danger_level: 3, icon: '🏥', color: '#E91E63', loot_table: { common: 50, uncommon: 35, rare: 12, epic: 3, legendary: 0 } },
+        { name: 'Промзона', description: 'Промышленный район с токсичными отходами', radiation: 30, min_level: 8, danger_level: 4, icon: '🏭', color: '#9C27B0', loot_table: { common: 35, uncommon: 35, rare: 22, epic: 7, legendary: 1 } },
+        { name: 'Центр города', description: 'Сердце мёртвого города', radiation: 50, min_level: 12, danger_level: 5, icon: '🌆', color: '#F44336', loot_table: { common: 25, uncommon: 30, rare: 30, epic: 12, legendary: 3 } },
+        { name: 'Военная база', description: 'Захваченная военная база', radiation: 70, min_level: 18, danger_level: 6, icon: '🎖️', color: '#607D8B', loot_table: { common: 15, uncommon: 25, rare: 35, epic: 20, legendary: 5 } },
+        { name: 'Бункер', description: 'Секретный бункер выживших', radiation: 100, min_level: 25, danger_level: 7, icon: '🔒', color: '#000000', loot_table: { common: 10, uncommon: 20, rare: 35, epic: 25, legendary: 10 } }
     ];
     for (const loc of locations) {
         await queryTx(`
-            INSERT INTO locations (name, description, radiation, min_level, danger_level, icon, color)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO locations (name, description, radiation, min_level, danger_level, icon, color, loot_table)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 radiation = EXCLUDED.radiation,
                 min_level = EXCLUDED.min_level,
                 danger_level = EXCLUDED.danger_level,
                 icon = EXCLUDED.icon,
-                color = EXCLUDED.color
-        `, [loc.name, loc.description, loc.radiation, loc.min_level, loc.danger_level, loc.icon, loc.color]);
+                color = EXCLUDED.color,
+                loot_table = EXCLUDED.loot_table
+        `, [loc.name, loc.description, loc.radiation, loc.min_level, loc.danger_level, loc.icon, loc.color, JSON.stringify(loc.loot_table)]);
     }
 
     // Боссы сидируются ПОСЛЕ каталога предметов: их reward_items и

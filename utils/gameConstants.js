@@ -9,6 +9,7 @@
 // Имя НЕ equipment: в calculateLocationRiskProfile() есть параметр с таким
 // именем и он перекрывает модуль — обращение equipment.normalize... падало бы.
 const sharedEquipment = require('../public/shared/equipment.js');
+const { logger } = require('./serverApi');
 
 // Тиры риска — тоже оттуда: клиент рисует подпись по этим границам, а
 // сервер по ним же начисляет множители за лут, опыт и шанс ключа.
@@ -62,6 +63,11 @@ function validateLootTable(table) {
         if (!Number.isFinite(num) || num < 0) return false;
         sum += num;
     }
+    // Все 5 редкостей должны присутствовать в таблице, иначе кумулятивный
+    // выброс в rollItemRarity никогда не достигнет отсутствующих редкостей.
+    for (const rarity of RARITY_ORDER) {
+        if (!(rarity in table)) return false;
+    }
     return Math.abs(sum - 100) <= 0.01;
 }
 
@@ -96,9 +102,14 @@ function getLootTable(locationId, dbLootTable = null) {
  * @returns {string} Редкость предмета
  */
 function rollItemRarity(locationId, luck = 1, dbLootTable = null, forcedRarity = null) {
-    // Pity timer: если задан forcedRarity, возвращаем его напрямую.
+    // Pity timer: если задан forcedRarity, проверяем, что такая редкость
+    // вообще возможна для этой локации (шанс > 0 в таблице лута).
     if (forcedRarity && RARITY_ORDER.includes(forcedRarity)) {
-        return forcedRarity;
+        const table = getLootTable(locationId, dbLootTable);
+        if (Number(table[forcedRarity] || 0) > 0) {
+            return forcedRarity;
+        }
+        //forcedRarity недоступен для этой локации — идём обычным выбросом.
     }
     const table = getLootTable(locationId, dbLootTable);
     const roll = Math.random() * 100;
@@ -147,7 +158,7 @@ function rollItemRarity(locationId, luck = 1, dbLootTable = null, forcedRarity =
             const current = Math.max(0, Number(table[rarity]) || 0);
             modifiedTable[rarity] = current + planned[rarity] * scale;
         }
-        modifiedTable.common = baseCommon - plannedTotal * scale;
+        modifiedTable.common = Math.max(0, baseCommon - plannedTotal * scale);
     }
     
     let cumulative = 0;

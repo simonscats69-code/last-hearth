@@ -208,10 +208,7 @@ async function handleLocationsList(req, res) {
                     types: preferredTypes,
                     rarity_chances: rarityChances,
                     exhaustion: exhaustionLevel,
-                    exhaustion_penalty: Math.round(Math.min(0.5, exhaustionLevel / 200) * 100),
-                    can_drop_boss_key: false, // заполняется ниже, если есть ключ
-                    boss_key_chance: 0,
-                    boss_key_name: null
+                    exhaustion_penalty: Math.round(Math.min(0.5, exhaustionLevel / 200) * 100)
                 }
             };
         });
@@ -295,7 +292,7 @@ router.post('/search', async (req, res) => {
             // P0-2: запрет поиска при нулевом здоровье
             if (Number(updatedPlayer.health || 0) <= 0) {
                 return {
-                    status: 200,
+                    status: 400,
                     body: {
                         success: false,
                         error: 'Вы истощены. Сначала восстановите здоровье.',
@@ -305,12 +302,6 @@ router.post('/search', async (req, res) => {
                     }
                 };
             }
-
-            // P0-1: пересчитываем энергию по реальному времени (не сбрасывая таймер)
-            await recalcEnergy(client, updatedPlayer);
-            // То же для здоровья: медленный реген после боя. Без него игрок,
-            // израсходовавший все аптечки, оставался с 1 HP навсегда.
-            await regenerateHealth(client, updatedPlayer);
 
             const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
 
@@ -355,6 +346,12 @@ router.post('/search', async (req, res) => {
                 };
             }
 
+            // P0-1: пересчитываем энергию по реальному времени (не сбрасывая таймер)
+            await recalcEnergy(client, updatedPlayer);
+            // То же для здоровья: медленный реген после боя. Без него игрок,
+            // израсходовавший все аптечки, оставался с 1 HP навсегда.
+            await regenerateHealth(client, updatedPlayer);
+
             // Валидация экипировки через normalizeEquipment: гарантирует чистую
             // структуру слотов перед расчётом защиты и риска.
             const equipment = normalizeEquipment(updatedPlayer.equipment);
@@ -384,6 +381,7 @@ router.post('/search', async (req, res) => {
         let radiationExpiresAt = null;
         const contaminationDefense = riskProfile.contaminationDefense;
         let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
+        const existingRadiation = normalizeRadiation(updatedPlayer.radiation);
         
         if (riskProfile.contaminationThreat > 0 && !activeBuffs.no_radiation) {
             // P1-7: используем уже посчитанное давление (с учётом защиты)
@@ -391,7 +389,6 @@ router.post('/search', async (req, res) => {
             radiationGain = Math.max(0, Math.ceil(riskProfile.contaminationPressure * randomFactor));
             
             if (radiationGain > 0) {
-                const currentRadiation = normalizeRadiation(updatedPlayer.radiation);
                 const radiationConfig = DEBUFF_CONFIG.radiation;
                 const now = new Date();
                 const expiresAt = new Date(
@@ -399,7 +396,7 @@ router.post('/search', async (req, res) => {
                 );
                 radiationExpiresAt = expiresAt.toISOString();
                 
-                resultingRadiationLevel = Math.min(radiationConfig.maxLevel, currentRadiation.level + radiationGain);
+                resultingRadiationLevel = Math.min(radiationConfig.maxLevel, existingRadiation.level + radiationGain);
                 
                 await client.query(
                     `UPDATE players SET radiation = $1::jsonb WHERE id = $2`,
@@ -410,6 +407,12 @@ router.post('/search', async (req, res) => {
                     }), playerId]
                 );
             }
+        }
+        
+        // Если радиация не накапливалась в этом поиске, но уже была активна,
+        // берём expires_at из существующих данных, чтобы клиент видел срок действия.
+        if (!radiationExpiresAt && resultingRadiationLevel > 0 && existingRadiation.expires_at) {
+            radiationExpiresAt = existingRadiation.expires_at;
         }
         
         const modifiers = calculateDebuffModifiers(updatedPlayer);
@@ -498,6 +501,17 @@ router.post('/search', async (req, res) => {
                 lootRolled = true;
                 const inventory = normalizeInventory(updatedPlayer.inventory);
 
+                // Проверяем место в инвентаре перед добавлением предмета.
+                // Если инвентарь полон, не пытаемся добавить — выбрасываем
+                // ошибку сразу, чтобы не мутировать инвентарь впустую.
+                if (inventory.length >= MAX_INVENTORY_SLOTS) {
+                    throw {
+                        message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
+                        code: 'INVENTORY_FULL',
+                        statusCode: 400
+                    };
+                }
+
                 const newItem = createInventoryItem({
                     ...foundItem,
                     stats: safeJsonParse(foundItem?.stats, {})
@@ -525,9 +539,6 @@ router.post('/search', async (req, res) => {
                 }
 
                 // Проверка лимита слотов ПОСЛЕ всех добавлений (включая loot_x2).
-                // Бросаем ошибку вместо возврата объекта: transaction() сделает
-                // ROLLBACK всех изменений (радиация, ключ босса, реген энергии),
-                // и клиент получит корректный ответ об ошибке.
                 if (inventory.length > MAX_INVENTORY_SLOTS) {
                     throw {
                         message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
@@ -863,7 +874,7 @@ router.post('/move', async (req, res) => {
             const requiredLevel = Number(locationData.min_level || 1);
             if (player.level < requiredLevel) {
                 return {
-                    status: 200,
+                    status: 403,
                     body: {
                         success: false,
                         error: `Нужен уровень ${requiredLevel}+`,
@@ -877,7 +888,7 @@ router.post('/move', async (req, res) => {
             // Перемещение стоит 1 энергии
             if (Number(player.energy || 0) < 1) {
                 return {
-                    status: 200,
+                    status: 400,
                     body: {
                         success: false,
                         error: 'Недостаточно энергии для перемещения',

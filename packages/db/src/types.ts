@@ -50,7 +50,7 @@ export interface DbPlayer {
   coins_stolen_from_me: number;
   items_stolen_from_me: number;
   unique_items: string;
-  locations_visited: string;
+  locations_visited: any[];
   clans_joined: number;
   clan_donated: number;
   active_boss_id?: number;

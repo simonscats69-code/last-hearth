@@ -112,7 +112,7 @@ export interface PlayerStats {
   daily_streak: number;
   daily_tasks_completed: number;
   daily_tasks_reset_at: Date | null;
-  locations_visited: number[];
+  locations_visited: { id: number; name: string }[];
   clans_joined: number;
   clan_donated: number;
   active_boss_id: number | null;

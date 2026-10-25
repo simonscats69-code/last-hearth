@@ -3719,17 +3719,18 @@ function updateProfileUI(player) {
     if (radiationValue) radiationValue.textContent = status.radiation || 0;
 
     // Локацию
-    if (player.location) {
+    if (player.location || player.current_location) {
+        const location = player.location || player.current_location || {};
         const locationIcon = document.getElementById('location-icon');
         const locationName = document.getElementById('location-name');
         const locationDesc = document.getElementById('location-desc');
         const locationRadiation = document.getElementById('location-radiation');
         const locationDanger = document.getElementById('location-danger');
-        if (locationIcon) locationIcon.innerHTML = iconHtml(player.location.name, player.location.icon, 'icon-img location-icon-img');
-        if (locationName) locationName.textContent = player.location.name;
-        if (locationDesc) locationDesc.textContent = player.location.description || 'Описание локации недоступно';
-        if (locationRadiation) locationRadiation.textContent = player.location.radiation;
-        if (locationDanger) locationDanger.textContent = player.location.danger_level || 1;
+        if (locationIcon) locationIcon.innerHTML = iconHtml(location.name, location.icon, 'icon-img location-icon-img');
+        if (locationName) locationName.textContent = location.name || 'Спальный район';
+        if (locationDesc) locationDesc.textContent = location.description || 'Тихий жилой комплекс';
+        if (locationRadiation) locationRadiation.textContent = location.radiation || 0;
+        if (locationDanger) locationDanger.textContent = location.danger_level || 1;
     }
     
     // Звёзды
@@ -4015,7 +4016,7 @@ async function searchLoot() {
     }
     
     try {
-        const response = await apiRequest('/api/game/world/search', {
+        const response = await apiRequest('/api/game/locations/search', {
             method: 'POST',
             body: {}
         });
@@ -4154,7 +4155,7 @@ async function searchLoot() {
  */
 async function moveToLocation(locationId) {
     try {
-        const response = await apiRequest('/api/game/world/move', {
+        const response = await apiRequest('/api/game/locations/move', {
             method: 'POST',
             body: { location_id: locationId }
         });
@@ -4169,6 +4170,7 @@ async function moveToLocation(locationId) {
             showScreen('main');
             showModal('✅ Успех', result.data?.message || result.message || `Вы прибыли в ${locationData?.name || 'новую локацию'}`);
             await loadProfile();
+            await loadLocations();
         } else {
             showModal('⚠️ Внимание', result.error || result.message || 'Не удалось перейти на локацию');
         }
@@ -7188,7 +7190,6 @@ function selectMapLocation(loc) {
     if (!loc) return;
 
     const locationId = Number(loc.id) || 0;
-    if (locationId === lastSelectedMapLocationId) return;
     lastSelectedMapLocationId = locationId;
 
     const nameEl = document.querySelector('.map-location-name');
@@ -11288,14 +11289,27 @@ function renderLocations() {
         scheduleMapRepaint(null);
     };
 
+    const onTouchStart = (e) => {
+        e.preventDefault();
+        const touch = e.touches[0];
+        onClick({ clientX: touch.clientX, clientY: touch.clientY, preventDefault: () => {} });
+    };
+    const onTouchEnd = (e) => {
+        e.preventDefault();
+    };
+
     canvas.addEventListener('click', onClick);
     canvas.addEventListener('mousemove', onMouseMove);
     canvas.addEventListener('mouseleave', onMouseLeave);
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
 
     renderLocations._cleanup = () => {
         canvas.removeEventListener('click', onClick);
         canvas.removeEventListener('mousemove', onMouseMove);
         canvas.removeEventListener('mouseleave', onMouseLeave);
+        canvas.removeEventListener('touchstart', onTouchStart);
+        canvas.removeEventListener('touchend', onTouchEnd);
         renderLocations._cleanup = null;
     };
 }

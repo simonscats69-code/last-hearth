@@ -147,10 +147,13 @@ export interface LocationRow {
   id: number;
   name: string;
   description?: string;
-  risk_level: number;
   radiation: number;
-  infection: number;
+  min_luck?: number;
+  danger_level: number;
+  loot_table?: any;
+  is_available?: boolean;
   icon: string;
-  required_level: number;
-  created_at: Date;
+  color?: string;
+  min_level: number;
+  exhaustion?: number;
 }
