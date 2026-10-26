@@ -3719,8 +3719,12 @@ function updateProfileUI(player) {
     if (radiationValue) radiationValue.textContent = status.radiation || 0;
 
     // Локацию
-    if (player.location || player.current_location) {
-        const location = player.location || player.current_location || {};
+    let location = player.location || player.current_location || {};
+    // Если объект локации не заполнен, но известен current_location_id — ищем в списке локаций.
+    if ((!location || Object.keys(location).length === 0) && player.current_location_id && Array.isArray(gameState.locations)) {
+        location = gameState.locations.find(loc => Number(loc.id) === Number(player.current_location_id)) || {};
+    }
+    if (location) {
         const locationIcon = document.getElementById('location-icon');
         const locationName = document.getElementById('location-name');
         const locationDesc = document.getElementById('location-desc');
@@ -3952,7 +3956,29 @@ function updateConditionsUI(status) {
     const radiation = Number(status.radiation || 0);
     if (radiationValue) radiationValue.textContent = radiation;
 
-    conditionsGrid.style.display = radiation > 0 ? 'grid' : 'none';
+    // Показываем блок условий всегда: при radiation = 0 — пустой/скрытый эффект,
+    // при radiation > 0 — показываем уровень и время истечения.
+    const expiresAt = status.radiation_expires_at || null;
+    const now = new Date(getNow ? getNow() : Date.now());
+    let expired = false;
+    if (expiresAt) {
+        const expDate = new Date(expiresAt);
+        expired = expDate <= now;
+    }
+
+    if (radiation > 0 && !expired) {
+        conditionsGrid.style.display = 'grid';
+        // Добавляем таймер истечения в текст радиации
+        if (expiresAt) {
+            const expDate = new Date(expiresAt);
+            const diffMs = expDate - now;
+            const diffMin = Math.max(0, Math.floor(diffMs / 60000));
+            radiationValue.textContent = `${radiation} ☢️ истекает через ~${diffMin} мин`;
+        }
+    } else {
+        conditionsGrid.style.display = 'none';
+        if (radiationValue) radiationValue.textContent = radiation;
+    }
 }
 
 /**
@@ -4078,8 +4104,11 @@ async function searchLoot() {
                 if (!gameState.player.status) gameState.player.status = {};
                 gameState.player.status.radiation = result.radiation.level || 0;
                 gameState.player.status.radiation_expires_at = result.radiation.expires_at || null;
-                updateConditionsUI(gameState.player.status);
             }
+
+            // Перерисовываем весь профиль: здоровье (урон от радиации), энергию,
+            // локацию, радиацию, монеты/звёзды — всё, что могло измениться после вылазки.
+            updateProfileUI(gameState.player);
 
             // Показываем подсказку о pity timer и истощении зоны.
             const statusMessages = [];
@@ -4165,9 +4194,11 @@ async function moveToLocation(locationId) {
             const locationData = result.data?.location;
             gameState.player.current_location_id = locationData?.id || locationId;
             gameState.player.location = locationData;
+            // Сначала активируем главный экран, чтобы DOM-элементы были доступны,
+            // и только потом обновляем UI (иначе updateProfileUI не найдёт элементы).
+            showScreen('main');
             updateProfileUI(gameState.player);
             updateMapRiskPreview();
-            showScreen('main');
             showModal('✅ Успех', result.data?.message || result.message || `Вы прибыли в ${locationData?.name || 'новую локацию'}`);
             await loadProfile();
             await loadLocations();
@@ -8831,7 +8862,7 @@ function mainScreenHtml() {
 
                     <!-- Состояния игрока: заражение зоны одно — радиация.
                          Инфекции объединены с ней. -->
-                    <div class="conditions-grid" id="conditions-grid" style="display:none">
+                    <div class="conditions-grid" id="conditions-grid">
                         <div class="condition-item">
                             <span class="condition-icon">\u26a1\ufe0f</span>
                             <span class="condition-text">Заражение</span>
