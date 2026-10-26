@@ -905,12 +905,13 @@ router.post('/move', async (req, res) => {
                        energy = GREATEST(0, energy - 1),
                        -- locations_visited читает достижение «Путешественник»
                        -- (3 локации) и «Искатель» (7). Хранит объекты {id, name}.
-                       locations_visited = (
-                           SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb)
-                             FROM jsonb_array_elements(
-                                 COALESCE(locations_visited, '[]'::jsonb)
-                                 || jsonb_build_array(jsonb_build_object('id', $1, 'name', $3)))
-                       )
+                        locations_visited = (
+                            SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb)
+                              FROM jsonb_array_elements(
+                                  COALESCE(locations_visited, '[]'::jsonb)
+                                  || jsonb_build_array(jsonb_build_object('id', $1::integer, 'name', $3)))
+                              AS t(value)
+                        )
                  WHERE id = $2
            `, [locationIdNum, playerId, locationData.name]);
 
