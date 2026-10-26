@@ -2907,7 +2907,8 @@ async function initGame() {
         gameState.energyTickerId = safeSetInterval(() => {
             refreshPlayerEnergyUI();
             // Тик таймера истечения радиации (каждую секунду, вместе с энергией)
-            if (gameState.player?.status?.radiation > 0) {
+            // Вызываем всегда — функция сама скроет панель при radiation = 0 или истёкшем сроке.
+            if (gameState.player?.status) {
                 updateConditionsUI(gameState.player.status);
             }
         }, 1000);
@@ -3032,6 +3033,7 @@ async function loadProfileUncached() {
             max_health: Number(playerData.max_health || 100),
             // Заражение зоны одно — radiation. Инфекции объединены с ним.
             radiation: Number(playerData.radiation || 0),
+            radiation_expires_at: playerData.radiation_expires_at || null,
             energy: Number(playerData.energy || 0),
             // Дефолт 50 — как в схеме БД (players.max_energy DEFAULT 50) и в
             // серверном recalcEnergy. Раньше стоял 100: при отсутствующем поле
@@ -3966,7 +3968,7 @@ function updateConditionsUI(status) {
     if (radiation >= 8) tierClass = 'radiation-critical';
     else if (radiation >= 5) tierClass = 'radiation-danger';
     else if (radiation >= 3) tierClass = 'radiation-warning';
-    else if (radiation > 0) tierClass = 'radiation-safe';
+    else if (radiation > 0) tierClass = 'radiation-active';
 
     // Применяем класс к элементу условия
     if (conditionItem) {
@@ -3978,7 +3980,7 @@ function updateConditionsUI(status) {
     // Показываем блок условий всегда: при radiation = 0 — пустой/скрытый эффект,
     // при radiation > 0 — показываем уровень и время истечения.
     const expiresAt = status.radiation_expires_at || null;
-    const now = new Date(getNow ? getNow() : Date.now());
+    const now = new Date(getNow());
     let expired = false;
     if (expiresAt) {
         const expDate = new Date(expiresAt);
@@ -7478,7 +7480,7 @@ async function showPendingRaidRewards(pending) {
         key: keyNames.length > 0 ? { boss_name: keyNames[0] } : undefined,
         // raid_id первого pending-вознаграждения — чтобы игрок знал, какой именно рейд завершён
         raidId: pending[0]?.raid_id || null,
-        raidBossName: pending[0]?.key_item_name ? null : undefined
+        raidBossName: pending[0]?.key_item_name || undefined
     };
     // Явное сообщение о завершении рейда, а не только о награде.
     const completedRaidIds = pending.map((r) => Number(r.raid_id)).filter(Boolean);
@@ -11990,7 +11992,7 @@ function showBossVictorySummary(bossName, rewards = {}, mastery = null) {
     showRewardCelebration({
         icon: '👑',
         title: 'Босс повержён!',
-        subtitle: `Победа над ${bossName}`,
+        subtitle: rewards.raidId ? `Рейд #${rewards.raidId} — ${bossName}` : `Победа над ${bossName}`,
         lines,
         tone: 'gold'
     });

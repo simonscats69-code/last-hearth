@@ -171,7 +171,11 @@ const DebuffAPI = {
                         const newLevel = Math.max(0, radiation.level - decaySteps);
                         let newExpiresAt = null;
                         if (newLevel > 0) {
-                            const newExpires = new Date(now.getTime() + config.baseDurationMs + (newLevel - 1) * config.durationPerLevelMs);
+                            // Считаем expires_at от исходного applied_at, а не от now,
+                            // чтобы затухание не продлевало общий срок жизни радиации.
+                            const appliedAt = radiation.applied_at ? new Date(radiation.applied_at) : now;
+                            const totalDurationMs = config.baseDurationMs + (newLevel - 1) * config.durationPerLevelMs;
+                            const newExpires = new Date(appliedAt.getTime() + totalDurationMs);
                             newExpiresAt = newExpires.toISOString();
                         }
                         

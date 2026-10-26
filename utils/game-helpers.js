@@ -672,7 +672,8 @@ async function checkAchievements(playerId, client = null) {
         const playerResult = await fn(
             `SELECT level, bosses_killed, pvp_wins, items_collected,
                     daily_streak, unique_items, locations_visited,
-                    clan_id, clan_role, clans_joined
+                    clan_id, clan_role, clans_joined,
+                    radiation
              FROM players WHERE id = $1`,
             [playerId]
         );
@@ -796,7 +797,7 @@ async function getPlayerProgress(playerId) {
     try {
         const playerResult = await query(
             `SELECT level, bosses_killed, pvp_wins, items_collected,
-                    daily_streak
+                    daily_streak, radiation
              FROM players WHERE id = $1`,
             [playerId]
         );

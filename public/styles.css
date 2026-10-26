@@ -1218,7 +1218,7 @@ html, body {
 }
 
 /* Индикаторы уровня радиации (пороговые эффекты) */
-.condition-item.radiation-safe {
+.condition-item.radiation-active {
     background: rgba(57, 255, 20, 0.15);
     border: 1px solid var(--radiation-color);
 }

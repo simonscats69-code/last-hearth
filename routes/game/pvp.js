@@ -330,7 +330,7 @@ router.post('/attack', async (req, res) => {
             const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
             const recentAttacksResult = await client.query(
                 `SELECT COUNT(*) as cnt FROM pvp_battles
-                 WHERE attacker_id = $1 AND defender_id = $2 AND created_at > $3`,
+                 WHERE attacker_id = $1 AND defender_id = $2 AND started_at > $3`,
                 [playerId, targetId, hourAgo]
             );
             const recentAttacks = Number(recentAttacksResult.rows[0]?.cnt || 0);
@@ -485,10 +485,10 @@ router.post('/revanche', async (req, res) => {
             const bonus = Number(p.revanche_bonus || 25);
 
             // Очищаем revanche (один раз на поражение)
-            await client.query(
-                `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL WHERE id = $1`,
-                [playerId]
-            );
+                await client.query(
+                    `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL, revanche_bonus = 25 WHERE id = $1`,
+                    [playerId]
+                );
 
             return {
                 battle_id: null, // создастся в createPVPMatch
@@ -512,7 +512,6 @@ router.post('/revanche', async (req, res) => {
         }
 
         ok(res, {
-            success: true,
             data: {
                 bonus_percent: outcome.bonus_percent,
                 target_id: outcome.target.id,
@@ -566,7 +565,6 @@ router.get('/battle-log/:battle_id', async (req, res) => {
         );
 
         ok(res, {
-            success: true,
             data: {
                 battle_id: battleId,
                 log: log.map((entry) => ({
@@ -884,7 +882,7 @@ await client.query(`
                          winner_id = $1,
                          loser_id = $2,
                          attacker_reward = CASE WHEN attacker_id = $1 THEN $3 ELSE 0 END,
-                         defender_reward = CASE WHEN defender_id = $2 THEN $3 ELSE 0 END,
+                         defender_reward = CASE WHEN defender_id = $2 THEN -$3 ELSE 0 END,
                          ended_at = NOW(),
                          battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
                      WHERE id = $4
