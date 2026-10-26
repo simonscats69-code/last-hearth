@@ -2906,6 +2906,10 @@ async function initGame() {
         // метки last_energy_update.
         gameState.energyTickerId = safeSetInterval(() => {
             refreshPlayerEnergyUI();
+            // Тик таймера истечения радиации (каждую секунду, вместе с энергией)
+            if (gameState.player?.status?.radiation > 0) {
+                updateConditionsUI(gameState.player.status);
+            }
         }, 1000);
 
         // Баффы живут по своим срокам — минуты для их протухания хватает.
@@ -3950,11 +3954,26 @@ function renderActiveBuffs(buffs = {}) {
 function updateConditionsUI(status) {
     const conditionsGrid = document.getElementById('conditions-grid');
     const radiationValue = document.getElementById('radiation-value');
+    const conditionItem = document.querySelector('.condition-item');
 
     if (!conditionsGrid) return;
 
     const radiation = Number(status.radiation || 0);
     if (radiationValue) radiationValue.textContent = radiation;
+
+    // Определяем пороговый уровень радиации для цветового индикатора
+    let tierClass = '';
+    if (radiation >= 8) tierClass = 'radiation-critical';
+    else if (radiation >= 5) tierClass = 'radiation-danger';
+    else if (radiation >= 3) tierClass = 'radiation-warning';
+    else if (radiation > 0) tierClass = 'radiation-safe';
+
+    // Применяем класс к элементу условия
+    if (conditionItem) {
+        // Удаляем старые классы радиации
+        conditionItem.classList.remove('radiation-safe', 'radiation-warning', 'radiation-danger', 'radiation-critical');
+        if (tierClass) conditionItem.classList.add(tierClass);
+    }
 
     // Показываем блок условий всегда: при radiation = 0 — пустой/скрытый эффект,
     // при radiation > 0 — показываем уровень и время истечения.
