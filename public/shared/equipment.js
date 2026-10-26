@@ -391,7 +391,7 @@
     });
 
     function calculateDropChance(luck) {
-        if (luck <= 0) return 5;
+        if (!Number.isFinite(luck) || luck <= 0) return 5;
         const chance = 10 + (luck * 0.4);
         return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
     }
@@ -849,7 +849,7 @@ function resolveEquipmentSlot(item) {
     function calculateDefenseTotal(equipment) {
         if (!equipment) return 0;
         let total = 0;
-        for (const slot of COMBAT_SLOTS) {
+        for (const slot of EQUIPMENT_SLOTS) {
             total += getEffectiveStatValue(equipment[slot], DEFENSE_KEYS);
         }
         return total;
@@ -859,7 +859,7 @@ function resolveEquipmentSlot(item) {
     function calculateEquipmentLuckBonus(equipment) {
         if (!equipment) return 0;
         let total = 0;
-        for (const slot of COMBAT_SLOTS) {
+        for (const slot of EQUIPMENT_SLOTS) {
             total += getEffectiveStatValue(equipment[slot], LUCK_KEYS);
         }
         return total;
@@ -896,7 +896,7 @@ function resolveEquipmentSlot(item) {
      * (1 единица за 2 удара).
      */
     function wearEquipment(item, amount = 1) {
-        if (!isEquipmentItem(item)) return item;
+        if (!isEquipmentItem(item)) return { ...item };
 
         const info = getDurabilityInfo(item);
         const wear = Math.max(0, Math.round(Number(amount) * GAME_CONFIG.WEAR_PER_HIT));
@@ -978,7 +978,7 @@ function resolveEquipmentSlot(item) {
         const counts = {};
         if (!equipment) return counts;
 
-        for (const slot of COMBAT_SLOTS) {
+        for (const slot of EQUIPMENT_SLOTS) {
             const item = equipment[slot];
             if (!item) continue;
             const setId = Number(item.set_id || (item.stats && item.stats.set_id) || 0);

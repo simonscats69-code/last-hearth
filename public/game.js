@@ -189,13 +189,7 @@ function escapeHtml(text) {
  * @returns {string}
  */
 function escapeAttribute(value) {
-    if (value === null || value === undefined) return '';
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+    return escapeHtml(value);
 }
 
 /**
@@ -1404,7 +1398,8 @@ const actionLocks = {
     sellItem: false,
     loadProfile: false,
     checkPlayerStatus: false,
-    loadBosses: false
+    loadBosses: false,
+    searchLoot: false
 };
 
 // Промис текущей загрузки профиля (см. loadProfile). Не даёт двум
@@ -1565,54 +1560,6 @@ const Templates = {
         `;
     },
     
-    // Карточка предмета
-    itemCard(item, actions = '') {
-        const itemActionId = item.index ?? item.id;
-        const rarityClass = escapeAttribute(item.rarity || 'common');
-        return `
-            <div class="item-card rarity-${rarityClass}" 
-                 data-id="${escapeAttribute(item.id)}" data-use-item="${escapeAttribute(itemActionId)}">
-                <span class="item-icon">${iconHtml(item.name, item.icon)}</span>
-                <span class="item-name">${escapeHtml(item.name)}</span>
-                ${item.count ? `<span class="item-count">x${Number(item.count)}</span>` : ''}
-                ${actions}
-            </div>
-        `;
-    },
-    
-    // Карточка босса (список боссов).
-    // Крупная иконка (64px), текст здоровья, кнопка атаки акцентом.
-    bossCard(boss) {
-        const locked = boss.locked || boss.required_level && boss.required_level > (gameState?.player?.level || 1);
-        return `
-            <div class="boss-card${locked ? ' locked' : ''}" data-id="${escapeAttribute(boss.id)}">
-                <div class="boss-header">
-                    <div class="boss-portrait-wrapper">
-                        <span class="boss-icon boss-card-icon">${iconHtml(boss.name, boss.icon, 'icon-img boss-card-icon')}</span>
-                        ${locked ? '<span class="boss-lock-badge">🔒</span>' : ''}
-                    </div>
-                    <div class="boss-info">
-                        <div class="boss-name-row">
-                            <span class="boss-name">${escapeHtml(boss.name)}</span>
-                        </div>
-                        <div class="boss-desc">${escapeHtml(boss.description || 'Теневой враг Очага')}</div>
-                    </div>
-                </div>
-                <div class="boss-hp-row">
-                    <span class="boss-hp-label">Здоровье</span>
-                    <span class="boss-hp-value">${Number(boss.current_hp)}/${Number(boss.max_hp)}</span>
-                </div>
-                <div class="boss-footer">
-                    ${!locked ? `<button class="btn btn-primary attack-btn" data-attack-boss data-boss-id="${escapeAttribute(boss.id)}">⚔️ Атаковать</button>` : `<button class="btn btn-secondary disabled">Заблокировано</button>`}
-                    <div class="boss-keys-line">
-                        <span class="boss-keys-icon">🗝️</span>
-                        <span class="boss-keys-text">${boss.keys_owned || 0} / ${boss.keys_needed || 1}</span>
-                    </div>
-                </div>
-            </div>
-        `;
-    },
-    
     // Кнопка.
     // ВНИМАНИЕ: inline onclick заблокирован CSP (script-src-attr без nonce),
     // поэтому обработчик передаётся через data-* и вызывается делегированным
@@ -1676,25 +1623,7 @@ const Templates = {
                                         <span class="slot-name">${escapeHtml(label)}</span>
                                         <div class="slot-item" data-slot="${escapeAttribute(slot)}"></div>
                                         <div class="slot-durability" data-slot="${escapeAttribute(slot)}"></div>
-                                    </div>`;
-    },
-
-    // Слот инвентаря
-    inventorySlot(item) {
-        const itemActionId = item.index ?? item.id;
-        const rarityClass = escapeAttribute(item.rarity || 'common');
-        const canSell = item.rarity && item.rarity !== 'key' && item.type !== 'key';
-        const sellBtn = canSell 
-            ? `<button class="btn btn-small btn-sell" data-action="sell-item" data-item-index="${escapeAttribute(item.index ?? item.id)}" title="Продать">💰 Продать</button>`
-            : '';
-        return `
-            <div class="inventory-slot rarity-${rarityClass}" 
-                 data-use-item="${escapeAttribute(itemActionId)}" data-id="${escapeAttribute(item.id)}">
-                <span class="item-icon">${iconHtml(item.name, item.icon)}</span>
-                ${item.count > 1 ? `<span class="item-count">${Number(item.count)}</span>` : ''}
-                ${sellBtn}
-            </div>
-        `;
+                                    </div>`
     }
 };
 
@@ -2198,25 +2127,8 @@ function getTimeToNextEnergy(lastUpdate) {
     return {
         seconds,
         ms: msUntilNext,
-        formatted: formatTimeMs(msUntilNext)
+        formatted: formatRemainingMs(msUntilNext, { seconds: true })
     };
-}
-
-/**
- * Форматировать время в чч:мм:сс
- * @param {number} ms - время в миллисекундах
- * @returns {string} форматированное время
- */
-function formatTimeMs(ms) {
-    const totalSeconds = Math.ceil(ms / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-
-    if (hours > 0) {
-        return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
 /**
@@ -4053,7 +3965,7 @@ async function searchLoot() {
         }
     }
 
-    actionLocks.searchLoot = true;
+    if (!lockAction('searchLoot')) return;
     
     const searchBtn = document.getElementById('search-btn');
 
@@ -4195,7 +4107,7 @@ async function searchLoot() {
         if (searchBtn) {
             searchBtn.classList.remove('shake');
         }
-        actionLocks.searchLoot = false;
+        unlockAction('searchLoot');
         refreshPlayerEnergyUI();
     }
 }
@@ -6007,8 +5919,7 @@ function canStartBossAttack() {
         return false;
     }
 
-    actionLocks.attackBoss = true;
-    return true;
+    return lockAction('attackBoss');
 }
 
 /**
@@ -6275,7 +6186,7 @@ async function attackBoss() {
         // (1 ⚡)» при энергии, «Нет энергии» при нуле. Раньше здесь стоял
         // хардкод на активную кнопку — после траты последней энергии
         // кнопка снова была кликабельна и упиралась в модалку.
-        actionLocks.attackBoss = false;
+        unlockAction('attackBoss');
         updateBossAttackButtonState();
     }
 }
