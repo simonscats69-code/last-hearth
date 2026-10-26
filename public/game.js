@@ -4507,12 +4507,15 @@ function renderEquipment(equipment) {
                         <span class="equip-slot-empty">пусто</span>
                     </div>`;
                 }
-                return `<div class="equip-slot rarity-${escapeHtml(item.rarity || 'common')}">
+                const setId = Number(item.set_id || (item.stats && item.stats.set_id) || 0);
+                const setClass = setId > 0 ? ` equip-slot-set-${setId}` : '';
+                return `<div class="equip-slot rarity-${escapeHtml(item.rarity || 'common')}${setClass}">
                     <span class="equip-slot-icon">${iconHtml(item.name, item.icon)}</span>
                     <span class="equip-slot-info">
                         <span class="equip-slot-name">${escapeHtml(item.name || label)}</span>
                         <span class="equip-slot-label">${escapeHtml(RARITY_LABELS[item.rarity] || '')}</span>
                         ${renderEquipmentState(item)}
+                        ${setId > 0 ? `<span class="equip-slot-set">Сет #${setId}</span>` : ''}
                     </span>
                     <!-- Снятие было невозможно: слот можно было только заменить
                          другим предметом. Кнопка возвращает вещь в инвентарь. -->
@@ -4521,8 +4524,51 @@ function renderEquipment(equipment) {
                 </div>`;
             }).join('')}
         </div>
+        <!-- Статус собранных сетов -->
+        <div id="equipment-set-status" class="equipment-set-status"></div>
         <div id="workshop-panel" class="inv-workshop"></div>
     `;
+
+    // Показываем статус собранных сетов
+    renderSetStatus(eq);
+}
+
+/**
+ * Показывает статус собранных сетов экипировки.
+ * Выделяет komplekты, в которых надеты 2+ предмета, и отображает бонусы.
+ * @param {object} equipment объект { slot: item }
+ */
+function renderSetStatus(equipment) {
+    const root = document.getElementById('equipment-set-status');
+    if (!root) return;
+
+    const rules = window.EquipmentShared;
+    if (!rules) {
+        root.innerHTML = '';
+        return;
+    }
+
+    const counts = rules.collectSetPieceCounts ? rules.collectSetPieceCounts(equipment) : {};
+    const setIds = Object.keys(counts).filter((id) => Number(counts[id]) >= 2);
+
+    if (setIds.length === 0) {
+        root.innerHTML = '<div class="set-status-empty">Нет собранных сетов</div>';
+        return;
+    }
+
+    const html = setIds.map((setId) => {
+        const count = Number(counts[setId]);
+        const tier = count >= 4 ? 4 : (count === 3 ? 3 : 2);
+        return `
+            <div class="set-status-item set-active">
+                <span class="set-status-label">Сет #${setId}</span>
+                <span class="set-status-count">${count}/4 предмета</span>
+                <span class="set-status-tier">Уровень бонуса: ${tier}</span>
+            </div>
+        `;
+    }).join('');
+
+    root.innerHTML = `<div class="set-status-header">🎯 Активные сеты:</div>${html}`;
 }
 
 /**
