@@ -107,7 +107,11 @@ async function createTables() {
             locations_visited JSONB DEFAULT '[]',
             clans_joined INTEGER DEFAULT 0,
             clan_donated INTEGER DEFAULT 0,
-            active_boss_id INTEGER
+            active_boss_id INTEGER,
+            -- Реванш после поражения в PvP: противник, которого можно отыграть
+            revanche_against INTEGER,
+            revanche_expires_at TIMESTAMP,
+            revanche_bonus INTEGER DEFAULT 25
         );
     `);
     
@@ -541,9 +545,28 @@ async function createTables() {
             battle_duration INTEGER DEFAULT 0,
             started_at TIMESTAMP DEFAULT NOW(),
             ended_at TIMESTAMP,
-            status VARCHAR(20) DEFAULT 'active'
+            status VARCHAR(20) DEFAULT 'active',
+            damage_bonus INTEGER DEFAULT 0
         );
     `);
+
+    // Лог ходов PvP боя: каждый удар, уклонение, исход боя
+    await query(`
+        CREATE TABLE IF NOT EXISTS pvp_battle_log (
+            id SERIAL PRIMARY KEY,
+            battle_id BIGINT REFERENCES pvp_battles(id) ON DELETE CASCADE,
+            round_number INTEGER DEFAULT 0,
+            attacker_id BIGINT REFERENCES players(id),
+            defender_id BIGINT REFERENCES players(id),
+            damage INTEGER DEFAULT 0,
+            is_dodged BOOLEAN DEFAULT false,
+            is_critical BOOLEAN DEFAULT false,
+            defender_health_after INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    `);
+
+    await query(`CREATE INDEX IF NOT EXISTS idx_pvp_battle_log_battle ON pvp_battle_log(battle_id)`);
 
     // Создание индексов для players
     await query(`CREATE INDEX IF NOT EXISTS idx_players_telegram_id ON players(telegram_id)`);
@@ -888,6 +911,31 @@ async function runMigrations() {
     // настраивать нечего. ADD COLUMN для них больше не выполняется, а сами
     // колонки, если они остались в БД от прошлой версии, никем не читаются.
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_hp_regen TIMESTAMP`);
+
+    // Реванш PvP: колонки для отслеживания возможности отыграться после поражения
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS revanche_against INTEGER`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS revanche_expires_at TIMESTAMP`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS revanche_bonus INTEGER DEFAULT 25`);
+
+    // pvp_battles: бонус урона для реванша
+    await queryTx(`ALTER TABLE pvp_battles ADD COLUMN IF NOT EXISTS damage_bonus INTEGER DEFAULT 0`);
+
+    // pvp_battle_log: таблица лога ходов боя (если ещё не создана)
+    await queryTx(`
+        CREATE TABLE IF NOT EXISTS pvp_battle_log (
+            id SERIAL PRIMARY KEY,
+            battle_id BIGINT REFERENCES pvp_battles(id) ON DELETE CASCADE,
+            round_number INTEGER DEFAULT 0,
+            attacker_id BIGINT REFERENCES players(id),
+            defender_id BIGINT REFERENCES players(id),
+            damage INTEGER DEFAULT 0,
+            is_dodged BOOLEAN DEFAULT false,
+            is_critical BOOLEAN DEFAULT false,
+            defender_health_after INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `);
+    await queryTx(`CREATE INDEX IF NOT EXISTS idx_pvp_battle_log_battle ON pvp_battle_log(battle_id)`);
 
     // raid_rewards: поле о невыданных предметах из-за переполнения инвентаря.
     await queryTx(`ALTER TABLE raid_rewards ADD COLUMN IF NOT EXISTS undropped_items JSONB NOT NULL DEFAULT '[]'`);

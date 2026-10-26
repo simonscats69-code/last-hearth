@@ -364,8 +364,24 @@ router.post('/attack', async (req, res) => {
                 throwPvpError(PvpError.INSUFFICIENT_ENERGY);
             }
 
+            // ПРЕВАНШ: если у атакующего есть право на реванш против цели,
+            // применяем бонус к урону и гасим право (один раз на поражение).
+            let damageBonus = 0;
+            const revancheCheck = await client.query(
+                `SELECT revanche_bonus FROM players WHERE id = $1 AND revanche_against = $2
+                 AND revanche_expires_at > NOW()`,
+                [playerId, targetId]
+            );
+            if (revancheCheck.rows[0]) {
+                damageBonus = Number(revancheCheck.rows[0].revanche_bonus || 25);
+                await client.query(
+                    `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL WHERE id = $1`,
+                    [playerId]
+                );
+            }
+
             // Создаём сессию боя с передачей client для работы внутри транзакции
-            const battle = await pvp.createPVPMatch(playerId, targetId, lockedPlayer.current_location_id, client);
+            const battle = await pvp.createPVPMatch(playerId, targetId, lockedPlayer.current_location_id, client, damageBonus);
 
             // Возвращаем результат и данные для логирования ПОСЛЕ коммита
             return {
@@ -405,6 +421,169 @@ router.post('/attack', async (req, res) => {
 
     } catch (error) {
         return handleError(res, error, 'pvp_attack', playerId);
+    }
+});
+
+/**
+ * Реванш после поражения в PvP
+ * POST /pvp/revanche → POST /api/game/pvp/revanche
+ * Позволяет проигравшему отыграться против победителя с бонусом к урону.
+ */
+router.post('/revanche', async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    const { target_id } = req.body || {};
+
+    try {
+        if (!playerId) {
+            return fail(res, 'Требуется авторизация', 'UNAUTHORIZED', 401);
+        }
+
+        const targetIdCheck = validateId(target_id, 'ID цели');
+        if (!targetIdCheck.ok) {
+            return fail(res, 'Укажите корректный ID цели', 'INVALID_TARGET_ID');
+        }
+        const targetId = targetIdCheck.value;
+
+        const outcome = await transaction(async (client) => {
+            // Проверяем, что у игрока есть revanche против этой цели
+            const playerResult = await client.query(
+                `SELECT revanche_against, revanche_expires_at, revanche_bonus
+                 FROM players WHERE id = $1 FOR UPDATE`,
+                [playerId]
+            );
+            const p = playerResult.rows[0];
+            if (!p) throwPvpError(PvpError.PLAYER_NOT_FOUND);
+
+            if (Number(p.revanche_against) !== targetId) {
+                return {
+                    status: 400,
+                    body: {
+                        success: false,
+                        error: 'Нет права на реванш против этого игрока',
+                        code: 'NO_REVANCHE'
+                    }
+                };
+            }
+
+            if (p.revanche_expires_at && new Date(p.revanche_expires_at) <= new Date()) {
+                // Реванш истёк — очищаем
+                await client.query(
+                    `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL WHERE id = $1`,
+                    [playerId]
+                );
+                return {
+                    status: 400,
+                    body: {
+                        success: false,
+                        error: 'Срок реванша истёк',
+                        code: 'REVANCHE_EXPIRED'
+                    }
+                };
+            }
+
+            const bonus = Number(p.revanche_bonus || 25);
+
+            // Очищаем revanche (один раз на поражение)
+            await client.query(
+                `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL WHERE id = $1`,
+                [playerId]
+            );
+
+            return {
+                battle_id: null, // создастся в createPVPMatch
+                bonus_percent: bonus,
+                target: { id: targetId },
+                log: {
+                    action: 'pvp_revanche_start',
+                    playerId,
+                    data: { target_id: targetId, bonus_percent: bonus }
+                }
+            };
+        });
+
+        if (outcome.status) {
+            return res.status(outcome.status).json(outcome.body);
+        }
+
+        // Логируем ПОСЛЕ коммита
+        if (outcome.log) {
+            await logPlayerAction(outcome.log.playerId, outcome.log.action, outcome.log.data);
+        }
+
+        ok(res, {
+            success: true,
+            data: {
+                bonus_percent: outcome.bonus_percent,
+                target_id: outcome.target.id,
+                message: `Реванш активирован! Бонус к урону +${outcome.bonus_percent}% на этот бой.`
+            }
+        });
+
+    } catch (error) {
+        return handleError(res, error, 'pvp_revanche', playerId);
+    }
+});
+
+/**
+ * Лог боя PvP (пошаговая хроника)
+ * GET /pvp/battle-log/:battle_id → GET /api/game/pvp/battle-log/:battle_id
+ */
+router.get('/battle-log/:battle_id', async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+    const { battle_id } = req.params;
+
+    try {
+        if (!playerId) {
+            return fail(res, 'Требуется авторизация', 'UNAUTHORIZED', 401);
+        }
+
+        const battleIdCheck = validateId(battle_id, 'ID боя');
+        if (!battleIdCheck.ok) {
+            return fail(res, 'Укажите корректный ID боя', 'INVALID_BATTLE_ID');
+        }
+        const battleId = battleIdCheck.value;
+
+        // Проверяем, что игрок участник боя
+        const battle = await queryOne(
+            `SELECT attacker_id, defender_id FROM pvp_battles WHERE id = $1`,
+            [battleId]
+        );
+        if (!battle) {
+            return fail(res, 'Бой не найден', 'BATTLE_NOT_FOUND', 404);
+        }
+        if (Number(battle.attacker_id) !== playerId && Number(battle.defender_id) !== playerId) {
+            return fail(res, 'Вы не участник этого боя', 'NOT_PARTICIPANT', 403);
+        }
+
+        const log = await queryAll(
+            `SELECT round_number, attacker_id, defender_id, damage, is_dodged, is_critical, defender_health_after, created_at
+             FROM pvp_battle_log
+             WHERE battle_id = $1
+             ORDER BY round_number ASC, id ASC`,
+            [battleId]
+        );
+
+        ok(res, {
+            success: true,
+            data: {
+                battle_id: battleId,
+                log: log.map((entry) => ({
+                    round: entry.round_number,
+                    attacker_id: Number(entry.attacker_id),
+                    defender_id: Number(entry.defender_id),
+                    damage: Number(entry.damage || 0),
+                    is_dodged: Boolean(entry.is_dodged),
+                    is_critical: Boolean(entry.is_critical),
+                    defender_health_after: Number(entry.defender_health_after || 0),
+                    created_at: entry.created_at
+                }))
+            }
+        });
+
+    } catch (error) {
+        return handleError(res, error, 'pvp_battle_log', playerId);
     }
 });
 
@@ -532,6 +711,12 @@ router.post('/attack-hit', async (req, res) => {
                 { ...defender, equipment: defenderEq }
             ).damage;
 
+            // Бонус урона от реванша (атакующий получает +X% к урону в этом бою)
+            const battleDamageBonus = Number(battleData.damage_bonus || 0);
+            if (battleDamageBonus > 0 && isAttacker) {
+                damage = Math.floor(damage * (1 + battleDamageBonus / 100));
+            }
+
             // Уклонение (soft cap 20%)
             const dodgeChance = Math.min(20, defender.agility / (defender.agility + 40) * 20);
             const isDodged = crypto.randomInt(100) < dodgeChance;
@@ -542,6 +727,13 @@ router.post('/attack-hit', async (req, res) => {
                      SET battle_duration = GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at))::integer)
                      WHERE id = $1`,
                     [battleId]
+                );
+
+                // Лог хода: уклонение
+                await client.query(
+                    `INSERT INTO pvp_battle_log (battle_id, round_number, attacker_id, defender_id, damage, is_dodged, defender_health_after)
+                     VALUES ($1, (SELECT COALESCE(MAX(round_number), 0) + 1 FROM pvp_battle_log WHERE battle_id = $2), $3, $4, 0, true, $5)`,
+                    [battleId, battleId, attackerId, defenderId, defender.health]
                 );
 
                 // Уклонение защитник увидит только на своём экране PvP: активных
@@ -578,6 +770,13 @@ router.post('/attack-hit', async (req, res) => {
                        equipment = $2::jsonb
                  WHERE id = $3
             `, [newHealth, JSON.stringify(defenderEq), defenderId]);
+
+            // Лог хода: Successful hit
+            await client.query(
+                `INSERT INTO pvp_battle_log (battle_id, round_number, attacker_id, defender_id, damage, is_dodged, defender_health_after)
+                 VALUES ($1, (SELECT COALESCE(MAX(round_number), 0) + 1 FROM pvp_battle_log WHERE battle_id = $2), $3, $4, $5, false, $6)`,
+                [battleId, battleId, attackerId, defenderId, damage, newHealth]
+            );
 
             // Автолечение защитника убрано: лекарства расходуются только
             // вручную с панели лечения. Раньше здесь вызывался applyAutoHeal,
@@ -716,9 +915,14 @@ await client.query(`
                         coins = GREATEST(0, coins - $1),
                         coins_stolen_from_me = coins_stolen_from_me + $1,
                         items_stolen_from_me = items_stolen_from_me + $2,
-                        current_location_id = $3
-                    WHERE id = $4
-                `, [coinsReward, stolenItem ? 1 : 0, safeLocationId, defenderId]);
+                        current_location_id = $3,
+                        -- Реванш: проигравший может отыграться против победителя
+                        -- в течение 24 часов с бонусом к урону
+                        revanche_against = $4,
+                        revanche_expires_at = NOW() + INTERVAL '24 hours',
+                        revanche_bonus = 25
+                    WHERE id = $5
+                `, [coinsReward, stolenItem ? 1 : 0, safeLocationId, attackerId, defenderId]);
 
                 await client.query(`
                     UPDATE players SET coins = coins + $1 WHERE id = $2

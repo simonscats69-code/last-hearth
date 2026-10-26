@@ -82,16 +82,16 @@ async function setPVPCooldown(playerId, minutes, type = 'pvp_battle', reason = '
  * @param {object} client - клиент БД транзакции
  * @returns {Promise<object>} Созданный матч
  */
-async function createPVPMatch(attackerId, defenderId, locationId, client = null) {
+async function createPVPMatch(attackerId, defenderId, locationId, client = null, damageBonus = 0) {
     const executeQuery = client
         ? (sql, params) => client.query(sql, params).then(r => r.rows[0] ?? null)
         : (sql, params) => queryOne(sql, params);
 
     const match = await executeQuery(
-        `INSERT INTO pvp_battles (attacker_id, defender_id, location_id, started_at, status)
-         VALUES ($1, $2, $3, NOW(), 'active')
+        `INSERT INTO pvp_battles (attacker_id, defender_id, location_id, started_at, status, damage_bonus)
+         VALUES ($1, $2, $3, NOW(), 'active', $4)
          RETURNING *`,
-        [attackerId, defenderId, locationId]
+        [attackerId, defenderId, locationId, damageBonus]
     );
 
     // Устанавливаем кулдаун обоим игрокам (в той же транзакции)

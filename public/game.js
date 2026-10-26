@@ -7429,9 +7429,18 @@ async function showPendingRaidRewards(pending) {
         coins: totalCoins,
         experience: totalExp,
         items,
-        key: keyNames.length > 0 ? { boss_name: keyNames[0] } : undefined
+        key: keyNames.length > 0 ? { boss_name: keyNames[0] } : undefined,
+        // raid_id первого pending-вознаграждения — чтобы игрок знал, какой именно рейд завершён
+        raidId: pending[0]?.raid_id || null,
+        raidBossName: pending[0]?.key_item_name ? null : undefined
     };
-    showBossVictorySummary?.('Рейдовый босс', summary, null);
+    // Явное сообщение о завершении рейда, а не только о награде.
+    const completedRaidIds = pending.map((r) => Number(r.raid_id)).filter(Boolean);
+    showBossVictorySummary?.(
+        completedRaidIds.length > 0 ? `Рейд #${completedRaidIds.join(', ')} завершён` : 'Рейдовый босс',
+        summary,
+        null
+    );
 
     // Гасим только после показа: если запрос уронить, награда всплывёт снова,
     // но не потеряется из вида (см. пояснение в роуте /raid/rewards/claim).
@@ -10820,7 +10829,15 @@ const MAP_COLORS = Object.freeze({
     unlockedA: '#6b96bd',
     unlockedB: '#35566f',
     rim: '#8fbde8',
-    rimLocked: '#5a5348'
+    rimLocked: '#5a5348',
+    // Обводка маркера по уровню опасности (danger_level 1-7)
+    danger1: '#4caf50',   // зелёный — безопасная зона
+    danger2: '#8bc34a',   // светло-зелёный
+    danger3: '#ffeb3b',   // жёлтый
+    danger4: '#ff9800',   // оранжевый
+    danger5: '#ff5722',   // темно-оранжевый
+    danger6: '#f44336',   // красный
+    danger7: '#9c27b0',   // пурпурный — максимально опасная
 });
 
 /** Радиус круга локации в логических пикселях (общий для отрисовки и клика). */
@@ -11185,8 +11202,13 @@ function drawLocation(ctx, loc, pos, isHovered = false) {
     ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
     ctx.fill();
 
-    // Обводка. У подсвеченной — ржавая, как у всех активных состояний UI.
-    ctx.strokeStyle = isHovered ? MAP_COLORS.rust400 : (unlocked ? MAP_COLORS.rim : MAP_COLORS.rimLocked);
+    // Обводка. У подсвеченной — ржавая. У открытых — цвет по уровню опасности.
+    let rimColor = MAP_COLORS.rimLocked;
+    if (unlocked) {
+        const dl = Number(loc.danger_level || 1);
+        rimColor = MAP_COLORS[`danger${Math.max(1, Math.min(7, dl))}`] || MAP_COLORS.rim;
+    }
+    ctx.strokeStyle = isHovered ? MAP_COLORS.rust400 : rimColor;
     ctx.lineWidth = isHovered ? 3 : 2;
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
