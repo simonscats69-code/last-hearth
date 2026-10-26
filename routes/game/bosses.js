@@ -2082,8 +2082,15 @@ router.post('/raid/:id/attack', async (req, res) => {
                     const { granted: grantedItems, undropped: participantUndropped } = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
                     const isLeader = participantId === leaderIdRaw;
 
-                    if (isLeader) {
-                        leaderKey = await grantNextBossKey(client, participantId, raid.boss_id);
+                    // Ключ следующего босса выдаётся ВСЕМ участникам с уроном > 0,
+                    // а не только лидеру. Лидер получает ключ гарантированно,
+                    // остальные — с вероятностью, пропорциональной доле урона.
+                    let participantKey = null;
+                    if (entry.dealt > 0) {
+                        const keyChance = isLeader ? 1 : entry.share;
+                        if (Math.random() < keyChance) {
+                            participantKey = await grantNextBossKey(client, participantId, raid.boss_id);
+                        }
                     }
 
                     if (participantId === playerId) {
@@ -2092,7 +2099,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                             experience: experienceReward,
                             items: grantedItems
                         };
-                        if (isLeader && leaderKey) rewards.key = leaderKey;
+                        if (participantKey) rewards.key = participantKey;
                         if (participantUndropped.length) rewards.undropped_items = participantUndropped;
                     }
 
@@ -2108,7 +2115,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         expUpdates.push(participantId, experienceReward);
                     }
 
-                    const keyName = (isLeader && leaderKey) ? (leaderKey.boss_name || null) : null;
+                    const keyName = participantKey ? (participantKey.boss_name || null) : null;
                     raidRewardsRows.push(
                         raidId,
                         raid.boss_id,
@@ -2125,7 +2132,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         coins: coinsReward,
                         experience: experienceReward,
                         items: grantedItems,
-                        key: (isLeader && leaderKey) ? leaderKey : null
+                        key: participantKey || null
                     });
                 }
 
