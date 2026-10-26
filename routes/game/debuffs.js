@@ -150,23 +150,54 @@ const DebuffAPI = {
             const warnings = [];
             
             // Проверяем радиацию
-            const radiation = safeJsonParse(player.radiation, { level: 0, expires_at: null });
+            const radiation = safeJsonParse(player.radiation, { level: 0, expires_at: null, applied_at: null });
             if (radiation.level > 0 && radiation.expires_at) {
                 const expiresAt = new Date(radiation.expires_at);
                 if (expiresAt <= now) {
-                    // Дебафф истёк
+                    // Дебафф истёк по времени
                     await client.query(
                         `UPDATE players SET radiation = $1 WHERE id = $2`,
                         [JSON.stringify({ level: 0, expires_at: null, applied_at: null }), playerId]
                     );
                     expired.push('radiation');
                 } else {
-                    active.push({ type: 'radiation', level: radiation.level, expiresAt: radiation.expires_at });
+                    // Естественное затухание: снижаем уровень на 1 каждые regenRateMs (30 мин)
+                    const config = DEBUFF_CONFIG.radiation;
+                    const lastDecay = radiation.last_decay_at ? new Date(radiation.last_decay_at) : (radiation.applied_at ? new Date(radiation.applied_at) : now);
+                    const elapsedMs = now - lastDecay;
+                    const decaySteps = Math.floor(elapsedMs / config.regenRateMs);
                     
-                    // Предупреждение если осталось менее 30 минут
-                    const timeLeft = expiresAt - now;
-                    if (timeLeft < 30 * 60 * 1000) {
-                        warnings.push('radiation_expiring');
+                    if (decaySteps > 0) {
+                        const newLevel = Math.max(0, radiation.level - decaySteps);
+                        let newExpiresAt = null;
+                        if (newLevel > 0) {
+                            const newExpires = new Date(now.getTime() + config.baseDurationMs + (newLevel - 1) * config.durationPerLevelMs);
+                            newExpiresAt = newExpires.toISOString();
+                        }
+                        
+                        await client.query(
+                            `UPDATE players SET radiation = $1 WHERE id = $2`,
+                            [JSON.stringify({
+                                level: newLevel,
+                                expires_at: newExpiresAt,
+                                applied_at: radiation.applied_at,
+                                last_decay_at: now.toISOString()
+                            }), playerId]
+                        );
+                        radiation.level = newLevel;
+                        radiation.expires_at = newExpiresAt;
+                    }
+                    
+                    if (radiation.level > 0) {
+                        active.push({ type: 'radiation', level: radiation.level, expiresAt: radiation.expires_at });
+                        
+                        // Предупреждение если осталось менее 30 минут
+                        const timeLeft = new Date(radiation.expires_at) - now;
+                        if (timeLeft < 30 * 60 * 1000) {
+                            warnings.push('radiation_expiring');
+                        }
+                    } else {
+                        expired.push('radiation');
                     }
                 }
             }
