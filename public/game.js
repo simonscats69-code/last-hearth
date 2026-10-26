@@ -1641,7 +1641,7 @@ const Templates = {
         return `
                 <div class="stat-card">
                     <span class="stat-icon">${escapeHtml(icon)}</span>
-                    <span class="stat-value">${escapeHtml(value)}</span>
+                    <span class="stat-value">${value}</span>
                     <span class="stat-label">${escapeHtml(label)}</span>
                 </div>`;
     },
@@ -1660,7 +1660,7 @@ const Templates = {
         return `
                 <div class="clan-stat">
                     <span class="stat-icon">${escapeHtml(icon)}</span>
-                    <span class="stat-value">${escapeHtml(value)}</span>
+                    <span class="stat-value">${value}</span>
                     <span class="stat-label">${escapeHtml(label)}</span>
                 </div>`;
     },
