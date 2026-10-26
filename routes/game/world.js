@@ -909,7 +909,7 @@ router.post('/move', async (req, res) => {
                             SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb)
                               FROM jsonb_array_elements(
                                   COALESCE(locations_visited, '[]'::jsonb)
-                                  || jsonb_build_array(jsonb_build_object('id', $1::integer, 'name', $3)))
+                                   || jsonb_build_array(jsonb_build_object('id', $1::integer, 'name', $3::text)))
                               AS t(value)
                         )
                  WHERE id = $2
