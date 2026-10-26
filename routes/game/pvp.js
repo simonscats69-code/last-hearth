@@ -62,6 +62,7 @@ const PvpError = {
     COOLDOWN:          { message: 'Подождите перед следующим PvP боем', code: 'ATTACK_COOLDOWN', statusCode: 429 },
     TARGET_COOLDOWN:   { message: 'Противник временно защищён от PvP', code: 'TARGET_COOLDOWN',   statusCode: 429 },
     RATE_LIMIT:        { message: 'Нельзя атаковать эту цель слишком часто', code: 'ATTACK_COOLDOWN', statusCode: 429 },
+    TARGET_FARMED:     { message: 'Лимит атак на этого игрока исчерпан (макс. 5 в час)', code: 'TARGET_FARMED', statusCode: 429 },
     ALREADY_IN_BATTLE: { message: 'Один из игроков уже находится в активном PvP бою', code: 'ALREADY_IN_BATTLE', statusCode: 409 },
     INSUFFICIENT_ENERGY: { message: 'Недостаточно энергии для атаки', code: 'INSUFFICIENT_ENERGY', statusCode: 400 },
     INSUFFICIENT_ENERGY_HIT: { message: 'Недостаточно энергии для удара', code: 'INSUFFICIENT_ENERGY', statusCode: 400 },
@@ -323,6 +324,19 @@ router.post('/attack', async (req, res) => {
             }
             if (cooldownsByPlayer[playerId]?.[`pvp_target_${targetId}`]) {
                 throwPvpError(PvpError.RATE_LIMIT);
+            }
+
+            // P1-8: Лимит атак на одну пару игроков в час (защита от фарма)
+            const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+            const recentAttacksResult = await client.query(
+                `SELECT COUNT(*) as cnt FROM pvp_battles
+                 WHERE attacker_id = $1 AND defender_id = $2 AND created_at > $3`,
+                [playerId, targetId, hourAgo]
+            );
+            const recentAttacks = Number(recentAttacksResult.rows[0]?.cnt || 0);
+            const MAX_ATTACKS_PER_HOUR = 5;
+            if (recentAttacks >= MAX_ATTACKS_PER_HOUR) {
+                throwPvpError(PvpError.TARGET_FARMED);
             }
 
             const existingBattleResult = await client.query(
