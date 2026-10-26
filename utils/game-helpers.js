@@ -12,6 +12,7 @@ const { query, transaction } = require('../db/database');
 // модуля. Два отдельных require одного файла выглядят мелкой безобидной
 // правдой, пока однажды не появится третья строка, взятая не оттуда.
 const { logger, safeJsonParse, logPlayerAction } = require('./serverApi');
+const { normalizeRadiationLevel } = require('./gameConstants');
 
 // ==========================================
 // ФУНКЦИИ СОСТОЯНИЯ ИГРОКА (из playerState.js)
@@ -585,6 +586,8 @@ function getAchievementCurrentValue(condition, player, runtimeContext) {
             return Array.isArray(player.unique_items) ? player.unique_items.length : 0;
         case 'locations_visited':
             return Array.isArray(player.locations_visited) ? player.locations_visited.length : 0;
+        case 'radiation_level':
+            return normalizeRadiationLevel(player.radiation) || 0;
         case 'in_clan':
             return player.clan_id ? 1 : 0;
         case 'clan_leader':

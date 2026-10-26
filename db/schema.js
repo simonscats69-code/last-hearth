@@ -2023,7 +2023,11 @@ async function seedAchievements() {
         // Коллекция
         { name: 'Коллекционер', description: 'Собери 10 уникальных предметов', category: 'collection', condition: { type: 'unique_items', value: 10 }, reward: { coins: 200, stars: 3 }, icon: '📦', rarity: 'uncommon' },
         { name: 'Хранитель', description: 'Собери 25 уникальных предметов', category: 'collection', condition: { type: 'unique_items', value: 25 }, reward: { coins: 750, stars: 10 }, icon: '💎', rarity: 'rare' },
-        
+
+        // Радиация
+        { name: 'Заражён', description: 'Достигни уровня радиации 3', category: 'radiation', condition: { type: 'radiation_level', value: 3 }, reward: { coins: 100, stars: 1 }, icon: '☢️', rarity: 'common' },
+        { name: 'Радиационное заражение', description: 'Достигни уровня радиации 5', category: 'radiation', condition: { type: 'radiation_level', value: 5 }, reward: { coins: 250, stars: 3 }, icon: '☢️', rarity: 'uncommon' },
+        { name: 'Критическое заражение', description: 'Достигни уровня радиации 10', category: 'radiation', condition: { type: 'radiation_level', value: 10 }, reward: { coins: 1000, stars: 10 }, icon: '☢️', rarity: 'rare' },
     ];
 
     // Удаляем достижения категории 'daily' — ежедневные задания убраны из игры.
