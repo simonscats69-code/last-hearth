@@ -1199,6 +1199,10 @@ const gameState = {
     // Текущий босс
     currentBoss: null,
 
+    // Последний известный HP босса: защита от отката HP вперёд,
+    // если сервер вернёт задержанное/устаревшее значение между ударами.
+    lastBossHP: null,
+
     // Длительность боя с боссом (мс), приходит из fight_duration_ms.
     // null — сервер ещё не сообщал; лог боя тогда не показывает срок.
     bossFightDurationMs: null,
@@ -1409,6 +1413,10 @@ let loadProfileInFlight = null;
 // Признак «холодного» кэша: на первом вызове loadProfile кэш пуст,
 // invalidateCache('profile') не нужен — пропускаем лишнюю операцию.
 let profileCacheCold = true;
+
+/** TTL кэша списка боссов: не перезапрашивать данные чаще раза в 5 секунд */
+const BOSS_LIST_CACHE_TTL_MS = 5000;
+let lastBossesLoadTime = 0;
 
 /** Через сколько мс принудительно снимать блокировку */
 const ACTION_LOCK_TIMEOUT_MS = 30000;
@@ -5292,6 +5300,15 @@ function renderInventoryWithFilters(items) {
  * GET /bosses - массив боссов с полями: is_unlocked, keys_required, player_keys, mastery, can_attack
  */
 async function loadBosses() {
+    // TTL-защита: не перезапрашивать список боссов чаще раза в 5 секунд,
+    // даже если showScreen('bosses') вызывается много раз подряд
+    // (например, после каждого убийства босса через onBossDefeated → showScreen).
+    const now = Date.now();
+    if (now - lastBossesLoadTime < BOSS_LIST_CACHE_TTL_MS && gameState.bosses.length > 0) {
+        return;
+    }
+    lastBossesLoadTime = now;
+
     if (!lockAction('loadBosses')) return;
 
     try {
@@ -5651,6 +5668,7 @@ function renderBossFightScreen(boss, timeRemainingMs = null) {
     }
 
     gameState.currentBoss = boss;
+    gameState.lastBossHP = boss.hp;
     // Серверное время: time_remainingMs пришёл от сервера, и смещение
     // локальных часов не должно сдвигать конец боя.
     gameState.bossFightEndTime = timeRemainingMs ? getNow() + timeRemainingMs : null;
@@ -6002,10 +6020,19 @@ function updateBossHealthUi(bossHp, bossMaxHp) {
     );
 
     if (gameState.currentBoss) {
-        gameState.currentBoss.hp = bossHp;
+        // Защита от отката HP вперёд: если сервер вернул задержанное значение
+        // (выше текущего), не показываем его — оставляем актуальное.
+        const serverHp = Math.max(0, Number(bossHp) || 0);
+        const clientHp = Math.max(0, Number(gameState.currentBoss.hp) || 0);
+        const finalHp = Math.min(serverHp, clientHp);
+
+        gameState.currentBoss.hp = finalHp;
         gameState.currentBoss.max_hp = bossMaxHp;
-        gameState.currentBoss.health = bossHp;
+        gameState.currentBoss.health = finalHp;
         gameState.currentBoss.max_health = bossMaxHp;
+
+        // Запоминаем последний известный HP для защиты от отката
+        gameState.lastBossHP = finalHp;
     }
 }
 
@@ -6030,6 +6057,7 @@ function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound
     showBossVictorySummary?.(gameState.currentBoss?.name || 'Босс', rewards || {}, mastery ?? null);
 
     gameState.currentBoss = null;
+    gameState.lastBossHP = null;
     gameState.activeBattle = null;
     // Бой закончен — секундный интервал и дедлайн снимаем (см. stopBossFightTimer).
     stopBossFightTimer();
@@ -6082,9 +6110,15 @@ async function attackBoss() {
     }
     
     try {
+        // Идемпотентный ключ на текущего босса + бой: защита от двойного
+        // списания энергии при повторном выполнении того же удара (ретраи
+        // apiRequest, двойной тап, задержка ответа).
+        const attackIdempotencyKey = `boss-attack-${gameState.currentBoss.id}-${Date.now()}`;
         const result = await apiRequest('/api/game/bosses/attack-boss', {
             method: 'POST',
-            body: { boss_id: gameState.currentBoss.id }
+            body: { boss_id: gameState.currentBoss.id },
+            idempotent: true,
+            idempotencyKey: attackIdempotencyKey
         });
         
         // Обновляем лог боя
@@ -7636,6 +7670,17 @@ async function attackRaid(raidId) {
                     data.last_energy_update || null
                 );
                 refreshPlayerEnergyUI();
+            }
+
+            // Синхронизируем здоровье игрока после ответного удара босса.
+            // Сервер присылает health (рейд) или player_health (соло).
+            const playerHealth =
+                data.player_health ??
+                data.health ??
+                result.player_health ??
+                result.health;
+            if (typeof playerHealth === 'number' && Number.isFinite(playerHealth)) {
+                updatePlayerHealthUi(playerHealth);
             }
 
             // Ответный удар СЛЕДУЮЩЕГО удара — по уже побитому боссу.
