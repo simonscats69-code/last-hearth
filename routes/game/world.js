@@ -384,12 +384,9 @@ router.post('/search', async (req, res) => {
         const existingRadiation = normalizeRadiation(updatedPlayer.radiation);
         
         if (riskProfile.contaminationThreat > 0 && !activeBuffs.no_radiation) {
-            // Базовое заражение от локации — всегда хотя бы немного,
-            // даже при высокой защите экипировки. Защита уменьшает, но не блокирует полностью.
+            // P1-7: используем уже посчитанное давление (с учётом защиты)
             const randomFactor = 0.7 + crypto.randomInt(600) / 1000;
-            const baseGain = Math.ceil(riskProfile.contaminationThreat * randomFactor);
-            const defenseReduction = Math.floor(riskProfile.contaminationDefense * 0.5);
-            radiationGain = Math.max(0, baseGain - defenseReduction);
+            radiationGain = Math.max(0, Math.ceil(riskProfile.contaminationPressure * randomFactor));
             
             if (radiationGain > 0) {
                 const radiationConfig = DEBUFF_CONFIG.radiation;
