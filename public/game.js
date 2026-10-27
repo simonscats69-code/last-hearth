@@ -4518,6 +4518,7 @@ async function renderWorkshopPanel() {
         bindWorkshopActions();
     } catch (error) {
         console.warn('Не удалось загрузить мастерскую:', error);
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось загрузить мастерскую'));
         root.innerHTML = '';
     }
 }
@@ -6419,8 +6420,6 @@ function renderClanScreen(data) {
     const clanCoins = Number(clan.coins || 0);
     const totalDonated = Number(clan.total_donated || 0);
     
-    const roleEmoji = { leader: '👑', officer: '⭐', member: '👤' };
-    
     content.innerHTML = `
         <div class="clan-card">
             <div class="clan-header">
@@ -6481,7 +6480,7 @@ function renderClanScreen(data) {
                 ${data.members && data.members.length > 0 ? 
                     data.members.filter(m => m.is_online).map(m => `
                         <div class="member-item ${m.is_online ? 'online' : ''}">
-                            <span class="member-role">${roleEmoji[m.clan_role]}</span>
+                            <span class="member-role">${getClanRoleEmoji(m.clan_role)}</span>
                             <span class="member-name">${escapeHtml(m.first_name)}</span>
                             <span class="member-level">ур. ${m.level}</span>
                         </div>
@@ -6715,6 +6714,7 @@ async function loadClanMembers() {
         if (data.success) showClanMembersModal(payload.members || []);
     } catch (error) {
         console.error('Load members error:', error);
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось загрузить участников клана'));
     }
 }
 
@@ -6722,14 +6722,12 @@ async function loadClanMembers() {
  * Показ модального окна с участниками
  */
 function showClanMembersModal(members) {
-    const roleEmoji = { leader: '👑', officer: '⭐', member: '👤' };
-    
     let html = '<div class="clan-members-modal">';
     html += '<h3>👥 Участники клана</h3>';
     
     members.forEach(m => {
         html += '<div class="member-row">' +
-            '<span class="member-role">' + (roleEmoji[m.clan_role] || roleEmoji.member) + '</span>' +
+            '<span class="member-role">' + (getClanRoleEmoji(m.clan_role)) + '</span>' +
             '<div class="member-info">' +
                 '<div class="member-name">' + escapeHtml(m.first_name || 'Выживший') + '</div>' +
                 '<div class="member-level">Уровень ' + escapeHtml(String(m.level ?? 1)) + '</div>' +
@@ -7022,6 +7020,7 @@ async function sendClanMessage() {
         }
     } catch (error) {
         console.error('Send message error:', error);
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось отправить сообщение'));
     }
 }
 
@@ -8180,6 +8179,7 @@ async function loadPVPGamePlayers() {
         
     } catch (error) {
         console.error('Ошибка загрузки PvP игроков:', error);
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось загрузить игроков PvP'));
     }
 }
 
@@ -8510,6 +8510,7 @@ async function loadPVPStats() {
         
     } catch (error) {
         console.error('Ошибка загрузки PvP статистики:', error);
+        showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось загрузить статистику PvP'));
     }
 }
 
@@ -10478,9 +10479,9 @@ async function buyCoinItem(itemId, triggerButton = null) {
             
             // Перезагружаем инвентарь и профиль: предмет уже в инвентаре,
             // а монеты на сервере изменились
-            loadInventory().catch(error => 
+            await loadInventory().catch(error => 
                 console.error('Не удалось обновить инвентарь после покупки за монеты:', error));
-            loadProfile().catch(error => 
+            await loadProfile().catch(error => 
                 console.error('Не удалось обновить профиль после покупки за монеты:', error));
         } else {
             showModal('❌ Ошибка', response.error || 'Не удалось купить предмет');
