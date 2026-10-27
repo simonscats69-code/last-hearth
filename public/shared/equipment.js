@@ -447,6 +447,19 @@
 
     /** +1 HP за столько миллисекунд */
     const HEALTH_REGEN_INTERVAL_MS = 90 * 1000;
+const HEALTH_REGEN_CAP_RATIO = 0.6;
+
+/** Потолок регенерации HP (60% от максимума) */
+function getHealthRegenCap(maxHealth) {
+    return Math.round((Number(maxHealth) || 0) * HEALTH_REGEN_CAP_RATIO);
+}
+
+/** Сколько HP можно восстановить регеном */
+function getRegenerableHealth(currentHealth, maxHealth) {
+    const cap = getHealthRegenCap(maxHealth);
+    const missing = Math.max(0, (Number(maxHealth) || 0) - (Number(currentHealth) || 0));
+    return Math.min(cap, missing);
+}
 
     /** Порог автолечения по умолчанию, % от максимума */
 
@@ -1135,6 +1148,9 @@ function resolveEquipmentSlot(item) {
     getExpForLevel,
     getTotalExpForLevel,
     HEALTH_REGEN_INTERVAL_MS,
+HEALTH_REGEN_CAP_RATIO,
+getHealthRegenCap,
+getRegenerableHealth,
     ENERGY_REGEN_INTERVAL_MS,
     ENERGY_PURCHASE_STARS_COST,
     ENERGY_PER_PURCHASE,

@@ -221,7 +221,6 @@ const BY_EMOJI = {
     '🌆': 'loc-city',
     '🎖️': 'loc-base',
     '🔒': 'loc-bunker',
-    '👑': 'arm-guard',
     '🌟': 'ui-star',
     '🏅': 'ui-badge',
     '🏆': 'ui-badge',

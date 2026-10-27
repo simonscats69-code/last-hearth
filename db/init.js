@@ -56,13 +56,11 @@ async function initDatabase() {
 
         const {
             createTables,
-            runMigrations,
             seedDatabase,
             seedAchievements
         } = getSchema();
 
         await createTables();
-        await runMigrations();
         await seedDatabase();
         await seedAchievements();
 

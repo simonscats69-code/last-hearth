@@ -210,7 +210,7 @@ async function run() {
 
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
     ok('ответ success', res.body && res.body.success === true, JSON.stringify(res.body));
-    ok('battle_id из createPVPMatch', res.body && res.body.battle_id === 999, JSON.stringify(res.body));
+    ok('battle_id из createPVPMatch', res.body && res.body.data && res.body.data.battle_id === 999, JSON.stringify(res.body));
     ok('recalcEnergy поднял энергию до 1', energyRecalcCalls.length > 0 && energyRecalcCalls[energyRecalcCalls.length - 1] === 0, JSON.stringify(energyRecalcCalls));
 
     const cooldownQ = callLog.filter(q => /FROM pvp_cooldowns/.test(q.sql));
@@ -266,8 +266,8 @@ async function run() {
 
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
     ok('success', res.body && res.body.success === true, JSON.stringify(res.body).slice(0, 200));
-    ok('battleEnded === true', res.body && res.body.battleEnded === true, JSON.stringify(res.body && res.body.battleEnded));
-    ok('message === Победа!', res.body && res.body.message === 'Победа!', JSON.stringify(res.body && res.body.message));
+    ok('battleEnded === true', res.body && res.body.data && res.body.data.battleEnded === true, JSON.stringify(res.body && res.body.data && res.body.data.battleEnded));
+    ok('message === Победа!', res.body && res.body.data && res.body.data.message === 'Победа!', JSON.stringify(res.body && res.body.data && res.body.data.message));
     const winLogs = callLog.filter(c => c.__log);
     ok('лог pvp_battle_win есть', winLogs.some(l => l.action === 'pvp_battle_win'), JSON.stringify(winLogs.map(l => l.action)));
     ok('лог БЕЗ client (после COMMIT)', winLogs.every(l => l.withClient === false), JSON.stringify(winLogs.map(l => l.withClient)));
@@ -288,9 +288,9 @@ async function run() {
     await getHandler('/attack-hit')(req, res);
 
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
-    ok('battleEnded === false', res.body && res.body.battleEnded === false, JSON.stringify(res.body && res.body.battleEnded));
-    ok('hit.damage > 0', res.body && res.body.hit && res.body.hit.damage > 0, JSON.stringify(res.body && res.body.hit));
-    ok('targetHealth уменьшилось', res.body && res.body.hit && res.body.hit.targetHealth === 70, JSON.stringify(res.body && res.body.hit && res.body.hit.targetHealth));
+    ok('battleEnded === false', res.body && res.body.data && res.body.data.battleEnded === false, JSON.stringify(res.body && res.body.data && res.body.data.battleEnded));
+    ok('hit.damage > 0', res.body && res.body.data && res.body.data.hit && res.body.data.hit.damage > 0, JSON.stringify(res.body && res.body.hit));
+    ok('targetHealth уменьшилось', res.body && res.body.data && res.body.data.hit && res.body.data.hit.targetHealth === 70, JSON.stringify(res.body && res.body.data && res.body.data.hit && res.body.data.hit.targetHealth));
     const hitLogs = callLog.filter(c => c.__log);
     ok('лог pvp_attack_hit есть', hitLogs.some(l => l.action === 'pvp_attack_hit'), JSON.stringify(hitLogs.map(l => l.action)));
 
@@ -321,10 +321,10 @@ async function run() {
     // targetHealth — здоровье противника ПОСЛЕ удара: было 90, урон 10 -> 80.
     // Раньше здесь же срабатывало автолечение и значение było 70 — теперь
     // автоаптек нет, поэтому ровно «здоровье минус урон».
-    ok('yourHealth = 80 (бьющий игрок)', res.body && res.body.hit && res.body.hit.yourHealth === 80, JSON.stringify(res.body && res.body.hit));
-    ok('targetHealth = 80 (90 - 10, без автохила)', res.body && res.body.hit && res.body.hit.targetHealth === 80, JSON.stringify(res.body && res.body.hit && res.body.hit.targetHealth));
+    ok('yourHealth = 80 (бьющий игрок)', res.body && res.body.data && res.body.data.hit && res.body.data.hit.yourHealth === 80, JSON.stringify(res.body && res.body.hit));
+    ok('targetHealth = 80 (90 - 10, без автохила)', res.body && res.body.data && res.body.data.hit && res.body.data.hit.targetHealth === 80, JSON.stringify(res.body && res.body.data && res.body.data.hit && res.body.data.hit.targetHealth));
     ok('targetAutoHeal больше не приходит (автохил удалён)',
-        res.body && res.body.hit && res.body.hit.targetAutoHeal === undefined,
+        res.body && res.body.data && res.body.data.hit && res.body.data.hit.targetAutoHeal === undefined,
         JSON.stringify(res.body.hit));
 
     console.log('');
@@ -351,11 +351,11 @@ async function run() {
     ({ req, res } = makeReqRes(attacker(), {}));
     await playersHandler(req, res);
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
-    ok('total = 7 (из COUNT OVER)', res.body && res.body.pagination && res.body.pagination.total === 7, JSON.stringify(res.body && res.body.pagination));
-    ok('2 игрока в списке', res.body && res.body.players && res.body.players.length === 2, JSON.stringify(res.body && res.body.players));
+    ok('total = 7 (из COUNT OVER)', res.body && res.body.data && res.body.data.pagination && res.body.data.pagination.total === 7, JSON.stringify(res.body && res.body.data && res.body.data.pagination));
+    ok('2 игрока в списке', res.body && res.body.data && res.body.data.players && res.body.data.players.length === 2, JSON.stringify(res.body && res.body.data && res.body.data.players));
     ok('служебное total_count убрано из ответа',
-        Boolean(res.body) && Boolean(res.body.players) && res.body.players.every(p => !('total_count' in p)),
-        JSON.stringify(res.body.players[0]));
+        Boolean(res.body && res.body.data) && Boolean(res.body.data.players) && res.body.data.players.every(p => !('total_count' in p)),
+        JSON.stringify((res.body && res.body.data && res.body.data.players && res.body.data.players[0]) || {}));
     ok('только ОДИН запрос со COUNT OVER (без отдельного COUNT)', playersCallCount === 1, 'count=' + playersCallCount);
     ok('COUNT отдельным запросом НЕ выполнено',
         !callLog.filter(q => /SELECT COUNT\(\*\) as total/.test(q.sql)).length,
@@ -365,7 +365,7 @@ async function run() {
     nonTxResponder = (sql) => (/danger_level FROM locations/.test(sql) ? { rows: [{ danger_level: 2 }] } : { rows: [] });
     ({ req, res } = makeReqRes(attacker(), {}));
     await playersHandler(req, res);
-    ok('не красная зона -> available: false', res.body && res.body.available === false, JSON.stringify(res.body));
+    ok('не красная зона -> available: false', res.body && res.body.data && res.body.data.available === false, JSON.stringify(res.body));
 
     console.log('');
     console.log('=== /stats: обработчик существует ===');

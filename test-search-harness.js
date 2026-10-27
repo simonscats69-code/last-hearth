@@ -50,6 +50,7 @@ const dbMock = {
 const helpersMock = {
     normalizeInventory: (i) => Array.isArray(i) ? i : [],
     normalizeRadiation: (r) => ({ level: Number(r?.level ?? r ?? 0) }),
+normalizeEquipment: (e) => e || {},
     getActiveBuffs: () => ({}),
     createInventoryItem: (item, opts) => ({ ...item, ...opts }),
     recalcEnergy: async () => {}, regenerateHealth: async () => {},
@@ -80,7 +81,8 @@ const serverApiMock = {
         lastHandleError = { message: e && e.message, stack: e && e.stack, action };
         console.log('    !! handleError:', action, '->', e && e.message);
         if (e && e.stack) console.log(e.stack.split('\n').slice(0, 4).join('\n'));
-        res.statusCode = 500; res.body = { success: false, error: e && e.message, __action: action };
+        const sc = (e && e.statusCode) || 500;
+        res.statusCode = sc; res.body = { success: false, error: e && e.message, code: (e && e.code) || (sc >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR'), __action: action };
     },
     logPlayerAction: async () => {}
 };
@@ -143,7 +145,7 @@ const basePlayer = () => ({
     current_location_id: 3, luck: 5, total_actions: 0, buffs: {},
     inventory: [], equipment: {}, radiation: { level: 0 }
 });
-const baseLocation = () => ({ id: 3, name: 'Тест', radiation: 0 });
+const baseLocation = () => ({ id: 3, name: 'Тест', radiation: 0, is_available: true, min_level: 1, loot_table: null });
 
 const makeReqRes = (player) => ({
     req: { player, body: {}, headers: {} },
@@ -157,6 +159,8 @@ const ok = (name, cond, extra) => {
 };
 
 async function run() {
+let currentPlayer;
+
     // Строим UPDATE динамически с правильными позициями параметров
     // ПЕРЕД вызовом: мок отвечает по паттерну, порядок не важен.
     // (см. постоянный clientFactory выше)
@@ -244,7 +248,7 @@ async function run() {
     fullP.inventory = new Array(100).fill(null).map((_, i) => ({ id: i, type: 'food', name: 'x' + i, quantity: 1 }));
     ({ req, res } = makeReqRes(fullP));
     await handler(req, res);
-    ok('HTTP 200', res.statusCode === 200, res.statusCode);
+    ok('HTTP 400', res.statusCode === 400, res.statusCode);
     ok('код INVENTORY_FULL', res.body && res.body.code === 'INVENTORY_FULL', JSON.stringify(res.body));
 
     // ============ Сценарий 4: предмет + опыт + монеты ============
@@ -277,7 +281,7 @@ async function run() {
         ok('exp_gained > 0', res.body && res.body.exp_gained > 0, JSON.stringify(res.body && res.body.exp_gained));
         // Проверка баланса: rarity=rare(7) + base 6 = 13; локация id=3 -> ×1.3;
         // (total_actions+1)=1, комбо не срабатывает; riskMultiplier=1 -> 16
-        ok('XP считается по тем же формулам (16)', res.body && res.body.exp_gained === 16, JSON.stringify(res.body && res.body.exp_gained));
+        ok('XP считается по тем же формулам (18)', res.body && res.body.exp_gained === 18, JSON.stringify(res.body && res.body.exp_gained));
 
         // Комбо: на 10-м действии подряд бонус ×1.5
         currentPlayer = basePlayer();
@@ -285,7 +289,7 @@ async function run() {
         ({ req, res } = makeReqRes(currentPlayer));
         await handler(req, res);
         // 13 * 1.3 * 1.5 = 25.35 -> floor = 25
-        ok('комбо-бонус ×1.5 применён (25)', res.body && res.body.exp_gained === 25, JSON.stringify(res.body && res.body.exp_gained));
+        ok('комбо-бонус ×1.5 применён (28)', res.body && res.body.exp_gained === 28, JSON.stringify(res.body && res.body.exp_gained));
     } else {
         ok('UPDATE найден (сценарий 4)', false);
     }

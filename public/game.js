@@ -1658,9 +1658,7 @@ const API = {
         ),
         // Ключи из прежнего API.endpoints, отсутствующие в общем словаре
         market: '/api/game/items/shop',
-        pvp: '/api/game/pvp/players',
-        status: '/api/game/status',
-        energy: '/api/game/profile/energy'
+        pvp: '/api/game/pvp/players'
     },
     
     // Активные контроллеры для отмены запросов
@@ -7734,7 +7732,7 @@ async function attackRaid(raidId) {
                     await loadRaids();
                     renderRaids(gameState.raids);
                 } catch (reloadError) {
-                    console.error('Не удалось перезагрузить рейды после ошибки:', reloadError);
+                    console.error('Не удалось перезагрузить рейды после ошибки:', reloadError?.message || reloadError);
                 }
             } else {
                 showNotification(errorMsg, 'error');
