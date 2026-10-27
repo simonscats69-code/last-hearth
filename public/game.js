@@ -3915,10 +3915,16 @@ function updateConditionsUI(status) {
             const diffMs = expDate - now;
             const diffMin = Math.max(0, Math.floor(diffMs / 60000));
             radiationValue.textContent = `${radiation} ☢️ истекает через ~${diffMin} мин`;
+        } else {
+            radiationValue.textContent = `${radiation} ☢️`;
         }
     } else {
-        conditionsGrid.style.display = 'none';
-        if (radiationValue) radiationValue.textContent = radiation;
+        // Всегда показываем блок условий, даже при радиации = 0,
+        // чтобы игрок видел текущий уровень заражения.
+        conditionsGrid.style.display = 'grid';
+        radiationValue.textContent = `${radiation} ☢️`;
+        // Убираем цветной фон, если радиации нет
+        conditionItem.classList.remove('radiation-active', 'radiation-warning', 'radiation-danger', 'radiation-critical');
     }
 }
 
