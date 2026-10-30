@@ -101,8 +101,41 @@ function runLogicChecks() {
 // ------------------------------------------------- 2. catch-блоки без текста
 
 /**
+ * Находит индекс строки с закрывающей скобкой catch-блока (подсчёт скобок).
+ * @param {string[]} lines - все строки файла
+ * @param {number} startLine - индекс строки с "} catch (var) {"
+ * @returns {number} индекс строки с закрывающей "}" catch-блока
+ */
+function findCatchBlockEnd(lines, startLine) {
+    let depth = 0;
+    // Подсчёт скобок на самой строке catch: "} catch (var) {" -> чистое изменение 0
+    for (const ch of lines[startLine]) {
+        if (ch === '{') depth++;
+        if (ch === '}') depth--;
+    }
+    // Входим в тело catch-блока через {, начинаем с depth = 1
+    depth = Math.max(depth, 0) + 1;
+
+    for (let i = startLine + 1; i < lines.length; i++) {
+        for (const ch of lines[i]) {
+            if (ch === '{') depth++;
+            if (ch === '}') {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+    }
+    // Fallback: если не нашли закрывающую скобку, используем старое окно
+    return startLine + 9;
+}
+
+/**
  * Ищет catch-блоки, где показывают сообщение, но не используют ни
  * error.message, ни clientErrorMessage.
+ * Окно поиска ограничивается телом catch-блока (до закрывающей }),
+ * чтобы не ловить showNotification/showModal из соседних блоков
+ * (else / finally и т.д.), которые могут попасть в 10-строчное окно
+ * после строки catch, но не относятся к обработке ошибки внутри catch.
  * @returns {number[]} номера строк
  */
 function findSwallowedErrors() {
@@ -117,7 +150,8 @@ function findSwallowedErrors() {
 
     const bad = [];
     for (const c of catches) {
-        const window = lines.slice(c.line, c.line + 10).join('\n');
+        const endLine = findCatchBlockEnd(lines, c.line);
+        const window = lines.slice(c.line, endLine + 1).join('\n');
         if (!/showModal\(|showNotification\(/.test(window)) continue;
 
         const v = c.varName;

@@ -159,8 +159,9 @@
      * @returns {number}
      */
     function calculateLocationContaminationThreat(location) {
-        const radiation = normalizeThreatLevelToPoints(location && location.radiation);
-        const infection = normalizeThreatLevelToPoints(location && location.infection);
+        if (!location || typeof location !== 'object') return 0;
+        const radiation = normalizeThreatLevelToPoints(location.radiation);
+        const infection = normalizeThreatLevelToPoints(location.infection);
         return radiation + infection;
     }
 
@@ -391,8 +392,9 @@
     });
 
     function calculateDropChance(luck) {
-        if (!Number.isFinite(luck) || luck <= 0) return 5;
-        const chance = 10 + (luck * 0.4);
+        const luckNum = Number.isFinite(luck) ? luck : 0;
+        if (luckNum <= 0) return GAME_CONFIG.BASE_DROP_CHANCE || 5;
+        const chance = (GAME_CONFIG.BASE_DROP_CHANCE || 5) + (luckNum * 0.4);
         return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
     }
 
@@ -409,8 +411,10 @@
      * @param {object} options { riskTier: string, luck: number, playerLevel: number }
      * @returns {object|null} { amount: number } или null если монеты не выпали
      */
-    function calculateCoinDrop(options = {}) {
+     function calculateCoinDrop(options = {}) {
         const { riskTier = 'safe', luck = 0, playerLevel = 1 } = options;
+        const luckNum = Number.isFinite(luck) ? luck : 0;
+        const levelNum = Number.isFinite(playerLevel) ? Math.max(1, Math.floor(playerLevel)) : 1;
         
         const COIN_DROP_CHANCE = GAME_CONFIG.COIN_DROP_CHANCE;
         const BASE_COIN_AMOUNT = GAME_CONFIG.BASE_COIN_AMOUNT;
@@ -424,8 +428,8 @@
         
         // Множители
         const riskMultiplier = GAME_CONFIG.RISK_MULTIPLIERS[riskTier] || 1.0;
-        const luckMultiplier = 1 + (luck * 0.01);
-        const levelMultiplier = 1 + (playerLevel * 0.05);
+        const luckMultiplier = 1 + (luckNum * 0.01);
+        const levelMultiplier = 1 + (levelNum * 0.05);
         
         const amount = Math.floor(BASE_COIN_AMOUNT * riskMultiplier * luckMultiplier * levelMultiplier);
         const finalAmount = Math.min(MAX_COIN_AMOUNT, Math.max(1, amount));
@@ -450,16 +454,16 @@
 const HEALTH_REGEN_CAP_RATIO = 0.6;
 
 /** Потолок регенерации HP (60% от максимума) */
-function getHealthRegenCap(maxHealth) {
-    return Math.round((Number(maxHealth) || 0) * HEALTH_REGEN_CAP_RATIO);
-}
+    function getHealthRegenCap(maxHealth) {
+        return Math.max(0, Math.round((Number(maxHealth) || 0) * HEALTH_REGEN_CAP_RATIO));
+    }
 
 /** Сколько HP можно восстановить регеном */
-function getRegenerableHealth(currentHealth, maxHealth) {
-    const cap = getHealthRegenCap(maxHealth);
-    const missing = Math.max(0, (Number(maxHealth) || 0) - (Number(currentHealth) || 0));
-    return Math.min(cap, missing);
-}
+    function getRegenerableHealth(currentHealth, maxHealth) {
+        const cap = getHealthRegenCap(maxHealth);
+        const missing = Math.max(0, (Number(maxHealth) || 0) - (Number(currentHealth) || 0));
+        return Math.max(0, Math.min(cap, missing));
+    }
 
     /** Порог автолечения по умолчанию, % от максимума */
 
@@ -636,7 +640,7 @@ function resolveEquipmentSlot(item) {
      * @returns {{current:number,max:number,isBroken:boolean,ratio:number}}
      */
     function getDurabilityInfo(item) {
-        const maxRaw = Number(item && (item.max_durability || item.durability));
+        const maxRaw = Number(item && (item.max_durability !== undefined ? item.max_durability : item.durability));
         const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 500));
 
         // Полей прочности нет вообще (расходник, валюта, пустой объект) —
@@ -717,6 +721,7 @@ function resolveEquipmentSlot(item) {
      * @returns {{coins:number,materials:Record<string,number>}|null}
      */
     function calculateModificationCost(item, key) {
+        if (!item || typeof item !== 'object') return null;
         const modification = MODIFICATIONS[key];
         if (!modification) return null;
 
@@ -763,8 +768,10 @@ function resolveEquipmentSlot(item) {
      * @returns {number} фактический урон
      */
     function rollVarianceDamage(baseDamage, variancePercent) {
-        const base = Math.max(0, Number(baseDamage) || 0);
-        const variance = Math.max(0, Math.min(100, Number(variancePercent) || 0));
+        const baseRaw = Number(baseDamage);
+        const base = Number.isFinite(baseRaw) ? Math.max(0, baseRaw) : 0;
+        const varianceRaw = Number(variancePercent);
+        const variance = Number.isFinite(varianceRaw) ? Math.max(0, Math.min(100, varianceRaw)) : 0;
         if (base === 0) return 0;
         if (variance === 0) return Math.max(1, Math.round(base));
 
@@ -892,8 +899,10 @@ function resolveEquipmentSlot(item) {
      * @returns {number} итоговый урон (не меньше 0)
      */
     function applyDefenseReduction(damage, defense) {
-        const incoming = Math.max(0, Math.round(Number(damage) || 0));
-        const defenseTotal = Math.max(0, Math.floor(Number(defense) || 0));
+        const incomingRaw = Number(damage);
+        const defenseRaw = Number(defense);
+        const incoming = Number.isFinite(incomingRaw) ? Math.max(0, Math.round(incomingRaw)) : 0;
+        const defenseTotal = Number.isFinite(defenseRaw) ? Math.max(0, Math.floor(defenseRaw)) : 0;
         if (defenseTotal <= 0) return incoming;
 
         const reduction = (defenseTotal / (defenseTotal + 100)) * 100;
@@ -926,7 +935,7 @@ function resolveEquipmentSlot(item) {
      * @returns {number} монеты (0 — ремонт не нужен)
      */
     function calculateRepairCost(item) {
-        const info = getDurabilityInfo(item);
+        if (!item || typeof item !== 'object') return 0;
         const missing = info.max - info.current;
         if (missing <= 0) return 0;
 
@@ -940,6 +949,7 @@ function resolveEquipmentSlot(item) {
      * @returns {{level:number,next_level:number,coins:number,materials:Record<string,number>}|null}
      */
     function calculateUpgradeCost(item) {
+        if (!item || typeof item !== 'object') return null;
         const level = getUpgradeLevel(item);
         if (level >= MAX_UPGRADE_LEVEL) return null;
 
@@ -991,10 +1001,10 @@ function resolveEquipmentSlot(item) {
         const counts = {};
         if (!equipment) return counts;
 
-        for (const slot of EQUIPMENT_SLOTS) {
+        for (const slot of COMBAT_SLOTS) {
             const item = equipment[slot];
             if (!item) continue;
-            const setId = Number(item.set_id || (item.stats && item.stats.set_id) || 0);
+            const setId = Number(item.set_id !== undefined && item.set_id !== null ? item.set_id : (item.stats && item.stats.set_id !== undefined ? item.stats.set_id : 0));
             if (!setId) continue;
             counts[setId] = (counts[setId] || 0) + 1;
         }
@@ -1014,7 +1024,8 @@ function resolveEquipmentSlot(item) {
 
         const counts = collectSetPieceCounts(equipment);
         for (const set of sets) {
-            const count = counts[Number(set && set.id)] || 0;
+            if (!set || typeof set !== 'object') continue;
+            const count = counts[Number(set.id)] || 0;
             if (count < 2) continue;
 
             const tier = count >= 4 ? 4 : (count === 3 ? 3 : 2);

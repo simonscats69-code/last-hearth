@@ -47,22 +47,36 @@ async function initDatabase() {
         logger.warn(`DATABASE_URL и DB_HOST не заданы — подключаемся к ${target}. ` +
             'В Docker/контейнере это почти наверняка ошибка: задайте DATABASE_URL в окружении (панель Bothost).');
     }
+    if (process.env.DATABASE_URL) {
+        try {
+            new URL(process.env.DATABASE_URL);
+        } catch {
+            logger.error('DATABASE_URL имеет некорректный формат');
+            throw new Error('Некорректный DATABASE_URL');
+        }
+    }
 
     logger.info('Подключение к БД: ' + target);
 
     try {
-        await pool.query('SELECT 1');
+        await pool.query({ text: 'SELECT 1', timeout: 5000 });
         logger.info('Подключение к БД установлено');
 
         const {
             createTables,
             seedDatabase,
-            seedAchievements
+            seedAchievements,
+            runMigrations
         } = getSchema();
 
         await createTables();
         await seedDatabase();
         await seedAchievements();
+
+        // Идемпотентные схемные миграции (ADD COLUMN IF NOT EXISTS, внешние ключи,
+        // и т.д.). Безопасны при каждом старте — не Zerstоряют данные, а только
+        // докидывают отсутствующие колонки/ограничения на существующих БД.
+        await runMigrations();
 
         // Кэш лута сбрасываем ПОСЛЕ сидов: он построен один раз при старте и
         // без инвалидации продолжает возвращать старые/несуществующие id после
@@ -71,10 +85,15 @@ async function initDatabase() {
         try {
             const lootCache = require('../utils/lootCache');
             lootCache.clearLootCache();
-            logger.info('Кэш лута сброшен после сида — будет пересобран при первом поиске');
+            if (typeof lootCache.initLootCache === 'function') {
+                await lootCache.initLootCache();
+            } else if (typeof lootCache.init === 'function') {
+                await lootCache.init();
+            }
+            logger.info('Кэш лута сброшен и пересобран после сида');
         } catch (cacheError) {
-            // Кэш — оптимизация, его сбой не должен ронять инициализацию.
-            logger.warn('Не удалось сбросить кэш лута: ' + describeError(cacheError));
+            logger.warn('Не удалось сбросить/пересобрать кэш лута: ' + describeError(cacheError));
+            logger.warn(cacheError?.stack || '');
         }
 
         return true;

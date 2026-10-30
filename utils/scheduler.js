@@ -22,7 +22,8 @@ const SCHEDULER_TASKS = [
     'cleanup',
     'dailyTasks',
     'debuffs',
-    'raids'
+    'raids',
+    'exhaustion'
 ];
 
 // Флаг для graceful shutdown (в памяти — перезапуск процесса сбрасывает)
@@ -745,7 +746,16 @@ async function cleanupExpiredRaids() {
                 }
                 
                 await query('DELETE FROM boss_sessions WHERE raid_id = $1', [raid.id]);
-                  
+                   
+                // Очистка player_boss_progress для истёкших соло-боёв.
+                // Игрок мог закрыть приложение посреди боя — строка останется
+                // до 8 часов или до следующего старта. Фоновая очистка
+                // старше SOLO_FIGHT_DURATION_MS (8 часов) устраняет утечку.
+                await query(
+                    `DELETE FROM player_boss_progress
+                     WHERE started_at < NOW() - INTERVAL '8 hours'`,
+                );
+                   
                 // Логируем истёкший рейд
                 logger.info({
                     type: 'raid_expired',
@@ -773,6 +783,43 @@ async function cleanupExpiredRaids() {
         // Запускаем следующую итерацию через 5 минут
         if (schedulerEnabled) {
             schedule('cleanupExpiredRaids', cleanupExpiredRaids, 5 * 60 * 1000);
+        }
+    }
+}
+
+/**
+ * Восстановление истощения локаций (exhaustion)
+ * Каждые 5 минут уменьшает exhaustion на 5 для всех локаций выше 0,
+ * чтобы шансы на редкий лут постепенно возвращались.
+ */
+async function decayExhaustion() {
+    if (await isTaskRunning('exhaustion')) {
+        logger.warn('exhaustion: пропуск, предыдущая задача ещё выполняется');
+        return;
+    }
+
+    await setTaskRunning('exhaustion', true);
+    const startTime = Date.now();
+
+    try {
+        const result = await query(
+            `UPDATE locations
+             SET exhaustion = GREATEST(0, exhaustion - 5)
+             WHERE exhaustion > 0`
+        );
+
+        logger.info({
+            type: 'exhaustion_decay',
+            locations_updated: result.rowCount,
+            duration_ms: Date.now() - startTime
+        });
+    } catch (err) {
+        logger.error({ type: 'exhaustion_decay_error', message: describeError(err) });
+    } finally {
+        await setTaskRunning('exhaustion', false);
+
+        if (schedulerEnabled) {
+            schedule('decayExhaustion', decayExhaustion, 5 * 60 * 1000);
         }
     }
 }
@@ -931,6 +978,9 @@ async function startScheduler() {
     
     // Очистка истёкших рейдов - через 60 секунд
     schedule('cleanupExpiredRaids', cleanupExpiredRaids, 60 * 1000);
+    
+    // Восстановление истощения локаций - через 70 секунд
+    schedule('decayExhaustion', decayExhaustion, 70 * 1000);
     
     logger.info('Планировщик задач запущен');
 }

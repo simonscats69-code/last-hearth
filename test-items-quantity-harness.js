@@ -119,7 +119,14 @@ const serverApiMock = {
     ok: (r, d) => r.status(200).json({ success: true, data: d }),
     fail: (r, m, c) => r.status(400).json({ success: false, error: m, code: c }),
     notFound: (r, m, c) => r.status(404).json({ success: false, error: m, code: c }),
-    PlayerHelper: { addExperience: async () => ({}) }
+    PlayerHelper: { addExperience: async () => ({}) },
+    requireItemId: (res, itemId) => {
+        if (!itemId || itemId <= 0 || !Number.isSafeInteger(itemId)) {
+            res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
+            return false;
+        }
+        return true;
+    }
 };
 
 const gameConstantsMock = {

@@ -88,8 +88,9 @@ export function normalizeResistanceToThreatPoints(totalResistance: number): numb
  * Суммарная угроза локации: радиация + инфекция дают одно заражение.
  */
 export function calculateLocationContaminationThreat(
-  location: { radiation?: number | null; infection?: number | null }
+  location: { radiation?: number | null; infection?: number | null } | null | undefined
 ): number {
+  if (!location) return 0;
   return normalizeThreatLevelToPoints(location.radiation ?? 0)
     + normalizeThreatLevelToPoints(location.infection ?? 0);
 }
@@ -131,7 +132,7 @@ export function getRiskTierByScore(score: number) {
 /** Формула опыта до следующего уровня */
 export function getExpForLevel(level: number): number {
   const lvl = Math.max(1, Number(level) || 1);
-  return Math.round(500 * lvl * (1 + lvl / 25));
+  return Math.round(400 * Math.pow(lvl, 1.25));
 }
 
 /** Общий опыт для достижения уровня */
@@ -150,7 +151,7 @@ export function resolveEquipmentSlot(item: InventoryItem | null | undefined): Eq
   const candidates = [
     item.slot,
     item.category,
-    item.type
+    item.type === 'weapon' ? 'weapon' : null
   ];
 
   for (const candidate of candidates) {
@@ -199,8 +200,13 @@ export function isEquipmentItem(item: InventoryItem | null | undefined): boolean
 export function getDurabilityInfo(item: InventoryItem | null | undefined): {
   current: number; max: number; isBroken: boolean; ratio: number
 } {
-  const maxRaw = Number(item && (item.max_durability ?? item.durability));
+  const maxRaw = Number(item && (item.max_durability || item.durability));
   const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : GAME_CONFIG.BASE_DURABILITY));
+
+  const hasDurabilityData = Boolean(item && (item.durability !== undefined || item.max_durability !== undefined));
+  if (!hasDurabilityData) {
+    return { current: max, max, isBroken: false, ratio: 1 };
+  }
 
   if (!isEquipmentItem(item)) {
     return { current: max, max, isBroken: false, ratio: 1 };
@@ -239,7 +245,7 @@ export function getEffectiveStatValue(item: InventoryItem | null | undefined, ke
 export function calculateDefenseTotal(equipment: PlayerEquipment | null | undefined): number {
   if (!equipment) return 0;
   let total = 0;
-  for (const slot of COMBAT_SLOTS) {
+  for (const slot of EQUIPMENT_SLOTS) {
     total += getEffectiveStatValue(equipment[slot], DEFENSE_KEYS);
   }
   return total;
@@ -249,7 +255,7 @@ export function calculateDefenseTotal(equipment: PlayerEquipment | null | undefi
 export function calculateEquipmentLuckBonus(equipment: PlayerEquipment | null | undefined): number {
   if (!equipment) return 0;
   let total = 0;
-  for (const slot of COMBAT_SLOTS) {
+  for (const slot of EQUIPMENT_SLOTS) {
     total += getEffectiveStatValue(equipment[slot], LUCK_KEYS);
   }
   return total;
@@ -257,17 +263,17 @@ export function calculateEquipmentLuckBonus(equipment: PlayerEquipment | null | 
 
 /** Снижение входящего урона защитой */
 export function applyDefenseReduction(damage: number, defense: number): number {
-  const incoming = Math.max(0, Number(damage) || 0);
-  const defenseTotal = Math.max(0, Number(defense) || 0);
-  if (defenseTotal <= 0) return Math.max(1, Math.round(incoming));
+  const incoming = Math.max(0, Math.round(Number(damage) || 0));
+  const defenseTotal = Math.max(0, Math.floor(Number(defense) || 0));
+  if (defenseTotal <= 0) return incoming;
 
   const reduction = (defenseTotal / (defenseTotal + 100)) * 100;
-  return Math.max(1, Math.floor(incoming * (1 - reduction / 100)));
+  return Math.max(0, Math.floor(incoming * (1 - reduction / 100)));
 }
 
 /** Износ предмета */
 export function wearEquipment(item: InventoryItem, amount = 1): InventoryItem {
-  if (!isEquipmentItem(item)) return item;
+  if (!isEquipmentItem(item)) return { ...item };
 
   const info = getDurabilityInfo(item);
   const wear = Math.max(0, Math.round(Number(amount) * WEAR_PER_HIT));
@@ -347,16 +353,18 @@ export function getModificationLevel(item: InventoryItem | null | undefined, key
 
 /** Плоская прибавка от модификаций */
 export function getModificationBonus(item: InventoryItem | null | undefined, stat: string): number {
-  const modification = MODIFICATION_BY_STAT[stat];
+  const modificationKey = MODIFICATION_BY_STAT[stat];
+  if (!modificationKey) return 0;
+  const modification = MODIFICATIONS[modificationKey];
   if (!modification) return 0;
-  return getModificationLevel(item, modification.key) * modification.perLevel;
+  return getModificationLevel(item, modificationKey) * modification.perLevel;
 }
 
 /** Стоимость следующего уровня модификации */
 export function calculateModificationCost(item: InventoryItem | null | undefined, key: string): {
   level: number; next_level: number; coins: number; materials: Record<string, number>
 } | null {
-  const modification = MODIFICATIONS.find(m => m.key === key);
+  const modification = Object.values(MODIFICATIONS).find(m => m.key === key);
   if (!modification || !item) return null;
 
   const level = getModificationLevel(item, key);
@@ -377,7 +385,7 @@ export function calculateModificationCost(item: InventoryItem | null | undefined
 
 /** Подходит ли модификация этому предмету */
 export function isModificationApplicable(item: InventoryItem | null | undefined, key: string): boolean {
-  const modification = MODIFICATIONS.find(m => m.key === key);
+  const modification = Object.values(MODIFICATIONS).find(m => m.key === key);
   if (!modification || !item || !isEquipmentItem(item)) return false;
 
   const type = String(item.type || '').toLowerCase();
@@ -402,7 +410,7 @@ export function collectSetPieceCounts(equipment: PlayerEquipment | null | undefi
   const counts: Record<number, number> = {};
   if (!equipment) return counts;
 
-  for (const slot of COMBAT_SLOTS) {
+  for (const slot of EQUIPMENT_SLOTS) {
     const item = equipment[slot];
     if (!item) continue;
     const statsSetId = item.stats && typeof item.stats === 'object'
@@ -440,4 +448,30 @@ export function calculateSetBonuses(
     }
   }
   return totals;
+}
+
+/** Контексты применения оружия (бои с боссами и PvP) */
+export const WEAPON_CONTEXTS = Object.freeze({
+  BOSS: 'boss',
+  PVP: 'pvp'
+});
+
+/** Множитель урона оружия в заданном контексте (boss / pvp) */
+export function getWeaponContextMultiplier(item: InventoryItem | null | undefined, context: string): number {
+  if (!item || typeof item !== 'object') return 1;
+  const stats = item.stats;
+  if (!stats || typeof stats !== 'object') return 1;
+  const bonusKey = context === WEAPON_CONTEXTS.BOSS ? 'boss_bonus' : 'pvp_bonus';
+  const bonus = (stats as Record<string, unknown>)[bonusKey];
+  const num = Number(bonus || 0);
+  return Number.isFinite(num) && num > 0 ? 1 + Math.min(100, num) / 100 : 1;
+}
+
+/** Урон оружия с учётом контекста (боевая ситуация: босс / PvP) */
+export function getWeaponDamageForContext(item: InventoryItem | null | undefined, context: string): number {
+  const base = getEffectiveStatValue(item, ['damage']);
+  if (base <= 0) return 0;
+  const stats = (item && item.stats && typeof item.stats === 'object') ? item.stats : {};
+  const bonus = getWeaponContextMultiplier(item, context);
+  return rollVarianceDamage(base * bonus, Number((stats as Record<string, unknown>).variance) || 0);
 }

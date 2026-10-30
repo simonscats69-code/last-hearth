@@ -61,7 +61,7 @@ function getTelegramId() {
         const id = tg.initDataUnsafe?.user?.id;
         // Используем != null для проверки на null/undefined (включая 0)
         if (id != null) {
-            gameLog('[getTelegramId] Got ID from SDK:', id);
+            gameLog('[getTelegramId] Got ID from SDK:', id ? `***${String(id).slice(-4)}` : id);
             return String(id);
         }
     }
@@ -72,7 +72,7 @@ function getTelegramId() {
         try {
             const user = JSON.parse(new URLSearchParams(initData).get('user') || '{}');
             if (user?.id != null) {
-                gameLog('[getTelegramId] Got ID from hash:', user.id);
+                gameLog('[getTelegramId] Got ID from hash:', user.id ? `***${String(user.id).slice(-4)}` : user.id);
                 return String(user.id);
             }
         } catch (e) {
@@ -1057,7 +1057,11 @@ const IDEMPOTENT_ENDPOINTS = new Set([
     'purchase',
     'clanJoin',
     'clanLeave',
-    'clanCreate'
+    'clanCreate',
+    'move',
+    'useItem',
+    'pvpAttack',
+    'clanBossSpawn'
 ]);
 
 /**
@@ -1065,7 +1069,7 @@ const IDEMPOTENT_ENDPOINTS = new Set([
  * Достаточно, чтобы поймать двойной тап (человек тапает за <500 мс),
  * и мало, чтобы схлопнуть осмысленное второе действие.
  */
-const IDEMPOTENCY_WINDOW_MS = 1500;
+const IDEMPOTENCY_WINDOW_MS = 5000;
 
 /**
  * Стабильный ключ идемпотентности для области действия в пределах окна.
@@ -1122,18 +1126,15 @@ function createApiMethod(name) {
             return apiRequest(config.endpoint, { method: 'GET' }, 2, body);
         };
     } else {
-        // Ключ идемпотентности живёт в замысании конкретного эндпоинта:
+        // Ключ идемпотентности живёт в замышании конкретного эндпоинта:
         // повторный вызов внутри окна получает тот же ключ, поэтому сервер
         // отвечает сохранённым результатом вместо второго выполнения.
-        let lastIdempotencyKey = null;
-        let lastKeyAt = 0;
+
         const isIdempotent = IDEMPOTENT_ENDPOINTS.has(name);
 
         return async function(body = {}, callOptions = {}) {
             invalidateCache(name);
 
-            // Повторного вызова внутри окна получает тот же ключ -> сервер
-            // отвечает сохранённым результатом вместо второго выполнения.
             const idempotencyKey = callOptions.idempotencyKey
                 || (isIdempotent ? stableMutationKeyWithBody(name, body, IDEMPOTENCY_WINDOW_MS) : null);
 
@@ -1392,8 +1393,11 @@ const actionLocks = {
     clanLeave: false,
     clanDonate: false,
     raidJoin: false,
+    raidLeave: false,
+    raidAttack: false,
     claimAchievement: false,
     pvpStart: false,
+    pvpAttack: false,
     useItem: false,
     purchase: false,
     buyCoinItem: false,
@@ -1401,6 +1405,7 @@ const actionLocks = {
     wheelSpin: false,
     sellItem: false,
     loadProfile: false,
+    moveToLocation: false,
     checkPlayerStatus: false,
     loadBosses: false,
     searchLoot: false
@@ -1829,9 +1834,10 @@ function getEl(id) {
 }
 
 /**
- * Безопасно установить innerHTML
+ * Установить innerHTML (только доверенные данные — без пользовательского контента).
+ * Мёртвая функция: нигде не вызывается.
  */
-function setHtml(elementOrId, html) {
+function setHtmlUnsafe(elementOrId, html) {
     const el = typeof elementOrId === 'string' ? getEl(elementOrId) : elementOrId;
     if (!el) return null;
     el.innerHTML = html;
@@ -2095,7 +2101,7 @@ window.addEventListener('beforeunload', () => {
 // ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ
 // ============================================================================
 
-window.setHtml = setHtml;
+window.setHtmlUnsafe = setHtmlUnsafe;
 window.confirmAction = confirmAction;
 window.Loader = Loader;
 window.Templates = Templates;
@@ -2481,12 +2487,13 @@ async function startBossFight(boss, timeRemainingMs = null) {
         // и data.time_remaining_ms.
         const result = await apiRequest('/api/game/bosses/start', {
             method: 'POST',
-            body: { boss_id: boss.id }
+            body: { boss_id: boss.id },
+            idempotencyKey: stableMutationKey(`boss-start-${boss.id}`, IDEMPOTENCY_WINDOW_MS)
         });
         
-        if (result.success) {
+        if (result?.success) {
             // Запускаем бой
-            const bossData = result.data || result;
+            const bossData = result?.data || result;
             const bossInfo = bossData.boss || bossData;
             // Длительность боя из ответа сервера — чтобы лог не показывал
             // захардкоженное «8 часов», если баланс поменяют.
@@ -2679,9 +2686,9 @@ function renderInitError(icon, title, text) {
     loadingScreen.style.display = 'flex';
     loadingScreen.innerHTML = `
         <div class="loader">
-            <div class="loader-icon">${icon}</div>
-            <h1>${title}</h1>
-            <p>${text}</p>
+            <div class="loader-icon">${escapeHtml(String(icon || ''))}</div>
+            <h1>${escapeHtml(String(title || ''))}</h1>
+            <p>${escapeHtml(String(text || ''))}</p>
             <button class="btn" id="init-error-restart-btn" type="button">🔄 Перезапустить</button>
         </div>
     `;
@@ -3753,7 +3760,7 @@ function updateHealPanel(player) {
             itemsEl.innerHTML = '<div class="heal-panel-empty">Нет лекарств — купи в магазине или жди восстановления</div>';
         } else {
             itemsEl.innerHTML = items.map((item) => `
-                <button class="heal-item-btn" data-heal-index="${item.index}">
+                <button class="heal-item-btn" data-heal-index="${escapeAttribute(String(item.index))}">
                     <span class="heal-item-icon">${iconHtml(item.name, item.icon)}</span>
                     <span class="heal-item-name">${escapeHtml(item.name)}</span>
                     <span class="heal-item-value">+${item.heal} HP</span>
@@ -3771,9 +3778,10 @@ async function healItem(itemIndex) {
     try {
         const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
-            body: { item_index: itemIndex, equip: false }
+            body: { item_index: itemIndex, equip: false },
+            idempotencyKey: stableMutationKey(`heal-item-${itemIndex}`, IDEMPOTENCY_WINDOW_MS)
         });
-        if (result.success) {
+        if (result?.success) {
             showNotification(`❤️ ${result.message || 'Здоровье восстановлено'}`, 'success');
             RenderCache.clear();
             await loadProfile();
@@ -3810,8 +3818,12 @@ function updateDailyBonusUI(player) {
 async function claimDailyBonus() {
     if (!lockAction('dailyBonus')) return;
     try {
-        const result = await apiRequest('/api/game/player/daily-bonus', { method: 'POST' });
-        showNotification(`🎁 ${result.data?.message || 'Бонус получен'}`, 'success');
+        const result = await apiRequest('/api/game/player/daily-bonus', { method: 'POST', idempotencyKey: stableMutationKey('daily-bonus', IDEMPOTENCY_WINDOW_MS) });
+        if (!result?.success) {
+            showNotification(result?.error || 'Не удалось получить бонус', 'error');
+            return;
+        }
+        showNotification(`🎁 ${result?.data?.message || 'Бонус получен'}`, 'success');
         playSound('coin');
         await loadProfile().catch(() => null);
         RenderCache.clear();
@@ -3978,23 +3990,21 @@ async function searchLoot() {
     }
 
     if (!lockAction('searchLoot')) return;
-    
-    const searchBtn = document.getElementById('search-btn');
 
-    if (searchBtn) {
-        searchBtn.disabled = true;
-        searchBtn.classList.add('shake');
-    }
-    
     try {
+        if (!gameState.player) {
+            unlockAction('searchLoot');
+            return;
+        }
         const response = await apiRequest('/api/game/locations/search', {
             method: 'POST',
-            body: {}
+            body: {},
+            idempotencyKey: stableMutationKey('location-search', IDEMPOTENCY_WINDOW_MS)
         });
         
         const result = response?.data || response;
         
-        if (result.success) {
+        if (result?.success) {
             // Сбрасываем кэш рендеринга — инвентарь мог измениться
             RenderCache.clear();
 
@@ -4116,9 +4126,6 @@ async function searchLoot() {
         console.error('Search error:', error);
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось выполнить поиск'));
     } finally {
-        if (searchBtn) {
-            searchBtn.classList.remove('shake');
-        }
         unlockAction('searchLoot');
         refreshPlayerEnergyUI();
     }
@@ -4128,15 +4135,22 @@ async function searchLoot() {
  * Переход к локации
  */
 async function moveToLocation(locationId) {
+    if (!lockAction('moveToLocation')) return;
+
     try {
+        if (!gameState.player) {
+            unlockAction('moveToLocation');
+            return;
+        }
         const response = await apiRequest('/api/game/locations/move', {
             method: 'POST',
-            body: { location_id: locationId }
+            body: { location_id: locationId },
+            idempotencyKey: stableMutationKey(`location-move-${locationId}`, IDEMPOTENCY_WINDOW_MS)
         });
         const result = response.data || response;
         
-        if (result.success) {
-            const locationData = result.data?.location;
+        if (result?.success) {
+            const locationData = result?.data?.location;
             gameState.player.current_location_id = locationData?.id || locationId;
             gameState.player.location = locationData;
             // Сначала активируем главный экран, чтобы DOM-элементы были доступны,
@@ -4144,7 +4158,7 @@ async function moveToLocation(locationId) {
             showScreen('main');
             updateProfileUI(gameState.player);
             updateMapRiskPreview();
-            showModal('✅ Успех', result.data?.message || result.message || `Вы прибыли в ${locationData?.name || 'новую локацию'}`);
+            showModal('✅ Успех', result?.data?.message || result.message || `Вы прибыли в ${locationData?.name || 'новую локацию'}`);
             await loadProfile();
             await loadLocations();
         } else {
@@ -4153,6 +4167,8 @@ async function moveToLocation(locationId) {
     } catch (error) {
         console.error('Move error:', error);
         showModal('❌ Ошибка', error?.message || 'Не удалось подключиться к серверу');
+    } finally {
+        unlockAction('moveToLocation');
     }
 }
 
@@ -4160,6 +4176,7 @@ async function moveToLocation(locationId) {
  * Обновление отображения энергии (локальное обновление без запроса к API)
  * Теперь также рассчитывает восстановление энергии на клиенте
  */
+// eslint-disable-next-line no-unused-vars
 function updateEnergyDisplay() {
     refreshPlayerEnergyUI();
 
@@ -4219,7 +4236,8 @@ async function checkPlayerStatus() {
     try {
         const result = await apiRequest('/api/game/status/check', {
             method: 'POST',
-            body: {}
+            body: {},
+            idempotencyKey: stableMutationKey('status-check', IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
 
@@ -4291,18 +4309,25 @@ function isEquippableInventoryItem(item) {
 }
 
 async function useItem(itemId, options = {}) {
+    const idx = parseInt(itemId, 10);
+    if (!Number.isInteger(idx) || idx < 0) {
+        showNotification('Некорректный индекс предмета', 'error');
+        return;
+    }
     if (!lockAction('useItem')) return;
+
     try {
         const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
             body: {
-                item_index: parseInt(itemId, 10),
+                item_index: idx,
                 equip: Boolean(options.equip)
-            }
+            },
+            idempotencyKey: stableMutationKey(`use-item-${idx}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
-        
-        if (result.success) {
+
+        if (result?.success) {
             // Для экипировки модалка на каждый клик раздражала —
             // ограничиваемся всплывающим уведомлением.
             const message = payload.message || result.message || 'Действие выполнено';
@@ -4541,7 +4566,8 @@ async function unequipSlot(slot) {
     try {
         const result = await apiRequest('/api/game/inventory/unequip', {
             method: 'POST',
-            body: { slot }
+            body: { slot },
+            idempotencyKey: stableMutationKey(`unequip-${slot}`, IDEMPOTENCY_WINDOW_MS)
         });
         showNotification(`🎒 ${result.message || 'Предмет снят'}`, 'success');
         RenderCache.clear();
@@ -4573,7 +4599,7 @@ function renderWorkshopModifications(entry, data) {
         return `
             <div class="inv-workshop-mod">
                 <span class="inv-workshop-mod-name">${iconHtml(null, modification.icon)} ${escapeHtml(modification.name)} ${modification.level}/${modification.max_level}</span>
-                <button class="ws-btn ws-btn-mod" data-ws-modify="${entry.slot}"
+                <button class="ws-btn ws-btn-mod" data-ws-modify="${escapeAttribute(entry.slot)}"
                         data-ws-modification="${escapeAttribute(modification.key)}" ${maxed ? 'disabled' : ''}>
                     ${maxed ? 'максимум' : `+1 · 🪙 ${formatNumber(cost.coins)}`}
                 </button>
@@ -4621,11 +4647,11 @@ function renderWorkshopSlot(entry, data) {
                 </span>
             </div>
             <div class="inv-workshop-actions">
-                <button class="ws-btn" data-ws-repair="${slot}" ${repairCost > 0 ? '' : 'disabled'} 
+                <button class="ws-btn" data-ws-repair="${escapeAttribute(slot)}" ${repairCost > 0 ? '' : 'disabled'} 
                         title="${escapeHtml(repairTooltip)}">
                     🔧 Ремонт · 🪙 ${formatNumber(repairCost)}
                 </button>
-                <button class="ws-btn" data-ws-upgrade="${slot}" ${upgradeCost ? '' : 'disabled'}
+                <button class="ws-btn" data-ws-upgrade="${escapeAttribute(slot)}" ${upgradeCost ? '' : 'disabled'}
                         title="${escapeHtml(upgradeTooltip)}">
                     ⬆️ Улучшение${upgradeCost ? ` · 🪙 ${formatNumber(upgradeCost.coins)}` : ' · максимум'}
                 </button>
@@ -4671,7 +4697,8 @@ async function modifyEquipmentSlot(slot, modification) {
     try {
         const result = await apiRequest('/api/game/workshop/modify', {
             method: 'POST',
-            body: { slot, modification }
+            body: { slot, modification },
+            idempotencyKey: stableMutationKey(`workshop-modify-${slot}-${modification}`, IDEMPOTENCY_WINDOW_MS)
         });
         showNotification(`🔩 ${result.message || 'Модификация установлена'}`, 'success');
         playSound('coin');
@@ -4690,7 +4717,8 @@ async function repairEquipmentSlot(slot) {
     try {
         const result = await apiRequest('/api/game/workshop/repair', {
             method: 'POST',
-            body: { slot }
+            body: { slot },
+            idempotencyKey: stableMutationKey(`workshop-repair-${slot}`, IDEMPOTENCY_WINDOW_MS)
         });
         showNotification(`🔧 ${result.message || 'Отремонтировано'}`, 'success');
         playSound('coin');
@@ -4709,7 +4737,8 @@ async function upgradeEquipmentSlot(slot) {
     try {
         const result = await apiRequest('/api/game/workshop/upgrade', {
             method: 'POST',
-            body: { slot }
+            body: { slot },
+            idempotencyKey: stableMutationKey(`workshop-upgrade-${slot}`, IDEMPOTENCY_WINDOW_MS)
         });
         showNotification(`⬆️ ${result.message || 'Улучшено'}`, 'success');
         playSound('coin');
@@ -4722,8 +4751,7 @@ async function upgradeEquipmentSlot(slot) {
             slot,
             message: error.message,
             code: error.code,
-            status: error.status,
-            response: error.response
+            status: error.status
         });
         showNotification(clientErrorMessage(error, 'Не удалось улучшить'), 'error');
     } finally {
@@ -4759,12 +4787,18 @@ function renderInventoryCapacity() {
  * @param {number|string} itemIndex - индекс слота в инвентаре
  */
 async function dropItem(itemIndex) {
+    const idx = parseInt(itemIndex, 10);
+    if (!Number.isInteger(idx) || idx < 0) {
+        showNotification('Некорректный индекс предмета', 'error');
+        return;
+    }
     if (!lockAction('dropItem')) return;
 
     try {
         const result = await apiRequest('/api/game/inventory/drop', {
             method: 'POST',
-            body: { item_index: parseInt(itemIndex, 10) }
+            body: { item_index: idx },
+            idempotencyKey: stableMutationKey(`inventory-drop-${idx}`, IDEMPOTENCY_WINDOW_MS)
         });
 
         if (result?.success) {
@@ -4773,7 +4807,7 @@ async function dropItem(itemIndex) {
                 .join(', ');
 
             showNotification(
-                materials ? `♻️ ${result.message} → ${materials}` : `♻️ ${result.message}`,
+                materials ? `♻️ ${result.message || 'Предмет разобран'} → ${materials}` : `♻️ ${result.message || 'Предмет разобран'}`,
                 'success'
             );
             playSound('coin');
@@ -4803,15 +4837,35 @@ async function dropItem(itemIndex) {
  * @param {number} [quantity] - сколько продать из стека (по умолчанию весь)
  */
 async function sellItem(itemIndex, quantity = null) {
+    const idx = parseInt(itemIndex, 10);
+    if (!Number.isInteger(idx) || idx < 0) {
+        showNotification('Некорректный индекс предмета', 'error');
+        return;
+    }
+    if (quantity != null) {
+        const qty = parseInt(quantity, 10);
+        if (!Number.isInteger(qty) || qty <= 0) {
+            showNotification('Некорректное количество', 'error');
+            return;
+        }
+        // Проверяем, что запрашиваемое количество не превышает размер стека
+        const item = gameState.inventory?.[idx];
+        const stackAmount = item?.quantity ?? 1;
+        if (qty > stackAmount) {
+            showNotification(`Нельзя продать больше, чем есть в стеке (${stackAmount})`, 'error');
+            return;
+        }
+    }
     if (!lockAction('sellItem')) return;
 
     try {
         const result = await apiRequest('/api/game/inventory/sell', {
             method: 'POST',
             body: {
-                item_index: parseInt(itemIndex, 10),
+                item_index: idx,
                 ...(quantity ? { quantity: parseInt(quantity, 10) } : {})
-            }
+            },
+            idempotencyKey: stableMutationKey(`inventory-sell-${idx}-${quantity}`, IDEMPOTENCY_WINDOW_MS)
         });
 
         if (result?.success) {
@@ -5068,8 +5122,8 @@ function renderInventory(items) {
         slot.setAttribute('role', 'button');
         slot.setAttribute('tabindex', '0');
         slot.setAttribute('aria-label', isSellMode
-            ? `${name}. Продать за ${sellPrice * amount} монет`
-            : `${name}. ${rarityLabel}. ${isEquippable ? 'Нажмите чтобы надеть' : 'Нажмите чтобы использовать'}`);
+            ? `${escapeAttribute(name)}. Продать за ${sellPrice * amount} монет`
+            : `${escapeAttribute(name)}. ${rarityLabel}. ${isEquippable ? 'Нажмите чтобы надеть' : 'Нажмите чтобы использовать'}`);
 
         // Кнопка «Подробнее» (ⓘ) обрабатывается ДЕЛЕГИРОВАНИЕМ на #inventory-grid
         // (registerInventoryInfoHandler ниже), а не слушателем на каждый слот:
@@ -5477,11 +5531,11 @@ function renderBosses(bosses) {
         const canStartMass = boss.can_start_mass !== false;
         const playerKeys = boss.owned_keys ?? boss.player_keys ?? 0;
         const keysRequired = boss.required_keys ?? 0;
-        const defeatedCount = boss.defeated_count ?? boss.mastery ?? 0;
-        const currentDamage = boss.current_damage ?? 1;
+        const _defeatedCount = boss.defeated_count ?? boss.mastery ?? 0;
+        const _currentDamage = boss.current_damage ?? 1;
         const currentHp = boss.hp ?? boss.max_hp;
         const maxHp = boss.max_hp || 1;
-        const hpPercent = Math.max(0, Math.min(100, (currentHp / maxHp) * 100));
+        const _hpPercent = Math.max(0, Math.min(100, (currentHp / maxHp) * 100));
 
         const item = document.createElement('div');
         item.className = `boss-card${!isUnlocked ? ' locked' : ''}`;
@@ -5566,7 +5620,7 @@ async function renderPlayerEquipmentInBossFight() {
             normalizedEquipment[slot] = item;
         }
     }
-    const slotNames = {
+    const _slotNames = {
         helmet: 'Шлем',
         face: 'Лицо',
         armor: 'Броня',
@@ -5835,12 +5889,13 @@ async function startSoloBossFight(bossId) {
     try {
         const result = await apiRequest('/api/game/bosses/start', {
             method: 'POST',
-            body: { boss_id: bossId }
+            body: { boss_id: bossId },
+            idempotencyKey: stableMutationKey(`boss-start-solo-${bossId}`, IDEMPOTENCY_WINDOW_MS)
         });
         
         const bossData = result?.data || result;
 
-        if (result.success && bossData.boss) {
+        if (result?.success && bossData.boss) {
             startBossFight(bossData.boss, bossData.time_remaining_ms);
         } else {
             showModal('⚠️ Внимание', bossData.error || result.error || result.message || 'Не удалось начать бой');
@@ -5859,10 +5914,11 @@ async function startMassBossFight(bossId) {
     try {
         const result = await apiRequest('/api/game/bosses/raid/start', {
             method: 'POST',
-            body: { boss_id: bossId }
+            body: { boss_id: bossId },
+            idempotencyKey: stableMutationKey(`raid-start-${bossId}`, IDEMPOTENCY_WINDOW_MS)
         });
 
-        if (result.success) {
+        if (result?.success) {
             await loadBosses();
             switchBossesTab('mass');
         } else {
@@ -5942,7 +5998,7 @@ function canStartBossAttack() {
         return false;
     }
 
-    return lockAction('attackBoss');
+    return true;
 }
 
 /**
@@ -6105,6 +6161,8 @@ function onBossDefeated(rewards, mastery, confettiCount, clearRenderCache, sound
 async function attackBoss() {
     if (!canStartBossAttack()) return;
 
+    if (!lockAction('attackBoss')) return;
+
     const isFreeAttack = Boolean(gameState.buffs?.free_energy);
 
     const btn = document.getElementById('attack-boss-btn');
@@ -6117,7 +6175,7 @@ async function attackBoss() {
         // Идемпотентный ключ на текущего босса + бой: защита от двойного
         // списания энергии при повторном выполнении того же удара (ретраи
         // apiRequest, двойной тап, задержка ответа).
-        const attackIdempotencyKey = `boss-attack-${gameState.currentBoss.id}-${Date.now()}`;
+        const attackIdempotencyKey = stableMutationKey(`boss-attack-${gameState.currentBoss.id}`, IDEMPOTENCY_WINDOW_MS);
         const result = await apiRequest('/api/game/bosses/attack-boss', {
             method: 'POST',
             body: { boss_id: gameState.currentBoss.id },
@@ -6128,7 +6186,7 @@ async function attackBoss() {
         // Обновляем лог боя
         const log = document.getElementById('fight-log');
         
-        if (result.success) {
+        if (result?.success) {
             // Показываем анимацию урона.
             // Урон передаём: без него showDamageAnimation трясёт иконку,
             // но не показывает всплывающее «−24».
@@ -6206,7 +6264,7 @@ async function attackBoss() {
             
             playSound('attack');
         } else {
-            showModal('⚠️ Внимание', result.message);
+            showModal('⚠️ Внимание', result.error || result.message || 'Не удалось выполнить атаку');
         }
         
     } catch (error) {
@@ -6464,14 +6522,14 @@ function renderClanScreen(data) {
                 <div class="clan-icon">🏰</div>
                 <div class="clan-title">
                     <h3>${escapeHtml(clan.name)}</h3>
-                    <span class="clan-level">Уровень ${clan.level}</span>
+                    <span class="clan-level">Уровень ${Number(clan.level) || 0}</span>
                 </div>
             </div>
             ${clan.description ? `<p class="clan-description">${escapeHtml(clan.description)}</p>` : ''}
             <div class="clan-stats">
                 ${Templates.clanStat('👥', Number(clan.members_count || 0), 'Участников')}
                 ${Templates.clanStat('💰', clanCoins, 'Казна')}
-                ${Templates.clanStat('✨', `${clan.loot_bonus}%`, 'Бонус добычи')}
+                ${Templates.clanStat('✨', `${Number(clan.loot_bonus) || 0}%`, 'Бонус добычи')}
                 ${Templates.clanStat('📈', totalDonated, 'Пожертвовано всего')}
             </div>
         </div>
@@ -6520,7 +6578,7 @@ function renderClanScreen(data) {
                         <div class="member-item ${m.is_online ? 'online' : ''}">
                             <span class="member-role">${getClanRoleEmoji(m.clan_role)}</span>
                             <span class="member-name">${escapeHtml(m.first_name)}</span>
-                            <span class="member-level">ур. ${m.level}</span>
+                            <span class="member-level">ур. ${Number(m.level) || 0}</span>
                         </div>
                     `).join('') : 
                     '<div class="empty-message">Нет участников онлайн</div>'
@@ -6592,6 +6650,14 @@ async function createClan() {
         showModal('⚠️ Ошибка', 'Название клана должно быть от 3 символов');
         return;
     }
+    if (name.length > 30) {
+        showModal('⚠️ Ошибка', 'Название клана не может быть длиннее 30 символов');
+        return;
+    }
+    if (description.length > 200) {
+        showModal('⚠️ Ошибка', 'Описание клана не может быть длиннее 200 символов');
+        return;
+    }
     
     // Блокировка от двойного клика: без неё два быстрых тапа создавали
     // два запроса, и игрок мог получить два клана или ошибку от сервера.
@@ -6603,11 +6669,12 @@ async function createClan() {
     try {
         const result = await apiRequest('/api/game/clans/clan/create', {
             method: 'POST',
-            body: { name, description, is_public: isPublic }
+            body: { name, description, is_public: isPublic },
+            idempotencyKey: stableMutationKey(`clan-create-${name}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
         
-        if (result.success) {
+        if (result?.success) {
             showModal('✅ Успех', payload.message || 'Клан создан');
             if (nameInput) nameInput.value = '';
             if (descInput) descInput.value = '';
@@ -6678,11 +6745,12 @@ async function joinClan(clanId) {
     try {
         const result = await apiRequest('/api/game/clans/clan/join', {
             method: 'POST',
-            body: { clan_id: clanId }
+            body: { clan_id: clanId },
+            idempotencyKey: stableMutationKey(`clan-join-${clanId}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
         
-        if (result.success) {
+        if (result?.success) {
             showModal('✅ Успех', payload.message || 'Вы вступили в клан');
             if (!payload.application_pending) {
                 showScreen('clan');
@@ -6723,11 +6791,12 @@ async function leaveClan() {
     try {
         const result = await apiRequest('/api/game/clans/clan/leave', {
             method: 'POST',
-            body: {}
+            body: {},
+            idempotencyKey: stableMutationKey('clan-leave', IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
         
-        if (result.success) {
+        if (result?.success) {
             showModal('✅ Успех', payload.message || 'Вы покинули клан');
             clanState.clan = null;
             loadClan();
@@ -6948,11 +7017,12 @@ async function donateToClan(amount) {
     try {
         const result = await apiRequest('/api/game/clans/clan/donate', {
             method: 'POST',
-            body: { amount }
+            body: { amount },
+            idempotencyKey: stableMutationKey(`clan-donate-${amount}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
         
-        if (result.success) {
+        if (result?.success) {
             showModal('✅ Успех', `Пожертвование принято! Вы пожертвовали ${amount} монет. Казна: ${Number(payload.clan_total) || 0}`);
             gameState.player.coins = Number(payload.new_balance ?? ((gameState.player.coins || 0) - amount));
             loadClan();
@@ -7045,20 +7115,29 @@ async function sendClanMessage() {
     const message = input?.value.trim();
     
     if (!message) return;
-    
+    if (message.length > 500) {
+        showNotification('⚠️ Сообщение слишком длинное (макс. 500 символов)', 'error');
+        return;
+    }
+
+    if (!lockAction('clanChat')) return;
+
     try {
         const result = await apiRequest('/api/game/clans/clan/chat', {
             method: 'POST',
-            body: { message }
+            body: { message },
+            idempotencyKey: stableMutationKey(`clan-chat-${message}`, IDEMPOTENCY_WINDOW_MS)
         });
         
-        if (result.success) {
+        if (result?.success) {
             if (input) input.value = '';
             loadClanChat();
         }
     } catch (error) {
         console.error('Send message error:', error);
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось отправить сообщение'));
+    } finally {
+        unlockAction('clanChat');
     }
 }
 
@@ -7100,10 +7179,11 @@ async function restoreEnergy() {
     try {
         const result = await apiRequest('/api/game/player/buy-energy', {
             method: 'POST',
-            body: {}
+            body: {},
+            idempotencyKey: stableMutationKey('buy-energy', IDEMPOTENCY_WINDOW_MS)
         });
 
-        if (result.success) {
+        if (result?.success) {
             const payload = result?.data || result;
             syncPlayerEnergyState(
                 payload.energy,
@@ -7219,7 +7299,7 @@ function renderRating(items, type) {
  * КАЖДОЕ событие: на телефоне это десятки полных repaint в секунду и
  * постоянное «мерцание», из-за которого попасть по локации было невозможно.
  */
-let lastSelectedMapLocationId = 0;
+let _lastSelectedMapLocationId = 0;
 let hoveredMapLocationId = 0;
 let mapRepaintPending = false;
 
@@ -7236,7 +7316,7 @@ function selectMapLocation(loc) {
     if (!loc) return;
 
     const locationId = Number(loc.id) || 0;
-    lastSelectedMapLocationId = locationId;
+        _lastSelectedMapLocationId = locationId;
 
     const nameEl = document.querySelector('.map-location-name');
     if (nameEl) nameEl.innerHTML = `${iconHtml(loc.name, loc.icon, 'icon-img location-icon-img')} ${escapeHtml(loc.name || '')}`.trim();
@@ -7440,10 +7520,14 @@ async function showPendingRaidRewards(pending) {
 
     // Гасим только после показа: если запрос уронить, награда всплывёт снова,
     // но не потеряется из вида (см. пояснение в роуте /raid/rewards/claim).
+    if (!lockAction('raidRewardsClaim')) return;
+
     try {
-        await apiRequest('/api/game/bosses/raid/rewards/claim', { method: 'POST' });
+        await apiRequest('/api/game/bosses/raid/rewards/claim', { method: 'POST', idempotencyKey: stableMutationKey('raid-rewards-claim', IDEMPOTENCY_WINDOW_MS) });
     } catch (claimError) {
         console.error('Не удалось забрать награду за рейд:', claimError);
+    } finally {
+        unlockAction('raidRewardsClaim');
     }
 }
 
@@ -7516,7 +7600,7 @@ function renderRaids(raids) {
                 <div class="raid-info">
                     <div class="raid-boss-name">${escapeHtml(raid.boss?.name || 'Босс')}</div>
                     <div class="raid-hp-bar">
-                        <div class="raid-hp-fill" style="width: ${hpPercent}%"></div>
+                        <div class="raid-hp-fill" style="width: ${Math.max(0, Math.min(100, Number(raid.hp_percent) || 0))}%"></div>
                     </div>
                     <div class="raid-hp-text">${formatNumber(raid.hp)} / ${formatNumber(raid.max_hp)} (${hpPercent}%)</div>
                     <div class="raid-stats-line">🎯 Всего урона: ${formatNumber(totalDamage)} · Осталось снять: ${formatNumber(Math.max(0, Number(raid.hp) || 0))}</div>
@@ -7575,11 +7659,12 @@ async function joinRaid(raidId) {
 
     try {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/join`, {
-            method: 'POST'
+            method: 'POST',
+            idempotencyKey: stableMutationKey(`raid-join-${raidId}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
         
-        if (result.success) {
+        if (result?.success) {
             showNotification(`Вы присоединились к рейду против ${payload?.boss?.name || 'босса'}!`, 'success');
              
             // Обновляем список рейдов
@@ -7652,15 +7737,16 @@ function applyLocalRaidAttack(raidId, data) {
  * @param {number} raidId - ID рейда
  */
 async function attackRaid(raidId) {
-    if (!lockAction('attackBoss')) return;
+    if (!lockAction('raidAttack')) return;
 
     try {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/attack`, {
-            method: 'POST'
+            method: 'POST',
+            idempotencyKey: stableMutationKey(`raid-attack-${raidId}`, IDEMPOTENCY_WINDOW_MS)
         });
 
-        if (result.success) {
-            const data = result.data;
+        if (result?.success) {
+            const data = result?.data;
 
             // Показываем урон (число с сервера — плоское damage_dealt).
             showDamageAnimation(Number(data.damage_dealt ?? data.damage) || 0);
@@ -7747,7 +7833,7 @@ async function attackRaid(raidId) {
         gameState.activeBattle = null;
         showNotification(clientErrorMessage(error, 'Ошибка при атаке'), 'error');
     } finally {
-        unlockAction('attackBoss');
+        unlockAction('raidAttack');
     }
 }
 
@@ -7759,14 +7845,15 @@ async function attackRaid(raidId) {
  * boss_sessions, сессия при выходе НЕ удаляется — см. роут).
  */
 async function leaveRaid(raidId) {
-    if (!lockAction('raidJoin')) return;
+    if (!lockAction('raidLeave')) return;
 
     try {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/leave`, {
-            method: 'POST'
+            method: 'POST',
+            idempotencyKey: stableMutationKey(`raid-leave-${raidId}`, IDEMPOTENCY_WINDOW_MS)
         });
 
-        if (result.success) {
+        if (result?.success) {
             gameState.activeBattle = null;
             showNotification('Вы вышли из рейда. Накопленный урон сохранён.', 'success');
             await loadRaids();
@@ -7780,13 +7867,14 @@ async function leaveRaid(raidId) {
         console.error('Ошибка выхода из рейда:', error);
         showNotification(clientErrorMessage(error, 'Ошибка при выходе из рейда'), 'error');
     } finally {
-        unlockAction('raidJoin');
+        unlockAction('raidLeave');
     }
 }
 
 /**
  * Форматирование оставшегося времени
  */
+// eslint-disable-next-line no-unused-vars
 function formatTimeRemaining(ms) {
     // Делегат общего форматтера: остаётся обратная совместимость со
     // старыми вызовами, логика живёт в formatRemainingMs.
@@ -8104,7 +8192,7 @@ function renderAchievementsList(achievements) {
                     ` : ''}
                 </div>
                 ${ach.completed && !ach.reward_claimed ? `
-                    <button class="claim-btn" data-claim-achievement="${ach.id}">Получить</button>
+                    <button class="claim-btn" data-claim-achievement="${escapeAttribute(ach.id)}">Получить</button>
                 ` : ''}
                 ${ach.reward_claimed ? `
                     <div class="claimed-badge">✓ Получено</div>
@@ -8130,13 +8218,14 @@ async function claimAchievement(achievementId) {
         // на сервере -> 404, награду забрать было невозможно.
         const result = await apiRequest('/api/game/player/achievements/claim', {
             method: 'POST',
-            body: { achievement_id: achievementId }
+            body: { achievement_id: achievementId },
+            idempotencyKey: stableMutationKey(`achievement-claim-${achievementId}`, IDEMPOTENCY_WINDOW_MS)
         });
 
         // Сервер отвечает { success, data: { message, new_balance } }
         const payload = result?.data || result;
 
-        if (result.success) {
+        if (result?.success) {
             showModal('✅ Награда получена', payload.message || 'Награда получена');
             updateBalanceDisplay(payload.new_balance);
             await loadAchievements();
@@ -8247,11 +8336,12 @@ async function startPVPFight(targetId, targetName, targetLevel, targetHealth, ta
     try {
         const result = await apiRequest('/api/game/pvp/attack', {
             method: 'POST',
-            body: { target_id: targetId }
+            body: { target_id: targetId },
+            idempotencyKey: stableMutationKey(`pvp-attack-${targetId}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
         
-        if (result.success) {
+        if (result?.success) {
             gameState.pvpMatch = {
                 battleId: payload.battle_id,
                 targetId: targetId,
@@ -8320,7 +8410,9 @@ async function attackPVPTarget() {
         showModal('❌ Ошибка', 'Бой не найден');
         return;
     }
-    
+
+    if (!lockAction('pvpAttack')) return;
+
     const attackBtn = document.getElementById('pvp-attack-btn');
     if (attackBtn) {
         attackBtn.disabled = true;
@@ -8330,11 +8422,12 @@ async function attackPVPTarget() {
     try {
         const result = await apiRequest('/api/game/pvp/attack-hit', {
             method: 'POST',
-            body: { battle_id: gameState.pvpMatch.battleId }
+            body: { battle_id: gameState.pvpMatch.battleId },
+            idempotencyKey: stableMutationKey(`pvp-attack-hit-${gameState.pvpMatch.battleId}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
         
-        if (result.success) {
+        if (result?.success) {
             playSound('attack');
 
             // Энергию синхронизируем через syncPlayerEnergyState — он двигает
@@ -8384,6 +8477,7 @@ async function attackPVPTarget() {
         // не видел ничего — кнопка просто оставалась на месте.
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось выполнить атаку'));
     } finally {
+        unlockAction('pvpAttack');
         if (attackBtn) {
             attackBtn.disabled = false;
             attackBtn.textContent = gameState.buffs?.free_energy ? '👊 АТАКОВАТЬ БЕСПЛАТНО' : '👊 АТАКОВАТЬ';
@@ -8480,7 +8574,7 @@ async function loadPVPStats() {
         const result = await apiRequest('/api/game/pvp/stats');
         const payload = result?.data || result;
         
-        if (result.success && payload.stats) {
+        if (result?.success && payload.stats) {
             const stats = payload.stats;
             
             setElementText('pvp-rating-value', stats.rating || 1000);
@@ -8861,6 +8955,7 @@ function orGlobal(name) {
  * совпадает с исходным порядком экранов в generateScreens.
  * ======================================================================== */
 
+// eslint-disable-next-line no-unused-vars
 function mainScreenHtml() {
     return `
         <!-- Главный экран -->
@@ -9002,6 +9097,7 @@ function mainScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function mapScreenHtml() {
     return `
         <!-- Карта -->
@@ -9035,6 +9131,7 @@ function mapScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function inventoryScreenHtml() {
     return `
         <!-- Инвентарь -->
@@ -9088,6 +9185,7 @@ function inventoryScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function bossesScreenHtml() {
     return `
         <!-- Боссы -->
@@ -9120,6 +9218,7 @@ function bossesScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function bossFightScreenHtml() {
     return `
         <!-- Бой с боссом -->
@@ -9212,6 +9311,7 @@ ${Templates.equipmentFightSlot('accessory', '🧭', 'Аксес.', 'Аксесс
         </div>
     `;
 }
+// eslint-disable-next-line no-unused-vars
 function clanScreenHtml() {
     return `
         <!-- Клан -->
@@ -9224,6 +9324,7 @@ function clanScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function clansListScreenHtml() {
     return `
         <!-- Список кланов -->
@@ -9243,6 +9344,7 @@ function clansListScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function clanCreateScreenHtml() {
     return `
         <!-- Создание клана -->
@@ -9254,7 +9356,7 @@ function clanCreateScreenHtml() {
             <div class="screen-content">
                 <div class="form-group">
                     <label>Название клана</label>
-                    <input type="text" id="clan-name-input" placeholder="Введите название" maxlength="20">
+                    <input type="text" id="clan-name-input" placeholder="Введите название" maxlength="30">
                 </div>
                 <div class="form-group">
                     <label>Описание</label>
@@ -9272,6 +9374,7 @@ function clanCreateScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function clanChatScreenHtml() {
     return `
         <!-- Чат клана -->
@@ -9303,6 +9406,7 @@ function clanChatScreenHtml() {
  * `.active` — так содержимое не пересоздаётся при каждом переключении,
  * а id (shop-items, shop-items-list, wheel) остаются уникальными.
  */
+// eslint-disable-next-line no-unused-vars
 function tradeScreenHtml() {
     return `
         <div class="screen" id="trade-screen">
@@ -9366,6 +9470,7 @@ function tradeScreenHtml() {
 }
 
 
+// eslint-disable-next-line no-unused-vars
 function ratingScreenHtml() {
     return `
         <!-- Рейтинг -->
@@ -9384,6 +9489,7 @@ function ratingScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function pvpPlayersScreenHtml() {
     return `
         <!-- PvP игроки -->
@@ -9402,6 +9508,7 @@ function pvpPlayersScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function pvpFightScreenHtml() {
     return `
         <!-- PvP бой -->
@@ -9446,6 +9553,7 @@ function pvpFightScreenHtml() {
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function pvpStatsScreenHtml() {
     return `
         <div class="screen" id="pvp-stats-screen">
@@ -9477,6 +9585,7 @@ ${Templates.statCard('', '<span id="pvp-items-lost">0</span>', 'Потеряно
     `;
 }
 
+// eslint-disable-next-line no-unused-vars
 function achievementsScreenHtml() {
     return `
         <!-- Достижения -->
@@ -9706,17 +9815,22 @@ async function buyShopItem(itemId, category, event) {
     const buyButton = event.currentTarget || document.querySelector(`.shop-buy-btn[data-id="${itemId}"]`);
     if (buyButton) buyButton.disabled = true;
 
-    // Покупка
+    // Покупка: монеты → /items/buy, звёзды → /purchase (принимает только stars)
+    const purchaseEndpoint = item.currency === 'stars'
+        ? '/api/game/purchase'
+        : '/api/game/items/buy';
+    const purchaseKey = stableMutationKey(`shop-buy-${itemId}-${item.currency}`, IDEMPOTENCY_WINDOW_MS);
     try {
-        const result = await apiRequest('/api/game/purchase', {
+        const result = await apiRequest(purchaseEndpoint, {
             method: 'POST',
             body: {
                 item_id: itemId,
                 currency: item.currency
-            }
+            },
+            idempotencyKey: purchaseKey
         });
         
-        if (result.success) {
+        if (result?.success) {
             // Сбрасываем кэш, т.к. инвентарь изменился
             RenderCache.clear();
             
@@ -10087,7 +10201,7 @@ async function spinWheelFree() {
         const playerId = gameState.player?.id;
         const wheelIdempotencyKey = stableMutationKey(`wheel-free-${playerId}`, IDEMPOTENCY_WINDOW_MS);
         const response = await gameApi.post('/game/wheel/spin', { is_paid: false }, { idempotencyKey: wheelIdempotencyKey });
-        
+
         if (!response.success) {
             if (response.code === 'COOLDOWN' && response.next_free_spin) {
                 const minutes = Math.ceil(response.next_free_spin / 60000);
@@ -10095,25 +10209,19 @@ async function spinWheelFree() {
             } else {
                 showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
             }
-            // Анимации не будет — снимаем блокировку сразу
-            unlockAction('wheelSpin');
             loadWheelInfo().catch(() => {});
             return;
         }
-        
+
         // Успех: блокировку снимает spinWheelAnimation после конца анимации
         spinWheelAnimation(response.data.prize, false);
-        
+
     } catch (error) {
         console.error('Ошибка вращения колеса:', error);
-        // «Недостаточно Stars» и «следующее вращение через N мин» — обычные
-        // ответы сервера с кодом 200 и success:false, они разбираются выше.
-        // Здесь приходит отказ с кодом: раньше он всегда выглядел как
-        // «не удалось связаться с сервером», даже когда сервер отвечал.
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось связаться с сервером'), 'error');
-        unlockAction('wheelSpin');
         loadWheelInfo().catch(() => {});
     }
+    // unlockAction('wheelSpin') вызывается в spinWheelAnimation после окончания анимации
 }
 
 /**
@@ -10125,7 +10233,7 @@ async function spinWheelPaid() {
         showModal('❌ Недостаточно Stars', 'Купите Stars в Telegram!');
         return;
     }
-    
+
     // Критично для платного вращения: каждый клик списывает звезду,
     // поэтому запрос обязан уйти ровно один раз
     if (!lockAction('wheelSpin')) return;
@@ -10134,28 +10242,27 @@ async function spinWheelPaid() {
     const paidBtn = document.getElementById('wheel-paid-btn');
     if (freeBtn) freeBtn.disabled = true;
     if (paidBtn) paidBtn.disabled = true;
-    
+
     try {
         const playerId = gameState.player?.id;
         const wheelIdempotencyKey = stableMutationKey(`wheel-paid-${playerId}`, IDEMPOTENCY_WINDOW_MS);
         const response = await gameApi.post('/game/wheel/spin', { is_paid: true }, { idempotencyKey: wheelIdempotencyKey });
-        
+
         if (!response.success) {
             showModal('❌ Ошибка', response.error || 'Не удалось крутить колесо', 'error');
-            unlockAction('wheelSpin');
             loadWheelInfo().catch(() => {});
             return;
         }
-        
+
         // Успех: блокировку снимает spinWheelAnimation после конца анимации
         spinWheelAnimation(response.data.prize, true);
-        
+
     } catch (error) {
         console.error('Ошибка вращения колеса:', error);
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось связаться с сервером'), 'error');
-        unlockAction('wheelSpin');
         loadWheelInfo().catch(() => {});
     }
+    // unlockAction('wheelSpin') вызывается в spinWheelAnimation после окончания анимации
 }
 
 /**
@@ -10427,7 +10534,7 @@ async function buyStarItem(itemId, triggerButton = null) {
     if (button) button.disabled = true;
 
     try {
-        const response = await gameApi.post('/game/items/buy-stars', { item_id: itemId, quantity: 1 });
+        const response = await gameApi.post('/game/items/buy-stars', { item_id: itemId, quantity: 1 }, { idempotencyKey: stableMutationKey(`buy-star-${itemId}`, IDEMPOTENCY_WINDOW_MS) });
         const payload = response?.data || response;
 
         if (response?.success) {
@@ -11366,7 +11473,7 @@ function renderLocations() {
 
     const onMouseLeave = () => {
         hoveredMapLocationId = 0;
-        lastSelectedMapLocationId = 0;
+        _lastSelectedMapLocationId = 0;
         scheduleMapRepaint(null);
     };
 
@@ -11439,6 +11546,9 @@ function initCityMapResize() {
 
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
+
+    // Сохраняем ссылку на обработчик для отписки при очистке модуля
+    initCityMapResize._resizeHandler = onResize;
 }
 
 

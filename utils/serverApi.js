@@ -91,9 +91,11 @@ async function checkRateLimit(identifier, maxRequests = 1000, windowMs = 60000) 
         
         return { allowed, remaining, resetAt };
     } catch (err) {
-        // При ошибке БД разрешаем запрос (fail-open) но логируем
-        logger.warn('[rateLimit] check failed, allowing request', { error: err.message, identifier });
-        return { allowed: true, remaining: maxRequests, resetAt: Date.now() + windowMs };
+        // При ошибке БД блокируем запрос (fail-closed): иначе при недоступности
+        // БД злоумышленник может обойти rate-limit, вызвав неограниченное число
+        // запросов на /auth. Логируем ошибку и возвращаем 429 через вызывающий код.
+        logger.error('[rateLimit] check failed, denying request', { error: err.message, identifier });
+        return { allowed: false, remaining: 0, resetAt: Date.now() + windowMs };
     }
 }
 
@@ -121,7 +123,7 @@ function sanitize(obj, seen = new WeakSet()) {
     if (!obj || typeof obj !== 'object') return obj;
     if (seen.has(obj)) return '[Circular]';
 
-    const sensitive = ['password', 'token', 'authorization', 'secret', 'api_key', 'apikey'];
+    const sensitive = ['password', 'token', 'authorization', 'secret', 'api_key', 'apikey', 'init_data', 'init-data', 'x-init-data', 'x-telegram-init-data'];
     const clone = Array.isArray(obj) ? [] : {};
     seen.add(obj);
 
@@ -143,8 +145,13 @@ function sanitize(obj, seen = new WeakSet()) {
  *
  * ВАЖНО: заголовок x-telegram-id НЕ учитывается. Он приходит от клиента
  * и подделывается одним curl, из-за чего лимиты обходились перебором
- * значений заголовка. Идентификатор берётся только из ПОДПИСАННЫХ
- * initData (подпись проверяется в validateTelegramInitData) либо из IP.
+ * значений заголовка.
+ *
+ * getTelegramIdFromHeaders парсит initData БЕЗ проверки подписи —
+ * используется ТОЛЬКО для отображения playerId в логах (с фолбэком
+ * 'anonymous'). Решения о доступе НЕ принимаются на основе этого
+ * значения; авторизация — в telegramAuthMiddleware через
+ * validateTelegramInitData.
  */
 function getTelegramIdFromHeaders(headers = {}) {
     const initData = headers['x-telegram-init-data'] || headers['x-init-data'];
@@ -235,22 +242,23 @@ function requestMiddleware(req, res, next) {
  * Очистка имени (trim, удаление спецсимволов)
  */
 function sanitizeName(name, maxLength = 50) {
+    const max = Number.isSafeInteger(maxLength) && maxLength > 0 ? maxLength : 50;
     if (name === undefined || name === null) {
-        return { valid: false, error: 'Требуется имя', code: 'MISSING_FIELD' };
+        return { ok: false, valid: false, error: 'Требуется имя', code: 'MISSING_FIELD' };
     }
     if (typeof name !== 'string') {
-        return { valid: false, error: 'Имя должно быть строкой', code: 'INVALID_TYPE' };
+        return { ok: false, valid: false, error: 'Имя должно быть строкой', code: 'INVALID_TYPE' };
     }
-    let sanitized = name.trim();
+    let sanitized = name.normalize('NFC').trim();
     sanitized = sanitized.replace(/[^\w\s\-а-яА-ЯёЁ]/g, '');
     sanitized = sanitized.replace(/\s+/g, ' ');
     if (sanitized.length === 0) {
-        return { valid: false, error: 'Имя не может быть пустым после очистки', code: 'EMPTY_VALUE' };
+        return { ok: false, valid: false, error: 'Имя не может быть пустым после очистки', code: 'EMPTY_VALUE' };
     }
-    if (sanitized.length > maxLength) {
-        return { valid: false, error: `Имя слишком длинное (макс. ${maxLength} символов)`, code: 'TOO_LONG', value: sanitized.substring(0, maxLength) };
+    if (sanitized.length > max) {
+        return { ok: false, valid: false, error: `Имя слишком длинное (макс. ${max} символов)`, code: 'TOO_LONG', value: sanitized.substring(0, max) };
     }
-    return { valid: true, value: sanitized };
+    return { ok: true, valid: true, value: sanitized };
 }
 
 /**
@@ -286,6 +294,62 @@ function notFound(res, message = 'Ресурс не найден', code = 'NOT_F
  */
 function unauthorized(res, message = 'Требуется авторизация', code = 'UNAUTHORIZED') {
     return res.status(401).json({ success: false, error: message, code });
+}
+
+/**
+ * Проверка авторизации игрока. Если игрок не найден — отдаёт 401 и возвращает false.
+ * Возвращает true, если авторизация пройдена.
+ */
+function requireAuth(req, res) {
+    if (!req.player || !req.player.id) {
+        unauthorized(res);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Валидация ID босса (целое положительное). При ошибке — 400, возвращает false.
+ */
+function requireBossId(res, bossId) {
+    if (!bossId || bossId <= 0 || !Number.isInteger(bossId)) {
+        fail(res, 'Укажите корректный ID босса', 'INVALID_BOSS_ID');
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Валидация ID рейда (целое положительное). При ошибке — 400, возвращает false.
+ */
+function requireRaidId(res, raidId) {
+    if (!raidId || raidId <= 0 || !Number.isInteger(raidId)) {
+        fail(res, 'Укажите корректный ID рейда', 'INVALID_RAID_ID');
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Валидация ID предмета (целое положительное). При ошибке — 400, возвращает false.
+ */
+function requireItemId(res, itemId) {
+    if (!itemId || itemId <= 0 || !Number.isSafeInteger(itemId)) {
+        fail(res, 'Укажите ID предмета', 'INVALID_ITEM_ID');
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Инкремент счётчика собранных предметов (items_collected) на 1.
+ * Вызывается внутри транзакции после добавления предмета в инвентарь.
+ */
+function incrementItemsCollected(client, playerId, amount = 1) {
+    return client.query(
+        `UPDATE players SET items_collected = COALESCE(items_collected, 0) + $1 WHERE id = $2`,
+        [amount, playerId]
+    );
 }
 
 /**
@@ -369,7 +433,7 @@ async function withPlayerLock(playerId, fn, timeoutMs = 10000) {
  * сообщения (например, текст ошибки PostgreSQL с именами таблиц и
  * колонок). Полные детали остаются в логах.
  */
-function handleError(res, error, action = 'unknown') {
+function handleError(res, error, action = 'unknown', playerId = null) {
     const statusCode = error.statusCode || 500;
     // Коды ошибок БД (23505, 42P01...) — это внутренние коды Postgres,
     // отдавать их клиенту незачем. Наружу уходят только наши
@@ -383,6 +447,7 @@ function handleError(res, error, action = 'unknown') {
     logger.error(`[${action}] Ошибка: ${internalMessage}`, {
         code,
         statusCode,
+        playerId,
         stack: error.stack
     });
 
@@ -501,10 +566,10 @@ function validateTelegramInitData(initData, botToken) {
  */
 async function telegramAuthMiddleware(req, res, next) {
     try {
-        const clientIP =
-            req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-            req.ip ||
-            req.connection?.remoteAddress;
+        // Rate limit для /auth endpoint (10 req/min per IP).
+        // trust proxy = false, поэтому req.ip — реальный IP соединения;
+        // X-Forwarded-For не читаем, иначе можно подделать и обойти лимит.
+        const clientIP = req.ip || req.connection?.remoteAddress;
         
         // Rate limit для /auth endpoint (10 req/min per IP)
         const { allowed, remaining, resetAt } = await checkRateLimit(clientIP, 10, 60000);
@@ -575,13 +640,13 @@ async function idempotencyMiddleware(req, res, next) {
 
     const idempotencyKey = req.headers['idempotency-key'];
     if (!idempotencyKey) {
-        return next(); // Опционально: если ключа нет, пропускаем
+        return next(); // Ключ опционален: мутация выполняется без идемпотентности
     }
 
     // Нормализуем ключ: playerId + ключ клиента
     const playerId = req.player?.id;
     if (!playerId) {
-        return next(); // Если нет игрока (не должно быть для мутаций), пропускаем
+        return next();
     }
 
     const fullKey = `idem:${playerId}:${idempotencyKey}`;
@@ -635,28 +700,34 @@ async function idempotencyMiddleware(req, res, next) {
         logger.warn('[idempotency] claim failed', { error: err.message });
     }
 
-    // Перехватываем res.json чтобы сохранить ответ
+    // Сохраняем ответ в кэш идемпотентности ДО отправки клиенту.
+    // Если процесс упадёт между сохранением и отправкой, повторный запрос
+    // с тем же ключом получит сохранённый ответ (реплей), а не 409.
     const originalJson = res.json.bind(res);
-    res.json = async function(data) {
-        const result = originalJson(data);
-        // Сохраняем ответ в кэш идемпотентности после отправки ответа клиенту.
-        // await гарантирует, что запись в БД завершится перед возвратом из
-        // res.json: процесс не упадёт между ответом и сохранением ключа.
-        if (claimed && idempotencyKey && res.statusCode >= 200 && res.statusCode < 400) {
-            const fullKey = `idem:${playerId}:${idempotencyKey}`;
-            const { query } = require('../db/database');
-            try {
-                await query(
-                    `UPDATE idempotency_keys SET response_data = $2, created_at = NOW()
-                      WHERE idempotency_key = $1`,
-                    [fullKey, data]
-                );
-            } catch (err) {
-                logger.warn('[idempotency] save failed', { error: err.message });
-            }
+    res.json = function(data) {
+        if (claimed && idempotencyKey && res.statusCode >= 200 && res.statusCode < 600) {
+            res.__idempotencyData = data;
+            res.__idempotencyFullKey = `idem:${playerId}:${idempotencyKey}`;
         }
-        return result;
+        return originalJson(data);
     };
+
+    res.on('finish', () => {
+        if (claimed && idempotencyKey && res.__idempotencyData !== undefined) {
+            const { query } = require('../db/database');
+            query(
+                `UPDATE idempotency_keys SET response_data = $2, created_at = NOW()
+                  WHERE idempotency_key = $1`,
+                [res.__idempotencyFullKey, res.__idempotencyData]
+            ).catch(() => {});
+        } else if (claimed && idempotencyKey) {
+            const { query } = require('../db/database');
+            query(
+                `DELETE FROM idempotency_keys WHERE idempotency_key = $1`,
+                [`idem:${playerId}:${idempotencyKey}`]
+            ).catch(() => {});
+        }
+    });
 
     next();
 }
@@ -683,6 +754,11 @@ module.exports = {
     handleError,
     notFound,
     unauthorized,
+    requireAuth,
+    requireBossId,
+    requireRaidId,
+    requireItemId,
+    incrementItemsCollected,
     wrap,
 
     // JSON утилиты

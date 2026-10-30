@@ -159,7 +159,7 @@ const ok = (name, cond, extra) => {
 };
 
 async function run() {
-let currentPlayer;
+    let currentPlayer = null;
 
     // Строим UPDATE динамически с правильными позициями параметров
     // ПЕРЕД вызовом: мок отвечает по паттерну, порядок не важен.

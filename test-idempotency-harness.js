@@ -45,7 +45,7 @@ const lineOf = (arr, re) => arr.findIndex(l => re.test(l));
 
 const rValidate = lineOf(routeIdx, /^\s*router\.use\(validatePlayer\)/);
 const rIdem = lineOf(routeIdx, /^\s*router\.use\(idempotencyMiddleware\)/);
-const rCritical = lineOf(routeIdx, /^\s*router\.use\('\/pvp\/attack', criticalActionLimiter\)/);
+const rCritical = lineOf(routeIdx, /^\s*router\.use\(\/\^\\\/pvp\\\/attack\$\//);
 const rGeneral = lineOf(routeIdx, /^\s*router\.use\(generalActionLimiter\)/);
 
 ok('в routes/game/index.js есть монтирование', rIdem !== -1, 'не найдено');

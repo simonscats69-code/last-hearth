@@ -254,13 +254,6 @@ function hashSeed(key) {
     return h >>> 0;
 }
 
-function renderIcon(key, drawFn, size = SIZE) {
-    const canvas = new Canvas(size, size);
-    const random = drawFrame(canvas, hashSeed(key) % 100000);
-    drawFn(canvas, random);
-    applyGrain(canvas, random, 0.045);
-    return canvas.toPNG();
-}
 
 function main() {
     if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });

@@ -14,7 +14,8 @@ const router = express.Router();
 // маршрутах с записью: см. пояснение в POST /bosses/start. withClient()
 // для чтений, которым транзакция не нужна — удобнее ручного pool.connect().
 const { transaction, withClient, isConnectionError } = require('../../db/database');
-const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger, unauthorized, logPlayerAction } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
+const { safeJsonParse, PlayerHelper: playerHelper, handleError, logger, unauthorized, logPlayerAction, requireAuth, requireBossId, requireRaidId, fail } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -267,12 +268,12 @@ async function applyBossCounterHit(client, playerId, boss, player, bossCurrentHp
             playerId,
             equipment,
             COUNTER_HIT_WEAR_SLOTS
-        );
-        await client.query(
-            'UPDATE players SET equipment = $1::jsonb WHERE id = $2',
-            [JSON.stringify(equipment), playerId]
-        );
-        return { damage: 0, health: Number(player.health || 0), broken_slots: brokenSlots };
+            );
+            await client.query(
+                'UPDATE players SET equipment = $1::jsonb WHERE id = $2',
+                [JSON.stringify(equipment), playerId]
+            );
+            return { damage: 0, health: Number(player.health || 0), broken_slots: brokenSlots };
     }
 
     const health = Math.max(0, Number(player.health || 0) - damage);
@@ -315,7 +316,7 @@ async function getPlayerBaseState(client, playerId) {
     // больше не читаются ни одним роутом после удаления автоиспользования
     // лекарств. Лекарства расходуются только вручную.
     const result = await client.query(
-        `SELECT id, first_name, level, health, max_health, energy, max_energy, equipment,
+        `SELECT id, first_name, level, health, max_health, energy, max_energy, last_energy_update, radiation, equipment,
                 inventory, active_boss_id, active_boss_started_at, active_boss_mode,
                 active_raid_id, buffs
          FROM players
@@ -366,6 +367,10 @@ async function resolveActiveBattle(client, playerId) {
         }
 
         const startedAt = new Date(player.active_boss_started_at).getTime();
+        if (Number.isNaN(startedAt)) {
+            await clearPlayerActiveBattle(client, playerId);
+            return null;
+        }
         const timePassed = Date.now() - startedAt;
         if (timePassed >= SOLO_FIGHT_DURATION_MS) {
             await client.query('DELETE FROM player_boss_progress WHERE player_id = $1', [playerId]);
@@ -432,7 +437,7 @@ async function resolveActiveBattle(client, playerId) {
             raid_id: raid.id,
             boss_id: raid.boss_id,
             started_at: player.active_boss_started_at,
-            time_remaining_ms: new Date(raid.expires_at).getTime() - Date.now(),
+            time_remaining_ms: Math.max(0, new Date(raid.expires_at).getTime() - Date.now()),
             boss: {
                 id: raid.boss_id,
                 name: raid.name,
@@ -603,8 +608,9 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
     const templates = preloadedTemplates || await loadItemTemplates(client, normalizedItems);
     if (!templates.length) return { granted: [], undropped: [] };
 
-    const playerResult = await client.query('SELECT inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-    const inventory = normalizeInventory(playerResult.rows[0]?.inventory);
+    const playerRow = await lockPlayer(playerId, client, 'inventory');
+    if (!playerRow) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+    const inventory = normalizeInventory(playerRow.inventory);
     const granted = [];
     const undropped = [];
     let totalGrantedCount = 0;
@@ -628,7 +634,10 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
 
             const slotsAdded = addItemToInventory(inventory, item, template);
             if (slotsAdded > 0 && inventory.length > MAX_INVENTORY_SLOTS) {
-                inventory.pop();
+                // Удаляем все превышающие лимит слоты с конца (только что добавленные)
+                while (inventory.length > MAX_INVENTORY_SLOTS) {
+                    inventory.pop();
+                }
                 break;
             }
             actuallyGranted++;
@@ -680,6 +689,7 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
 
 async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteries) {
     const boss = await getBossById(client, bossId);
+    if (!boss) throw { message: 'Босс не найден', code: 'BOSS_NOT_FOUND', statusCode: 404 };
     const experienceReward = activeBuffs.exp_x2
         ? (boss.reward_experience || 0) * 2
         : (boss.reward_experience || 0);
@@ -976,16 +986,13 @@ router.post('/start', async (req, res) => {
     // Валидация вынесена ДО открытия транзакции. Раньше соединение бралось
     // из пула первым делом, и при отказе на проверках оно всё равно
     // освобождалось в finally — но занималось на время проверок впустую.
-    if (!req.player || !req.player.id) {
-        return unauthorized(res, 'Не авторизован');
-    }
+    if (!req.player?.id) return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    if (!requireAuth(req, res)) return;
     const bossId = Number(req.body?.boss_id);
-    const playerId = req.player.id;
+    const playerId = req.player?.id;
     logger.info('[bosses/start] Валидация данных', { bossId, playerId });
 
-    if (!validateBossId(bossId)) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-    }
+    if (!requireBossId(res, bossId)) return;
 
     try {
         // Раньше здесь был вложенный try с собственным ROLLBACK. Из-за него
@@ -1141,7 +1148,8 @@ router.get('/', async (req, res) => {
         // получал «бой есть», который не resolve-ится, до следующего
         // успешного прохода.
         const outcome = await transaction(async (client) => {
-            const playerId = req.player.id;
+            if (!req.player?.id) return { status: 401, body: { success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' } };
+            const playerId = req.player?.id;
             logger.info('[bosses/get] Получение данных игрока', { playerId });
             const player = await getPlayerBaseState(client, playerId);
 
@@ -1291,10 +1299,9 @@ async function getPendingRaidRewards(client, playerId) {
  */
 router.post('/raid/rewards/claim', async (req, res) => {
     try {
+        if (!req.player?.id) return unauthorized(res);
         const playerId = req.player?.id;
-        if (!playerId) {
-            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
-        }
+        if (!requireAuth(req, res)) return;
 
         const result = await transaction(async (client) => {
             const pending = await getPendingRaidRewards(client, playerId);
@@ -1323,7 +1330,7 @@ router.post('/raid/rewards/claim', async (req, res) => {
             count: result.claimed.length
         });
 
-        return res.json({ success: true, data: result });
+        return res.status(200).json({ success: true, data: result });
     } catch (error) {
         if (handleConnectionError(res, error)) return undefined;
         return handleError(res, error, 'raid_rewards_claim');
@@ -1336,15 +1343,12 @@ router.post('/attack-boss', async (req, res) => {
     // P2: guard на req.player. Обычно гарантирован validatePlayer, но
     // при прямом вызове роутера req.player может отсутствовать, и роутер
     // отвечал 500 вместо 401.
+    if (!req.player?.id) return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+    if (!requireAuth(req, res)) return;
+    if (!req.player?.id) return unauthorized(res);
     const playerId = req.player?.id;
 
-    if (!playerId) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
-    }
-
-    if (!validateBossId(bossId)) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-    }
+    if (!requireBossId(res, bossId)) return;
 
     try {
         const outcome = await transaction(async (client) => {
@@ -1400,6 +1404,9 @@ router.post('/attack-boss', async (req, res) => {
                  RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, playerId]
             );
+            if (!energyResult.rows[0]) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
 
             await client.query(
                 `UPDATE player_boss_progress
@@ -1471,6 +1478,7 @@ router.post('/attack-boss', async (req, res) => {
 
 router.get('/raids', async (req, res) => {
     try {
+        if (!req.player?.id) return unauthorized(res);
         const playerId = req.player?.id;
         const outcome = await withClient(async (client) => {
             const raids = await getActiveRaids(client, playerId);
@@ -1497,15 +1505,12 @@ router.get('/raids', async (req, res) => {
 router.post('/raid/start', async (req, res) => {
     // Валидация до открытия транзакции — как в POST /bosses/start.
     const bossId = Number(req.body?.boss_id);
-    if (!req.player) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
-    }
-    const playerId = req.player.id;
+    if (!requireAuth(req, res)) return;
+    if (!req.player?.id) return unauthorized(res);
+    const playerId = req.player?.id;
     const playerName = req.player.first_name || 'Игрок';
 
-    if (!validateBossId(bossId)) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' });
-    }
+    if (!requireBossId(res, bossId)) return;
 
     try {
         const outcome = await transaction(async (client) => {
@@ -1597,12 +1602,12 @@ router.post('/raid/start', async (req, res) => {
             await client.query(
                 `INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
                  VALUES ($1, $2, $3, 0, NOW(), NOW())
-                 ON CONFLICT (boss_id, player_id)
-                 DO UPDATE SET raid_id = EXCLUDED.raid_id,
-                               damage_dealt = 0,
-                               rewards_earned = false,
-                               joined_at = NOW(),
-                               last_hit_at = NOW()`,
+             ON CONFLICT (boss_id, player_id, raid_id)
+                  DO UPDATE SET raid_id = EXCLUDED.raid_id,
+                                damage_dealt = 0,
+                                rewards_earned = false,
+                                joined_at = NOW(),
+                                last_hit_at = NOW()`,
                 [bossId, playerId, raidId]
             );
 
@@ -1638,6 +1643,8 @@ router.post('/raid/start', async (req, res) => {
             };
         });
 
+        await logPlayerAction(playerId, 'raid_start', { bossId, raidId: outcome.body?.data?.raid_id });
+
         return res.status(outcome.status).json(outcome.body);
     } catch (error) {
         // Как в POST /bosses/start: нехватка ключей — бизнес-ошибка с 400
@@ -1666,14 +1673,11 @@ router.post('/raid/start', async (req, res) => {
 router.post('/raid/:id/join', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const raidId = Number(req.params.id);
-    if (!req.player) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
-    }
-    const playerId = req.player.id;
+    if (!requireAuth(req, res)) return;
+    if (!req.player?.id) return unauthorized(res);
+    const playerId = req.player?.id;
 
-    if (!raidId || raidId <= 0) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
-    }
+    if (!requireRaidId(res, raidId)) return;
 
     try {
         const outcome = await transaction(async (client) => {
@@ -1695,9 +1699,10 @@ router.post('/raid/:id/join', async (req, res) => {
             const raidResult = await client.query(
                 `SELECT rp.id, rp.boss_id, rp.current_health, rp.max_health, rp.expires_at,
                         b.name AS boss_name, b.icon
-                 FROM raid_progress rp
-                 JOIN bosses b ON b.id = rp.boss_id
-                 WHERE rp.id = $1 AND rp.is_active = true AND rp.is_raid = true AND rp.expires_at > NOW()`,
+                  FROM raid_progress rp
+                  JOIN bosses b ON b.id = rp.boss_id
+                  WHERE rp.id = $1 AND rp.is_active = true AND rp.is_raid = true AND rp.expires_at > NOW()
+                  FOR UPDATE`,
                 [raidId]
             );
 
@@ -1741,12 +1746,12 @@ router.post('/raid/:id/join', async (req, res) => {
             await client.query(
                 `INSERT INTO boss_sessions (boss_id, player_id, raid_id, damage_dealt, joined_at, last_hit_at)
                  VALUES ($1, $2, $3, 0, NOW(), NOW())
-                 ON CONFLICT (boss_id, player_id)
-                 DO UPDATE SET raid_id = EXCLUDED.raid_id,
-                               damage_dealt = 0,
-                               rewards_earned = false,
-                               joined_at = NOW(),
-                               last_hit_at = NOW()`,
+             ON CONFLICT (boss_id, player_id, raid_id)
+                  DO UPDATE SET raid_id = EXCLUDED.raid_id,
+                                damage_dealt = 0,
+                                rewards_earned = false,
+                                joined_at = NOW(),
+                                last_hit_at = NOW()`,
                 [raid.boss_id, playerId, raidId]
             );
 
@@ -1800,14 +1805,11 @@ router.post('/raid/:id/join', async (req, res) => {
 router.post('/raid/:id/leave', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const raidId = Number(req.params.id);
-    if (!req.player) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
-    }
-    const playerId = req.player.id;
+    if (!requireAuth(req, res)) return;
+    if (!req.player?.id) return unauthorized(res);
+    const playerId = req.player?.id;
 
-    if (!raidId || raidId <= 0) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
-    }
+    if (!requireRaidId(res, raidId)) return;
 
     try {
         const outcome = await transaction(async (client) => {
@@ -1840,14 +1842,11 @@ router.post('/raid/:id/leave', async (req, res) => {
 router.post('/raid/:id/attack', async (req, res) => {
     // Валидация до открытия транзакции — как в остальных маршрутах боссов.
     const raidId = Number(req.params.id);
-    if (!req.player) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
-    }
-    const playerId = req.player.id;
+    if (!requireAuth(req, res)) return;
+    if (!req.player?.id) return unauthorized(res);
+    const playerId = req.player?.id;
 
-    if (!raidId || raidId <= 0) {
-        return res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' });
-    }
+    if (!requireRaidId(res, raidId)) return;
 
     try {
         // expLogs собирается внутри транзакции, но логируем после COMMIT,
@@ -1912,7 +1911,9 @@ router.post('/raid/:id/attack', async (req, res) => {
             }
 
             const player = await getPlayerBaseState(client, playerId);
-            // Регенерация энергии — та же, что в соло-бою и в world/pvp:
+            if (!player) {
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+            }
             // без неё после исчерпания энергии рейд тоже требовал поиска в мире.
             await recalcEnergy(client, player);
             const activeBuffs = getActiveBuffs(player.buffs);
@@ -1965,6 +1966,9 @@ router.post('/raid/:id/attack', async (req, res) => {
                  RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, playerId]
             );
+            if (!energyResult.rows[0]) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
 
             await client.query('UPDATE raid_progress SET current_health = $1 WHERE id = $2', [newHp, raidId]);
             // first_hit отмечается здесь, а не в момент входа: участник,
@@ -2078,6 +2082,20 @@ router.post('/raid/:id/attack', async (req, res) => {
                     if (isTopDamager && expRemainder > 0) experienceReward += expRemainder;
 
                     const { granted: grantedItems, undropped: participantUndropped } = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
+                    // trackCollectedItems для наград рейда — иначе достижение
+                    // «Коллекционер» не учитывает предметы из рейда.
+                    if (grantedItems && grantedItems.length > 0) {
+                        const grantedIds = grantedItems
+                            .filter((item) => item && item.id)
+                            .map((item) => item.id);
+                        if (grantedIds.length > 0) {
+                            await trackCollectedItems(client, participantId, grantedIds);
+                            await client.query(
+                                `UPDATE players SET items_collected = COALESCE(items_collected, 0) + $1 WHERE id = $2`,
+                                [grantedIds.length, participantId]
+                            );
+                        }
+                    }
                     const isLeader = participantId === leaderIdRaw;
 
                     // Ключ следующего босса выдаётся ВСЕМ участникам с уроном > 0,
@@ -2289,3 +2307,4 @@ router.post('/raid/:id/attack', async (req, res) => {
 });
 
 module.exports = router;
+

@@ -187,8 +187,8 @@ console.log('\n=== 5. Items: item_index, trackCollectedItems в /buy ===');
 {
     const it = fs.readFileSync('routes/game/items.js', 'utf8');
 
-    ok('/use использует Number.isInteger (2.5 отсекается)',
-        /const itemIndex = Number\(req\.body\?\.item_index\);[\s\S]{0,220}?if \(!Number\.isInteger\(itemIndex\) \|\| itemIndex < 0\)/.test(it));
+    ok('/use использует validateItemIndex (2.5 отсекается)',
+        /validateItemIndex\(itemIndex\)/.test(it));
     const isNaNChecks = (it.match(/if \(isNaN\(itemIndex\) \|\| itemIndex < 0\)/g) || []).length;
     ok('старой проверки isNaN не осталось', isNaNChecks === 0, isNaNChecks);
 

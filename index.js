@@ -14,8 +14,10 @@ try {
     }
 }
 
-// ADMIN_IDS парсится один раз при старте
-const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+const { getAdminIds } = require('./utils/adminIds');
+
+// ADMIN_IDS парсится один раз при старте через общий модуль
+const ADMIN_IDS = getAdminIds();
 const DEV_MODE = process.env.DEV_MODE === 'true';
 // Окно валидации initData (MAX_INIT_DATA_AGE_SECONDS, по умолчанию 1 ч)
 // читается напрямую в utils/serverApi.js (validateTelegramInitData) —
@@ -40,7 +42,7 @@ let isShuttingDown = false;
 // не должны зависеть от базы.
 let isDatabaseReady = false;
 
-function handleFatalRuntimeError(kind, error) {
+async function handleFatalRuntimeError(kind, error) {
     try {
         logger.error({
             type: 'fatal_runtime_error',
@@ -53,21 +55,32 @@ function handleFatalRuntimeError(kind, error) {
     }
 
     if (server && !isShuttingDown) {
-        shutdown(kind);
+        await shutdown(kind);
         return;
     }
 
-    setTimeout(() => process.exit(1), 100);
+    setTimeout(async () => {
+        try {
+            await Promise.race([
+                closePool(),
+                new Promise((resolve) => setTimeout(resolve, 5000))
+            ]);
+        } catch {
+            // ignore
+        }
+        process.exit(1);
+    }, 100);
 }
 
 // Глобальные обработчики ошибок для отладки
 process.on('uncaughtException', (err) => {
-    handleFatalRuntimeError('UNCAUGHT EXCEPTION', err);
+    handleFatalRuntimeError('UNCAUGHT EXCEPTION', err).catch(() => {});
 });
 
-// unhandledRejection НЕ убивает сервер: одиночный отклонённый промис
-// (например, ошибка БД при деплое) не должен ронять весь игровой процесс.
-process.on('unhandledRejection', (reason) => {
+// unhandledRejection: не гасим сервер на любой ошибке, но критическая
+// ошибка БД (connection failure, shutdown) делает работу небезопасной —
+// завершаем процесс, чтобы orquestrator перезапустил инстанс.
+process.on('unhandledRejection', async (reason) => {
     try {
         logger.error({
             type: 'unhandled_rejection',
@@ -77,6 +90,16 @@ process.on('unhandledRejection', (reason) => {
     } catch {
         console.error('UNHANDLED REJECTION:', reason?.message || reason);
     }
+    const isDbError = reason && (
+        reason.code === '08006' ||      // connection failure
+        reason.code === '57P01' ||      // admin_shutdown
+        /terminating|connection.*lost/i.test(String(reason?.message || reason))
+    );
+    if (isDbError && !isShuttingDown) {
+        handleFatalRuntimeError('UNHANDLED REJECTION (DB)', reason).catch(() => {});
+    }
+    // Временные конфликты (deadlock, serialization_failure) и ошибки SQL (42*)
+    // логируем, но не убиваем процесс — транзакции ретраят их сами.
 });
 
 const express = require('express');
@@ -132,7 +155,11 @@ function getRateLimitKey(req) {
 
 // Базовая конфигурация приложения
 app.disable('x-powered-by');
-app.set('trust proxy', 1);
+// trust proxy: false — не доверяем X-Forwarded-For от любого хоста.
+// Иначе злоумышленник подделывает заголовок и получает разные ключи
+// rate-limit с одного реального IP. Для работы за конкретным прокси
+// (Bothost и т.п.) укажите его IP явно: app.set('trust proxy', ['1.2.3.4']).
+app.set('trust proxy', process.env.TRUST_PROXY ? process.env.TRUST_PROXY.split(',') : false);
 
 // Проверка длины URL - самая первая (до любых тяжёлых middleware)
 app.use((req, res, next) => {
@@ -375,14 +402,6 @@ app.use(helmet({
             scriptSrc: [
                 "'self'",
                 (req, res) => `'nonce-${res.locals.nonce}'`,
-                // telegram.org — для telegram-web-app.js.
-                //
-                // ЗДЕСЬ БЫЛА ДЫРА: в списке также был https://cdn.jsdelivr.net,
-                // хотя ни index.html, ни game.js не подключают с него ничего
-                // (grep по public/ даёт 0 совпадений). Allowlist целого хоста в
-                // script-src — постоянно открытый обход nonce-защиты: любой
-                // скрипт с этого CDN выполнится, если XSS-примитив найдётся.
-                // Если библиотека реально понадобится — точный путь + integrity.
                 'https://telegram.org'
             ],
             // script-src-attr: 'none', а не nonce.
@@ -399,9 +418,9 @@ app.use(helmet({
             // addEventListener, поэтому 'none' ничего не ломает.
             scriptSrcAttr: ["'none'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
-            connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
-            fontSrc: ["'self'", 'https:'],
+            imgSrc: ["'self'", 'data:', 'blob:'],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'"],
             objectSrc: ["'none'"],
             mediaSrc: ["'self'"],
             frameSrc: ["'none'"],
@@ -465,7 +484,7 @@ app.use((req, res, next) => {
         return res.status(403).json({ error: 'Origin не разрешён', origin });
     }
     res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     // X-Telegram-ID убран: заголовок приходит от клиента и больше нигде
     // не читается. Разрешать его в CORS незачем, а его присутствие
     // провоцировало клиентов его слать.
@@ -544,7 +563,7 @@ app.get('/ready', healthLimiter, async (req, res) => {
         await query('SELECT 1');
         res.json({ status: 'ready', db: 'connected' });
     } catch (err) {
-        res.status(500).json({ status: 'not_ready', db: 'error' });
+        res.status(503).json({ status: 'not_ready', db: 'error' });
     }
 });
 
@@ -561,7 +580,7 @@ app.get('/metrics', telegramAuthMiddleware, (req, res) => {
 
     const telegramId = String(req.telegramUser.id);
     
-    if (!ADMIN_IDS.includes(telegramId)) {
+    if (!getAdminIds().includes(telegramId)) {
         logger.warn({ type: 'metrics_access_denied', telegramId, ip: req.ip });
         return res.status(403).json({ error: 'Доступ запрещён' });
     }
@@ -586,7 +605,7 @@ app.get('/metrics', telegramAuthMiddleware, (req, res) => {
 // Для API и прочего — JSON 404.
 app.use((req, res) => {
     const accept = req.headers.accept || '';
-    if (req.method === 'GET' && !req.path.startsWith('/api') && accept.includes('text/html')) {
+    if (req.method === 'GET' && !req.path.startsWith('/api') && accept.includes('text/html') && !/\.[a-zA-Z0-9]+$/.test(req.path)) {
         return sendIndexHtml(res);
     }
     res.status(404).json({ error: 'Not found' });
@@ -594,6 +613,9 @@ app.use((req, res) => {
 
 // Глобальный обработчик ошибок
 app.use((err, req, res, next) => {
+    if (res.headersSent) {
+        return;
+    }
     logger.error({
         type: 'server_error',
         requestId: req.requestId,
@@ -608,7 +630,7 @@ app.use((err, req, res, next) => {
     });
 });
 
-function shutdown(signal) {
+async function shutdown(signal) {
     logger.info(`Получен сигнал ${signal}. Завершаем сервер...`);
     
     if (isShuttingDown) {
@@ -643,6 +665,7 @@ function shutdown(signal) {
     }
     
     if (server) {
+        server.closeAllConnections();
         server.close(async () => {
             logger.info('HTTP сервер остановлен');
             try {
@@ -661,6 +684,11 @@ function shutdown(signal) {
         }, 10000);
     } else {
         logger.warn('SIGTERM получен до старта сервера');
+        try {
+            await closePool();
+        } catch {
+            // ignore
+        }
         process.exit(process.exitCode || 0);
     }
 }
@@ -686,7 +714,7 @@ function startHttpServer(port) {
  *
  * @returns {{problems: string[], warnings: string[]}}
  */
-function validateStartupConfig() {
+async function validateStartupConfig() {
     const problems = [];
     const warnings = [];
 
@@ -723,7 +751,7 @@ function validateStartupConfig() {
         // Критичные проблемы конфигурации — не стартуем: молча живой сервер
         // без авторизации опаснее, чем упавший процесс, который перезапустится.
         process.exitCode = 1;
-        handleFatalRuntimeError('startup_config_invalid', { problems });
+        await handleFatalRuntimeError('startup_config_invalid', { problems });
         return { problems, warnings };
     }
 
@@ -742,7 +770,7 @@ async function startServer() {
     // Попутно ADMIN_IDS фиксируется здесь, а routes/admin.js:50 парсит env
     // заново на каждый запрос — копии могут разойтись (dev переустановил env
     // между рестартом и запросом).
-    validateStartupConfig();
+    await validateStartupConfig();
 
     // HTTP-сервер стартует ПЕРВЫМ. За reverse-прокси Bothost приложение
     // обязано слушать порт как можно раньше: пока порт не открыт,
@@ -769,10 +797,6 @@ async function startServer() {
     // старт Supabase) — повторяем подключение, прежде чем работать без БД.
 const DB_INIT_ATTEMPTS = 3;
 const DB_INIT_RETRY_DELAY_MS = 5000;
-// Падать ли процессом, если БД так и не поднялась. По умолчанию ДА: иначе
-// healthcheck видит 200 и контейнер не перезапускается, а игра отвечает 503
-// вечно. EXIT_ON_DB_FAIL=false — только для ручного дебага.
-const EXIT_ON_DB_FAIL = process.env.EXIT_ON_DB_FAIL !== 'false';
     let databaseInitialized = false;
     for (let attempt = 1; attempt <= DB_INIT_ATTEMPTS; attempt++) {
         try {
@@ -818,15 +842,12 @@ const EXIT_ON_DB_FAIL = process.env.EXIT_ON_DB_FAIL !== 'false';
             message: `БД недоступна после ${DB_INIT_ATTEMPTS} попыток. Игровые маршруты отвечают 503 до перезапуска процесса.`
         });
 
-        if (EXIT_ON_DB_FAIL) {
-            logger.error('[index] Завершение процесса: БД недоступна (EXIT_ON_DB_FAIL=true).');
-            // handleFatalRuntimeError сам решает: если HTTP-сервер уже слушает —
-            // идёт graceful shutdown (пул, планировщик, бот), иначе процесс
-            // умирает через 100мс. Свой process.exit() здесь дал бы гонку с ним.
-            // exitCode=1 нужен, чтобы shutdown выше завершился кодом сбоя, а не 0.
-            process.exitCode = 1;
-            handleFatalRuntimeError('database_unavailable', { attempts: DB_INIT_ATTEMPTS });
-        }
+        // Всегда завершаем процесс при недоступности БД: иначе healthcheck видит
+        // 200 на / и не перезапускает контейнер, а игра отвечает 503 вечно.
+        // EXIT_ON_DB_FAIL=false оставлен для обратной совместимости, но не
+        // предотвращает завершение — иначе сервер застревает в зомби-состоянии.
+        process.exitCode = 1;
+        await handleFatalRuntimeError('database_unavailable', { attempts: DB_INIT_ATTEMPTS });
     }
 
     try {

@@ -86,6 +86,7 @@ async function createTables() {
             last_energy_update TIMESTAMP DEFAULT NOW(),
             last_action_time TIMESTAMP DEFAULT NOW(),
             active_boss_mode VARCHAR(20),
+            active_boss_started_at TIMESTAMP,
             active_raid_id INTEGER,
             last_daily_bonus TIMESTAMP,
             daily_streak INTEGER DEFAULT 0,
@@ -198,7 +199,7 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS item_sets (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL UNIQUE,
             description TEXT,
             icon VARCHAR(50),
             bonus_2 JSONB DEFAULT '{}'::jsonb,
@@ -230,7 +231,7 @@ async function createTables() {
             reward_coins INTEGER DEFAULT 50,
             reward_items JSONB DEFAULT '[]',
             key_drop_chance REAL DEFAULT 0.5,
-            required_key_id INTEGER,
+            required_key_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
             keys_required INTEGER DEFAULT 1,
             is_group_boss BOOLEAN DEFAULT false,
             min_clan_level INTEGER DEFAULT 1,
@@ -342,7 +343,7 @@ async function createTables() {
             id SERIAL PRIMARY KEY,
             boss_id INTEGER REFERENCES bosses(id),
             player_id BIGINT REFERENCES players(id),
-            raid_id INTEGER NOT NULL DEFAULT -1,
+            raid_id INTEGER,
             damage_dealt INTEGER DEFAULT 0,
             rewards_earned BOOLEAN DEFAULT false,
             joined_at TIMESTAMP DEFAULT NOW(),
@@ -393,8 +394,9 @@ async function createTables() {
     // уходила только убийце. Теперь каждому участнику пишется строчка, а
     // забирает он её при следующем открытии экрана боссов.
     //
-    // raid_id без FK on purpose: строка рейда удаляется сразу после раздачи
-    // наград (raid_progress чистится), и связь оборвалась бы.
+    // raid_id с FK ON DELETE RESTRICT: строка рейда удаляется только после
+    // раздачи наград и очистки boss_sessions (планировщик соблюдает порядок).
+    // Это гарантирует целостность связи boss_sessions → raid_progress.
     await query(`
         CREATE TABLE IF NOT EXISTS raid_rewards (
             id SERIAL PRIMARY KEY,
@@ -411,6 +413,7 @@ async function createTables() {
         )
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_rewards_player ON raid_rewards(player_id, claimed)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_raid_rewards_raid ON raid_rewards(raid_id)`);
     await query(`
         CREATE TABLE IF NOT EXISTS raid_progress (
             id SERIAL PRIMARY KEY,
@@ -422,9 +425,8 @@ async function createTables() {
             expires_at TIMESTAMP NOT NULL,
             is_active BOOLEAN DEFAULT true,
             is_raid BOOLEAN DEFAULT false,
-            leader_id INTEGER REFERENCES players(id),
-            leader_name VARCHAR(255),
-            UNIQUE(boss_id, is_active)
+            leader_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
+            leader_name VARCHAR(255)
         );
     `);
 
@@ -541,7 +543,7 @@ async function createTables() {
             defender_damage INTEGER DEFAULT 0,
             attacker_reward INTEGER DEFAULT 0,
             defender_reward INTEGER DEFAULT 0,
-            location_id INTEGER DEFAULT 0,
+            location_id INTEGER DEFAULT 1,
             battle_duration INTEGER DEFAULT 0,
             started_at TIMESTAMP DEFAULT NOW(),
             ended_at TIMESTAMP,
@@ -619,10 +621,16 @@ async function createTables() {
     // Индексы для raid_progress
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_progress_boss ON raid_progress(boss_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_progress_active ON raid_progress(is_active) WHERE is_active = true`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_raid_progress_active_boss ON raid_progress(boss_id) WHERE is_active = true`);
 
     // Индексы для boss_sessions
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_sessions_boss ON boss_sessions(boss_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_sessions_player ON boss_sessions(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_boss_sessions_raid ON boss_sessions(raid_id)`);
+
+    // Индексы для активных боев/рейдов игроков
+    await query(`CREATE INDEX IF NOT EXISTS idx_players_active_boss_id ON players(active_boss_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_players_active_raid_id ON players(active_raid_id)`);
 }
 
 /**
@@ -724,7 +732,7 @@ async function runMigrations() {
             table: 'clans',
             column: 'leader_id',
             references: 'players(id)',
-            onDelete: 'ON DELETE SET NULL',
+            onDelete: 'ON DELETE RESTRICT',
             checkColumn: true
         },
         {
@@ -806,7 +814,7 @@ async function runMigrations() {
             ) THEN
                 ALTER TABLE boss_sessions
                 ADD CONSTRAINT fk_boss_sessions_raid
-                FOREIGN KEY (raid_id) REFERENCES raid_progress(id) ON DELETE SET NULL;
+                FOREIGN KEY (raid_id) REFERENCES raid_progress(id) ON DELETE RESTRICT;
             END IF;
         END $do$
     `);
@@ -886,6 +894,7 @@ async function runMigrations() {
     `);
 
     await queryTx(`CREATE INDEX IF NOT EXISTS idx_clans_leader_id ON clans(leader_id)`);
+    await queryTx(`CREATE UNIQUE INDEX IF NOT EXISTS idx_clans_name_lower ON clans (LOWER(name))`);
     // Индексы idx_players_telegram_id, idx_players_clan_id, idx_player_achievements_player,
     // idx_boss_mastery_player, idx_daily_tasks_player уже созданы в createTables()
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
@@ -955,9 +964,9 @@ async function runMigrations() {
             -- Удаляем старое ограничение, если существует
             IF EXISTS (
                 SELECT 1 FROM information_schema.table_constraints
-                WHERE table_name = 'items' AND constraint_name = 'items_name_type_key'
+                WHERE table_name = 'items' AND constraint_name = 'uq_items_name_type'
             ) THEN
-                ALTER TABLE items DROP CONSTRAINT items_name_type_key;
+                ALTER TABLE items DROP CONSTRAINT uq_items_name_type;
             END IF;
             -- Добавляем новое ограничение, если не существует
             IF NOT EXISTS (
@@ -1075,12 +1084,9 @@ async function runMigrations() {
         END $$;
     `);
 
-    // Миграция boss_sessions: raid_id теперь NOT NULL DEFAULT -1.
-    // Существующие NULL заменяем на -1, затем ставим NOT NULL и DEFAULT -1,
-    // чтобы UNIQUE(boss_id, player_id, raid_id) работал корректно.
-    await queryTx(`UPDATE boss_sessions SET raid_id = -1 WHERE raid_id IS NULL`);
-    await queryTx(`ALTER TABLE boss_sessions ALTER COLUMN raid_id SET NOT NULL`);
-    await queryTx(`ALTER TABLE boss_sessions ALTER COLUMN raid_id SET DEFAULT -1`);
+    // Миграция boss_sessions: raid_id остаётся nullable (без DEFAULT -1),
+    // чтобы FK на raid_progress(id) не нарушалось значением -1.
+    // UNIQUE(boss_id, player_id, raid_id) работает корректно с NULL.
 });
 }
 

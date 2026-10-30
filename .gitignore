@@ -24,3 +24,10 @@ dupe-report.txt
 .dead-confirmed.txt
 .dead-suspect.txt
 .unsure-classes.txt
+
+# Криптографические ключи и сертификаты — никогда не коммитить
+*.pem
+*.key
+*.crt
+*.cert
+*.pub

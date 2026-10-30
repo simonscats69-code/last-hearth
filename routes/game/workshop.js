@@ -9,7 +9,8 @@
 const express = require('express');
 const router = express.Router();
 const { transaction } = require('../../db/database');
-const { handleError, logger } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
+const { handleError, logger, notFound, fail, unauthorized } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // правды для equipmentRules/normalizeEquipment/normalizeInventory.
@@ -110,7 +111,7 @@ function summarizeMaterials(inventory) {
         const category = String(item.category || item.type || '').toLowerCase();
         if (!['material', 'ammo'].includes(category)) continue;
         const name = item.name || 'Предмет';
-        counts[name] = (counts[name] || 0) + Math.max(1, Number(item.quantity || 1));
+        counts[name] = (counts[name] || 0) + Math.max(0, Number(item.quantity || 1));
     }
     return counts;
 }
@@ -120,7 +121,7 @@ function summarizeMaterials(inventory) {
  */
 router.get('/', async (req, res) => {
     try {
-        const player = await transaction(async (client) => {
+        if (!req.player?.id) return unauthorized(res);
             const result = await client.query(
                 'SELECT coins, equipment, inventory FROM players WHERE id = $1',
                 [req.player.id]
@@ -129,7 +130,7 @@ router.get('/', async (req, res) => {
         });
 
         if (!player) {
-            return res.status(404).json({ success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' });
+            return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
         }
 
         const equipment = normalizeEquipment(player.equipment);
@@ -142,7 +143,7 @@ router.get('/', async (req, res) => {
             coins: Number(player.coins || 0),
             max_upgrade_level: equipmentRules.MAX_UPGRADE_LEVEL,
             slots,
-            materials: summarizeMaterials(player.inventory)
+            materials: summarizeMaterials(normalizeInventory(player.inventory))
         });
     } catch (error) {
         return handleError(res, error, 'workshop_view');
@@ -154,18 +155,16 @@ router.get('/', async (req, res) => {
  * (calculateRepairCost в public/shared/equipment.js).
  */
 router.post('/repair', async (req, res) => {
+    if (!req.player?.id) return unauthorized(res);
     try {
         const slot = String(req.body?.slot || '');
         if (!isValidSlot(slot)) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный слот', code: 'INVALID_SLOT' });
+            return fail(res, 'Укажите корректный слот', 'INVALID_SLOT');
         }
 
         const result = await transaction(async (client) => {
-            const playerResult = await client.query(
-                'SELECT coins, equipment FROM players WHERE id = $1 FOR UPDATE',
-                [req.player.id]
-            );
-            const player = playerResult.rows[0];
+            const player = await lockPlayer(req.player?.id, client, 'coins, equipment');
+
             if (!player) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
@@ -177,7 +176,7 @@ router.post('/repair', async (req, res) => {
             }
 
             const cost = equipmentRules.calculateRepairCost(item);
-            if (cost <= 0) {
+            if (!Number.isFinite(cost) || cost <= 0) {
                 throw { message: 'Предмет не изношен', code: 'NOT_BROKEN', statusCode: 400 };
             }
             if (Number(player.coins || 0) < cost) {
@@ -224,18 +223,16 @@ router.post('/repair', async (req, res) => {
  * Цена: монеты + материал по редкости (+ патроны для стрелкового оружия).
  */
 router.post('/upgrade', async (req, res) => {
+    if (!req.player?.id) return unauthorized(res);
     try {
         const slot = String(req.body?.slot || '');
         if (!isValidSlot(slot)) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный слот', code: 'INVALID_SLOT' });
+            return fail(res, 'Укажите корректный слот', 'INVALID_SLOT');
         }
 
         const result = await transaction(async (client) => {
-            const playerResult = await client.query(
-                'SELECT coins, equipment, inventory FROM players WHERE id = $1 FOR UPDATE',
-                [req.player.id]
-            );
-            const player = playerResult.rows[0];
+            const player = await lockPlayer(req.player?.id, client, 'coins, equipment, inventory');
+
             if (!player) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
@@ -247,7 +244,7 @@ router.post('/upgrade', async (req, res) => {
             }
 
             const cost = equipmentRules.calculateUpgradeCost(item);
-            if (!cost) {
+            if (!cost || typeof cost !== 'object') {
                 throw {
                     message: `Максимальный уровень улучшения: ${equipmentRules.MAX_UPGRADE_LEVEL}`,
                     code: 'MAX_UPGRADE_LEVEL',
@@ -275,8 +272,8 @@ router.post('/upgrade', async (req, res) => {
                 }
 
                 const owned = inventory
-                    .filter((entry) => entry.id === material.id)
-                    .reduce((sum, entry) => sum + Math.max(1, Number(entry.quantity || 1)), 0);
+                    .filter((entry) => Number(entry.id) === Number(material.id))
+                    .reduce((sum, entry) => sum + Math.max(0, Number(entry.quantity || 1)), 0);
 
                 if (owned < required) {
                     throw {
@@ -294,9 +291,9 @@ router.post('/upgrade', async (req, res) => {
                 const material = materials.get(name);
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
-                    if (inventory[i].id !== material.id) continue;
+                    if (Number(inventory[i].id) !== Number(material.id)) continue;
 
-                    const have = Math.max(1, Number(inventory[i].quantity || 1));
+                    const have = Math.max(0, Number(inventory[i].quantity || 1));
                     const take = Math.min(have, left);
                     left -= take;
                     if (take >= have) {
@@ -357,23 +354,21 @@ router.post('/upgrade', async (req, res) => {
  * у брони — дерево, ткань и пластик.
  */
 router.post('/modify', async (req, res) => {
+    if (!req.player?.id) return unauthorized(res);
     try {
         const slot = String(req.body?.slot || '');
         const modification = String(req.body?.modification || '');
 
         if (!isValidSlot(slot)) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный слот', code: 'INVALID_SLOT' });
+            return fail(res, 'Укажите корректный слот', 'INVALID_SLOT');
         }
-        if (!equipmentRules.MODIFICATIONS[modification]) {
+        if (!Object.prototype.hasOwnProperty.call(equipmentRules.MODIFICATIONS, modification) || !equipmentRules.MODIFICATIONS[modification]) {
             return res.status(400).json({ success: false, error: 'Неизвестная модификация', code: 'INVALID_MODIFICATION' });
         }
 
         const result = await transaction(async (client) => {
-            const playerResult = await client.query(
-                'SELECT coins, equipment, inventory FROM players WHERE id = $1 FOR UPDATE',
-                [req.player.id]
-            );
-            const player = playerResult.rows[0];
+            const player = await lockPlayer(req.player?.id, client, 'coins, equipment, inventory');
+
             if (!player) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
@@ -392,7 +387,7 @@ router.post('/modify', async (req, res) => {
             }
 
             const cost = equipmentRules.calculateModificationCost(item, modification);
-            if (!cost) {
+            if (!cost || typeof cost !== 'object') {
                 throw {
                     message: `Максимальный уровень модификации: ${equipmentRules.MAX_MODIFICATION_LEVEL}`,
                     code: 'MAX_MODIFICATION_LEVEL',
@@ -418,8 +413,8 @@ router.post('/modify', async (req, res) => {
                 }
 
                 const owned = inventory
-                    .filter((entry) => entry.id === material.id)
-                    .reduce((sum, entry) => sum + Math.max(1, Number(entry.quantity || 1)), 0);
+                    .filter((entry) => Number(entry.id) === Number(material.id))
+                    .reduce((sum, entry) => sum + Math.max(0, Number(entry.quantity || 1)), 0);
 
                 if (owned < required) {
                     throw {
@@ -438,9 +433,9 @@ router.post('/modify', async (req, res) => {
                 const material = materials.get(name);
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
-                    if (inventory[i].id !== material.id) continue;
+                    if (Number(inventory[i].id) !== Number(material.id)) continue;
 
-                    const have = Math.max(1, Number(inventory[i].quantity || 1));
+                    const have = Math.max(0, Number(inventory[i].quantity || 1));
                     const take = Math.min(have, left);
                     left -= take;
                     if (take >= have) {

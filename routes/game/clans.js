@@ -14,7 +14,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll } = require('../../db/database');
-const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, wrap, logPlayerAction, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
+const { withPlayerLock, validateId, sanitizeName, ok, fail, notFound, unauthorized, wrap, logPlayerAction, logger, ERROR_MESSAGES } = require('../../utils/serverApi');
 
 const crypto = require('crypto');
 // Единый источник игровых констант (общий с клиентом).
@@ -65,6 +65,7 @@ function generateClanInviteCode() {
  */
 router.get('/clan', wrap(async (req, res) => {
     const player = req.player;
+    if (!player?.id) return unauthorized(res);
     const playerId = player?.id;
     
     // Отсутствие клана — это НЕ ошибка запроса, а обычное состояние игрока.
@@ -101,11 +102,12 @@ router.get('/clan', wrap(async (req, res) => {
                             END
                         )
                         ORDER BY p.clan_donated DESC
-                        LIMIT 30
                     )
-                    FROM players p WHERE p.clan_id = c.id
+                    FROM (
+                        SELECT * FROM players WHERE clan_id = c.id ORDER BY clan_donated DESC LIMIT 30
+                    ) p
                 ),
-                '{}'
+                '[]'
             ) AS members,
             (SELECT COUNT(*) FROM players WHERE clan_id = c.id) AS members_count
         FROM clans c
@@ -151,6 +153,9 @@ router.get('/clan', wrap(async (req, res) => {
 router.post('/clan/create', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!req.body || typeof req.body !== 'object') {
+        return fail(res, 'Некорректное тело запроса', 'INVALID_REQUEST_BODY', 400);
+    }
     const { name, description = '', is_public: isPublicBody, is_open: isOpenBody } = req.body;
     // Отдельный код приглашения на каждое создание. Генерация перенесена
     // внутрь транзакции: код выдавался ДО проверок, и при откате (занятое
@@ -280,6 +285,9 @@ router.post('/clan/create', wrap(async (req, res) => {
 router.post('/clan/join', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!req.body || typeof req.body !== 'object') {
+        return fail(res, 'Некорректное тело запроса', 'INVALID_REQUEST_BODY', 400);
+    }
     const { clan_id, invite_code } = req.body;
     
     // Валидация ID клана.
@@ -333,21 +341,30 @@ router.post('/clan/join', wrap(async (req, res) => {
         return fail(res, 'Клан полный (макс. 30 участников)', 'CLAN_FULL');
     }
     
-    const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
-        if (!lockedPlayer) {
-            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-        }
+        const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
+            if (!lockedPlayer) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
 
-        // Проверяем, что игрок не состоит в клане
-        if (lockedPlayer.clan_id) {
-            throw { message: 'Вы уже состоите в клане', code: 'ALREADY_IN_CLAN', statusCode: 400 };
-        }
+            if (lockedPlayer.clan_id) {
+                throw { message: 'Вы уже состоите в клане', code: 'ALREADY_IN_CLAN', statusCode: 400 };
+            }
 
-        // Проверяем количество участников
-        const memberCountResult = await client.query(
-            'SELECT COUNT(*) as count FROM players WHERE clan_id = $1',
-            [clanId]
-        );
+            // Блокируем строку клана, чтобы параллельные вступления не превысили лимит
+            const clanRow = await client.query('SELECT id, is_open, invite_code, name FROM clans WHERE id = $1 FOR UPDATE', [clanId]);
+            const lockedClan = clanRow.rows[0];
+            if (!lockedClan) {
+                throw { message: 'Клан не найден', code: 'CLAN_NOT_FOUND', statusCode: 404 };
+            }
+            if (lockedClan.is_open !== true) {
+                throw { message: 'Клан закрытый', code: 'CLAN_CLOSED', statusCode: 400 };
+            }
+
+            // Проверяем количество участников
+            const memberCountResult = await client.query(
+                'SELECT COUNT(*) as count FROM players WHERE clan_id = $1',
+                [clanId]
+            );
         const memberCount = memberCountResult.rows[0];
 
         if (Number(memberCount.count) >= 30) {
@@ -368,7 +385,7 @@ router.post('/clan/join', wrap(async (req, res) => {
         }
 
         return {
-            message: `Вы вступили в клан ${clan.name}`,
+            message: `Вы вступили в клан ${lockedClan.name}`,
             clan: { id: clan.id, name: clan.name },
             log: { action: 'clan_join', data: { clan_id: clanId, clan_name: clan.name } },
         };
@@ -394,16 +411,60 @@ router.post('/clan/leave', wrap(async (req, res) => {
     }
     
     if (player.clan_role === 'leader') {
-        return fail(res, 'Лидер не может покинуть клан. Передайте лидерство.', 'LEADER_CANT_LEAVE', 403);
+        const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
+            if (!lockedPlayer) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
+
+            const memberCount = await client.query(
+                `SELECT COUNT(*) AS cnt FROM players WHERE clan_id = $1`,
+                [lockedPlayer.clan_id]
+            );
+            const count = parseInt(memberCount.rows[0].cnt, 10);
+            if (count <= 1) {
+                throw { message: 'Лидер не может покинуть клан в одиночку. Передайте лидерство или удалите клан.', code: 'LEADER_CANT_LEAVE_ALONE', statusCode: 403 };
+            }
+            // Передаём лидерство первому попавшемуся члену клана
+            const nextLeader = await client.query(
+                `SELECT id FROM players WHERE clan_id = $1 AND id <> $2 ORDER BY id LIMIT 1 FOR UPDATE`,
+                [lockedPlayer.clan_id, playerId]
+            );
+            if (nextLeader.rows.length > 0) {
+                await client.query(
+                    `UPDATE players SET clan_role = 'leader' WHERE id = $1`,
+                    [nextLeader.rows[0].id]
+                );
+                await client.query(
+                    `UPDATE clans SET leader_id = $1 WHERE id = $2`,
+                    [nextLeader.rows[0].id, lockedPlayer.clan_id]
+                );
+                await logPlayerAction(playerId, 'clan_transfer_leader_auto', {
+                    clan_id: lockedPlayer.clan_id,
+                    from_id: playerId,
+                    to_id: nextLeader.rows[0].id
+                });
+            }
+            await client.query(
+                `UPDATE players SET clan_role = NULL WHERE id = $1`,
+                [playerId]
+            );
+            await client.query(
+                `UPDATE players SET clan_id = NULL WHERE id = $1`,
+                [playerId]
+            );
+            return { message: 'Лидерство передано, вы покинули клан', left: true };
+        });
+        ok(res, { message: 'Лидерство передано, вы покинули клан', left: true });
+        return;
     }
     
     const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
-        if (!lockedPlayer) {
-            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+        if (!lockedPlayer.clan_id || lockedPlayer.clan_role === 'leader') {
+            throw { message: 'Состояние клана изменилось', code: 'CLAN_STATE_CHANGED', statusCode: 409 };
         }
 
         await client.query(
-            `UPDATE players SET clan_id = NULL, clan_role = NULL WHERE id = $1`, 
+            `UPDATE players SET clan_id = NULL, clan_role = NULL WHERE id = $1`,
             [playerId]
         );
 
@@ -440,11 +501,11 @@ router.get('/', wrap(async (req, res) => {
     const hasSearch = search && search.trim().length > 0;
     const searchPattern = hasSearch ? `%${search}%` : '%%';
 
-    let countQuery = 'SELECT COUNT(*) as total FROM clans c';
+    let countQuery = 'SELECT COUNT(*) as total FROM clans c WHERE c.is_public = true';
     let searchQuery = '';
     
     if (hasSearch) {
-        searchQuery = ` WHERE c.name ILIKE $1 OR c.description ILIKE $1`;
+        searchQuery = ` AND (c.name ILIKE $1 OR c.description ILIKE $1)`;
         countQuery += searchQuery;
     }
 
@@ -460,7 +521,9 @@ router.get('/', wrap(async (req, res) => {
     `;
     
     if (hasSearch) {
-        clansQuery += ` WHERE c.name ILIKE $3 OR c.description ILIKE $3`;
+        clansQuery += ` WHERE c.is_public = true AND (c.name ILIKE $3 OR c.description ILIKE $3)`;
+    } else {
+        clansQuery += ` WHERE c.is_public = true`;
     }
     
     clansQuery += ` ORDER BY c.total_donated DESC LIMIT $1 OFFSET $2`;
@@ -567,6 +630,9 @@ router.get('/clan/chat', wrap(async (req, res) => {
 router.post('/clan/chat', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!req.body || typeof req.body !== 'object') {
+        return fail(res, 'Некорректное тело запроса', 'INVALID_REQUEST_BODY', 400);
+    }
     const { message } = req.body;
     
     if (!player.clan_id) {
@@ -619,6 +685,9 @@ router.post('/clan/chat', wrap(async (req, res) => {
 router.post('/clan/donate', wrap(async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!req.body || typeof req.body !== 'object') {
+        return fail(res, 'Некорректное тело запроса', 'INVALID_REQUEST_BODY', 400);
+    }
     const { amount } = req.body;
     
     if (!player.clan_id) {
@@ -646,6 +715,10 @@ router.post('/clan/donate', wrap(async (req, res) => {
             throw { message: ERROR_MESSAGES.INSUFFICIENT_COINS, code: 'INSUFFICIENT_COINS', statusCode: 400 };
         }
 
+        if (!lockedPlayer.clan_id) {
+            throw { message: 'Вы не состоите в клане', code: 'NOT_IN_CLAN', statusCode: 400 };
+        }
+
         // Списание с игрока и добавление в казну клана
         await client.query(
             // COALESCE: у старых записей счётчик пожертвований мог быть NULL,
@@ -660,7 +733,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
                 SET total_donated = COALESCE(total_donated, 0) + $1,
                     coins = COALESCE(coins, 0) + $1
               WHERE id = $2`,
-            [donation, player.clan_id]
+            [donation, lockedPlayer.clan_id]
         );
         
         // Получаем обновлённые показатели клана
@@ -685,4 +758,67 @@ router.post('/clan/donate', wrap(async (req, res) => {
 
     ok(res, result);
 }));
+
+/**
+ * Передача лидерства клана другому участнику
+ * POST /clan/transfer-leader
+ */
+router.post('/clan/transfer-leader', wrap(async (req, res) => {
+    const player = req.player;
+    const playerId = player?.id;
+
+    if (!player.clan_id) {
+        return fail(res, 'Вы не состоите в клане', 'NOT_IN_CLAN');
+    }
+
+    if (player.clan_role !== 'leader') {
+        return fail(res, 'Только лидер клана может передать лидерство', 'NOT_LEADER', 403);
+    }
+
+    const targetId = Number(req.body?.target_id);
+    if (!Number.isInteger(targetId) || targetId <= 0) {
+        return fail(res, 'Укажите корректный ID участника', 'INVALID_TARGET_ID');
+    }
+
+    const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
+        if (!lockedPlayer) {
+            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+        }
+
+        // Проверяем, что цель — член того же клана
+        const targetResult = await client.query(
+            `SELECT id, clan_role FROM players WHERE id = $1 AND clan_id = $2 FOR UPDATE`,
+            [targetId, player.clan_id]
+        );
+        if (targetResult.rows.length === 0) {
+            throw { message: 'Участник не найден в вашем клане', code: 'TARGET_NOT_IN_CLAN', statusCode: 404 };
+        }
+
+        // Передаём лидерство цели, себе — роль участника
+        await client.query(
+            `UPDATE players SET clan_role = 'member' WHERE id = $1`,
+            [playerId]
+        );
+        await client.query(
+            `UPDATE players SET clan_role = 'leader' WHERE id = $1`,
+            [targetId]
+        );
+        await client.query(
+            `UPDATE clans SET leader_id = $1 WHERE id = $2`,
+            [targetId, player.clan_id]
+        );
+
+        return {
+            message: 'Лидерство передано',
+            log: { action: 'clan_transfer_leader', data: { clan_id: player.clan_id, from_id: playerId, to_id: targetId } },
+        };
+    });
+
+    if (result.log) {
+        await logPlayerAction(playerId, result.log.action, result.log.data);
+    }
+
+    ok(res, result);
+}));
+
 module.exports = router;

@@ -11,8 +11,9 @@ import { GAME_CONFIG } from './config';
 
 /** Drop chance based on luck */
 export function calculateDropChance(luck: number): number {
-  if (luck <= 0) return 5;
-  const chance = 10 + (luck * 0.4);
+  const luckNum = Number.isFinite(luck) ? luck : 0;
+  if (luckNum <= 0) return 5;
+  const chance = 10 + (luckNum * 0.4);
   return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
 }
 
@@ -36,9 +37,12 @@ export function calculateCoinDrop(options: {
     deadly: 3.0
   };
 
+  const luckNum = Number.isFinite(luck) ? luck : 0;
+  const levelNum = Number.isFinite(playerLevel) ? Math.max(1, Math.floor(playerLevel)) : 1;
+
   const riskMultiplier = riskMultipliers[riskTier] || 1.0;
-  const luckMultiplier = 1 + (luck * 0.01);
-  const levelMultiplier = 1 + (playerLevel * 0.05);
+  const luckMultiplier = 1 + (luckNum * 0.01);
+  const levelMultiplier = 1 + (levelNum * 0.05);
 
   const amount = Math.floor(
     GAME_CONFIG.BASE_COIN_AMOUNT * riskMultiplier * luckMultiplier * levelMultiplier
@@ -57,7 +61,7 @@ export function getRarityColor(rarity: Rarity | undefined): string {
     epic: '#a855f7',
     legendary: '#f59e0b',
   };
-  return colors[rarity || 'common'];
+  return colors[rarity || 'common'] || colors.common;
 }
 
 /** Rarity sort index */
@@ -72,16 +76,18 @@ export function clamp(value: number, min: number, max: number): number {
 
 /** Format number with suffix (K, M, B) */
 export function formatNumber(value: number): string {
-  if (value >= 1_000_000_000) {
-    return `${(value / 1_000_000_000).toFixed(1)}B`;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '0';
+  if (num >= 1_000_000_000) {
+    return `${(num / 1_000_000_000).toFixed(1)}B`;
   }
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}M`;
+  if (num >= 1_000_000) {
+    return `${(num / 1_000_000).toFixed(1)}M`;
   }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}K`;
+  if (num >= 1_000) {
+    return `${(num / 1_000).toFixed(1)}K`;
   }
-  return String(value);
+  return String(num);
 }
 
 /** Calculate percentage */
@@ -103,5 +109,7 @@ export function mapRange(
   outMin: number,
   outMax: number
 ): number {
-  return ((value - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
+  const denom = inMax - inMin;
+  if (!Number.isFinite(denom) || denom === 0) return outMin;
+  return ((value - inMin) * (outMax - outMin)) / denom + outMin;
 }

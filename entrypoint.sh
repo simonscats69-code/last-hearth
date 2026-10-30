@@ -88,8 +88,14 @@ ls -la /app
 echo "=== Конец списка ==="
 
 mkdir -p /app/data
-chmod 777 /app/data
+chmod 755 /app/data
 chown -R $(id -u):$(id -g) /app/data 2>/dev/null || true
+
+echo "=== Применение миграций БД перед стартом ==="
+npm run db:migrate 2>&1 || {
+  echo "[boot] КРИТИЧЕСКОЕ: миграции не применились, завершение запуска"
+  exit 1
+}
 
 echo "=== Node version ==="
 node --version
@@ -108,9 +114,18 @@ try {
 }
 
 const child = spawn('node', ['index.js'], {
-  stdio: ['inherit', 'pipe', 'pipe'],
-  env: process.env
+    stdio: ['inherit', 'pipe', 'pipe'],
+    env: process.env
 });
+
+// Пробрасываем сигналы на дочерний процесс для корректного graceful shutdown.
+function forwardSignal(signal) {
+    if (!child.killed) {
+        child.kill(signal);
+    }
+}
+process.on('SIGTERM', () => forwardSignal('SIGTERM'));
+process.on('SIGINT', () => forwardSignal('SIGINT'));
 
 child.stdout.on('data', (data) => {
   console.log('[STDOUT]', data.toString().trim());
@@ -137,7 +152,7 @@ child.on('close', (code, signal) => {
   if (signal) {
     process.exit(128 + signal);
   }
-  console.log('[WRAPPER] Process exited with 0, keeping container alive...');
-  setInterval(() => {}, 1000);
+  // Чистый выход с кодом 0 — завершаем контейнер, а не зацикливаемся.
+  process.exit(0);
 });
 " 2>&1

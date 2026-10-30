@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../db/database');
 const { telegramAuthMiddleware, logger } = require('../utils/serverApi');
+const { getAdminIds } = require('../utils/adminIds');
 
 // Применяем telegramAuthMiddleware ко всем admin роутам
 // Это устанавливает req.telegramUser после валидации подписи Telegram
@@ -47,7 +48,7 @@ function requireAdmin(req, res, next) {
         return res.status(401).json({ error: 'Требуется валидная авторизация Telegram' });
     }
     
-    const adminIds = (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+    const adminIds = getAdminIds();
     const telegramId = String(req.telegramUser.id);
     
     if (!adminIds.includes(telegramId)) {

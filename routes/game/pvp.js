@@ -14,6 +14,7 @@
 const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, transaction } = require('../../db/database');
+const { lockPlayer } = require('../../db/players');
 const pvp = require('../../db/pvp');
 const crypto = require('crypto');
 const {
@@ -23,6 +24,7 @@ const {
     handleError: apiHandleError,
     // Сериализация инвентаря при краже предметов в бою.
     safeStringify,
+    unauthorized,
     PlayerHelper: playerHelper
 } = require('../../utils/serverApi');
 
@@ -33,7 +35,7 @@ const { getGameHelpers } = require('../../utils/getGameHelpers');
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
-const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory } = helpers;
+const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory, trackCollectedItems } = helpers;
 // Валидация ID — общая, см. utils/validate.js.
 const { validateId } = require('../../utils/validate');
 // Файл правил предметов импортируется один раз: брать его и по имени
@@ -52,7 +54,7 @@ const MAX_INVENTORY_SLOTS = equipmentRules.MAX_INVENTORY_SLOTS;
  * handleError из serverApi читает их напрямую.
  */
 const PvpError = {
-    PLAYER_NOT_FOUND:  { message: 'Игрок не найден',              code: 'PLAYER_NOT_FOUND',  statusCode: 404 },
+    BANNED:            { message: 'Игрок заблокирован', code: 'BANNED', statusCode: 403 },
     NOT_RED_ZONE:      { message: 'PvP доступно только на красных зонах', code: 'NOT_RED_ZONE',      statusCode: 400 },
     NOT_SAME_LOCATION: { message: 'Игрок не на этой локации',       code: 'NOT_SAME_LOCATION', statusCode: 400 },
     TARGET_DEAD:       { message: 'Противник уже мертв',           code: 'PLAYER_DEAD',       statusCode: 400 },
@@ -144,6 +146,7 @@ const fail = (res, message, code = 'ERROR', statusCode = 400) =>
 router.get('/players', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!playerId) return unauthorized(res);
     
     try {
         // Пагинация
@@ -182,10 +185,11 @@ router.get('/players', async (req, res) => {
                    pvp_wins, pvp_rating, pvp_streak,
                    COUNT(*) OVER() AS total_count
             FROM players
-            WHERE current_location_id = $1 AND id != $2
-              AND banned = false AND health > 0
-            LIMIT $3 OFFSET $4
-        `, [player.current_location_id, playerId, limit, offset]);
+             WHERE current_location_id = $1 AND id != $2
+               AND banned = false AND health > 0
+             ORDER BY id
+             LIMIT $3 OFFSET $4
+         `, [player.current_location_id, playerId, limit, offset]);
 
         // total одинаков для всех строк; если строк нет, total = 0
         const total = resultRows.length > 0
@@ -226,6 +230,7 @@ router.get('/players', async (req, res) => {
 router.post('/attack', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!playerId) return unauthorized(res);
 
     try {
         // Валидация входных данных
@@ -257,21 +262,15 @@ router.post('/attack', async (req, res) => {
                 ? [playerId, targetId]
                 : [targetId, playerId];
             
-            const firstResult = await client.query(
-                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
-                [firstId]
-            );
-            const secondResult = await client.query(
-                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
-                [secondId]
-            );
-            
-            if (!firstResult.rows[0] || !secondResult.rows[0]) {
+            const firstPlayer = await lockPlayer(firstId, client);
+            const secondPlayer = await lockPlayer(secondId, client);
+
+            if (!firstPlayer || !secondPlayer) {
                 throwPvpError(PvpError.PLAYER_NOT_FOUND);
             }
-            
-            const lockedPlayer = firstId === playerId ? firstResult.rows[0] : secondResult.rows[0];
-            const targetPlayer = firstId === targetId ? firstResult.rows[0] : secondResult.rows[0];
+
+            const lockedPlayer = firstId === playerId ? firstPlayer : secondPlayer;
+            const targetPlayer = firstId === targetId ? firstPlayer : secondPlayer;
 
             // Проверяем красную зону
             const location = await client.query(`
@@ -288,6 +287,15 @@ router.post('/attack', async (req, res) => {
 
             if (Number(targetPlayer.health || 0) <= 0) {
                 throwPvpError(PvpError.TARGET_DEAD);
+            }
+            if (Number(lockedPlayer.health || 0) <= 0) {
+                throwPvpError(PvpError.SELF_DEAD);
+            }
+            if (lockedPlayer.banned) {
+                throwPvpError(PvpError.BANNED);
+            }
+            if (targetPlayer.banned) {
+                throwPvpError(PvpError.BANNED);
             }
 
             const attackerProtected = await pvp.isProtectedFromPVP(playerId, client);
@@ -375,7 +383,7 @@ router.post('/attack', async (req, res) => {
             if (revancheCheck.rows[0]) {
                 damageBonus = Number(revancheCheck.rows[0].revanche_bonus || 25);
                 await client.query(
-                    `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL WHERE id = $1`,
+                    `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL, revanche_bonus = 25 WHERE id = $1`,
                     [playerId]
                 );
             }
@@ -443,16 +451,26 @@ router.post('/revanche', async (req, res) => {
         if (!targetIdCheck.ok) {
             return fail(res, 'Укажите корректный ID цели', 'INVALID_TARGET_ID');
         }
-        const targetId = targetIdCheck.value;
+            const targetId = targetIdCheck.value;
 
-        const outcome = await transaction(async (client) => {
+            // Валидация цели: жив, не забанен, уровень >=5
+            const targetCheck = await queryOne('SELECT id, banned, health, level FROM players WHERE id = $1', [targetId]);
+            if (!targetCheck) {
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+            }
+            if (targetCheck.banned) {
+                return { status: 403, body: { success: false, error: 'Игрок заблокирован', code: 'BANNED' } };
+            }
+            if (Number(targetCheck.health || 0) <= 0) {
+                return { status: 400, body: { success: false, error: 'Противник мёртв', code: 'TARGET_DEAD' } };
+            }
+            if (Number(targetCheck.level || 0) < 5) {
+                return { status: 400, body: { success: false, error: 'Цель защищена до 5 уровня', code: 'TARGET_PROTECTED' } };
+            }
+
+            const outcome = await transaction(async (client) => {
             // Проверяем, что у игрока есть revanche против этой цели
-            const playerResult = await client.query(
-                `SELECT revanche_against, revanche_expires_at, revanche_bonus
-                 FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            const p = playerResult.rows[0];
+            const p = await lockPlayer(playerId, client, 'revanche_against, revanche_expires_at, revanche_bonus');
             if (!p) throwPvpError(PvpError.PLAYER_NOT_FOUND);
 
             if (Number(p.revanche_against) !== targetId) {
@@ -484,11 +502,8 @@ router.post('/revanche', async (req, res) => {
 
             const bonus = Number(p.revanche_bonus || 25);
 
-            // Очищаем revanche (один раз на поражение)
-                await client.query(
-                    `UPDATE players SET revanche_against = NULL, revanche_expires_at = NULL, revanche_bonus = 25 WHERE id = $1`,
-                    [playerId]
-                );
+            // Право на реванш сохраняется для /attack (один раз на поражение);
+            // здесь только возвращаем бонус, не очищаем флаг.
 
             return {
                 battle_id: null, // создастся в createPVPMatch
@@ -512,11 +527,9 @@ router.post('/revanche', async (req, res) => {
         }
 
         ok(res, {
-            data: {
-                bonus_percent: outcome.bonus_percent,
-                target_id: outcome.target.id,
-                message: `Реванш активирован! Бонус к урону +${outcome.bonus_percent}% на этот бой.`
-            }
+            bonus_percent: outcome.bonus_percent,
+            target_id: outcome.target.id,
+            message: `Реванш активирован! Бонус к урону +${outcome.bonus_percent}% на этот бой.`
         });
 
     } catch (error) {
@@ -565,19 +578,17 @@ router.get('/battle-log/:battle_id', async (req, res) => {
         );
 
         ok(res, {
-            data: {
-                battle_id: battleId,
-                log: log.map((entry) => ({
-                    round: entry.round_number,
-                    attacker_id: Number(entry.attacker_id),
-                    defender_id: Number(entry.defender_id),
-                    damage: Number(entry.damage || 0),
-                    is_dodged: Boolean(entry.is_dodged),
-                    is_critical: Boolean(entry.is_critical),
-                    defender_health_after: Number(entry.defender_health_after || 0),
-                    created_at: entry.created_at
-                }))
-            }
+            battle_id: battleId,
+            log: log.map((entry) => ({
+                round: entry.round_number,
+                attacker_id: Number(entry.attacker_id),
+                defender_id: Number(entry.defender_id),
+                damage: Number(entry.damage || 0),
+                is_dodged: Boolean(entry.is_dodged),
+                is_critical: Boolean(entry.is_critical),
+                defender_health_after: Number(entry.defender_health_after || 0),
+                created_at: entry.created_at
+            }))
         });
 
     } catch (error) {
@@ -593,9 +604,13 @@ router.get('/battle-log/:battle_id', async (req, res) => {
 router.post('/attack-hit', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!playerId) return unauthorized(res);
 
     try {
         // Валидация
+        if (!req.body || typeof req.body !== 'object') {
+            return fail(res, 'Некорректное тело запроса', 'INVALID_REQUEST_BODY', 400);
+        }
         const { battle_id } = req.body;
         
         const battleIdCheck = validateId(battle_id, 'ID боя');
@@ -648,17 +663,9 @@ router.post('/attack-hit', async (req, res) => {
                 ? [attackerId, defenderId]
                 : [defenderId, attackerId];
             
-            const firstPlayerResult = await client.query(
-                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
-                [firstId]
-            );
-            const secondPlayerResult = await client.query(
-                `SELECT * FROM players WHERE id = $1 FOR UPDATE`,
-                [secondId]
-            );
-            
-            const firstPlayer = firstPlayerResult.rows[0];
-            const secondPlayer = secondPlayerResult.rows[0];
+            const firstPlayer = await lockPlayer(firstId, client);
+            const secondPlayer = await lockPlayer(secondId, client);
+
             const attacker = attackerId === firstId ? firstPlayer : secondPlayer;
             const defender = defenderId === firstId ? firstPlayer : secondPlayer;
 
@@ -716,7 +723,8 @@ router.post('/attack-hit', async (req, res) => {
             }
 
             // Уклонение (soft cap 20%)
-            const dodgeChance = Math.min(20, defender.agility / (defender.agility + 40) * 20);
+            const agilityDenom = Number(defender.agility || 0) + 40;
+            const dodgeChance = agilityDenom === 0 ? 0 : Math.min(20, Number(defender.agility || 0) / agilityDenom * 20);
             const isDodged = crypto.randomInt(100) < dodgeChance;
             
             if (isDodged) {
@@ -742,9 +750,9 @@ router.post('/attack-hit', async (req, res) => {
                     message: 'Противник уклонился от атаки!',
                     hit: {
                         damage: 0,
-                        yourHealth: attacker.health,
-                        targetHealth: defender.health,
-                        maxHealth: defender.max_health
+                        yourHealth: Number(attacker.health || 0),
+                        targetHealth: Number(defender.health || 0),
+                        maxHealth: Number(defender.max_health || 0)
                     },
                     energy_left: energyLeft,
                     last_energy_update: energyLastUpdate
@@ -760,7 +768,7 @@ router.post('/attack-hit', async (req, res) => {
             // слот 'head' и не было 'face'), и маски с противогазами не
             // изнашивались в PvP вообще.
             const attackerBroken = wearEquipmentSlots(client, attackerId, attackerEq, ['weapon']);
-            const defenderBroken = wearEquipmentSlots(client, defenderId, defenderEq, equipmentRules.COMBAT_SLOTS);
+            const defenderBroken = wearEquipmentSlots(client, defenderId, defenderEq, equipmentRules.EQUIPMENT_SLOTS);
 
             await client.query(`
                 UPDATE players
@@ -849,19 +857,25 @@ router.post('/attack-hit', async (req, res) => {
                     // любая добыча сразу упиралась бы в INVENTORY_FULL.
                     if (stolen && attackerInventory.length < MAX_INVENTORY_SLOTS) {
                         const stolenIndex = defenderInventory.indexOf(stolen);
-                        const stackQuantity = Math.max(1, Number(stolen.quantity || 1));
-                        const isEquipment = equipmentRules.isEquipmentItem(stolen);
-
-                        // Из стака крадётся ОДНА штука, а не весь стак — иначе проигравший
-                        // терял бы, например, все 99 собранных консервов.
-                        if (!isEquipment && stackQuantity > 1) {
-                            defenderInventory[stolenIndex] = { ...stolen, quantity: stackQuantity - 1 };
-                            addItemToInventory(attackerInventory, { ...stolen, quantity: 1 }, null);
-                            stolenItem = { ...stolen, quantity: 1 };
+                        if (stolenIndex < 0) {
+                            stolenItem = null;
                         } else {
-                            defenderInventory.splice(stolenIndex, 1);
-                            addItemToInventory(attackerInventory, { ...stolen }, null);
-                            stolenItem = stolen;
+                            const stackQuantity = Math.max(1, Number(stolen.quantity || 1));
+                            const isEquipment = equipmentRules.isEquipmentItem(stolen);
+
+                            // Из стака крадётся ОДНА штука, а не весь стак — иначе проигравший
+                            // терял бы, например, все 99 собранных консервов.
+                            if (!isEquipment && stackQuantity > 1) {
+                                defenderInventory[stolenIndex] = { ...stolen, quantity: stackQuantity - 1 };
+                                addItemToInventory(attackerInventory, { ...stolen, quantity: 1 }, null);
+                                stolenItem = { ...stolen, quantity: 1 };
+                                await trackCollectedItems(client, attackerId, [stolen.id]);
+                            } else {
+                                defenderInventory.splice(stolenIndex, 1);
+                                addItemToInventory(attackerInventory, { ...stolen }, null);
+                                stolenItem = stolen;
+                                await trackCollectedItems(client, attackerId, [stolen.id]);
+                            }
                         }
                     }
                 }
@@ -873,7 +887,7 @@ router.post('/attack-hit', async (req, res) => {
                      ORDER BY danger_level ASC, id ASC
                      LIMIT 1`
                 );
-                const safeLocationId = Number(safeLocationResult.rows[0]?.id || 1);
+                const safeLocationId = safeLocationResult.rows[0]?.id ? Number(safeLocationResult.rows[0].id) : null;
 
                 // Завершаем бой
 await client.query(`
@@ -894,10 +908,10 @@ await client.query(`
                     `UPDATE players
                      SET pvp_wins = pvp_wins + 1,
                          pvp_streak = pvp_streak + 1,
-                         pvp_max_streak = GREATEST(pvp_max_streak, pvp_streak + 1),
+                          pvp_max_streak = GREATEST(pvp_max_streak, $2),
                          pvp_rating = pvp_rating + 25
-                     WHERE id = $1`,
-                    [attackerId]
+                      WHERE id = $1`,
+                    [attackerId, Number(attacker.pvp_streak || 0) + 1]
                 );
                 
                 // Используем playerHelper.addExperience для корректного level-up
@@ -913,7 +927,7 @@ await client.query(`
                         coins = GREATEST(0, coins - $1),
                         coins_stolen_from_me = coins_stolen_from_me + $1,
                         items_stolen_from_me = items_stolen_from_me + $2,
-                        current_location_id = $3,
+                        current_location_id = COALESCE($3, current_location_id),
                         -- Реванш: проигравший может отыграться против победителя
                         -- в течение 24 часов с бонусом к урону
                         revanche_against = $4,
@@ -939,7 +953,7 @@ await client.query(`
                         throw { message: 'Защитник исчез', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
                     }
                     const attWrite = await client.query(
-                        `UPDATE players SET inventory = $1 WHERE id = $2 RETURNING id`,
+                        `UPDATE players SET inventory = $1, items_collected = COALESCE(items_collected, 0) + 1 WHERE id = $2 RETURNING id`,
                         [safeStringify(attackerInventory), attackerId]
                     );
                     if (attWrite.rowCount === 0) {
@@ -1011,9 +1025,9 @@ await client.query(`
                 rewards,
                 hit: {
                     damage,
-                    yourHealth: attacker.health,
-                    targetHealth: defenderHealth,
-                    maxHealth: defender.max_health,
+                    yourHealth: Number(attacker.health || 0),
+                    targetHealth: Number(defenderHealth || 0),
+                    maxHealth: Number(defender.max_health || 0),
                     your_broken_equipment: attackerBroken,
                     target_broken_equipment: defenderBroken
                 },
@@ -1051,6 +1065,7 @@ await client.query(`
 router.get('/stats', async (req, res) => {
     const player = req.player;
     const playerId = player?.id;
+    if (!playerId) return unauthorized(res);
     
     try {
         const [stats, cooldown, recentBattles] = await Promise.all([

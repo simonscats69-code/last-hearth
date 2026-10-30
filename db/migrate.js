@@ -16,7 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { pool, query, transaction, describeError, isConnectionError } = require('./database');
+const { pool, transaction, describeError, isConnectionError } = require('./database');
 const { logger } = require('../utils/log');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
@@ -51,7 +51,7 @@ function getAvailableMigrations() {
         return [];
     }
     return fs.readdirSync(MIGRATIONS_DIR)
-        .filter((file) => file.endsWith('.sql'))
+        .filter((file) => file.endsWith('.sql') && fs.statSync(path.join(MIGRATIONS_DIR, file)).isFile())
         .sort();
 }
 
@@ -63,6 +63,14 @@ async function applyMigration(client, migrationFile, version) {
         path.join(MIGRATIONS_DIR, migrationFile),
         'utf-8'
     );
+    if (!sql.trim()) {
+        logger.info(`[migrate] Миграция ${version} пустая, пропускаем`);
+        await client.query(
+            'INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING',
+            [version]
+        );
+        return;
+    }
     await client.query(sql);
     await client.query(
         'INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING',
@@ -87,7 +95,7 @@ async function runSqlMigrations() {
 
         let count = 0;
         for (const file of files) {
-            const version = file.replace('.sql', '');
+            const version = file.replace(/\.sql$/, '');
             if (appliedSet.has(version)) {
                 continue;
             }
@@ -106,7 +114,8 @@ async function runSqlMigrations() {
  */
 async function runSchemaMigrations() {
     // Ленивый require: schema.js тяжёлая и нужна только при миграции
-    const { runMigrations } = require('./schema');
+    const { createTables, runMigrations } = require('./schema');
+    await createTables();
     await runMigrations();
     logger.info('[migrate] Схемные миграции применены');
 }
@@ -150,7 +159,7 @@ async function runDataRepairs() {
  */
 async function runAllMigrations() {
     // Проверка доступности БД
-    await pool.query('SELECT 1');
+    await pool.query({ text: 'SELECT 1', timeout: 5000 });
 
     // 1. Схемные миграции (идемпотентные ALTER TABLE)
     await runSchemaMigrations();
@@ -162,18 +171,26 @@ async function runAllMigrations() {
     await runDataRepairs();
 }
 
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log('Использование: node db/migrate.js [--help]');
+    console.log('Применяет все неприменённые миграции БД.');
+    process.exit(0);
+}
+
 // Точка входа: если запущен напрямую (не через require)
 if (require.main === module) {
     runAllMigrations()
-        .then(() => {
+        .then(async () => {
             logger.info('[migrate] Все миграции успешно применены');
+            try { await pool.end(); } catch {}
             process.exit(0);
         })
-        .catch((error) => {
+        .catch(async (error) => {
             logger.error(`[migrate] Ошибка миграции: ${describeError(error)}`);
             if (isConnectionError(error)) {
                 logger.error('[migrate] Ошибка подключения к БД. Проверьте настройки.');
             }
+            try { await pool.end(); } catch {}
             process.exit(1);
         });
 }

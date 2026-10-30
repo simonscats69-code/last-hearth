@@ -8,10 +8,11 @@
 const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, transaction } = require('../../db/database');
-const { safeJsonParse, handleError, logPlayerAction } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
+const { safeJsonParse, handleError, logPlayerAction, notFound, fail, unauthorized, incrementItemsCollected, requireItemId } = require('../../utils/serverApi');
 // validateQuantity: единая проверка количества для /buy и /buy-stars.
-// Без неё Math.max/min с NaN пропускали проверку баланса (см. коммент. в роутах).
-const { validateQuantity } = require('../../utils/validate');
+// validateItemIndex: единая проверка индекса предмета в инвентаре.
+const { validateQuantity, validateItemIndex } = require('../../utils/validate');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -73,7 +74,8 @@ router.get(['/shop', '/items'], async (req, res) => {
  */
 router.get(['/', '/inventory'], async (req, res) => {
     try {
-        const playerId = req.player.id;
+        if (!req.player?.id) return unauthorized(res);
+        const playerId = req.player?.id;
 
         const player = await queryOne(
             'SELECT inventory, equipment FROM players WHERE id = $1',
@@ -81,15 +83,15 @@ router.get(['/', '/inventory'], async (req, res) => {
         );
 
         if (!player) {
-            return res.status(404).json({ success: false, error: 'Игрок не найден' });
+            return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
         }
 
         const inventory = normalizeInventory(player.inventory);
-        const equipment = safeJsonParse(player.equipment, {});
+        const equipment = normalizeEquipment(player.equipment);
 
         // Цены продажи считаем по таблице items, а не берём из JSON инвентаря.
         // Одним запросом на все id, чтобы не делать N+1.
-        const ids = [...new Set(inventory.map(i => i.id).filter(id => id != null))];
+        const ids = [...new Set(inventory.map(i => Number(i.id)).filter(id => Number.isInteger(id) && id > 0))];
         const catalog = new Map();
         if (ids.length > 0) {
             const rows = await queryAll(
@@ -120,7 +122,8 @@ router.get(['/', '/inventory'], async (req, res) => {
  */
 router.post('/buy', async (req, res) => {
     try {
-        const playerId = req.player.id;
+        if (!req.player?.id) return unauthorized(res);
+        const playerId = req.player?.id;
 
         // P1-5: quantity валидируется ДО арифметики.
         //
@@ -138,9 +141,7 @@ router.post('/buy', async (req, res) => {
         // itemId тоже целое: раньше `!itemId || itemId <= 0` пропускало 2.5.
         const itemId = Number(req.body?.item_id);
 
-        if (!Number.isSafeInteger(itemId) || itemId <= 0) {
-            return res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
-        }
+        if (!requireItemId(res, itemId)) return;
 
         const result = await transaction(async (client) => {
             const item = await client.query(
@@ -155,16 +156,11 @@ router.post('/buy', async (req, res) => {
             const shopItem = item.rows[0];
             const totalPrice = shopItem.price * quantity;
 
-            const playerResult = await client.query(
-                'SELECT coins, inventory FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
+            const player = await lockPlayer(playerId, client, 'coins, inventory');
 
-            if (!playerResult.rows[0]) {
+            if (!player) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
-
-            const player = playerResult.rows[0];
 
             if (Number(player.coins || 0) < totalPrice) {
                 throw {
@@ -190,8 +186,8 @@ router.post('/buy', async (req, res) => {
             }
 
             await client.query(
-                'UPDATE players SET coins = coins - $1, inventory = $2 WHERE id = $3',
-                [totalPrice, JSON.stringify(inventory), playerId]
+                'UPDATE players SET coins = coins - $1, inventory = $2, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
+                [totalPrice, JSON.stringify(inventory), playerId, quantity]
             );
 
             // P2: покупка тоже идёт в уникальный collection-tracker, иначе
@@ -216,7 +212,7 @@ router.post('/buy', async (req, res) => {
                     quantity
                 },
                 coins_spent: totalPrice,
-                coins_remaining: player.coins - totalPrice
+                coins_remaining: Number(player.coins || 0) - totalPrice
             };
         });
 
@@ -241,31 +237,32 @@ router.post('/buy', async (req, res) => {
  */
 router.post(['/use', '/use-item'], async (req, res) => {
     try {
-        const playerId = req.player.id;
+        if (!req.player?.id) return unauthorized(res);
+        const playerId = req.player?.id;
         const itemIndex = Number(req.body?.item_index);
         const equip = Boolean(req.body?.equip);
 
-        // P2: 2.5 — не NaN и >= 0, поэтому старая проверка его пропускала,
-        // а inventory[2.5] === undefined давал TypeError -> 500.
-        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
-            return res.status(400).json({ success: false, error: 'Укажите корректный индекс предмета', code: 'INVALID_INDEX' });
+        const itemIndexCheck = validateItemIndex(itemIndex);
+        if (!itemIndexCheck.ok) {
+            return fail(res, itemIndexCheck.error, itemIndexCheck.code);
         }
 
         const result = await transaction(async (client) => {
-            const player = await client.query(
-                'SELECT inventory, equipment, health, max_health, radiation FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
+            const playerRow = await lockPlayer(playerId, client, 'inventory, equipment, health, max_health, radiation');
 
-            if (!player.rows[0]) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            if (!playerRow) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
 
-            const inventory = normalizeInventory(player.rows[0].inventory);
+            const inventory = normalizeInventory(playerRow.inventory);
 
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
 
             const item = inventory[itemIndex];
+
+            if (!item || typeof item !== 'object') {
+                throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+            }
 
             if (equip) {
                 // Слот определяет единственный источник правил
@@ -281,14 +278,19 @@ router.post(['/use', '/use-item'], async (req, res) => {
                     };
                 }
 
-                const equipment = safeJsonParse(player.rows[0].equipment, {});
+                const equipment = normalizeEquipment(playerRow.equipment);
                 const oldItem = equipment[slot] || null;
 
                 // Снаряжение не стакается: если в слоте предмет уже лежит,
                 // старый возвращается в инвентарь отдельной записью.
                 inventory.splice(itemIndex, 1);
                 equipment[slot] = item;
-                if (oldItem) inventory.push(oldItem);
+                if (oldItem) {
+                    if (inventory.length >= MAX_INVENTORY_SLOTS) {
+                        throw { message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов).`, code: 'INVENTORY_FULL', statusCode: 400 };
+                    }
+                    inventory.push(oldItem);
+                }
 
                 await client.query(
                     'UPDATE players SET equipment = $1, inventory = $2 WHERE id = $3',
@@ -307,19 +309,19 @@ router.post(['/use', '/use-item'], async (req, res) => {
             const stats = item.stats || {};
             const updates = [];
             const params = [playerId];
-            const playerRadiation = normalizeRadiation(player.rows[0].radiation);
+            const playerRadiation = normalizeRadiation(playerRow.radiation);
 
             // Бонусы сетов: heal_bonus (процент к лечению) и energy_bonus
             // (плоская прибавка к энергии). Без них Медицинский сет был
             // просто набором дорогих вещей без преимущества.
-            const setBonuses = await getSetBonuses(safeJsonParse(player.rows[0].equipment, {}), client);
+            const setBonuses = await getSetBonuses(safeJsonParse(playerRow.equipment, {}), client);
 
             if (stats.healing || stats.health) {
                 const baseHeal = Number(stats.healing || stats.health || 0);
                 const healPercent = Number(stats.heal_bonus || 0) + Number(setBonuses.heal_bonus || 0);
                 const healAmount = Math.max(1, Math.round(baseHeal * (1 + healPercent / 100)));
-                const curHealth = Number(player.rows[0].health || 0);
-                const maxHealth = Number(player.rows[0].max_health || 100);
+                const curHealth = Number(playerRow.health || 0);
+                const maxHealth = Number(playerRow.max_health || 100);
                 const newHealth = Math.min(maxHealth, curHealth + healAmount);
                 updates.push(`health = $${params.length + 1}`);
                 params.push(newHealth);
@@ -329,7 +331,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
             if (stats.energy) {
                 const energyAmount = Number(stats.energy) + Number(setBonuses.energy_bonus || 0);
                 if (energyAmount > 0) {
-                    updates.push(`energy = LEAST(max_energy, energy + $${params.length + 1})`);
+                    updates.push(`energy = LEAST(COALESCE(max_energy,0), COALESCE(energy,0) + $${params.length + 1})`);
                     params.push(energyAmount);
                 }
             }
@@ -407,28 +409,23 @@ router.post(['/use', '/use-item'], async (req, res) => {
  */
 router.post('/sell', async (req, res) => {
     try {
-        const playerId = req.player.id;
+        if (!req.player?.id) return unauthorized(res);
+        const playerId = req.player?.id;
         const itemIndex = Number(req.body?.item_index);
 
-        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите корректный индекс предмета',
-                code: 'INVALID_INDEX'
-            });
+        const itemIndexCheck = validateItemIndex(itemIndex);
+        if (!itemIndexCheck.ok) {
+            return fail(res, itemIndexCheck.error, itemIndexCheck.code);
         }
 
         const result = await transaction(async (client) => {
-            const playerResult = await client.query(
-                'SELECT inventory, coins FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
+            const playerRow = await lockPlayer(playerId, client, 'inventory, coins');
 
-            if (!playerResult.rows[0]) {
+            if (!playerRow) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
-            const inventory = normalizeInventory(playerResult.rows[0].inventory);
+            const inventory = normalizeInventory(playerRow.inventory);
 
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
@@ -436,7 +433,9 @@ router.post('/sell', async (req, res) => {
 
             const item = inventory[itemIndex];
 
-            // Цену берём из таблицы items, а не из JSON инвентаря —
+            if (!item || typeof item !== 'object') {
+                throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+            }
             // иначе цену можно было бы подделать на клиенте.
             const dbItemResult = await client.query(
                 'SELECT id, name, type, rarity, price, stackable FROM items WHERE id = $1',
@@ -469,7 +468,7 @@ router.post('/sell', async (req, res) => {
                 inventory[itemIndex] = { ...item, quantity: stackQuantity - soldQuantity };
             }
 
-            const newCoins = Number(playerResult.rows[0].coins || 0) + earned;
+            const newCoins = Number(playerRow.coins || 0) + earned;
 
             await client.query(
                 'UPDATE players SET coins = $1, inventory = $2 WHERE id = $3',
@@ -519,32 +518,33 @@ router.post('/sell', async (req, res) => {
  */
 router.post('/drop', async (req, res) => {
     try {
-        const playerId = req.player.id;
+        if (!req.player?.id) return unauthorized(res);
+        const playerId = req.player?.id;
         const itemIndex = Number(req.body?.item_index);
 
-        if (!Number.isInteger(itemIndex) || itemIndex < 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Укажите корректный индекс предмета',
-                code: 'INVALID_INDEX'
-            });
+        const itemIndexCheck = validateItemIndex(itemIndex);
+        if (!itemIndexCheck.ok) {
+            return fail(res, itemIndexCheck.error, itemIndexCheck.code);
         }
 
         const result = await transaction(async (client) => {
-            const playerResult = await client.query(
-                'SELECT inventory FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
-            if (!playerResult.rows[0]) {
+            const playerRow = await lockPlayer(playerId, client, 'inventory');
+
+            if (!playerRow) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
-            const inventory = normalizeInventory(playerResult.rows[0].inventory);
+            const inventory = normalizeInventory(playerRow.inventory);
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
 
             const item = inventory[itemIndex];
+
+            if (!item || typeof item !== 'object') {
+                throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+            }
+
             const stackQuantity = Math.max(1, Number(item.quantity || 1));
             const requested = Number(req.body?.quantity);
             const dropQuantity = (Number.isInteger(requested) && requested > 0)
@@ -568,11 +568,11 @@ router.post('/drop', async (req, res) => {
                     [materialNames]
                 );
                 materials = materialResult.rows;
-                if (materials.length === 0) {
+                if (materials.length === 0 || materials.length < materialNames.length) {
                     throw {
                         message: 'Материалы разбора недоступны',
                         code: 'MATERIAL_MISSING',
-                        statusCode: 500
+                        statusCode: 400
                     };
                 }
             }
@@ -591,7 +591,8 @@ router.post('/drop', async (req, res) => {
                 }
 
                 const slotsNeeded = Math.max(0, projected.length - inventory.length);
-                const freeSlots = MAX_INVENTORY_SLOTS - inventory.length;
+                const freesSlot = dropQuantity >= stackQuantity;
+                const freeSlots = MAX_INVENTORY_SLOTS - inventory.length + (freesSlot ? 1 : 0);
                 if (slotsNeeded > freeSlots) {
                     throw {
                         message: `Нужно свободных слотов: ${slotsNeeded}, доступно: ${freeSlots}. Продай или разбери что-нибудь.`,
@@ -664,15 +665,13 @@ router.post('/drop', async (req, res) => {
  */
 router.post('/unequip', async (req, res) => {
     try {
-        const playerId = req.player.id;
+        if (!req.player?.id) return unauthorized(res);
+        const playerId = req.player?.id;
         const slot = String(req.body?.slot || '');
 
         const result = await transaction(async (client) => {
-            const playerResult = await client.query(
-                'SELECT equipment, inventory FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
-            const player = playerResult.rows[0];
+            const player = await lockPlayer(playerId, client, 'equipment, inventory');
+
             if (!player) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
@@ -737,7 +736,8 @@ router.post('/unequip', async (req, res) => {
  */
 router.post('/buy-stars', async (req, res) => {
     try {
-        const playerId = req.player.id;
+        if (!req.player?.id) return unauthorized(res);
+        const playerId = req.player?.id;
 
         // P1-5: та же валидация количества, что и в /buy — см. комментарий там.
         const qtyCheck = validateQuantity(req.body?.quantity);
@@ -748,9 +748,7 @@ router.post('/buy-stars', async (req, res) => {
 
         const itemId = Number(req.body?.item_id);
 
-        if (!Number.isInteger(itemId) || itemId <= 0) {
-            return res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
-        }
+        if (!requireItemId(res, itemId)) return;
 
         const result = await transaction(async (client) => {
             const shopItem = await client.query(
@@ -764,11 +762,8 @@ router.post('/buy-stars', async (req, res) => {
             const shopItemRow = shopItem.rows[0];
             const totalStars = Number(shopItemRow.stars_price) * quantity;
 
-            const playerResult = await client.query(
-                'SELECT stars, inventory FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
-            const player = playerResult.rows[0];
+            const player = await lockPlayer(playerId, client, 'stars, inventory');
+
             if (!player) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
@@ -793,8 +788,8 @@ router.post('/buy-stars', async (req, res) => {
             }
 
             await client.query(
-                'UPDATE players SET stars = stars - $1, inventory = $2 WHERE id = $3',
-                [totalStars, JSON.stringify(inventory), playerId]
+                'UPDATE players SET stars = GREATEST(0, COALESCE(stars,0) - $1), inventory = $2, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
+                [totalStars, JSON.stringify(inventory), playerId, quantity]
             );
 
             await trackCollectedItems(client, playerId, [shopItemRow.id]);
@@ -828,3 +823,4 @@ router.post('/buy-stars', async (req, res) => {
 });
 
 module.exports = router;
+

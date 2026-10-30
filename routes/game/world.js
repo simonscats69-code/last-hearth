@@ -10,6 +10,7 @@ const router = express.Router();
 // transaction() — он же и освобождает соединение в finally.
 // См. пояснение в POST /world/search.
 const { query, queryAll, describeError, transaction } = require('../../db/database');
+const { lockPlayer } = require('../../db/players');
 const {
     DEBUFF_CONFIG,
     calculateDropChance,
@@ -18,7 +19,7 @@ const {
     calculateLocationRiskProfile,
     calculateRadiationDamage
 } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, handleError } = require('../../utils/serverApi');
+const { logger, safeJsonParse, handleError, unauthorized } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -161,7 +162,7 @@ async function handleLocationsList(req, res) {
         const player = req.player;
 
         if (!player) {
-            return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+            return unauthorized(res);
         }
 
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
@@ -170,7 +171,7 @@ async function handleLocationsList(req, res) {
         const countResult = await query(`
             SELECT COUNT(*) as total FROM locations
         `);
-        const totalLocations = parseInt(countResult.rows[0].total, 10);
+        const totalLocations = parseInt(countResult.rows[0]?.total || 0, 10);
         
         const locations = await queryAll(`
             SELECT id, name, icon, color, radiation, danger_level,
@@ -184,7 +185,7 @@ async function handleLocationsList(req, res) {
         const availableLocations = locations.map(loc => {
             // Строим превью лута для клиента: типы предметов, шансы редкостей,
             // примерные предметы и информацию о ключе босса.
-            const lootTable = loc.loot_table && typeof loc.loot_table === 'object' && Object.keys(loc.loot_table).length > 0
+            const lootTable = loc.loot_table && typeof loc.loot_table === 'object' && !Array.isArray(loc.loot_table) && Object.keys(loc.loot_table).length > 0
                 ? loc.loot_table
                 : null;
             const preferredTypes = getLootTypePool(loc.id);
@@ -202,7 +203,7 @@ async function handleLocationsList(req, res) {
                 min_level: loc.required_level,
                 description: loc.description,
                 is_available: loc.is_available,
-                unlocked: player.level >= loc.required_level,
+                unlocked: Number(player.level || 0) >= Number(loc.required_level || 0),
                 current: loc.id === player.current_location_id,
                 loot_preview: {
                     types: preferredTypes,
@@ -248,9 +249,10 @@ router.post('/search', async (req, res) => {
     logger.info('[world] POST /search вызван', { playerId: req.player?.id, body: req.body, headers: safeHeaderKeys });
 
     if (!req.player) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+        return unauthorized(res);
     }
-    const playerId = req.player.id;
+    if (!req.player?.id) return unauthorized(res);
+    const playerId = req.player?.id;
 
     // Раньше здесь вручную бралось соединение, а ветки отказа («нет
     // игрока», «нет здоровья», «нет энергии», «локация не найдена»,
@@ -269,14 +271,7 @@ router.post('/search', async (req, res) => {
             // regenerable всегда 0, хелпер уходит в ветку «на потолке» и пишет
             // last_hp_regen = NOW(), то есть поиск не лечит И обнуляет
             // накопленное время регена.
-            const playerResult = await client.query(`
-                SELECT id, energy, max_energy, current_location_id, radiation, inventory,
-                       equipment, luck, health, max_health, last_hp_regen, level, experience,
-                       buffs, total_actions
-                FROM players WHERE id = $1 FOR UPDATE
-            `, [playerId]);
-
-            const updatedPlayer = playerResult.rows[0];
+            const updatedPlayer = await lockPlayer(playerId, client, 'id, energy, max_energy, current_location_id, radiation, inventory, equipment, luck, health, max_health, last_hp_regen, level, experience, buffs, total_actions, last_energy_update, empty_searches_streak');
 
             if (!updatedPlayer) {
                 return {
@@ -308,6 +303,14 @@ router.post('/search', async (req, res) => {
             // Запрос локации вынесен ПЕРЕД проверкой энергии: сначала убеждаемся,
             // что зона доступна и игрок соответствует уровню, и только потом
             // считаем стоимость действия.
+            if (!updatedPlayer.current_location_id) {
+                throw {
+                    message: 'Локация не найдена',
+                    code: 'LOCATION_NOT_FOUND',
+                    statusCode: 404
+                };
+            }
+
             const location = await client.query(`
                 SELECT id, name, radiation, is_available, min_level, loot_table FROM locations WHERE id = $1
             `, [updatedPlayer.current_location_id]);
@@ -366,7 +369,7 @@ router.post('/search', async (req, res) => {
                 deadly: 3
             };
             const energyCost = activeBuffs.free_energy ? 0 : (ENERGY_COST_BY_TIER[riskProfile.tier] || 1);
-            if (updatedPlayer.energy < energyCost) {
+            if (Number(updatedPlayer.energy || 0) < energyCost) {
                 throw {
                     message: 'Недостаточно энергии',
                     code: 'INSUFFICIENT_ENERGY',
@@ -411,10 +414,12 @@ router.post('/search', async (req, res) => {
         
         // Если радиация не накапливалась в этом поиске, но уже была активна,
         // берём expires_at из существующих данных, чтобы клиент видел срок действия.
-        if (!radiationExpiresAt && resultingRadiationLevel > 0 && existingRadiation.expires_at) {
+        if (!radiationExpiresAt && resultingRadiationLevel > 0 && existingRadiation.expires_at && new Date(existingRadiation.expires_at) > now) {
             radiationExpiresAt = existingRadiation.expires_at;
         }
-        
+
+        updatedPlayer.radiation = { level: resultingRadiationLevel, expires_at: radiationExpiresAt || null };
+
         const modifiers = calculateDebuffModifiers(updatedPlayer);
         // Удача от экипировки (например, Сталкерского пояса) слотом accessory.
         const equipmentLuckBonus = equipmentRules.calculateEquipmentLuckBonus(equipment);
@@ -535,6 +540,11 @@ router.post('/search', async (req, res) => {
                     if (!wouldExceed) {
                         addItemToInventory(inventory, { ...newItem }, foundItem);
                         itemsCollected += 1;
+                        // trackCollectedItems для дубля loot_x2 — иначе
+                        // достижение «Коллекционер» не учитывает второй экземпляр.
+                        if (foundItem?.id) {
+                            await trackCollectedItems(client, playerId, [foundItem.id]);
+                        }
                     }
                 }
 
@@ -555,7 +565,7 @@ router.post('/search', async (req, res) => {
                 // даёт пропорционально больше опыта за риск.
                 const rarityExp = SEARCH_RARITY_XP[itemRarity] ?? 0;
                 const locBonus = Math.pow(1.2, locationData.id - 1);
-                const comboBonus = (updatedPlayer.total_actions + 1) % SEARCH_COMBO_EVERY === 0 ? SEARCH_COMBO_MULTIPLIER : 1;
+                const comboBonus = (Number(updatedPlayer.total_actions || 0) + 1) % SEARCH_COMBO_EVERY === 0 ? SEARCH_COMBO_MULTIPLIER : 1;
                 const baseExpReward = Math.floor(SEARCH_BASE_XP + rarityExp) * locBonus * comboBonus;
                 expGained = Math.max(1, Math.floor(baseExpReward * riskProfile.expMultiplier));
 
@@ -635,6 +645,10 @@ router.post('/search', async (req, res) => {
         
         const energyResult = await client.query(updateSql, params);
 
+        if (!energyResult.rows[0]) {
+            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+        }
+
         const newEnergy = energyResult.rows[0].energy;
         const newMaxEnergy = energyResult.rows[0].max_energy;
         const lastEnergyUpdate = energyResult.rows[0].last_energy_update;
@@ -710,7 +724,7 @@ router.post('/search', async (req, res) => {
                     max: newMaxEnergy,
                     restored: 0,
                     last_update: lastEnergyUpdate,
-                    coins: energyResult.rows[0].coins
+                    coins: Number(energyResult.rows[0].coins || 0)
                 },
                 // Заражение зоной — одно. Инфекции объединены с радиацией,
                 // поэтому отдельный блок infection больше не отдаётся:
@@ -794,12 +808,20 @@ router.post('/move', async (req, res) => {
     // Валидация выполняется ДО открытия транзакции, как и раньше: BEGIN
     // в прежней записи стоял после этих проверок. Заодно уходит лишнее
     // занятие соединения из пула на время валидации.
+    if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({
+            success: false,
+            error: 'Некорректное тело запроса',
+            code: 'INVALID_REQUEST_BODY'
+        });
+    }
     const { location_id } = req.body;
 
     if (!req.player) {
-        return res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' });
+        return unauthorized(res);
     }
-    const playerId = req.player.id;
+    if (!req.player?.id) return unauthorized(res);
+    const playerId = req.player?.id;
     const locationIdNum = Number(location_id);
 
     if (location_id === undefined || location_id === null) {
@@ -822,13 +844,7 @@ router.post('/move', async (req, res) => {
         // Как и в /search: тело транзакции возвращает результат, ответ
         // уходит после COMMIT, ROLLBACK делает transaction().
         const outcome = await transaction(async (client) => {
-            // SELECT с явным списком полей вместо SELECT *. energy нужен для
-            // проверки стоимости перемещения (1 единица).
-            const playerResult = await client.query(`
-                SELECT id, level, current_location_id, energy FROM players WHERE id = $1 FOR UPDATE
-            `, [playerId]);
-
-            const player = playerResult.rows[0];
+            const player = await lockPlayer(playerId, client, 'id, level, current_location_id, energy, last_energy_update');
 
             // Проверяем существование игрока
             if (!player) {
@@ -841,6 +857,8 @@ router.post('/move', async (req, res) => {
                     }
                 };
             }
+
+            await recalcEnergy(client, player);
 
             const targetLocation = await client.query(`
                 SELECT id, name, radiation, description, min_level, danger_level, icon, is_available
@@ -872,7 +890,7 @@ router.post('/move', async (req, res) => {
             }
 
             const requiredLevel = Number(locationData.min_level || 1);
-            if (player.level < requiredLevel) {
+            if (Number(player.level || 0) < requiredLevel) {
                 return {
                     status: 403,
                     body: {
@@ -953,3 +971,4 @@ router.post('/move', async (req, res) => {
 });
 
 module.exports = router;
+

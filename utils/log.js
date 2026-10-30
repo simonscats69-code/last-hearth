@@ -33,8 +33,10 @@ const TABLES = Object.freeze({
 
 // Создаём директорию для логов
 const logDir = path.join(__dirname, '../logs');
-if (!fs.existsSync(logDir)) {
+try {
     fs.mkdirSync(logDir, { recursive: true });
+} catch (err) {
+    if (err.code !== 'EEXIST') throw err;
 }
 
 // JSON формат для продакшена
@@ -66,29 +68,34 @@ transports.push(
         format: winston.format.combine(
             winston.format.colorize(),
             winston.format.timestamp({ format: 'HH:mm:ss' }),
-            winston.format.printf(({ level, message, timestamp, stack }) => {
+            winston.format.printf(({ level, message, timestamp, stack, ...rest }) => {
                 let msg = message;
                 if (typeof message === 'object' && message !== null) {
                     msg = JSON.stringify(message, null, 2);
                 }
+                const meta = Object.keys(rest).length ? ' ' + JSON.stringify(rest) : '';
                 if (stack) {
-                    return `${timestamp} ${level}: ${msg}\n${stack}`;
+                    return `${timestamp} ${level}: ${msg}${meta}\n${stack}`;
                 }
-                return `${timestamp} ${level}: ${msg}`;
+                return `${timestamp} ${level}: ${msg}${meta}`;
             })
         )
     })
 );
 
+const allowedLevels = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'];
+const requestedLevel = String(process.env.LOG_LEVEL || 'info').toLowerCase();
+const loggerLevel = allowedLevels.includes(requestedLevel) ? requestedLevel : 'info';
+
 const logger = winston.createLogger({
-    level: process.env.LOG_LEVEL || 'info',
+    level: loggerLevel,
     format: jsonFormat,
     defaultMeta: { service: 'last-hearth-api' },
     transports
 });
 
 logger.on('error', (err) => {
-    logger.error('Logger subsystem error:', err);
+    console.error('Logger subsystem error:', err && err.message, err && err.stack);
 });
 
 /**
@@ -96,11 +103,13 @@ logger.on('error', (err) => {
  */
 function serializeJSONField(value) {
     if (value === undefined || value === null) return '{}';
-    if (typeof value === 'function') return '{}';
+    if (typeof value === 'function' || typeof value === 'symbol') return '{}';
+    if (typeof value === 'bigint') return JSON.stringify(value.toString());
     try {
-        return JSON.stringify(value);
+        const s = JSON.stringify(value);
+        return typeof s === 'string' ? s : '{}';
     } catch (error) {
-        logger.warn('serializeJSONField failed', { error: error.message });
+        logger.warn('serializeJSONField failed', { error: error.message, stack: error.stack });
         return '{}';
     }
 }
@@ -120,7 +129,7 @@ function handleLogError(error, context) {
  * @param {object} client - Опциональный клиент БД (для использования внутри транзакции)
  */
 async function logPlayerAction(playerId, action, metadata = {}, client = null) {
-    if (!playerId || !action) {
+    if (playerId == null || typeof action !== 'string' || !action.trim()) {
         logger.error('[logPlayerAction] Некорректные параметры');
         return;
     }
@@ -149,11 +158,12 @@ async function logPlayerAction(playerId, action, metadata = {}, client = null) {
  * Логирование ошибок игрока
  */
 function logPlayerError(playerId, error, context = {}) {
+    const err = error instanceof Error ? error : new Error(String(error));
     logger.error({
         type: 'player_error',
         playerId,
-        message: error.message,
-        stack: error.stack,
+        message: err.message,
+        stack: err.stack,
         ...context
     });
 }

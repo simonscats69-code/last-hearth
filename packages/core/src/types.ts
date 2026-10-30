@@ -9,7 +9,7 @@ export type EquipmentSlot =
   | 'weapon'
   | 'armor'
   | 'helmet'
-  | 'head'
+  | 'face'
   | 'body'
   | 'hands'
   | 'legs'
@@ -61,7 +61,7 @@ export interface PlayerEquipment {
   weapon?: InventoryItem;
   armor?: InventoryItem;
   helmet?: InventoryItem;
-  head?: InventoryItem;
+  face?: InventoryItem;
   body?: InventoryItem;
   hands?: InventoryItem;
   legs?: InventoryItem;
@@ -104,10 +104,12 @@ export interface PlayerStats {
   bosses_killed: number;
   pvp_wins: number;
   pvp_losses: number;
-  pvp_draws: number;
   pvp_streak: number;
   pvp_max_streak: number;
   pvp_rating: number;
+  banned: boolean;
+  ban_reason: string | null;
+  days_played: number;
   total_actions: number;
   daily_streak: number;
   daily_tasks_completed: number;
@@ -123,7 +125,7 @@ export interface PlayerStats {
 
 /** Equipment slot names — согласованы с public/shared/equipment.js */
 export const EQUIPMENT_SLOTS: EquipmentSlot[] = [
-  'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'
+  'armor', 'helmet', 'face', 'body', 'hands', 'legs', 'boots', 'accessory'
 ];
 
 /** Combat-relevant equipment slots (EQUIPMENT_SLOTS + weapon) */
@@ -133,7 +135,7 @@ export const COMBAT_SLOTS: EquipmentSlot[] = [
 
 /** Combat slots used for defense calculation (без weapon — он не даёт защиту) */
 export const DEFENSE_SLOTS: EquipmentSlot[] = [
-  'armor', 'helmet', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'
+  'armor', 'helmet', 'face', 'body', 'hands', 'legs', 'boots', 'accessory'
 ];
 
 /** Rarity order for sorting */
@@ -146,7 +148,7 @@ export const SLOT_ICONS: Record<EquipmentSlot, string> = {
   weapon: '⚔️',
   armor: '🛡️',
   helmet: '⛑️',
-  head: '🪖',
+  face: '🪖',
   body: '🧥',
   hands: '🧤',
   legs: '👖',
@@ -164,7 +166,7 @@ export const RARITY_COLORS: Record<Rarity, string> = {
 };
 
 /** Valid equipment slots for combat */
-export const VALID_COMBAT_SLOTS = ['weapon', 'body', 'head', 'hands', 'legs', 'boots', 'accessory'] as const;
+export const VALID_COMBAT_SLOTS = ['weapon', 'body', 'face', 'hands', 'legs', 'boots', 'accessory'] as const;
 
 /** Ammo item names */
 export const AMMO_ITEM_NAME = 'Патроны';
@@ -181,8 +183,8 @@ export interface Modification {
   materials: Record<string, string>;
 }
 
-export const MODIFICATIONS: Modification[] = [
-  {
+export const MODIFICATIONS: Record<string, Modification> = {
+  sharpening: {
     key: 'sharpening',
     name: 'Заточка',
     stat: 'damage',
@@ -197,7 +199,7 @@ export const MODIFICATIONS: Modification[] = [
       legendary: 'Титан'
     }
   },
-  {
+  plating: {
     key: 'plating',
     name: 'Облицовка',
     stat: 'defense',
@@ -212,11 +214,12 @@ export const MODIFICATIONS: Modification[] = [
       legendary: 'Электроника'
     }
   }
-];
+};
 
-export const MODIFICATION_BY_STAT: Record<string, Modification> = Object.fromEntries(
-  MODIFICATIONS.map(m => [m.stat, m])
-);
+export const MODIFICATION_BY_STAT: Record<string, string> = {
+  damage: 'sharpening',
+  defense: 'plating'
+};
 
 /** Upgrade materials by rarity */
 export const UPGRADE_MATERIAL_BY_RARITY: Record<string, string> = {
@@ -258,4 +261,4 @@ export const MAX_MODIFICATION_LEVEL = 3;
 export const UPGRADE_BONUS_PER_LEVEL = 0.08;
 
 /** Valid equipment slots */
-export const VALID_SLOTS = ['weapon', 'head', 'body', 'hands', 'legs', 'boots', 'accessory'] as const;
+export const VALID_SLOTS = ['weapon', 'face', 'body', 'hands', 'legs', 'boots', 'accessory'] as const;

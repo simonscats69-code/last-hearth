@@ -174,6 +174,19 @@ const serverApiMock = {
     ok: (r, d) => r.status(200).json({ success: true, data: d }),
     fail: (r, m, c) => r.status(400).json({ success: false, error: m, code: c }),
     notFound: (r, m, c) => r.status(404).json({ success: false, error: m, code: c }),
+    unauthorized: (r, m = 'Требуется авторизация', c = 'UNAUTHORIZED') => r.status(401).json({ success: false, error: m, code: c }),
+    requireAuth: (req, res) => {
+        if (!req.player || !req.player.id) { res.status(401).json({ success: false, error: 'Требуется авторизация', code: 'UNAUTHORIZED' }); return false; }
+        return true;
+    },
+    requireBossId: (res, bossId) => {
+        if (!bossId || bossId <= 0 || !Number.isInteger(bossId)) { res.status(400).json({ success: false, error: 'Укажите корректный ID босса', code: 'INVALID_BOSS_ID' }); return false; }
+        return true;
+    },
+    requireRaidId: (res, raidId) => {
+        if (!raidId || raidId <= 0 || !Number.isInteger(raidId)) { res.status(400).json({ success: false, error: 'Укажите корректный ID рейда', code: 'INVALID_RAID_ID' }); return false; }
+        return true;
+    },
     PlayerHelper: { addExperience: async () => ({}) }
 };
 

@@ -95,7 +95,15 @@ const serverApiMock = {
         const code = typeof error.code === 'string' ? error.code : 'ERROR';
         return res.status(statusCode).json({ success: false, error: error.message, code });
     },
-    logPlayerAction: async () => {}
+    logPlayerAction: async () => {},
+    fail: (res, message, code) => res.status(400).json({ success: false, error: message, code }),
+    requireItemId: (res, itemId) => {
+        if (!itemId || itemId <= 0 || !Number.isSafeInteger(itemId)) {
+            res.status(400).json({ success: false, error: 'Укажите ID предмета', code: 'INVALID_ITEM_ID' });
+            return false;
+        }
+        return true;
+    }
 };
 
 const validateMock = {

@@ -25,11 +25,11 @@ function normalizeInventory(value) {
     const parsed = safeJsonParse(value, []);
 
     if (Array.isArray(parsed)) {
-        return parsed;
+        return parsed.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }));
     }
 
     if (parsed && typeof parsed === 'object') {
-        return Object.values(parsed).filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+        return Object.values(parsed).filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }));
     }
 
     return [];
@@ -209,17 +209,18 @@ function addItemToInventory(inventory, newItem, dbItem) {
     const isEquipment = Boolean(newItem.slot || dbItem?.slot)
         || EQUIPMENT_TYPES.has(type)
         || EQUIPMENT_TYPES.has(category);
-    const stackable = dbItem ? dbItem.stackable !== false : true;
+    const stackable = dbItem ? dbItem.stackable !== false && dbItem.stackable !== 0 && dbItem.stackable !== '0' : true;
 
     const maxStack = Math.max(1, Number(dbItem?.max_stack || 99));
-    const quantity = Math.max(1, Number(newItem.quantity || 1));
+    const rawQty = Number(newItem.quantity || 1);
+    const quantity = Number.isFinite(rawQty) && rawQty > 0 ? rawQty : 1;
 
     let remaining = quantity;
 
-    if (stackable && !isEquipment && type !== 'key' && !newItem.upgrade_level) {
+    if (stackable && !isEquipment && type !== 'key' && Number(newItem.upgrade_level || 0) === 0) {
         for (let i = 0; i < inventory.length && remaining > 0; i++) {
             const existing = inventory[i];
-            if (!existing || existing.id !== newItem.id) continue;
+            if (!existing || Number(existing.id) !== Number(newItem.id)) continue;
             if (existing.rarity !== newItem.rarity) continue;
             if (Number(existing.upgrade_level || 0) !== 0) continue;
 
@@ -305,8 +306,21 @@ function buildPlayerStatus(player) {
  */
 async function recalcEnergy(client, player) {
     const now = Date.now();
+    if (!player.last_energy_update) {
+        await client.query('UPDATE players SET last_energy_update = $1 WHERE id = $2', [new Date(now).toISOString(), player.id]);
+        player.last_energy_update = new Date(now).toISOString();
+        return player;
+    }
     const last = new Date(player.last_energy_update).getTime();
     if (!Number.isFinite(last)) return player;
+
+    // Если метка в будущем — не регенируем, но сдвигаем метку на now,
+    // чтобы не «замораживать» реген навсегда.
+    if (last > now) {
+        await client.query('UPDATE players SET last_energy_update = $1 WHERE id = $2', [new Date(now).toISOString(), player.id]);
+        player.last_energy_update = new Date(now).toISOString();
+        return player;
+    }
 
     const elapsedMs = Math.max(0, now - last);
     // 1 энергия за интервал из общего файла правил (60 c)
@@ -359,13 +373,13 @@ async function regenerateHealth(client, player) {
     const current = Math.max(0, Number(player.health) || 0);
 
     const regenerable = Math.max(0, maxHealth - current);
-    const stamp = () => new Date().toISOString();
+    const nowStamp = new Date().toISOString();
 
     if (regenerable <= 0) {
         // При полном здоровье метку всё равно двигаем: иначе она «застынет»
         // и при следующем уроне накопится время с прошлого раза.
-        await client.query('UPDATE players SET last_hp_regen = $1 WHERE id = $2', [stamp(), player.id]);
-        player.last_hp_regen = stamp();
+        await client.query('UPDATE players SET last_hp_regen = $1 WHERE id = $2', [nowStamp, player.id]);
+        player.last_hp_regen = nowStamp;
         return 0;
     }
 
@@ -374,8 +388,8 @@ async function regenerateHealth(client, player) {
 
     if (!Number.isFinite(last)) {
         // Первый запуск: только ставим метку, ничего не начисляем.
-        await client.query('UPDATE players SET last_hp_regen = $1 WHERE id = $2', [stamp(), player.id]);
-        player.last_hp_regen = stamp();
+        await client.query('UPDATE players SET last_hp_regen = $1 WHERE id = $2', [nowStamp, player.id]);
+        player.last_hp_regen = nowStamp;
         return 0;
     }
 
@@ -427,7 +441,7 @@ function normalizeEquipment(raw) {
     for (const slot of Object.keys(eq)) {
         const item = eq[slot];
         if (item && typeof item === 'object' && !Array.isArray(item)) {
-            out[slot] = item;
+            out[slot] = { ...item };
         }
     }
     return out;
@@ -513,16 +527,16 @@ function wearEquipmentSlots(client, playerId, equipment, slots) {
  * @param {Iterable<number|string>} itemIds
  */
 async function trackCollectedItems(client, playerId, itemIds) {
-    const ids = [...new Set([...itemIds].map(Number).filter(Number.isFinite))];
+    const ids = [...new Set(Array.from(itemIds || []).map(Number).filter(Number.isFinite))];
     if (ids.length === 0) return;
 
     await client.query(`
         UPDATE players
            SET unique_items = (
                    SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb)
-                     FROM jsonb_array_elements_text(
-                         COALESCE(unique_items, '[]'::jsonb) || $2::jsonb
-                     ) AS value
+                      FROM jsonb_array_elements(
+                          COALESCE(unique_items, '[]'::jsonb) || $2::jsonb
+                      ) AS value
                )
          WHERE id = $1
     `, [playerId, JSON.stringify(ids)]);

@@ -15,6 +15,7 @@ const router = express.Router();
 // была закоммичена (например, если res.json бросил исключение после
 // COMMIT) — лишний запрос на закрытой транзакции.
 const { query, transaction } = require('../../db/database');
+const { lockPlayer } = require('../../db/players');
 const { logger, handleError, safeJsonParse, unauthorized } = require('../../utils/serverApi');
 
 // ==========================================
@@ -51,6 +52,7 @@ function selectPrize() {
  */
 router.get(['/wheel', '/'], async (req, res) => {
     logger.info('[minigames/wheel] Начало запроса', { playerId: req.player?.id });
+    if (!req.player?.id) return unauthorized(res);
     const playerId = req.player?.id;
 
     if (!playerId) {
@@ -110,6 +112,7 @@ router.get(['/wheel', '/'], async (req, res) => {
  * POST /wheel/spin или POST /spin - крутить колесо
  */
 router.post(['/wheel/spin', '/spin'], async (req, res) => {
+    if (!req.player?.id) return unauthorized(res);
     const playerId = req.player?.id;
     // Валидация: преобразуем к boolean
     const is_paid = req.body?.is_paid === true || req.body?.is_paid === 'true';
@@ -126,12 +129,7 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
     try {
         const outcome = await transaction(async (client) => {
             // Получаем игрока
-            const playerResult = await client.query(
-                'SELECT id, coins, stars, energy, max_energy, last_wheel_spin FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
-
-            const player = playerResult.rows[0];
+            const player = await lockPlayer(playerId, client);
 
             if (!player) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден' } };
@@ -145,8 +143,13 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
             if (!lastSpin) {
                 canSpinFree = true;
             } else {
-                const timeSinceLastSpin = now - new Date(lastSpin).getTime();
-                canSpinFree = timeSinceLastSpin >= FREE_SPIN_COOLDOWN_MS;
+                const lastTime = new Date(lastSpin).getTime();
+                if (Number.isNaN(lastTime)) {
+                    canSpinFree = true;
+                } else {
+                    const timeSinceLastSpin = now - lastTime;
+                    canSpinFree = timeSinceLastSpin >= FREE_SPIN_COOLDOWN_MS;
+                }
             }
 
             // Проверка платного вращения
@@ -190,7 +193,7 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
                 [prize.value, playerId]
             );
         } else if (prize.type === 'energy') {
-            const newEnergy = Math.min(player.max_energy || 100, (player.energy || 0) + prize.value);
+            const newEnergy = Math.min(Number(player.max_energy) || 50, (Number(player.energy) || 0) + prize.value);
             const updateCooldown = !is_paid ? ', last_wheel_spin = NOW()' : '';
             await client.query(
                 `UPDATE players SET energy = $1${updateCooldown} WHERE id = $2`,
@@ -287,9 +290,12 @@ function getItemConfig(itemId) {
  * @param {object} existingBuffs - уже полученные buffs игрока
  */
 async function grantPlayerBuff(client, playerId, effect, expiresAtISO, existingBuffs) {
-    const buffs = { ...existingBuffs };
-    buffs[effect] = { expires_at: expiresAtISO };
-    
+    const buffs = (existingBuffs && typeof existingBuffs === 'object' && !Array.isArray(existingBuffs)) ? { ...existingBuffs } : {};
+    const newExpires = new Date(expiresAtISO).getTime();
+    const oldExpires = buffs[effect]?.expires_at ? new Date(buffs[effect].expires_at).getTime() : 0;
+    const finalExpires = Number.isFinite(newExpires) && newExpires > oldExpires ? expiresAtISO : (buffs[effect]?.expires_at || expiresAtISO);
+    buffs[effect] = { expires_at: finalExpires };
+
     await client.query(
         'UPDATE players SET buffs = $1 WHERE id = $2',
         [JSON.stringify(buffs), playerId]
@@ -304,7 +310,7 @@ async function grantPlayerBuff(client, playerId, effect, expiresAtISO, existingB
  * @param {Array} existingCosmetics - уже полученные cosmetics игрока
  */
 async function grantPlayerCosmetic(client, playerId, effect, existingCosmetics) {
-    let cosmetics = existingCosmetics ? [...existingCosmetics] : [];
+    const cosmetics = Array.isArray(existingCosmetics) ? [...existingCosmetics] : [];
     
     if (!cosmetics.includes(effect)) {
         cosmetics.push(effect);
@@ -321,9 +327,18 @@ const parseJsonField = safeJsonParse;
  * POST /purchase - покупка товара за Stars
  */
 router.post(['/purchase', '/'], async (req, res) => {
+    if (!req.player?.id) return unauthorized(res);
+    const playerId = req.player?.id;
+
     // Валидируем до получения клиента из пула
+    if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({
+            success: false,
+            error: 'Некорректное тело запроса',
+            code: 'INVALID_REQUEST_BODY'
+        });
+    }
     const { item_id, currency = 'stars' } = req.body;
-    const playerId = req.player.id;
     
     if (currency !== 'stars') {
         return res.status(400).json({
@@ -349,13 +364,13 @@ router.post(['/purchase', '/'], async (req, res) => {
     try {
         const outcome = await transaction(async (client) => {
             // Получаем игрока со всеми необходимыми данными одним запросом
-            const playerResult = await client.query(
-                'SELECT stars, buffs, cosmetics FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
+            const player = await lockPlayer(playerId, client);
 
-            const player = playerResult.rows[0];
-            const playerStars = player?.stars || 0;
+            if (!player) {
+                return { status: 404, body: { success: false, error: 'Игрок не найден' } };
+            }
+
+            const playerStars = player.stars || 0;
 
             if (playerStars < price) {
                 return {
@@ -368,6 +383,11 @@ router.post(['/purchase', '/'], async (req, res) => {
                         required: price
                     }
                 };
+            }
+
+            const existingCosmeticsEarly = parseJsonField(player?.cosmetics, []);
+            if (itemConfig.category === 'cosmetics' && Array.isArray(existingCosmeticsEarly) && existingCosmeticsEarly.includes(itemConfig.effect)) {
+                return { status: 400, body: { success: false, error: 'Уже куплено', code: 'ALREADY_OWNED' } };
             }
 
             // Списываем Stars. GREATEST(0, ...) по той же причине, что и в колесе:
@@ -508,7 +528,7 @@ router.get('/leaderboard/players', async (req, res) => {
                     entry.bosses_killed = player.bosses_killed;
                     break;
                 case 'pvp': {
-                    const total = player.pvp_wins + player.pvp_losses;
+                    const total = Number(player.pvp_wins || 0) + Number(player.pvp_losses || 0);
                     entry.pvp_wins = player.pvp_wins;
                     entry.pvp_losses = player.pvp_losses;
                     entry.win_rate = total > 0 ? Math.round((player.pvp_wins / total) * 100) : 0;
@@ -563,7 +583,7 @@ router.get('/leaderboard/clans', async (req, res) => {
             name: clan.name,
             leader_id: clan.leader_id,
             level: clan.level,
-            members_count: clan.members_count,
+            members_count: parseInt(clan.members_count, 10),
             total_levels: parseInt(clan.total_levels, 10),
             total_clans: parseInt(clan.total_clans, 10)
         }));
@@ -580,3 +600,4 @@ router.get('/leaderboard/clans', async (req, res) => {
 // ==========================================
 
 module.exports = router;
+

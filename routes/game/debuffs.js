@@ -11,9 +11,10 @@
 const express = require('express');
 const router = express.Router();
 const { transaction, queryOne } = require('../../db/database');
+const { lockPlayer } = require('../../db/players');
 // logger раньше использовался только в удалённых HTTP-роутах. Ошибки из
 // DebuffAPI ловит вызывающий: world.js отдаёт их в handleError.
-const { safeJsonParse, logPlayerAction, handleError } = require('../../utils/serverApi');
+const { safeJsonParse, logPlayerAction, handleError, unauthorized, notFound, fail } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -58,7 +59,7 @@ const DebuffAPI = {
     async apply(playerId, type, level, options = {}) {
         const config = DEBUFF_CONFIG[type];
         if (!config) {
-            throw new Error(`Неизвестный тип дебаффа: ${type}`);
+            throw { message: `Неизвестный тип дебаффа: ${type}`, code: 'UNKNOWN_DEBUFF', statusCode: 400 };
         }
 
         // P2: уровень приводим к конечному числу ДО арифметики.
@@ -70,20 +71,16 @@ const DebuffAPI = {
         // а инфекция даёт 0 урона навсегда.
         const numericLevel = Number(level);
         if (!Number.isFinite(numericLevel)) {
-            throw new Error(`Некорректный уровень дебаффа: ${level}`);
+            throw { message: `Некорректный уровень дебаффа: ${level}`, code: 'INVALID_DEBUFF_LEVEL', statusCode: 400 };
         }
         level = Math.min(config.maxLevel, Math.max(config.minLevel, numericLevel));
 
         const executor = async (client) => {
             // Блокируем строку игрока по внутреннему id
-            const playerResult = await client.query(
-                `SELECT radiation FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            const player = playerResult.rows[0];
-            
+            const player = await lockPlayer(playerId, client, 'radiation');
+
             if (!player) {
-                throw new Error('Игрок не найден');
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
             
             const now = new Date();
@@ -93,8 +90,8 @@ const DebuffAPI = {
             
             if (type === DEBUFF_TYPES.RADIATION) {
                 // Применяем/увеличиваем радиацию
-                const currentRadiation = safeJsonParse(player.radiation, { level: 0 });
-                const newLevel = Math.min(config.maxLevel, currentRadiation.level + level);
+                const currentLevel = normalizeRadiationLevel(player.radiation);
+                const newLevel = Math.min(config.maxLevel, currentLevel + Number(level || 0));
                 
                 await client.query(
                     `UPDATE players SET radiation = $1 WHERE id = $2`,
@@ -106,7 +103,7 @@ const DebuffAPI = {
                 );
                 
                 await logPlayerAction(playerId, 'debuff_radiation_apply', {
-                    oldLevel: currentRadiation.level,
+                    oldLevel: currentLevel,
                     newLevel,
                     source: options.source
                 }, client);
@@ -117,7 +114,7 @@ const DebuffAPI = {
             // Единственный тип дебаффа — радиация. Прежняя ветка
             // DEBUFF_TYPES.INFECTION писала в players.infections отдельным
             // массивом; теперь зона даёт одно заражение в players.radiation.
-            throw new Error(`Неизвестный тип дебаффа: ${type}`);
+            throw { message: `Неизвестный тип дебаффа: ${type}`, code: 'UNKNOWN_DEBUFF', statusCode: 400 };
         };
 
         if (options.client) {
@@ -134,14 +131,10 @@ const DebuffAPI = {
      */
     async check(playerId) {
         return await transaction(async (client) => {
-            const playerResult = await client.query(
-                `SELECT radiation, health FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            const player = playerResult.rows[0];
-            
+            const player = await lockPlayer(playerId, client, 'radiation, health');
+
             if (!player) {
-                throw new Error('Игрок не найден');
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
             
             const now = new Date();
@@ -151,9 +144,13 @@ const DebuffAPI = {
             
             // Проверяем радиацию
             const radiation = safeJsonParse(player.radiation, { level: 0, expires_at: null, applied_at: null });
-            if (radiation.level > 0 && radiation.expires_at) {
+            const radiationLevel = normalizeRadiationLevel(radiation);
+            if (radiationLevel > 0 && radiation.expires_at) {
                 const expiresAt = new Date(radiation.expires_at);
-                if (expiresAt <= now) {
+                if (!Number.isFinite(expiresAt.getTime())) {
+                    await client.query(`UPDATE players SET radiation = $1 WHERE id = $2`, [JSON.stringify({ level: 0, expires_at: null, applied_at: null }), playerId]);
+                    expired.push('radiation');
+                } else if (expiresAt <= now) {
                     // Дебафф истёк по времени
                     await client.query(
                         `UPDATE players SET radiation = $1 WHERE id = $2`,
@@ -168,7 +165,7 @@ const DebuffAPI = {
                     const decaySteps = Math.floor(elapsedMs / config.regenRateMs);
                     
                     if (decaySteps > 0) {
-                        const newLevel = Math.max(0, radiation.level - decaySteps);
+                        const newLevel = Math.max(0, radiationLevel - decaySteps);
                         let newExpiresAt = null;
                         if (newLevel > 0) {
                             // Считаем expires_at от исходного applied_at, а не от now,
@@ -217,7 +214,7 @@ const DebuffAPI = {
             const totalDamage = DebuffAPI.calculateDebuffDamage(active);
             if (totalDamage > 0) {
                 await client.query(
-                    `UPDATE players SET health = GREATEST(0, health - $1) WHERE id = $2`,
+                    `UPDATE players SET health = GREATEST(0, COALESCE(health,0) - $1) WHERE id = $2`,
                     [totalDamage, playerId]
                 );
             }
@@ -238,6 +235,7 @@ const DebuffAPI = {
      * @returns {number} суммарный урон
      */
     calculateDebuffDamage(activeDebuffs) {
+        if (!activeDebuffs) return 0;
         let damage = 0;
         const now = new Date();
         
@@ -245,7 +243,8 @@ const DebuffAPI = {
             if (!debuff.expiresAt) continue;
             
             const expiresAt = new Date(debuff.expiresAt);
-            
+            if (!Number.isFinite(expiresAt.getTime())) continue;
+
             // Дебафф истёк - пропускаем (урон не наносится)
             if (expiresAt <= now) continue;
             
@@ -268,6 +267,7 @@ const DebuffAPI = {
      * Только радиация: инфекции объединены с ней.
      */
     getActive(player) {
+        if (!player) return [];
         // Тот же парсер, что и в status.js /check: три формата хранения
         // радиации (объект/число/строка-JSON) живут в одной функции
         // utils/gameConstants.js.
@@ -301,14 +301,10 @@ const DebuffAPI = {
 
         const executor = async (client) => {
             // Получаем игрока и инвентарь
-            const playerResult = await client.query(
-                `SELECT radiation, inventory FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            const player = playerResult.rows[0];
-            
+            const player = await lockPlayer(playerId, client, 'radiation, inventory');
+
             if (!player) {
-                throw createDebuffError('Игрок не найден', 'PLAYER_NOT_FOUND', 404);
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
             
             // Ищем предмет в инвентаре
@@ -359,23 +355,33 @@ const DebuffAPI = {
                 throw createDebuffError('Этот предмет не лечит дебаффы', 'INVALID_ITEM_TYPE', 400);
             }
             
+            const radiation = safeJsonParse(player.radiation, { level: 0 });
+            const radiationLevel = normalizeRadiationLevel(radiation);
+
+            // Проверяем, что есть активный дебафф для лечения ДО любой мутации
+            if (radiationLevel <= 0) {
+                throw { message: 'Активных дебаффов для лечения не найдено', code: 'NO_ACTIVE_DEBUFF', statusCode: 400 };
+            }
+
             // Лечим заражение: снижаем уровень и пропорционально укорачиваем
             // срок действия. Один блок вместо прежних «лечим радиацию» и
             // «лечим инфекции».
             {
-                const radiation = safeJsonParse(player.radiation, { level: 0 });
-                const newLevel = Math.max(0, radiation.level - curePower);
-                
+                const effectiveCure = Math.min(curePower, itemPower);
+                const newLevel = Math.max(0, radiationLevel - effectiveCure);
+
                 // Пересчитываем время истечения
                 let newExpiresAt = null;
-                if (newLevel > 0 && radiation.expires_at && radiation.level > 0) {
+                if (newLevel > 0 && radiation.expires_at && radiationLevel > 0) {
                     const oldExpires = new Date(radiation.expires_at);
                     const now = new Date();
-                    // Защита от деления на ноль: используем Math.max(1, ...) для уровня
-                    const safeLevel = Math.max(1, radiation.level);
-                    const reductionRatio = curePower / safeLevel;
-                    const reduction = (oldExpires - now) * reductionRatio;
-                    newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
+                    if (Number.isFinite(oldExpires.getTime())) {
+                        // Защита от деления на ноль: используем Math.max(1, ...) для уровня
+                        const safeLevel = Math.max(1, radiationLevel);
+                        const reductionRatio = effectiveCure / safeLevel;
+                        const reduction = (oldExpires.getTime() - now.getTime()) * reductionRatio;
+                        newExpiresAt = new Date(Math.max(now.getTime(), oldExpires.getTime() - reduction)).toISOString();
+                    }
                 }
                 
                 await client.query(
@@ -389,11 +395,11 @@ const DebuffAPI = {
                 
                 await logPlayerAction(playerId, 'debuff_cure_radiation', {
                     cureType: resolvedCureType,
-                    oldLevel: radiation.level,
+                    oldLevel: radiationLevel,
                     newLevel
                 }, client);
             }
-            
+
             if (consumeItem) {
                 const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, resolvedItemIndex);
 
@@ -445,7 +451,7 @@ router.post('/apply', async (req, res) => {
     const { type, level, source } = req.body || {};
     try {
         if (!playerId) {
-            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+            return unauthorized(res, 'Не авторизован');
         }
         const result = await DebuffAPI.apply(playerId, type || DEBUFF_TYPES.RADIATION, Number(level) || 1, { source });
         return res.json({ success: true, data: result });
@@ -455,13 +461,14 @@ router.post('/apply', async (req, res) => {
 });
 
 /**
- * GET /debuffs/check — проверить дебаффы игрока (очистить истёкшие, применить урон)
+ * POST /debuffs/check — проверить дебаффы игрока (очистить истёкшие, применить урон)
+ * Мутирующий маршрут: может применить урон, поэтому требует Idempotency-Key.
  */
-router.get('/check', async (req, res) => {
+router.post('/check', async (req, res) => {
     const playerId = req.player?.id;
     try {
         if (!playerId) {
-            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+            return unauthorized(res, 'Не авторизован');
         }
         const result = await DebuffAPI.check(playerId);
         return res.json({ success: true, data: result });
@@ -477,11 +484,11 @@ router.get('/active', async (req, res) => {
     const playerId = req.player?.id;
     try {
         if (!playerId) {
-            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+            return unauthorized(res, 'Не авторизован');
         }
         const playerResult = await queryOne('SELECT radiation FROM players WHERE id = $1', [playerId]);
         if (!playerResult) {
-            return res.status(404).json({ success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' });
+            return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
         }
         const active = DebuffAPI.getActive(playerResult);
         return res.json({ success: true, data: { active } });
@@ -499,7 +506,7 @@ router.post('/cure', async (req, res) => {
     const { cureType, itemId, itemIndex } = req.body || {};
     try {
         if (!playerId) {
-            return res.status(401).json({ success: false, error: 'Не авторизован', code: 'UNAUTHORIZED' });
+            return unauthorized(res, 'Не авторизован');
         }
         const result = await DebuffAPI.cure(playerId, cureType || 'auto', itemId, itemIndex);
         return res.json({ success: true, data: result });

@@ -6,7 +6,8 @@
 const express = require('express');
 const router = express.Router();
 const { query, queryOne, queryAll, transaction } = require('../../db/database');
-const { logger, safeJsonParse, handleError, logPlayerAction, validateId } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
+const { logger, safeJsonParse, handleError, logPlayerAction, validateId, ok, unauthorized, notFound } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
@@ -21,7 +22,7 @@ function getGameHelpers() {
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
-const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth } = helpers;
+const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth, recalcEnergy } = helpers;
 // Общий файл правил с клиентом: цены покупки энергии (в звёздах), ежедневный бонус.
 const equipmentRules = require('../../public/shared/equipment.js');
 const { DAILY_BONUS_COOLDOWN_MS, DAILY_BONUS_STREAK_LIMIT, DAILY_BONUS_BASE_COINS, DAILY_BONUS_COINS_PER_DAY, DAILY_BONUS_STAR_EVERY } = equipmentRules;
@@ -103,20 +104,22 @@ router.get(['/', '/profile'], async (req, res) => {
         // игрок не видел бы восстановления, пока не зайдёт в поиск.
         // P2: .catch(() => 0) глотал ошибку совсем — рассинхрон показанного
         // и фактического HP оставался невидимым. Логируем причину.
-        const updatedPlayer = await transaction(async (client) => {
-            const locked = await client.query(
-                'SELECT id, health, max_health, last_hp_regen FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
-            return locked.rows[0] ? await regenerateHealth(client, locked.rows[0]) : 0;
+        const locked = await transaction(async (client) => {
+            const l = await lockPlayer(playerId, client, 'id, health, max_health, last_hp_regen, energy, max_energy, last_energy_update');
+            if (!l) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            await regenerateHealth(client, l);
+            await recalcEnergy(client, l);
+            return l;
         }).catch((err) => {
             logger.warn('[player] Не удалось обновить реген здоровья в профиле', {
                 playerId, error: err && err.message
             });
-            return 0;
+            throw err;
         });
-        if (updatedPlayer > 0) {
-            player.health = Math.min(Number(player.max_health || 0), Number(player.health || 0) + updatedPlayer);
+        if (locked) {
+            player.health = locked.health;
+            player.energy = locked.energy;
+            player.last_energy_update = locked.last_energy_update;
         }
 
         const achievements = await getPlayerAchievements(playerId);
@@ -198,10 +201,19 @@ router.put('/update', async (req, res) => {
         const values = fieldNames.map(f => updates[f]);
         values.unshift(playerId);
 
-        await query(
-            `UPDATE players SET ${setClauses.join(', ')}, updated_at = NOW() WHERE id = $1`,
-            values
-        );
+        const result = await transaction(async (client) => {
+            const playerRow = await lockPlayer(playerId, client, 'id');
+
+            if (!playerRow) {
+                throw { message: 'Игрок не найден', code: 'NOT_FOUND' };
+            }
+            await client.query(
+                `UPDATE players SET ${setClauses.join(', ')}, updated_at = NOW() WHERE id = $1`,
+                values
+            );
+        });
+
+        await logPlayerAction(playerId, 'profile_update', { fields: fieldNames });
 
         const updatedPlayer = await queryOne('SELECT * FROM players WHERE id = $1', [playerId]);
 
@@ -225,6 +237,7 @@ router.put('/update', async (req, res) => {
 router.post('/buy-energy', async (req, res) => {
     try {
         const playerId = req.player?.id;
+        if (!playerId) return unauthorized(res);
         // Цена и объём — из общего файла правил, тем же файлом пользуется
         // клиент (public/game.js, restoreEnergy). Раньше «5» и «25» были
         // записаны здесь отдельно, а клиент держал свою копию цены.
@@ -232,38 +245,39 @@ router.post('/buy-energy', async (req, res) => {
         const ENERGY_PER_PURCHASE = equipmentRules.ENERGY_PER_PURCHASE;
 
         const result = await transaction(async (client) => {
-            const player = await client.query(
-                'SELECT stars, energy, max_energy FROM players WHERE id = $1 FOR UPDATE',
-                [playerId]
-            );
-            const p = player.rows[0];
-            if (!p) throw { message: 'Игрок не найден', code: 'NOT_FOUND' };
-            if (p.stars < STARS_COST) throw { message: 'Недостаточно звёзд', code: 'INSUFFICIENT_STARS' };
-            if (p.energy >= p.max_energy) throw { message: 'Энергия уже полная', code: 'ENERGY_FULL' };
+            const p = await lockPlayer(playerId, client, 'stars, energy, max_energy');
 
-            const newEnergy = Math.min(p.energy + ENERGY_PER_PURCHASE, p.max_energy);
+            if (!p) throw { message: 'Игрок не найден', code: 'NOT_FOUND', statusCode: 404 };
+            const stars = Number(p.stars || 0);
+            const energy = Number(p.energy || 0);
+            const maxEnergy = Number(p.max_energy || 0) || 50;
+            if (stars < STARS_COST) throw { message: 'Недостаточно звёзд', code: 'INSUFFICIENT_STARS' };
+            if (energy >= maxEnergy) throw { message: 'Энергия уже полная', code: 'ENERGY_FULL' };
+
+            const newEnergy = Math.min(energy + ENERGY_PER_PURCHASE, maxEnergy);
 
             await client.query(
-                // Энергия покупается, а не тратится, поэтому last_energy_update
-                // двигать нельзя: сценарий energy=0, max=50, метка 40 мин
-                // назад — игрок получил бы 20 энергии вместо 50, теряя 40.
-                'UPDATE players SET stars = GREATEST(0, stars - $1), energy = $2 WHERE id = $3',
+                'UPDATE players SET stars = GREATEST(0, COALESCE(stars,0) - $1), energy = $2 WHERE id = $3',
                 [STARS_COST, newEnergy, playerId]
             );
 
             return {
                 energy: newEnergy,
-                stars: p.stars - STARS_COST,
+                stars: stars - STARS_COST,
                 log: { action: 'buy_energy', playerId, data: { cost: STARS_COST, gained: ENERGY_PER_PURCHASE } }
             };
         });
 
         // Логируем ПОСЛЕ коммита транзакции
         if (result.log) {
-            await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+            try {
+                await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+            } catch (e) {
+                // не влияем на ответ
+            }
         }
 
-        res.json({ success: true, data: result });
+        res.json({ success: true, data: { energy: result.energy, stars: result.stars } });
     } catch (err) {
         if (err.code === 'INSUFFICIENT_STARS' || err.code === 'ENERGY_FULL' || err.code === 'NOT_FOUND') {
             return res.status(400).json({ error: err.message, code: err.code });
@@ -287,12 +301,8 @@ router.post('/daily-bonus', async (req, res) => {
         }
 
         const result = await transaction(async (client) => {
-            const result = await client.query(
-                `SELECT id, coins, stars, daily_streak, last_daily_bonus
-                   FROM players WHERE id = $1 FOR UPDATE`,
-                [playerId]
-            );
-            const player = result.rows[0];
+            const player = await lockPlayer(playerId, client, 'id, coins, stars, daily_streak, last_daily_bonus');
+
             if (!player) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
 
             const now = Date.now();
@@ -320,8 +330,8 @@ router.post('/daily-bonus', async (req, res) => {
 
             await client.query(
                 `UPDATE players
-                    SET coins = coins + $1,
-                        stars = stars + $2,
+                    SET coins = COALESCE(coins,0) + $1,
+                        stars = COALESCE(stars,0) + $2,
                         daily_streak = $3,
                         last_daily_bonus = NOW()
                   WHERE id = $4`,
@@ -343,10 +353,15 @@ router.post('/daily-bonus', async (req, res) => {
 
         // Логируем ПОСЛЕ коммита транзакции
         if (result.log) {
-            await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+            try {
+                await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
+            } catch (e) {
+                // не влияем на ответ
+            }
         }
 
-        res.json({ success: true, data: result });
+        const { log, ...responseData } = result;
+        res.json({ success: true, data: responseData });
     } catch (err) {
         if (err.code === 'DAILY_BONUS_ALREADY_CLAIMED' || err.code === 'PLAYER_NOT_FOUND') {
             return res.status(err.statusCode || 400).json({
@@ -371,7 +386,7 @@ router.post('/daily-bonus', async (req, res) => {
 router.get('/achievements', async (req, res) => {
     try {
         const playerId = req.player?.id;
-        const achievements = await getPlayerAchievements(playerId);
+        if (!playerId) return unauthorized(res);
         res.json({ success: true, data: achievements || [] });
     } catch (err) {
         handleError(res, err, 'get_achievements');
@@ -482,7 +497,7 @@ router.get('/achievements/progress', async (req, res) => {
 router.post('/achievements/claim', async (req, res) => {
     try {
         const playerId = req.player?.id;
-        const { achievement_id } = req.body || {};
+        if (!playerId) return unauthorized(res);
 
         // Валидация типа ID, а не только «не пустой».
         //
@@ -514,10 +529,41 @@ router.post('/achievements/claim', async (req, res) => {
 router.get('/progress', async (req, res) => {
     try {
         const playerId = req.player?.id;
-        const progress = await getPlayerProgress(playerId);
+        if (!playerId) return unauthorized(res);
         res.json({ success: true, data: progress || {} });
     } catch (err) {
         handleError(res, err, 'get_progress');
+    }
+});
+
+/**
+ * GET /energy — текущая энергия игрока
+ * GET /api/game/profile/energy (через алиас /profile в routes/game/index.js:375)
+ * Возвращает { success: true, data: { energy, max_energy, last_energy_update } }
+ */
+router.get('/energy', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) {
+            return unauthorized(res);
+        }
+
+        const player = await queryOne(
+            'SELECT energy, max_energy, last_energy_update FROM players WHERE id = $1',
+            [playerId]
+        );
+        if (!player) {
+            return notFound(res, 'Игрок не найден');
+        }
+
+        return ok(res, {
+            energy: Number(player.energy),
+            max_energy: Number(player.max_energy),
+            last_energy_update: player.last_energy_update
+        });
+    } catch (err) {
+        logger.error({ type: 'player_energy_error', message: err.message });
+        return handleError(res, err, 'get_player_energy');
     }
 });
 

@@ -74,7 +74,7 @@ const order = [];
 lines.forEach((l, i) => {
     if (/^\s*router\.use\(ipFloodLimiter\)/.test(l)) order.push(['ipFlood', i]);
     if (/^\s*router\.use\(validatePlayer\)/.test(l)) order.push(['validatePlayer', i]);
-    if (/^\s*router\.use\('\/pvp\/attack', criticalActionLimiter\)/.test(l)) order.push(['critical', i]);
+    if (/router\.use\(\/\^\\\/pvp\\\/attack\$\//.test(l)) order.push(['critical', i]);
     if (/^\s*router\.use\(generalActionLimiter\)/.test(l)) order.push(['generalAction', i]);
 });
 ok('порядок: ipFlood < validatePlayer < точечные < общий',
@@ -83,7 +83,7 @@ ok('порядок: ipFlood < validatePlayer < точечные < общий',
 
 // 5. validatePlayer идёт ДО лимитов по playerId (иначе keyGenerator не сработает)
 const vpIdx = lines.findIndex(l => /router\.use\(validatePlayer\)/.test(l));
-const criticalIdx = lines.findIndex(l => /router\.use\('\/pvp\/attack'/.test(l));
+const criticalIdx = lines.findIndex(l => /router\.use\(\/\^\\\/pvp\\\/attack\$\//.test(l));
 ok('validatePlayer раньше лимитов по id игрока', vpIdx < criticalIdx, vpIdx + ' vs ' + criticalIdx);
 
 // 6. Алиасы /inventory/buy не потеряны

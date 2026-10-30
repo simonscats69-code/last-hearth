@@ -105,7 +105,7 @@ async function main() {
             const result = await client.query(`SELECT * FROM ${safeTable}`);
 
             const file = path.join(targetDir, `${table}.json`);
-            fs.writeFileSync(file, JSON.stringify(result.rows, null, 0), 'utf8');
+            await fs.promises.writeFile(file, JSON.stringify(result.rows, null, 0), 'utf8');
 
             manifest.tables[table] = { rows: result.rows.length, file: path.basename(file) };
             console.log(`[backup]   ${table}: ${result.rows.length} строк`);
@@ -122,8 +122,8 @@ async function main() {
     } finally {
         client.release();
         // Освобождаем пул иначе процесс не завершится.
-        if (typeof closePool === 'function') closePool();
-        else if (typeof pool.end === 'function') pool.end();
+        if (typeof closePool === 'function') await closePool();
+        else if (typeof pool.end === 'function') await pool.end();
     }
 }
 

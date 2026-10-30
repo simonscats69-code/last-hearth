@@ -4,6 +4,7 @@
  */
 
 const express = require('express');
+require('express-async-errors');
 const router = express.Router();
 const { query, queryOne, describeError } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
@@ -89,9 +90,7 @@ function safeRequire(path, name) {
         return module;
     } catch (error) {
         logger.error(`[game] Ошибка загрузки ${name}:`, error.message, error.stack);
-        const mockRouter = express.Router();
-        mockRouter.use((req, res) => res.status(500).json({ error: `Модуль ${name} недоступен` }));
-        return mockRouter;
+        throw error;
     }
 }
 
@@ -265,7 +264,11 @@ function touchPlayerActivity(playerId) {
 
     // Периодически подчищаем шину. Сравнение по остатку от деления, чтобы не
     // заводить отдельный setInterval: чистим не чаще раза в минуту.
-    pruneActivityBus(ACTIVITY_BUS_RETENTION_MS);
+    const nowMinute = Math.floor(now / 60000);
+    if (!global._lastPruneMinute || global._lastPruneMinute !== nowMinute) {
+        global._lastPruneMinute = nowMinute;
+        pruneActivityBus(ACTIVITY_BUS_RETENTION_MS);
+    }
 
     // Ошибку не пробрасываем: отметка активности не должна ломать запрос.
     query(
@@ -297,7 +300,7 @@ router.use(validatePlayer);
 // общий apiLimiter (150/мин) на них не смотрит как на трату ресурсов.
 router.use('/bosses/attack-boss', criticalActionLimiter);
 router.use(/^\/bosses\/raid\/\d+\/attack$/, criticalActionLimiter);
-router.use('/pvp/attack', criticalActionLimiter);
+router.use(/^\/pvp\/attack$/, criticalActionLimiter);
 router.use('/pvp/attack-hit', criticalActionLimiter);
 // Колесо: лимитер смонтирован на РЕАЛЬНЫЙ путь клиента (/wheel/spin), а не
 // только на внутренний /minigames/wheel/spin.
@@ -337,16 +340,6 @@ const chatLimiter = rateLimit({
 router.use('/clans/clan/chat', chatLimiter);
 
 // ====== ИДЕМПОТЕНТНОСТЬ МУТАЦИЙ ======
-// P1-8: раньше idempotencyMiddleware висел на app.use('/api/game', ...) в
-// index.js — то есть ДО validatePlayer. В этот момент req.player ещё не
-// установлен, playerId undefined, и middleware всегда уходил в next(),
-// ничего не проверяя и ничего не сохраняя: мёртвый код, который только
-// добавлял req/res-обёртки.
-//
-// Теперь он смонтирован ЗДЕСЬ, после validatePlayer (есть req.player.id),
-// но ПОСЛЕ лимитов запросов: иначе запросы с разными ключами обходили бы
-// rate-limit вообще, не расходуя бюджет. Повторы с тем же ключом попадут
-// под реплей и не выполнят действие второй раз.
 router.use(idempotencyMiddleware);
 
 // Общий лимит на игрока — последний, тоже по id игрока.
@@ -376,5 +369,10 @@ router.use('/profile', playerRouter);
 router.use('/inventory', itemsRouter);
 router.use('/wheel', minigamesRouter);
 router.use('/purchase', minigamesRouter);
+
+// 404 для неизвестных /api/game/* путей
+router.use((req, res) => {
+    res.status(404).json({ error: 'Not found', code: 'GAME_NOT_FOUND' });
+});
 
 module.exports = router;

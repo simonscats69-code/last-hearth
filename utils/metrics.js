@@ -15,15 +15,14 @@ const metrics = {
         total: 0,
         success: 0,
         errors: 0,
-        byEndpoint: {}
+        byEndpoint: Object.create(null)
     },
     responseTimes: [],
     startTime: Date.now()
 };
 
-/**
- * Записывает метрику запроса
- */
+const MAX_ENDPOINTS = 1000;
+
 function recordRequest(endpoint, statusCode, responseTime) {
     metrics.requests.total++;
 
@@ -35,25 +34,32 @@ function recordRequest(endpoint, statusCode, responseTime) {
     }
 
     if (!metrics.requests.byEndpoint[endpoint]) {
-        metrics.requests.byEndpoint[endpoint] = {
-            total: 0,
-            success: 0,
-            errors: 0,
-            avgTime: 0
-        };
+        if (Object.keys(metrics.requests.byEndpoint).length >= MAX_ENDPOINTS) {
+            // evict oldest? simple: skip new endpoint tracking
+        } else {
+            metrics.requests.byEndpoint[endpoint] = {
+                total: 0,
+                success: 0,
+                errors: 0,
+                avgTime: 0
+            };
+        }
     }
 
     const ep = metrics.requests.byEndpoint[endpoint];
-    ep.total++;
-    if (isSuccess) {
-        ep.success++;
-    } else {
-        ep.errors++;
+    if (ep) {
+        ep.total++;
+        if (isSuccess) {
+            ep.success++;
+        } else {
+            ep.errors++;
+        }
+        const rt = Number.isFinite(responseTime) ? responseTime : 0;
+        ep.avgTime = Math.round((((ep.avgTime * (ep.total - 1)) + rt) / ep.total) * 100) / 100;
     }
 
-    ep.avgTime = ((ep.avgTime * (ep.total - 1)) + responseTime) / ep.total;
-
-    metrics.responseTimes.push(responseTime);
+    const rt2 = Number.isFinite(responseTime) ? responseTime : 0;
+    metrics.responseTimes.push(rt2);
     if (metrics.responseTimes.length > 100) {
         metrics.responseTimes.shift();
     }
@@ -77,11 +83,16 @@ function getMetrics() {
         }
         totalIdle += cpu.times.idle;
     });
-    const cpuUsage = 100 - (100 * totalIdle / totalTick);
+    const cpuUsage = totalTick > 0 ? 100 - (100 * totalIdle / totalTick) : 0;
 
     const memoryUsage = process.memoryUsage();
     const totalMemory = os.totalmem();
     const freeMemory = os.freemem();
+
+    const endpointsSnapshot = {};
+    for (const key of Object.keys(metrics.requests.byEndpoint)) {
+        endpointsSnapshot[key] = { ...metrics.requests.byEndpoint[key] };
+    }
 
     return {
         uptime: Math.floor(uptime / 1000),
@@ -91,11 +102,11 @@ function getMetrics() {
             errors: metrics.requests.errors,
             successRate: metrics.requests.total > 0
                 ? Math.round((metrics.requests.success / metrics.requests.total) * 100)
-                : 100
+                : 0
         },
         performance: {
             avgResponseTime: Math.round(avgResponseTime * 100) / 100,
-            requestsPerSecond: (metrics.requests.total / (uptime / 1000)).toFixed(2)
+            requestsPerSecond: uptime > 0 ? Number((metrics.requests.total / (uptime / 1000)).toFixed(2)) : 0
         },
         system: {
             cpu: Math.round(cpuUsage * 100) / 100,
@@ -108,7 +119,7 @@ function getMetrics() {
             nodeVersion: process.version,
             platform: os.platform()
         },
-        endpoints: metrics.requests.byEndpoint
+        endpoints: endpointsSnapshot
     };
 }
 

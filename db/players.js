@@ -67,10 +67,18 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     return result.rows[0];
 }
 
-async function lockPlayer(playerId, client) {
+async function lockPlayer(playerId, client, columns = '*') {
     if (!client) throw new Error('lockPlayer требует client');
     playerId = requireId(playerId, 'playerId');
-    const result = await client.query('SELECT * FROM players WHERE id = $1 FOR UPDATE', [playerId]);
+    let cols = '*';
+    if (columns && columns !== '*') {
+        const parts = columns.split(',').map(c => c.trim()).filter(Boolean);
+        if (!parts.length || !parts.every(p => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p))) {
+            throw new Error('Недопустимые имена колонок в lockPlayer');
+        }
+        cols = parts.join(', ');
+    }
+    const result = await client.query(`SELECT ${cols} FROM players WHERE id = $1 FOR UPDATE`, [playerId]);
     return result.rows[0];
 }
 
@@ -118,5 +126,6 @@ async function addExperienceWithLevelUp(client, playerId, exp, getExpForLevel) {
 module.exports = {
     // Из всего модуля используется только addExperienceWithLevelUp
     // (utils/serverApi.js -> PlayerHelper.addExperience).
-    addExperienceWithLevelUp
+    addExperienceWithLevelUp,
+    lockPlayer
 };

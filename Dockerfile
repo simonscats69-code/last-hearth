@@ -15,8 +15,10 @@ COPY packages/client/package*.json ./packages/client/
 # Копируем исходный код ДО установки зависимостей (postinstall запускает build)
 COPY . .
 
-# Устанавливаем зависимости — npm install лучше работает с workspaces чем npm ci
-RUN npm install --include=dev
+# Устанавливаем все зависимости (включая dev) — нужны для npm run build на этапе сборки.
+# Dev-зависимости (tsup, typescript и т.д.) остаются в最終 образе, так как
+# multi-stage сборка не используется.
+RUN npm install
 
 # Собираем пакеты в правильном порядке: core -> db -> server -> client
 RUN npm run -w @last-hearth/core -- build && \
@@ -76,10 +78,16 @@ EOF
 
 # Не удаляем dev deps — npm prune ломает workspace symlinks
 
-# Делаем entrypoint исполняемым
-RUN chmod +x /app/entrypoint.sh
+# Незащищённый запуск от root — риск при компрометации контейнера.
+# Создаём непривилегированного пользователя и запускаем от его имени.
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
 
 EXPOSE 3000
+
+# Healthcheck через существующий endpoint /ready (node вместо wget, которого нет в alpine).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "const http=require('http');http.get('http://localhost:3000/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "index.js"]

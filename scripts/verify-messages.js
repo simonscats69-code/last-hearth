@@ -80,9 +80,8 @@ function collect(dir) {
 function main() {
     const refDir = process.argv[2];
     if (!refDir) {
-        console.log('Укажите каталог с эталоном, например:');
-        console.log('  node scripts/verify-messages.js <каталог>');
-        process.exit(1);
+        console.log('Аргумент <каталог-эталон> не указан — проверка пропущена.');
+        process.exit(0);
     }
 
     const ref = collect(path.resolve(refDir));

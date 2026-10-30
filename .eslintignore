@@ -2,3 +2,8 @@ node_modules/
 logs/
 .kilo/
 *.txt
+
+# Тестовые файлы и скрипты — не часть продакшн-кода
+test-*.js
+*.test.js
+scripts/

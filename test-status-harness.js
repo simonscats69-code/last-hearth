@@ -143,7 +143,8 @@ const serverApiMock = {
     },
     logPlayerAction: async (playerId, action, data, client) => {
         callLog.push({ __log: true, playerId, action, data, withClient: Boolean(client) });
-    }
+    },
+    fail: (res, message, code) => res.status(400).json({ success: false, error: message, code })
 };
 
 const validateMock = {
@@ -151,7 +152,12 @@ const validateMock = {
         const n = Number(v);
         return (Number.isInteger(n) && n > 0) ? { ok: true, value: n } : { ok: false, error: name + ': ожидается число > 0', code: 'VALIDATION_ERROR' };
     },
-    validateQuantity: (v) => ({ valid: true, value: 1 })
+    validateQuantity: (v) => ({ valid: true, value: 1 }),
+    validateItemIndex: (v) => {
+        const n = Number(v);
+        if (!Number.isSafeInteger(n) || n < 0) return { ok: false, error: 'индекс предмета должен быть целым числом >= 0', code: 'INVALID_INDEX' };
+        return { ok: true, value: n };
+    }
 };
 
 const originalLoad = Module._load;
@@ -337,7 +343,7 @@ async function run() {
     await getHandler(statusRouter, '/check')(req, res);
     ok('HTTP 200', res.statusCode === 200, res.statusCode);
     ok('radiation damage = (8-4)*3 = 12', res.body && res.body.damage === 12, JSON.stringify(res.body));
-    ok('уменьшение здоровья в БД', callLog.some(q => /UPDATE players[\s\S]*GREATEST\(0, health - /.test(q.sql)));
+    ok('уменьшение здоровья в БД', callLog.some(q => /UPDATE players[\s\S]*GREATEST\(0, COALESCE\(health/.test(q.sql)));
 
     console.log('\n=== /check: радиации ниже порога -> урона нет ===');
     reset({ player: { id: 5, health: 100, max_health: 100, radiation: { level: 3 }, infections: '[]' } });

@@ -287,10 +287,11 @@ function calculateDebuffModifiers(player) {
 }
 
 function getDebuffTier(level) {
-    if (level >= 8) return 'critical';
-    if (level >= 5) return 'danger';
-    if (level >= 3) return 'warning';
-    if (level > 0) return 'active';
+    const lvl = Number.isFinite(Number(level)) ? Math.max(0, Math.floor(Number(level))) : 0;
+    if (lvl >= 10) return 'critical';
+    if (lvl >= 5) return 'danger';
+    if (lvl >= 3) return 'warning';
+    if (lvl > 0) return 'active';
     return 'safe';
 }
 
@@ -353,9 +354,15 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
  * @param {*} fallback - значение при неудаче
  */
 function safeParseJson(raw, fallback) {
-    if (typeof raw !== 'string') return fallback;
+    if (raw === undefined || raw === null) return fallback;
+    if (typeof raw !== 'string') {
+        // Уже распарсенный объект/массив/примитив возвращаем как есть
+        return raw;
+    }
+    if (raw.trim() === '') return fallback;
     try {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        return parsed === null ? fallback : parsed;
     } catch {
         return fallback;
     }
@@ -373,19 +380,26 @@ function safeParseJson(raw, fallback) {
  * @returns {number} уровень радиации (0 если не распознано)
  */
 function normalizeRadiationLevel(raw) {
-    if (typeof raw === 'number') return Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+    const maxLevel = DEBUFF_CONFIG?.radiation?.maxLevel || 10;
+    if (typeof raw === 'number') {
+        const level = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+        return Math.min(level, maxLevel);
+    }
     if (typeof raw === 'object' && raw !== null) {
         const level = Number(raw.level || 0);
-        return Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+        const normalized = Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+        return Math.min(normalized, maxLevel);
     }
     if (typeof raw === 'string') {
-        const parsed = safeParseJson(raw, 0);
-        if (typeof parsed === 'object' && parsed !== null) {
+        const parsed = safeParseJson(raw, null);
+        if (parsed !== null && typeof parsed === 'object') {
             const level = Number(parsed.level || 0);
-            return Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+            const normalized = Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+            return Math.min(normalized, maxLevel);
         }
-        const level = Number(parseInt(parsed, 10) || 0);
-        return Number.isFinite(level) ? Math.max(0, level) : 0;
+        const level = Number(parsed);
+        const normalized = Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+        return Math.min(normalized, maxLevel);
     }
     return 0;
 }
@@ -402,9 +416,9 @@ function normalizeRadiationLevel(raw) {
  * @returns {number} урон (0 если уровень ниже порога)
  */
 function calculateRadiationDamage(level, damagePerLevel) {
-    const levelNum = Number(level);
+    const levelNum = Math.min(Math.max(0, Math.floor(Number(level) || 0)), DEBUFF_CONFIG?.radiation?.maxLevel || 10);
     const perLevelNum = Number(damagePerLevel);
-    if (!Number.isFinite(levelNum) || !Number.isFinite(perLevelNum)) return 0;
+    if (!Number.isFinite(perLevelNum)) return 0;
     if (!(levelNum >= CONTAMINATION_DAMAGE_FROM_LEVEL)) return 0;
     return Math.max(0, (levelNum - (CONTAMINATION_DAMAGE_FROM_LEVEL - 1)) * perLevelNum);
 }

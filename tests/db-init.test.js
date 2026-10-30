@@ -123,9 +123,10 @@ async function testInitDatabase() {
         assert(/initDatabase/.test(src), 'initDatabase должна быть экспортирована');
     });
 
-    test('init.js не вызывает runMigrations, repairPlayerInventories, applyItemRenames, mergeDuplicateInventoryStacks', () => {
-        // Эти функции перенесены в db/migrate.js
-        assert(!/await runMigrations\(\)/.test(src), 'init.js не должен вызывать runMigrations()');
+    test('init.js вызывает runMigrations (идемпотентные схемные миграции)', () => {
+        assert(/await runMigrations\(\)/.test(src), 'init.js должен вызывать runMigrations()');
+    });
+    test('init.js не вызывает destrucciónные функции миграций', () => {
         assert(!/await repairPlayerInventories/.test(src), 'init.js не должен вызывать repairPlayerInventories()');
         assert(!/await applyItemRenames/.test(src), 'init.js не должен вызывать applyItemRenames()');
         assert(!/await mergeDuplicateInventoryStacks/.test(src), 'init.js не должен вызывать mergeDuplicateInventoryStacks()');

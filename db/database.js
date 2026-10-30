@@ -14,9 +14,15 @@
  * @returns {boolean} true, если это похоже на проблему с соединением
  */
 function isConnectionError(err) {
-    if (!err || typeof err.code !== 'string') return false;
-    return [
-        // Сетевые ошибки Node
+    if (!err) return false;
+    const codes = [];
+    if (typeof err.code === 'string') codes.push(err.code);
+    if (Array.isArray(err.errors)) {
+        for (const e of err.errors) {
+            if (e && typeof e.code === 'string') codes.push(e.code);
+        }
+    }
+    return codes.some((c) => [
         'ECONNREFUSED',
         'ECONNRESET',
         'ETIMEDOUT',
@@ -24,10 +30,9 @@ function isConnectionError(err) {
         'ENETUNREACH',
         'ENOTFOUND',
         'EPIPE',
-        // SQLSTATE: класс 08 — connection exception
         '08000', '08001', '08003', '08004', '08006', '08007',
         '08P01'
-    ].includes(err.code);
+    ].includes(c));
 }
 
 /**
@@ -57,10 +62,16 @@ function setLogger(log) {
 function splitSslmode(rawUrl) {
     const match = rawUrl.match(/[?&]sslmode=([^&]*)/);
     if (!match) return { url: rawUrl, sslmode: null };
+    let sslmode = null;
+    try {
+        sslmode = decodeURIComponent(match[1]);
+    } catch {
+        sslmode = match[1];
+    }
     const url = rawUrl
         .replace(/([?&])sslmode=[^&]*&?/g, '$1')
         .replace(/[?&]$/, '');
-    return { url, sslmode: decodeURIComponent(match[1]) };
+    return { url, sslmode };
 }
 
 /**
@@ -71,9 +82,9 @@ function splitSslmode(rawUrl) {
  */
 function buildPoolConfig() {
     const base = {
-        max: parseInt(process.env.DB_POOL_MAX || '50', 10),
-        idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '30000', 10),
-        connectionTimeoutMillis: parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT || '3000', 10)
+        max: Number.isFinite(parseInt(process.env.DB_POOL_MAX || '50', 10)) ? parseInt(process.env.DB_POOL_MAX || '50', 10) : 50,
+        idleTimeoutMillis: Number.isFinite(parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '30000', 10)) ? parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '30000', 10) : 30000,
+        connectionTimeoutMillis: Number.isFinite(parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT || '3000', 10)) ? parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT || '3000', 10) : 3000
     };
     if (process.env.DATABASE_URL) {
         const { url, sslmode } = splitSslmode(process.env.DATABASE_URL);
@@ -95,7 +106,7 @@ function buildPoolConfig() {
         return {
             ...base,
             host: process.env.DB_HOST,
-            port: parseInt(process.env.DB_PORT || '5432', 10),
+            port: Number.isFinite(parseInt(process.env.DB_PORT || '5432', 10)) ? parseInt(process.env.DB_PORT || '5432', 10) : 5432,
             database: process.env.DB_NAME || 'postgres',
             user: process.env.DB_USER || 'postgres',
             password: process.env.DB_PASSWORD || 'postgres',
@@ -160,7 +171,8 @@ pool.on('error', (err) => {
 // statement_timeout на уровне соединения: отменяем запросы, висящие дольше 10с.
 // Защита от каскадного забивания пула долго выполняющимися запросами (logPlayerAction,
 // тяжёлые обновления при убийстве босса и т.д.).
-const STATEMENT_TIMEOUT_MS = parseInt(process.env.DB_STATEMENT_TIMEOUT || '10000', 10);
+const rawStatementTimeout = parseInt(process.env.DB_STATEMENT_TIMEOUT || '10000', 10);
+const STATEMENT_TIMEOUT_MS = Number.isFinite(rawStatementTimeout) && rawStatementTimeout > 0 ? rawStatementTimeout : 10000;
 pool.on('connect', (client) => {
     void client.query(`SET statement_timeout = ${STATEMENT_TIMEOUT_MS}`).catch((err) => {
         logger.warn('Не удалось установить statement_timeout: ' + describeError(err));
@@ -171,9 +183,11 @@ async function query(sql, params = []) {
     const client = await pool.connect();
     try {
         const result = await client.query(sql, params);
-        return result;
-    } finally {
         client.release();
+        return result;
+    } catch (err) {
+        client.release(err);
+        throw err;
     }
 }
 
@@ -181,9 +195,11 @@ async function queryOne(sql, params = []) {
     const client = await pool.connect();
     try {
         const result = await client.query(sql, params);
-        return result.rows[0] || null;
-    } finally {
         client.release();
+        return result.rows[0] || null;
+    } catch (err) {
+        client.release(err);
+        throw err;
     }
 }
 
@@ -191,9 +207,11 @@ async function queryAll(sql, params = []) {
     const client = await pool.connect();
     try {
         const result = await client.query(sql, params);
-        return result.rows || [];
-    } finally {
         client.release();
+        return result.rows || [];
+    } catch (err) {
+        client.release(err);
+        throw err;
     }
 }
 
@@ -207,7 +225,7 @@ async function queryAll(sql, params = []) {
  * при повторной попытке транзакция обычно проходит. Без retry любой бой двух
  * игроков, замокнувших строки в разном порядке (A->B и B->A), отдавал бы 500.
  */
-const RETRYABLE_PG_CODES = new Set(['40P01', '40001']);
+const RETRYABLE_PG_CODES = new Set(['40P01', '40001', '08006']);
 
 /** Сколько раз повторять транзакцию при deadlock/serialization failure. */
 const TRANSACTION_RETRY_MAX = 3;
@@ -234,6 +252,7 @@ async function transaction(fn) {
             await client.query('BEGIN');
             const result = await fn(client);
             await client.query('COMMIT');
+            client.release();
             return result;
         } catch (error) {
             // ROLLBACK тоже может упасть (соединение уже мертво) — тогда
@@ -244,16 +263,17 @@ async function transaction(fn) {
                 // игнорируем: соединение всё равно уйдёт в release()
             }
 
+            client.release(error);
+
             // Deadlock/serialization — повторяем с задержкой. Остальное — сразу наружу.
             if (!isRetryableTransactionError(error) || attempt === TRANSACTION_RETRY_MAX) {
                 throw error;
             }
 
             lastError = error;
-            console.warn(`[db] Транзакция откачена (${error.code}), попытка ${attempt}/${TRANSACTION_RETRY_MAX}. Повторяю.`);
+            logger.warn(`[db] Транзакция откачена (${error.code}), попытка ${attempt}/${TRANSACTION_RETRY_MAX}. Повторяю.`);
+            // Освобождаем соединение до ожидания, чтобы не держать его в пуле.
             await new Promise(resolve => setTimeout(resolve, retryDelay(attempt)));
-        } finally {
-            client.release();
         }
     }
 
@@ -270,9 +290,12 @@ async function transaction(fn) {
 async function withClient(fn) {
     const client = await pool.connect();
     try {
-        return await fn(client);
-    } finally {
+        const result = await fn(client);
         client.release();
+        return result;
+    } catch (err) {
+        client.release(err);
+        throw err;
     }
 }
 
@@ -284,12 +307,16 @@ async function withClient(fn) {
  * ленивым require внутри initDatabase. Теперь database.js вообще не знает
  * про schema: единственный, кто связывает подключение и DDL, — db/init.js.
  */
+let poolClosed = false;
 async function closePool() {
+    if (poolClosed) return;
+    poolClosed = true;
     try {
         await pool.end();
         logger.info('Пул соединений закрыт');
     } catch (error) {
         logger.error('Ошибка закрытия пула: ' + describeError(error));
+        throw error;
     }
 }
 
