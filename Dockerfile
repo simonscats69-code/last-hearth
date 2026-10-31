@@ -81,8 +81,8 @@ EOF
 # Незащищённый запуск от root — риск при компрометации контейнера.
 # Создаём непривилегированного пользователя и запускаем от его имени.
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-RUN chown -R appuser:appgroup /app
-USER appuser
+# Run as root to allow entrypoint to rebuild packages on mounted volumes
+# USER appuser
 
 EXPOSE 3000
 
