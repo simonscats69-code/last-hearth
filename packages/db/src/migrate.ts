@@ -5,7 +5,19 @@ import { Pool } from 'pg';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const MIGRATIONS_DIR = path.join(__dirname, '../db/migrations');
+const MIGRATIONS_DIR = (() => {
+  const candidates = [
+    path.join(__dirname, '../db/migrations'),
+    path.join(__dirname, '../../../db/migrations'),
+    path.join(__dirname, '../../db/migrations'),
+    path.join(process.cwd(), 'db/migrations'),
+    path.join(process.cwd(), '../db/migrations'),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return candidates[0];
+})();
 
 async function runMigrations(pool: Pool) {
   // Create migrations table if not exists
