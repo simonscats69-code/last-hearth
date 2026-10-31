@@ -8,7 +8,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { transaction } = require('../../db/database');
+const { transaction, query } = require('../../db/database');
 const { lockPlayer } = require('../../db/players');
 const { handleError, logger, notFound, fail, unauthorized } = require('../../utils/serverApi');
 
@@ -123,13 +123,11 @@ router.get('/', async (req, res) => {
     try {
         if (!req.player?.id) return unauthorized(res);
 
-        const player = await transaction(async (client) => {
-            const result = await client.query(
-                'SELECT coins, equipment, inventory FROM players WHERE id = $1',
-                [req.player.id]
-            );
-            return result.rows[0] || null;
-        });
+        const playerResult = await query(
+            'SELECT coins, equipment, inventory FROM players WHERE id = $1',
+            [req.player.id]
+        );
+        const player = playerResult.rows[0] || null;
 
         if (!player) {
             return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
