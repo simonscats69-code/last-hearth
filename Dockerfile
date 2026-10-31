@@ -1,7 +1,7 @@
 # Last Hearth - Telegram Mini App
 FROM node:20-alpine
 
-ENV NODE_ENV=production
+# ENV NODE_ENV=production moved below build steps to ensure devDependencies are installed
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ COPY . .
 # Устанавливаем все зависимости (включая dev) — нужны для npm run build на этапе сборки.
 # Dev-зависимости (tsup, typescript и т.д.) остаются в最終 образе, так как
 # multi-stage сборка не используется.
-RUN npm install
+RUN npm install --include=dev
 
 # Собираем пакеты в правильном порядке: core -> db -> server -> client
 RUN npm run -w @last-hearth/core -- build && \
@@ -89,5 +89,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "const http=require('http');http.get('http://localhost:3000/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" || exit 1
 
+ENV NODE_ENV=production
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "index.js"]
