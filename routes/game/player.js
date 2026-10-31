@@ -387,6 +387,7 @@ router.get('/achievements', async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) return unauthorized(res);
+        const achievements = await getPlayerAchievements(playerId);
         res.json({ success: true, data: achievements || [] });
     } catch (err) {
         handleError(res, err, 'get_achievements');
