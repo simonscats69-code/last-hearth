@@ -473,5 +473,5 @@ export function getWeaponDamageForContext(item: InventoryItem | null | undefined
   if (base <= 0) return 0;
   const stats = (item && item.stats && typeof item.stats === 'object') ? item.stats : {};
   const bonus = getWeaponContextMultiplier(item, context);
-  return rollVarianceDamage(base * bonus, Number((stats as Record<string, unknown>).variance) || 0);
+  return rollVarianceDamage(base * bonus, Number((stats as Record<string, unknown>)['variance']) || 0);
 }
