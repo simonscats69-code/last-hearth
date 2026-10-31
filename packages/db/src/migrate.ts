@@ -5,7 +5,7 @@ import { Pool } from 'pg';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const MIGRATIONS_DIR = (() => {
+const MIGRATIONS_DIR: string = (() => {
   const candidates = [
     path.join(__dirname, '../db/migrations'),
     path.join(__dirname, '../../../db/migrations'),
@@ -16,7 +16,7 @@ const MIGRATIONS_DIR = (() => {
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
-  return candidates[0];
+  return candidates[0] as string;
 })();
 
 async function runMigrations(pool: Pool) {
