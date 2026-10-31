@@ -122,6 +122,8 @@ function summarizeMaterials(inventory) {
 router.get('/', async (req, res) => {
     try {
         if (!req.player?.id) return unauthorized(res);
+
+        const player = await transaction(async (client) => {
             const result = await client.query(
                 'SELECT coins, equipment, inventory FROM players WHERE id = $1',
                 [req.player.id]
