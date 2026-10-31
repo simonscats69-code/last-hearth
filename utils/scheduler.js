@@ -416,7 +416,7 @@ async function cleanupOldLogs() {
         // Удаляем старые сессии
         try {
             const sessionsResult = await query(`
-                DELETE FROM player_sessions
+                DELETE FROM public.player_sessions
                 WHERE expires_at < NOW()
                 RETURNING id
             `);
