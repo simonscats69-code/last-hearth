@@ -5561,10 +5561,13 @@ const currentDamage = boss.current_damage ?? 1;
                 <span class="boss-hp-label">Здоровье</span>
                 <span class="boss-hp-value">${formatNumber(currentHp)} / ${formatNumber(maxHp)}</span>
             </div>
-            <div class="boss-stats-row">
-                <span class="boss-stat" aria-label="Количество побед над боссом">⭐ ${formatNumber(defeatedCount)} побед</span>
-                <span class="boss-stat" aria-label="Ваш урон за удар">⚔️ ${formatNumber(currentDamage)} урона/удар</span>
-            </div>
+            <details class="boss-stats-details">
+                <summary>📊 Статистика</summary>
+                <div class="boss-stats-row">
+                    <span class="boss-stat" aria-label="Количество побед над боссом">⭐ ${formatNumber(defeatedCount)} побед</span>
+                    <span class="boss-stat" aria-label="Ваш урон за удар">⚔️ ${formatNumber(currentDamage)} урона/удар</span>
+                </div>
+            </details>
             <div class="boss-footer">
                 ${!locked && canStartSolo
                     ? `<button class="btn btn-primary attack-btn start-solo-btn" data-boss-id="${escapeAttribute(boss.id)}">⚔️ Начать бой</button>`

@@ -126,6 +126,14 @@ router.get(['/', '/profile'], async (req, res) => {
         const progress = await getPlayerProgress(playerId);
         const status = buildPlayerStatus(player);
 
+        // Единый источник истины для числа убитых боссов — агрегат из boss_mastery
+        // (а не players.bosses_killed, который может расходиться при рейдах).
+        const bossKillsRow = await queryOne(
+            `SELECT COALESCE(SUM(kills), 0) AS total FROM boss_mastery WHERE player_id = $1`,
+            [playerId]
+        );
+        const bossesKilled = Number(bossKillsRow?.total || 0);
+
         res.json({
             success: true,
             data: {
@@ -149,7 +157,7 @@ router.get(['/', '/profile'], async (req, res) => {
                     clan_id: player.clan_id,
                     clan_role: player.clan_role,
                     daily_streak: player.daily_streak,
-                    bosses_killed: player.bosses_killed,
+                    bosses_killed: bossesKilled,
                     pvp_wins: player.pvp_wins,
                     pvp_losses: player.pvp_losses,
                     pvp_rating: player.pvp_rating,
