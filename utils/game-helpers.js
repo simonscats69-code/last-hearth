@@ -99,7 +99,7 @@ function createInventoryItem(item, options = {}) {
         radiation_resist: Number(options.radiation_resist ?? source.radiation_resist ?? stats.radiation_resist ?? 0),
         durability,
         max_durability: Number(options.max_durability ?? source.max_durability ?? 100),
-        quantity: Math.max(1, Number(options.quantity ?? source.quantity ?? 1) || 1),
+        quantity: (() => { const q = Number(options.quantity ?? source.quantity ?? 1); return Number.isFinite(q) && q > 0 ? q : 1; })(),
         upgrade_level: Number(options.upgrade_level ?? source.upgrade_level ?? 0),
         modifications
     };
@@ -218,7 +218,7 @@ function addItemToInventory(inventory, newItem, dbItem) {
     const isEquipment = Boolean(newItem.slot || dbItem?.slot)
         || EQUIPMENT_TYPES.has(type)
         || EQUIPMENT_TYPES.has(category);
-    const stackable = dbItem ? dbItem.stackable !== false && dbItem.stackable !== 0 && dbItem.stackable !== '0' : true;
+    const stackable = dbItem ? (dbItem.stackable !== false && dbItem.stackable !== 0 && dbItem.stackable !== '0' && dbItem.stackable !== 'false') : true;
 
     const maxStack = Math.max(1, Number(dbItem?.max_stack || 99));
     const rawQty = Number(newItem.quantity || 1);
