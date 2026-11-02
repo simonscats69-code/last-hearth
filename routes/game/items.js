@@ -186,7 +186,7 @@ router.post('/buy', async (req, res) => {
             }
 
             await client.query(
-                'UPDATE players SET coins = coins - $1, inventory = $2, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, inventory = $2, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
                 [totalPrice, JSON.stringify(inventory), playerId, quantity]
             );
 

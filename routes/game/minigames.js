@@ -162,7 +162,7 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
                 // "stars - 1" при гонке двух платных вращений дало бы 500 с
                 // нарушением constraint вместо понятной бизнес-ошибки.
                 await client.query(
-                    'UPDATE players SET stars = GREATEST(0, stars - 1) WHERE id = $1',
+                    'UPDATE players SET stars = GREATEST(0, COALESCE(stars,0) - 1) WHERE id = $1',
                     [playerId]
                 );
             } else {
@@ -189,7 +189,7 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
         if (prize.type === 'coins') {
             const updateCooldown = !is_paid ? ', last_wheel_spin = NOW()' : '';
             await client.query(
-                `UPDATE players SET coins = coins + $1${updateCooldown} WHERE id = $2`,
+                `UPDATE players SET coins = COALESCE(coins,0) + $1${updateCooldown} WHERE id = $2`,
                 [prize.value, playerId]
             );
         } else if (prize.type === 'energy') {
@@ -224,7 +224,7 @@ router.post(['/wheel/spin', '/spin'], async (req, res) => {
             
             if (bonus > 0) {
                 await client.query(
-                    `UPDATE players SET coins = coins + $1${updateCooldown} WHERE id = $2`,
+                    `UPDATE players SET coins = COALESCE(coins,0) + $1${updateCooldown} WHERE id = $2`,
                     [bonus, playerId]
                 );
             } else if (!is_paid) {
@@ -394,7 +394,7 @@ router.post(['/purchase', '/'], async (req, res) => {
             // колонка под CHECK (stars >= 0). Проверка playerStars < price выше
             // защищает при одиночном запросе, GREATEST — страховка от гонки.
             await client.query(
-                'UPDATE players SET stars = GREATEST(0, stars - $1) WHERE id = $2',
+                'UPDATE players SET stars = GREATEST(0, COALESCE(stars,0) - $1) WHERE id = $2',
                 [price, playerId]
             );
 

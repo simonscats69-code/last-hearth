@@ -191,7 +191,7 @@ router.post('/clan/create', wrap(async (req, res) => {
         return fail(res, 'Вы уже состоите в клане', 'ALREADY_IN_CLAN');
     }
 
-    if (player.coins < CLAN_CREATE_COST) {
+    if (Number(player.coins || 0) < CLAN_CREATE_COST) {
         return fail(res, `Нужно ${CLAN_CREATE_COST} монет`, 'NOT_ENOUGH_COINS');
     }
     
@@ -203,7 +203,7 @@ router.post('/clan/create', wrap(async (req, res) => {
         }
 
         // Проверяем монеты еще раз внутри транзакции
-        if (lockedPlayer.coins < CLAN_CREATE_COST) {
+        if (Number(lockedPlayer.coins || 0) < CLAN_CREATE_COST) {
             throw { message: ERROR_MESSAGES.INSUFFICIENT_COINS, code: 'INSUFFICIENT_COINS', statusCode: 400 };
         }
 
@@ -259,7 +259,7 @@ router.post('/clan/create', wrap(async (req, res) => {
         const clanId = insertResult.rows[0].id;
         
         await client.query(
-            `UPDATE players SET clan_id = $1, clan_role = 'leader', coins = coins - $3
+            `UPDATE players SET clan_id = $1, clan_role = 'leader', coins = COALESCE(coins,0) - $3
              WHERE id = $2`,
             [clanId, playerId, CLAN_CREATE_COST]
         );
@@ -356,8 +356,17 @@ router.post('/clan/join', wrap(async (req, res) => {
             if (!lockedClan) {
                 throw { message: 'Клан не найден', code: 'CLAN_NOT_FOUND', statusCode: 404 };
             }
-            if (lockedClan.is_open !== true) {
-                throw { message: 'Клан закрытый', code: 'CLAN_CLOSED', statusCode: 400 };
+if (lockedClan.is_open !== true) {
+                throw { message: 'Клан закрыт', code: 'CLAN_CLOSED', statusCode: 400 };
+            }
+
+            // Повторная проверка кода приглашения внутри транзакции (TOCTOU).
+            if (invite_code !== undefined && invite_code !== null && String(invite_code).trim() !== '') {
+                const provided = String(invite_code).trim();
+                const expected = lockedClan.invite_code ? String(lockedClan.invite_code) : '';
+                if (!expected || provided !== expected) {
+                    throw { message: 'Неверный код приглашения', code: 'CLAN_INVITE_CODE_INVALID', statusCode: 400 };
+                }
             }
 
             // Проверяем количество участников
@@ -723,7 +732,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
         await client.query(
             // COALESCE: у старых записей счётчик пожертвований мог быть NULL,
             // и clan_donated замирал навсегда вместо роста.
-            `UPDATE players SET coins = coins - $1, clan_donated = COALESCE(clan_donated, 0) + $1
+            `UPDATE players SET coins = COALESCE(coins,0) - $1, clan_donated = COALESCE(clan_donated, 0) + $1
              WHERE id = $2`,
             [donation, playerId]
         );
@@ -739,7 +748,7 @@ router.post('/clan/donate', wrap(async (req, res) => {
         // Получаем обновлённые показатели клана
         const clanResult = await client.query(
             `SELECT total_donated, coins FROM clans WHERE id = $1`,
-            [player.clan_id]
+            [lockedPlayer.clan_id]
         );
 
         return { 
@@ -788,7 +797,7 @@ router.post('/clan/transfer-leader', wrap(async (req, res) => {
         // Проверяем, что цель — член того же клана
         const targetResult = await client.query(
             `SELECT id, clan_role FROM players WHERE id = $1 AND clan_id = $2 FOR UPDATE`,
-            [targetId, player.clan_id]
+            [targetId, lockedPlayer.clan_id]
         );
         if (targetResult.rows.length === 0) {
             throw { message: 'Участник не найден в вашем клане', code: 'TARGET_NOT_IN_CLAN', statusCode: 404 };
@@ -805,7 +814,7 @@ router.post('/clan/transfer-leader', wrap(async (req, res) => {
         );
         await client.query(
             `UPDATE clans SET leader_id = $1 WHERE id = $2`,
-            [targetId, player.clan_id]
+            [targetId, lockedPlayer.clan_id]
         );
 
         return {
