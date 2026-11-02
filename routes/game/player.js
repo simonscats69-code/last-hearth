@@ -258,7 +258,7 @@ router.post('/buy-energy', async (req, res) => {
             if (!p) throw { message: 'Игрок не найден', code: 'NOT_FOUND', statusCode: 404 };
             const stars = Number(p.stars || 0);
             const energy = Number(p.energy || 0);
-            const maxEnergy = Number(p.max_energy || 0) || 50;
+            const maxEnergy = Number(p.max_energy ?? 50);
             if (stars < STARS_COST) throw { message: 'Недостаточно звёзд', code: 'INSUFFICIENT_STARS' };
             if (energy >= maxEnergy) throw { message: 'Энергия уже полная', code: 'ENERGY_FULL' };
 
@@ -505,10 +505,7 @@ router.get('/achievements/progress', async (req, res) => {
  */
 router.post('/achievements/claim', async (req, res) => {
     try {
-        const playerId = req.player?.id;
-        if (!playerId) return unauthorized(res);
-
-        // Валидация типа ID, а не только «не пустой».
+        const achievement_id = req.body?.achievement_id;
         //
         // ЗДЕСЬ БЫЛ БАГ: проверялось только `!achievement_id`, которое
         // отсекает '' / null / 0, но пропускает 'abc' и '1.5'. Дальше
@@ -539,6 +536,7 @@ router.get('/progress', async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) return unauthorized(res);
+        const progress = await getPlayerProgress(playerId);
         res.json({ success: true, data: progress || {} });
     } catch (err) {
         handleError(res, err, 'get_progress');
