@@ -914,8 +914,8 @@ function resolveEquipmentSlot(item) {
      * Прочность не уходит в минус: при нуле предмет «сломан» — бонусов не даёт
      * (см. getEffectiveStatValue), но остаётся в инвентаре, его можно починить.
      * 
-     * Износ за удар: GAME_CONFIG.WEAR_PER_HIT = 0.5 единицы
-     * (1 единица за 2 удара).
+     * Износ за удар: GAME_CONFIG.WEAR_PER_HIT = 0.5 единицы,
+     * округление Math.round даёт 1 единицу за удар.
      */
     function wearEquipment(item, amount = 1) {
         if (!isEquipmentItem(item)) return { ...item };
