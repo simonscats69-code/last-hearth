@@ -232,6 +232,11 @@ function addItemToInventory(inventory, newItem, dbItem) {
             if (!existing || Number(existing.id) !== Number(newItem.id)) continue;
             if (existing.rarity !== newItem.rarity) continue;
             if (Number(existing.upgrade_level || 0) !== 0) continue;
+            // Не стакать предметы с разной прочностью/модификациями/статами
+            if (Number(existing.durability) !== Number(newItem.durability)) continue;
+            if (Number(existing.max_durability) !== Number(newItem.max_durability)) continue;
+            if (JSON.stringify(existing.modifications || null) !== JSON.stringify(newItem.modifications || null)) continue;
+            if (JSON.stringify(existing.stats || null) !== JSON.stringify(newItem.stats || null)) continue;
 
             const currentQty = Math.max(0, Number(existing.quantity || 1));
             if (currentQty >= maxStack) continue;
@@ -452,7 +457,7 @@ function normalizeEquipment(raw) {
     for (const slot of Object.keys(eq)) {
         const item = eq[slot];
         if (item && typeof item === 'object' && !Array.isArray(item)) {
-            out[slot] = { ...item };
+            out[slot] = { ...item, stats: item.stats ? { ...item.stats } : item.stats, modifications: item.modifications ? { ...item.modifications } : item.modifications };
         }
     }
     return out;

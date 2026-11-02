@@ -89,9 +89,11 @@ async function tryAcquireTaskLock(taskName) {
     try {
         return await withClient(async (client) => {
             const result = await client.query(`
-                UPDATE scheduler_state 
-                SET is_running = true, last_run_at = NOW(), updated_at = NOW()
-                WHERE task_name = $1 AND is_running = false
+                INSERT INTO scheduler_state (task_name, is_running, last_run_at, updated_at)
+                VALUES ($1, true, NOW(), NOW())
+                ON CONFLICT (task_name) DO UPDATE
+                  SET is_running = true, last_run_at = NOW(), updated_at = NOW()
+                  WHERE scheduler_state.is_running = false
                 RETURNING task_name
             `, [taskName]);
             return result.rows.length > 0;
@@ -413,20 +415,8 @@ async function cleanupOldLogs() {
             });
         }
         
-        // Удаляем старые сессии
-        try {
-            const sessionsResult = await query(`
-                DELETE FROM public.player_sessions
-                WHERE expires_at < NOW()
-                RETURNING id
-            `);
-
-            if (sessionsResult.rows.length > 0) {
-                logger.info({
-                    type: 'sessions_cleanup',
-                    sessions_deleted: sessionsResult.rows.length
-                });
-            }
+// Удаляем старые сессии (таблица player_sessions удалена из схемы — пропускаем)
+        logger.debug({ type: 'sessions_cleanup_skipped', reason: 'player_sessions table removed' });
         } catch (sessionsErr) {
             // Таблицы player_sessions может не быть в новой схеме — не роняем очистку.
             logger.warn('sessions cleanup пропущен: ' + describeError(sessionsErr));
