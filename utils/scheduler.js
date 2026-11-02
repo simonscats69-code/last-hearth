@@ -755,6 +755,18 @@ async function cleanupExpiredRaids() {
                     `DELETE FROM player_boss_progress
                      WHERE started_at < NOW() - INTERVAL '8 hours'`,
                 );
+
+                // Чистим зависшие соло-бои в players: если игрок не обращался
+                // к серверу, active_boss_id оставался до следующего запроса.
+                await query(
+                    `UPDATE players
+                        SET active_boss_id = NULL,
+                            active_boss_started_at = NULL,
+                            active_boss_mode = NULL,
+                            active_raid_id = NULL
+                      WHERE active_boss_mode = 'solo'
+                        AND active_boss_started_at < NOW() - INTERVAL '8 hours'`
+                );
                    
                 // Логируем истёкший рейд
                 logger.info({

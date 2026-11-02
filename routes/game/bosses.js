@@ -1748,8 +1748,6 @@ router.post('/raid/:id/join', async (req, res) => {
                  VALUES ($1, $2, $3, 0, NOW(), NOW())
              ON CONFLICT (boss_id, player_id, raid_id)
                   DO UPDATE SET raid_id = EXCLUDED.raid_id,
-                                damage_dealt = 0,
-                                rewards_earned = false,
                                 joined_at = NOW(),
                                 last_hit_at = NOW()`,
                 [raid.boss_id, playerId, raidId]
@@ -2068,7 +2066,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                 const raidRewardsRows = []; // [raidId, bossId, playerId, coins, exp, itemsJson, keyName, claimed]
                 const participantRewards = new Map(); // playerId -> {coins, exp, items, key}
 
-                for (const entry of shares) {
+                for (const entry of [...shares].sort((a, b) => a.participantId - b.participantId)) {
                     const participantId = entry.participantId;
                     const participantBuffs = getActiveBuffs(entry.buffs);
                     const lootMultiplier = participantBuffs.loot_x2 ? 2 : 1;
@@ -2084,18 +2082,14 @@ router.post('/raid/:id/attack', async (req, res) => {
                     const { granted: grantedItems, undropped: participantUndropped } = await grantRewardItems(client, participantId, raid.reward_items, entry.share * lootMultiplier, raidRewardTemplates);
                     // trackCollectedItems для наград рейда — иначе достижение
                     // «Коллекционер» не учитывает предметы из рейда.
-                    if (grantedItems && grantedItems.length > 0) {
-                        const grantedIds = grantedItems
-                            .filter((item) => item && item.id)
-                            .map((item) => item.id);
-                        if (grantedIds.length > 0) {
-                            await trackCollectedItems(client, participantId, grantedIds);
-                            await client.query(
-                                `UPDATE players SET items_collected = COALESCE(items_collected, 0) + $1 WHERE id = $2`,
-                                [grantedIds.length, participantId]
-                            );
+if (grantedItems && grantedItems.length > 0) {
+                            const grantedIds = grantedItems
+                                .filter((item) => item && item.id)
+                                .map((item) => item.id);
+                            if (grantedIds.length > 0) {
+                                await trackCollectedItems(client, participantId, grantedIds);
+                            }
                         }
-                    }
                     const isLeader = participantId === leaderIdRaw;
 
                     // Ключ следующего босса выдаётся ВСЕМ участникам с уроном > 0,
@@ -2166,26 +2160,16 @@ router.post('/raid/:id/attack', async (req, res) => {
                     );
                 }
 
-                // Батчовый UPDATE опыта
-                if (expUpdates.length > 0) {
-                    const numRows = expUpdates.length / 2;
-                    const values = Array.from({ length: numRows }, (_, i) =>
-                        `($${i * 2 + 1}::bigint, $${i * 2 + 2}::integer)`
-                    ).join(', ');
-                    await client.query(
-                        `UPDATE players p SET experience = p.experience + v.amount
-                         FROM (VALUES ${values}) AS v(player_id, amount)
-                         WHERE p.id = v.player_id`,
-                        expUpdates
-                    );
-                    // Логи опыта — по одному на игрока (нельзя батчить из-за разных logData)
-                    for (const entry of shares) {
-                        const pid = entry.participantId;
-                        const expReward = participantRewards.get(pid)?.experience || 0;
-                        if (expReward > 0) {
-                            const expResult = await playerHelper.addExperience(pid, expReward, client);
-                            expLogs.push({ playerId: pid, logData: expResult.logData });
-                        }
+                // Батчовый UPDATE опыта убран: опыт начисляется через playerHelper.addExperience
+                // ниже (он же делает level-up). Раньше здесь был ещё один +experience,
+                // что давало двойной счёт.
+                // Логи опыта — по одному на игрока (нельзя батчить из-за разных logData)
+                for (const entry of shares) {
+                    const pid = entry.participantId;
+                    const expReward = participantRewards.get(pid)?.experience || 0;
+                    if (expReward > 0) {
+                        const expResult = await playerHelper.addExperience(pid, expReward, client);
+                        expLogs.push({ playerId: pid, logData: expResult.logData });
                     }
                 }
 

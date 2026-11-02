@@ -682,17 +682,46 @@ async function idempotencyMiddleware(req, res, next) {
             // ответила. Если ответ готов (response_data не пустой) —
             // отдаём его как реплей.
             const existing = await queryOne(
-                `SELECT response_data FROM idempotency_keys WHERE idempotency_key = $1`,
+                `SELECT response_data, created_at FROM idempotency_keys WHERE idempotency_key = $1`,
                 [fullKey]
             );
-            if (existing && existing.response_data && Object.keys(existing.response_data).length > 0) {
+            const isStale = existing
+                && (!existing.response_data || Object.keys(existing.response_data).length === 0)
+                && existing.created_at
+                && (Date.now() - new Date(existing.created_at).getTime() > 5 * 60 * 1000);
+
+            if (isStale) {
+                await dbQuery(`DELETE FROM idempotency_keys WHERE idempotency_key = $1`, [fullKey]);
+                const retryInsert = await dbQuery(
+                    `INSERT INTO idempotency_keys (idempotency_key, response_data, created_at)
+                     VALUES ($1, $2, NOW())
+                     ON CONFLICT (idempotency_key) DO NOTHING`,
+                    [fullKey, {}]
+                );
+                claimed = retryInsert.rowCount > 0;
+                if (claimed) {
+                    // proceed to handler
+                } else {
+                    // race lost; fall through to 409 below
+                }
+            }
+
+            if (!claimed && existing && existing.response_data && Object.keys(existing.response_data).length > 0) {
                 logger.info('[idempotency] returning cached response', { key: idempotencyKey, playerId });
                 return res.set('Idempotency-Replay', 'true').json(existing.response_data);
             }
-            return res.status(409).json({
-                error: 'Запрос с таким Idempotency-Key уже выполняется',
-                code: 'IDEMPOTENCY_IN_PROGRESS'
-            });
+            if (!claimed && !isStale) {
+                return res.status(409).json({
+                    error: 'Запрос с таким Idempotency-Key уже выполняется',
+                    code: 'IDEMPOTENCY_IN_PROGRESS'
+                });
+            }
+            if (!claimed) {
+                return res.status(409).json({
+                    error: 'Запрос с таким Idempotency-Key уже выполняется',
+                    code: 'IDEMPOTENCY_IN_PROGRESS'
+                });
+            }
         }
     } catch (err) {
         // Ошибка БД — не блокируем запрос, логируем и продолжаем.
