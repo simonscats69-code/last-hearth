@@ -458,7 +458,6 @@ router.post('/clan/leave', wrap(async (req, res) => {
                     from_id: playerId,
                     to_id: nextLeader.rows[0].id
                 });
-            }
             await client.query(
                 `UPDATE players SET clan_role = NULL WHERE id = $1`,
                 [playerId]
