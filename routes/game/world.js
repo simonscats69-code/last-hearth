@@ -386,11 +386,12 @@ router.post('/search', async (req, res) => {
         let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         const existingRadiation = normalizeRadiation(updatedPlayer.radiation);
         
-if (riskProfile.contaminationThreat > 0 && !activeBuffs.no_radiation) {
+const now = new Date();
+
+        if (riskProfile.contaminationThreat > 0 && !activeBuffs.no_radiation) {
             // P1-7: используем уже посчитанное давление (с учётом защиты)
             const randomFactor = 0.7 + crypto.randomInt(600) / 1000;
             radiationGain = Math.max(0, Math.ceil(riskProfile.contaminationPressure * randomFactor));
-            const now = new Date();
 
             if (radiationGain > 0) {
                 const radiationConfig = DEBUFF_CONFIG.radiation;
