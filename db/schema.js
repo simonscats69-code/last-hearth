@@ -402,6 +402,7 @@ async function createTables() {
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_rewards_player ON raid_rewards(player_id, claimed)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_raid_rewards_raid ON raid_rewards(raid_id)`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_raid_rewards_raid_player ON raid_rewards(raid_id, player_id)`);
     await query(`
         CREATE TABLE IF NOT EXISTS raid_progress (
             id SERIAL PRIMARY KEY,

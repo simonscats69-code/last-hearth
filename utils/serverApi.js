@@ -723,10 +723,10 @@ async function idempotencyMiddleware(req, res, next) {
                 });
             }
         }
-    } catch (err) {
-        // Ошибка БД — не блокируем запрос, логируем и продолжаем.
-        // claimed остаётся false: ответ ниже всё равно будет отдан.
-        logger.warn('[idempotency] claim failed', { error: err.message });
+} catch (err) {
+        // Fail-closed: при сбое БД не выполняем мутацию без идемпотентности.
+        logger.error('[idempotency] claim failed, failing closed', { error: err.message });
+        return res.status(503).json({ error: 'Сервис временно недоступен', code: 'SERVICE_UNAVAILABLE' });
     }
 
     // Сохраняем ответ в кэш идемпотентности ДО отправки клиенту.
