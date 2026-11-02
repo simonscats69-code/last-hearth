@@ -844,7 +844,19 @@ router.post('/move', async (req, res) => {
         // Как и в /search: тело транзакции возвращает результат, ответ
         // уходит после COMMIT, ROLLBACK делает transaction().
         const outcome = await transaction(async (client) => {
-            const player = await lockPlayer(playerId, client, 'id, level, current_location_id, energy, last_energy_update');
+            const player = await lockPlayer(playerId, client, 'id, level, current_location_id, energy, last_energy_update, active_boss_id, active_raid_id');
+
+            // Запрещаем перемещение во время активного боя/рейда.
+            if (player.active_boss_id || player.active_raid_id) {
+                return {
+                    status: 409,
+                    body: {
+                        success: false,
+                        error: 'Нельзя перемещаться во время активного боя или рейда',
+                        code: 'ACTIVE_BATTLE_IN_PROGRESS'
+                    }
+                };
+            }
 
             // Проверяем существование игрока
             if (!player) {

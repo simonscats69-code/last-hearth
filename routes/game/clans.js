@@ -203,6 +203,10 @@ router.post('/clan/create', wrap(async (req, res) => {
         }
 
         // Проверяем монеты еще раз внутри транзакции
+        if (lockedPlayer.clan_id) {
+            throw { message: 'Вы уже состоите в клане', code: 'ALREADY_IN_CLAN', statusCode: 400 };
+        }
+
         if (Number(lockedPlayer.coins || 0) < CLAN_CREATE_COST) {
             throw { message: ERROR_MESSAGES.INSUFFICIENT_COINS, code: 'INSUFFICIENT_COINS', statusCode: 400 };
         }
@@ -438,7 +442,9 @@ router.post('/clan/leave', wrap(async (req, res) => {
                 `SELECT id FROM players WHERE clan_id = $1 AND id <> $2 ORDER BY id LIMIT 1 FOR UPDATE`,
                 [lockedPlayer.clan_id, playerId]
             );
-            if (nextLeader.rows.length > 0) {
+            if (nextLeader.rows.length === 0) {
+                throw { message: 'Нет участников для передачи лидерства', code: 'NO_NEXT_LEADER', statusCode: 403 };
+            }
                 await client.query(
                     `UPDATE players SET clan_role = 'leader' WHERE id = $1`,
                     [nextLeader.rows[0].id]
@@ -508,7 +514,7 @@ router.get('/', wrap(async (req, res) => {
 
     // Получаем общее количество
     const hasSearch = search && search.trim().length > 0;
-    const searchPattern = hasSearch ? `%${search}%` : '%%';
+    const searchPattern = hasSearch ? `%${search.replace(/[%_\\]/g, '\\$&')}%` : '%%';
 
     let countQuery = 'SELECT COUNT(*) as total FROM clans c WHERE c.is_public = true';
     let searchQuery = '';
@@ -787,6 +793,9 @@ router.post('/clan/transfer-leader', wrap(async (req, res) => {
     const targetId = Number(req.body?.target_id);
     if (!Number.isInteger(targetId) || targetId <= 0) {
         return fail(res, 'Укажите корректный ID участника', 'INVALID_TARGET_ID');
+    }
+    if (targetId === playerId) {
+        return fail(res, 'Нельзя передать лидерство самому себе', 'INVALID_TARGET_ID');
     }
 
     const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {

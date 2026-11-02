@@ -181,7 +181,7 @@ router.get('/players', async (req, res) => {
         // рендер списка потенциальных целей.
         // ВАЖНО: queryAll() возвращает массив строк, а не { rows }.
         const resultRows = await queryAll(`
-            SELECT id, telegram_id, username, first_name, level,
+            SELECT id, username, first_name, level,
                    health, max_health, strength, endurance, agility,
                    pvp_wins, pvp_rating, pvp_streak,
                    COUNT(*) OVER() AS total_count
@@ -339,7 +339,8 @@ router.post('/attack', async (req, res) => {
             const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
             const recentAttacksResult = await client.query(
                 `SELECT COUNT(*) as cnt FROM pvp_battles
-                 WHERE attacker_id = $1 AND defender_id = $2 AND started_at > $3`,
+                 WHERE ((attacker_id = $1 AND defender_id = $2) OR (attacker_id = $2 AND defender_id = $1))
+                   AND started_at > $3`,
                 [playerId, targetId, hourAgo]
             );
             const recentAttacks = Number(recentAttacksResult.rows[0]?.cnt || 0);
@@ -701,6 +702,9 @@ router.post('/attack-hit', async (req, res) => {
                  RETURNING energy, max_energy, last_energy_update`,
                 [energyCost, attackerId]
             );
+            if (!energyResult.rows[0]) {
+                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            }
             const energyLeft = Number(energyResult.rows[0]?.energy || 0);
             const energyLastUpdate = energyResult.rows[0]?.last_energy_update || null;
 

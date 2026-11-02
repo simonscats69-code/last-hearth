@@ -343,7 +343,7 @@ async function clearPlayerActiveBattle(client, playerId) {
     );
 }
 
-async function clearActiveBattleForPlayers(client, playerIds) {
+async function clearActiveBattleForPlayers(client, playerIds, raidId) {
     if (!playerIds.length) return;
 
     await client.query(
@@ -352,8 +352,9 @@ async function clearActiveBattleForPlayers(client, playerIds) {
              active_boss_started_at = NULL,
              active_boss_mode = NULL,
              active_raid_id = NULL
-         WHERE id = ANY($1::bigint[])`,
-        [playerIds]
+         WHERE id = ANY($1::bigint[])
+           AND active_raid_id = $2`,
+        [playerIds, raidId]
     );
 }
 
@@ -364,6 +365,13 @@ async function resolveActiveBattle(client, playerId) {
     }
 
     if (player.active_boss_mode === 'solo') {
+        // Если игрок мёртв, бой не возобновляем — очищаем и начинаем заново.
+        if (Number(player.health || 0) <= 0) {
+            await clearPlayerActiveBattle(client, playerId);
+            await client.query('DELETE FROM player_boss_progress WHERE player_id = $1', [playerId]);
+            return null;
+        }
+
         if (!player.active_boss_started_at || !player.active_boss_id) {
             await clearPlayerActiveBattle(client, playerId);
             return null;
@@ -2237,7 +2245,7 @@ if (grantedItems && grantedItems.length > 0) {
                     delete rewards.items;
                 }
 
-                await clearActiveBattleForPlayers(client, participantIds);
+                await clearActiveBattleForPlayers(client, participantIds, raidId);
                 await client.query('DELETE FROM boss_sessions WHERE raid_id = $1', [raidId]);
                 await client.query('DELETE FROM raid_progress WHERE id = $1', [raidId]);
             }
