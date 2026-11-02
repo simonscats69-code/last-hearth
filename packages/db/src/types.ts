@@ -40,9 +40,8 @@ export interface DbPlayer {
   created_at: Date;
   updated_at: Date;
   pvp_wins: number;
-  pvp_losses: number;
-  pvp_draws: number;
-  pvp_streak: number;
+pvp_losses: number;
+    pvp_streak: number;
   pvp_max_streak: number;
   pvp_rating: number;
   pvp_total_damage_dealt: number;
