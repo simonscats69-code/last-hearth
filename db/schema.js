@@ -177,6 +177,7 @@ async function createTables() {
             max_stack INTEGER DEFAULT 99,
             effects JSONB DEFAULT '{}',
             slot VARCHAR(50),
+            set_id INTEGER,
             stats JSONB DEFAULT '{}',
             durability INTEGER DEFAULT 100,
             max_durability INTEGER DEFAULT 100,
@@ -784,6 +785,11 @@ async function runMigrations() {
     await queryTx(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS min_clan_level INTEGER DEFAULT 1`);
     await queryTx(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS icon VARCHAR(50)`);
     await queryTx(`ALTER TABLE bosses ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)`);
+
+    // Миграция: колонка set_id в items — нужна для сидов и бонусов сетов.
+    // В CREATE TABLE её не было, из-за чего seedDatabase падал на свежей БД
+    // (INSERT ... set_id) и приложение отвечало 500.
+    await queryTx(`ALTER TABLE items ADD COLUMN IF NOT EXISTS set_id INTEGER`);
 
     // Миграции для clans - поля уже используются API и фронтендом
     // (в createTables уже есть: level, experience, coins, is_public, is_open, invite_code, total_members, bosses_killed, loot_bonus, total_donated, created_at, updated_at)
