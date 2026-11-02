@@ -499,7 +499,7 @@ function validateTelegramInitData(initData, botToken) {
         // (ссылка, кэш браузера, прокси). Telegram выдаёт initData при
         // каждом открытии Mini App, поэтому 1 час достаточно: вернувшийся
         // позже просто получит новый токен.
-        const MAX_AGE = parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '3600', 10);
+        const MAX_AGE = Number.isFinite(parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '3600', 10)) ? parseInt(process.env.MAX_INIT_DATA_AGE_SECONDS || '3600', 10) : 3600;
         if (age < -300 || age > MAX_AGE) {
             logger.warn('initData истёк или время не синхронизировано', { age, authDate, now, maxAge: MAX_AGE });
             return null;
@@ -569,7 +569,7 @@ async function telegramAuthMiddleware(req, res, next) {
         // Rate limit для /auth endpoint (10 req/min per IP).
         // trust proxy = false, поэтому req.ip — реальный IP соединения;
         // X-Forwarded-For не читаем, иначе можно подделать и обойти лимит.
-        const clientIP = req.ip || req.connection?.remoteAddress;
+        const clientIP = req.ip || req.connection?.remoteAddress || 'unknown';
         
         // Rate limit для /auth endpoint (10 req/min per IP)
         const { allowed, remaining, resetAt } = await checkRateLimit(clientIP, 10, 60000);

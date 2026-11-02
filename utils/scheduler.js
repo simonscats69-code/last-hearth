@@ -206,9 +206,13 @@ async function isTaskRunning(taskName) {
 async function setTaskRunning(taskName, running) {
     if (running) {
         const acquired = await tryAcquireTaskLock(taskName);
-        if (acquired === null || acquired === false) {
-            memoryState.isRunning[taskName] = true;
+        if (acquired === false) {
+            // Лок занят другой инстанцией — не запускаем.
+            return false;
         }
+        // acquired === true или null (fallback) — продолжаем в памяти.
+        memoryState.isRunning[taskName] = true;
+        return true;
     } else {
         await releaseTaskLock(taskName);
         memoryState.isRunning[taskName] = false;
@@ -417,10 +421,6 @@ async function cleanupOldLogs() {
         
 // Удаляем старые сессии (таблица player_sessions удалена из схемы — пропускаем)
         logger.debug({ type: 'sessions_cleanup_skipped', reason: 'player_sessions table removed' });
-        } catch (sessionsErr) {
-            // Таблицы player_sessions может не быть в новой схеме — не роняем очистку.
-            logger.warn('sessions cleanup пропущен: ' + describeError(sessionsErr));
-        }
 
         // Удаляем сообщения клан-чата старше 30 дней.
         // Без ретеншена clan_chat рос forever: чат — самая активная таблица

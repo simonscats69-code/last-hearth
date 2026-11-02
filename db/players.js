@@ -36,7 +36,7 @@ async function updatePlayerExperience(playerId, exp, options = {}) {
     playerId = requireId(playerId, 'playerId');
     const exec = getExecutor(client);
     const result = await exec(
-        `UPDATE players SET experience = experience + $1 ${updateTimestamp ? ', updated_at = NOW()' : ''} WHERE id = $2 RETURNING level, experience, max_energy, max_health`,
+        `UPDATE players SET experience = COALESCE(experience,0) + $1 ${updateTimestamp ? ', updated_at = NOW()' : ''} WHERE id = $2 RETURNING level, experience, max_energy, max_health`,
         [exp, playerId]
     );
     if (!result.rows[0]) throw new Error(ERR_PLAYER_NOT_FOUND);
@@ -55,11 +55,11 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     
     const result = levelsGained <= 1
         ? await exec(
-            `WITH updated AS (UPDATE players SET level = level + 1, experience = $2, max_energy = max_energy + 1, max_health = max_health + 1, boss_damage = COALESCE(boss_damage, 0) + 1, luck = LEAST($3, luck + 1), energy = LEAST(energy + 1, max_energy + 1), health = LEAST(health + 1, max_health + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + 1, experience = $2, max_energy = COALESCE(max_energy,0) + 1, max_health = COALESCE(max_health,0) + 1, boss_damage = COALESCE(boss_damage, 0) + 1, luck = LEAST($3, COALESCE(luck,0) + 1), energy = LEAST(COALESCE(energy,0) + 1, COALESCE(max_energy,0) + 1), health = LEAST(COALESCE(health,0) + 1, COALESCE(max_health,0) + 1), updated_at = NOW() WHERE id = $1 RETURNING *) SELECT * FROM updated`,
             [playerId, newExperience, maxLuck]
         )
         : await exec(
-            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = max_energy + $1, max_health = max_health + $1, boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST($5, luck + $3), energy = LEAST(energy + $1, max_energy + $1), health = LEAST(health + $1, max_health + $1), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
+            `WITH updated AS (UPDATE players SET level = level + $1, experience = $2, max_energy = COALESCE(max_energy,0) + $1, max_health = COALESCE(max_health,0) + $1, boss_damage = COALESCE(boss_damage, 0) + $1, luck = LEAST($5, COALESCE(luck,0) + $3), energy = LEAST(COALESCE(energy,0) + $1, COALESCE(max_energy,0) + $1), health = LEAST(COALESCE(health,0) + $1, COALESCE(max_health,0) + $1), updated_at = NOW() WHERE id = $4 RETURNING *) SELECT * FROM updated`,
             [levelsGained, newExperience, luckBonus, playerId, maxLuck]
         );
     
@@ -90,12 +90,12 @@ async function addExperienceWithLevelUp(client, playerId, exp, getExpForLevel) {
     const lockedPlayer = await lockPlayer(playerId, client);
     if (!lockedPlayer) throw { message: ERR_PLAYER_NOT_FOUND, code: 'PLAYER_NOT_FOUND', statusCode: 404 };
 
-    let newExperience = lockedPlayer.experience + exp;
+    let newExperience = (lockedPlayer.experience || 0) + exp;
     let newLevel = lockedPlayer.level;
     let leveledUp = false;
     let totalLevelsGained = 0;
 
-    while (newExperience >= getExpForLevel(newLevel)) {
+    while (newExperience >= getExpForLevel(newLevel) && totalLevelsGained < 100) {
         newExperience -= getExpForLevel(newLevel);
         newLevel++;
         leveledUp = true;
