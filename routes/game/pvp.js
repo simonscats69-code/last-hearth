@@ -69,6 +69,7 @@ const PvpError = {
     INSUFFICIENT_ENERGY: { message: 'Недостаточно энергии для атаки', code: 'INSUFFICIENT_ENERGY', statusCode: 400 },
     INSUFFICIENT_ENERGY_HIT: { message: 'Недостаточно энергии для удара', code: 'INSUFFICIENT_ENERGY', statusCode: 400 },
     BATTLE_NOT_FOUND:  { message: 'Бой не найден',                   code: 'BATTLE_NOT_FOUND',   statusCode: 404 },
+    PLAYER_NOT_FOUND:  { message: 'Игрок не найден',                 code: 'PLAYER_NOT_FOUND',   statusCode: 404 },
     BATTLE_FINISHED:   { message: 'Бой уже завершён',                code: 'BATTLE_FINISHED',    statusCode: 409 },
     NOT_PARTICIPANT:   { message: 'Вы не участник этого боя',       code: 'NOT_PARTICIPANT',    statusCode: 403 },
     INVALID_INPUT:     { message: 'Некорректные данные запроса',    code: 'VALIDATION_ERROR',   statusCode: 400 }
@@ -456,16 +457,16 @@ router.post('/revanche', async (req, res) => {
             // Валидация цели: жив, не забанен, уровень >=5
             const targetCheck = await queryOne('SELECT id, banned, health, level FROM players WHERE id = $1', [targetId]);
             if (!targetCheck) {
-                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+                return res.status(404).json({ success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' });
             }
             if (targetCheck.banned) {
-                return { status: 403, body: { success: false, error: 'Игрок заблокирован', code: 'BANNED' } };
+                return res.status(403).json({ success: false, error: 'Игрок заблокирован', code: 'BANNED' });
             }
             if (Number(targetCheck.health || 0) <= 0) {
-                return { status: 400, body: { success: false, error: 'Противник мёртв', code: 'TARGET_DEAD' } };
+                return res.status(400).json({ success: false, error: 'Противник мёртв', code: 'TARGET_DEAD' });
             }
             if (Number(targetCheck.level || 0) < 5) {
-                return { status: 400, body: { success: false, error: 'Цель защищена до 5 уровня', code: 'TARGET_PROTECTED' } };
+                return res.status(400).json({ success: false, error: 'Цель защищена до 5 уровня', code: 'TARGET_PROTECTED' });
             }
 
             const outcome = await transaction(async (client) => {

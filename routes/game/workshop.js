@@ -191,7 +191,7 @@ router.post('/repair', async (req, res) => {
             equipment[slot] = { ...item, durability: durability.max };
 
             await client.query(
-                'UPDATE players SET coins = coins - $1, equipment = $2::jsonb WHERE id = $3',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb WHERE id = $3',
                 [cost, JSON.stringify(equipment), req.player.id]
             );
 
@@ -259,7 +259,7 @@ router.post('/upgrade', async (req, res) => {
                 };
             }
 
-            const materials = await loadMaterials(client, Object.keys(cost.materials));
+            const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
             const inventory = normalizeInventory(player.inventory);
 
             // Сначала проверяем весь список: нельзя списать часть материалов
@@ -313,7 +313,7 @@ router.post('/upgrade', async (req, res) => {
             };
 
             await client.query(
-                'UPDATE players SET coins = coins - $1, equipment = $2::jsonb, inventory = $3 WHERE id = $4',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb, inventory = $3 WHERE id = $4',
                 [cost.coins, JSON.stringify(equipment), JSON.stringify(inventory), req.player.id]
             );
 
@@ -403,7 +403,7 @@ router.post('/modify', async (req, res) => {
             }
 
             const inventory = normalizeInventory(player.inventory);
-            const materials = await loadMaterials(client, Object.keys(cost.materials));
+            const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
 
             for (const [name, required] of Object.entries(cost.materials)) {
                 const material = materials.get(name);
@@ -454,7 +454,7 @@ router.post('/modify', async (req, res) => {
             equipment[slot] = { ...item, modifications };
 
             await client.query(
-                'UPDATE players SET coins = coins - $1, equipment = $2::jsonb, inventory = $3 WHERE id = $4',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb, inventory = $3 WHERE id = $4',
                 [cost.coins, JSON.stringify(equipment), JSON.stringify(inventory), req.player.id]
             );
 

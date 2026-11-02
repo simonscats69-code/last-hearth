@@ -1260,6 +1260,9 @@ router.get('/', async (req, res) => {
                 }
             };
         });
+        if (outcome && outcome.status) {
+            return res.status(outcome.status).json(outcome.body);
+        }
         res.json(outcome);
     } catch (error) {
         if (handleConnectionError(res, error)) return;

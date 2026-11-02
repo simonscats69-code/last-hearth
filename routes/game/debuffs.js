@@ -108,7 +108,7 @@ const DebuffAPI = {
                     source: options.source
                 }, client);
                 
-                return { type, oldLevel: currentRadiation.level, newLevel, expiresAt };
+                return { type, oldLevel: currentLevel, newLevel, expiresAt };
             }
 
             // Единственный тип дебаффа — радиация. Прежняя ветка
@@ -347,7 +347,7 @@ const DebuffAPI = {
                 cure.contaminationReduction !== undefined
                     ? cure.contaminationReduction
                     : cure.radiationReduction
-            );
+            ) || 0;
             
             // Проверяем, что предмет подходит для лечения
             const itemPower = Number(itemStats.radiation_cure || item.rad_removal || 0);

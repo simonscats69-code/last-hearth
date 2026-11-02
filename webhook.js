@@ -133,7 +133,7 @@ async function setupWebhook(app) {
                 }
 
                 // Если игрок только что создан (старые поля пусты), выдаём стартовый инвентарь
-                const isNewPlayer = !player.inventory || player.inventory === '[]' || player.inventory === null;
+                const isNewPlayer = !player.inventory || (Array.isArray(player.inventory) && player.inventory.length === 0) || player.inventory === null;
                 if (isNewPlayer) {
                     // Стартовый инвентарь берём из каталога по ИМЕНИ, а не по захардкоженным
                     // id. Раньше здесь стояли {id: 1} и {id: 2} — таких id в
