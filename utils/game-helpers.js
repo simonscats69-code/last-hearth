@@ -369,10 +369,12 @@ async function recalcEnergy(client, player) {
  * @returns {Promise<number>} сколько HP восстановлено
  */
 async function regenerateHealth(client, player) {
-    const maxHealth = Math.max(1, Number(player.max_health) || 1);
+    const maxHealth = Math.max(100, Number(player.max_health) || 100);
+    const cap = Math.floor(maxHealth * (equipmentRules.HEALTH_REGEN_CAP_RATIO || 0.6));
+    const effectiveMax = Math.max(1, cap);
     const current = Math.max(0, Number(player.health) || 0);
 
-    const regenerable = Math.max(0, maxHealth - current);
+    const regenerable = Math.max(0, effectiveMax - current);
     const nowStamp = new Date().toISOString();
 
     if (regenerable <= 0) {
