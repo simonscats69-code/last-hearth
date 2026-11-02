@@ -146,7 +146,7 @@ function normalizePlayerBuffs(value) {
  * Ключи боссов — валюта прогрессии: их нельзя обратить в монеты,
  * иначе можно было бы бесконечно фармить монеты, покупая ключи по кругу.
  */
-const NON_SELLABLE_TYPES = new Set(['key']);
+const NON_SELLABLE_TYPES = new Set(['key', 'quest', 'currency', 'material']);
 
 /** Доля от цены в магазине, которую игрок получает при продаже */
 const SELL_RATE = 0.35;
@@ -488,15 +488,9 @@ const equipmentRules = require('../public/shared/equipment.js');
  * @returns {Promise<Object>} бонусы сетов
  */
 async function getSetBonuses(equipment, client) {
-    // client — объект с методом .query (не функция), поэтому вызов отличается
-    // от глобального query(). Параметр обязателен: ветки-фолбэка без client
-    // не осталось (все вызовы передают его), а мёртвая ветка перестала бы
-    // покрываться тестами и тихо устарела.
-    if (!client) {
-        throw new Error('getSetBonuses: требуется client транзакции — иначе берётся второе соединение пула');
-    }
-
-    const sets = await client.query('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
+    // Фоллбэк на глобальный query для read-only сценариев без транзакции.
+    const queryFn = client && typeof client.query === 'function' ? client.query.bind(client) : query;
+    const sets = await queryFn('SELECT id, bonus_2, bonus_3, bonus_4 FROM item_sets ORDER BY id');
     return equipmentRules.calculateSetBonuses(equipment, (sets.rows || []).map((row) => ({
         id: row.id,
         bonus_2: safeJsonParse(row.bonus_2, {}),
