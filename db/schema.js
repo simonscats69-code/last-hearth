@@ -311,7 +311,6 @@ async function createTables() {
     `);
     
     // Таблица прогресса боя с боссом (для одиночной игры)
-    // Оптимизация: добавлено поле mastery_cache для кэширования мастерства
     await query(`
         CREATE TABLE IF NOT EXISTS player_boss_progress (
             id SERIAL PRIMARY KEY,
@@ -321,20 +320,8 @@ async function createTables() {
             max_hp INTEGER NOT NULL,
             last_attack TIMESTAMP DEFAULT NOW(),
             started_at TIMESTAMP DEFAULT NOW(),
-            mastery_cache JSONB DEFAULT '{}',
             UNIQUE(player_id, boss_id)
         );
-    `);
-
-    // Миграция: добавить mastery_cache если не существует
-    await query(`
-        DO $do$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                           WHERE table_name = 'player_boss_progress' AND column_name = 'mastery_cache') THEN
-                ALTER TABLE player_boss_progress ADD COLUMN mastery_cache JSONB DEFAULT '{}';
-            END IF;
-        END $do$
     `);
 
     // Таблица сессий рейдовых боссов

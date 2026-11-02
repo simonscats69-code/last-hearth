@@ -3675,8 +3675,10 @@ function updateProfileUI(player) {
     const mainCoins = document.getElementById('main-coins-value');
     if (invStars) invStars.textContent = player.stars || 0;
     if (invCoins) invCoins.textContent = player.coins || 0;
-    if (mainStars) mainStars.textContent = player.stars || 0;
-    if (mainCoins) mainCoins.textContent = player.coins || 0;
+if (mainStars) mainStars.textContent = player.stars || 0;
+if (mainCoins) mainCoins.textContent = player.coins || 0;
+const mainBossesKilled = document.getElementById('main-bosses-killed-value');
+if (mainBossesKilled) mainBossesKilled.textContent = player.bosses_killed || 0;
 
     const searchBtnCost = document.querySelector('#search-btn .btn-cost');
     if (searchBtnCost) {
@@ -5531,8 +5533,8 @@ function renderBosses(bosses) {
         const canStartMass = boss.can_start_mass !== false;
         const playerKeys = boss.owned_keys ?? boss.player_keys ?? 0;
         const keysRequired = boss.required_keys ?? 0;
-        const _defeatedCount = boss.defeated_count ?? boss.mastery ?? 0;
-        const _currentDamage = boss.current_damage ?? 1;
+const defeatedCount = boss.defeated_count ?? boss.mastery ?? 0;
+const currentDamage = boss.current_damage ?? 1;
         const currentHp = boss.hp ?? boss.max_hp;
         const maxHp = boss.max_hp || 1;
         const _hpPercent = Math.max(0, Math.min(100, (currentHp / maxHp) * 100));
@@ -5555,9 +5557,13 @@ function renderBosses(bosses) {
                     <div class="boss-desc">${escapeHtml(boss.description || 'Теневой враг Очага')}</div>
                 </div>
             </div>
-            <div class="boss-hp-row">
+            <div class="boss-hp-row" role="meter" aria-valuenow="${currentHp}" aria-valuemin="0" aria-valuemax="${maxHp}" aria-label="Здоровье босса">
                 <span class="boss-hp-label">Здоровье</span>
                 <span class="boss-hp-value">${formatNumber(currentHp)} / ${formatNumber(maxHp)}</span>
+            </div>
+            <div class="boss-stats-row">
+                <span class="boss-stat" aria-label="Количество побед над боссом">⭐ ${formatNumber(defeatedCount)} побед</span>
+                <span class="boss-stat" aria-label="Ваш урон за удар">⚔️ ${formatNumber(currentDamage)} урона/удар</span>
             </div>
             <div class="boss-footer">
                 ${!locked && canStartSolo
@@ -7569,24 +7575,26 @@ function renderRaids(raids) {
         // Топ-5 бьющих. Без урона — строчку не показываем: «топ» из нулей
         // только занимает место.
         const topHtml = Array.isArray(raid.top_damagers) && raid.top_damagers.length > 0
-            ? `<div class="raid-top">🏆 <strong>Топ:</strong> ${raid.top_damagers.map((t, i) => {
+            ? `<div class="raid-top"><strong>Топ:</strong><div class="raid-top-list">${raid.top_damagers.map((t, i) => {
                 const name = escapeHtml(t.player_name || 'Игрок');
                 const dmg = Number(t.damage_dealt) || 0;
                 const pct = Number(t.damage_pct) || 0;
-                const me = Number(t.player_id) === myId ? ' class="raid-top-me"' : '';
-                return `<span${me}>${i + 1}. ${name} — ${formatNumber(dmg)} (${pct}%)</span>`;
-            }).join(' · ')}</div>`
+                const me = Number(t.player_id) === myId ? ' raid-top-me' : '';
+                return `<div class="raid-top-row${me}"><span class="raid-top-rank">${i + 1}.</span> <span class="raid-top-name">${name}</span> <span class="raid-top-dmg">${formatNumber(dmg)}</span> <span class="raid-top-pct">(${pct}%)</span><div class="raid-top-bar" style="width:${pct}%"></div></div>`;
+            }).join('')}</div></div>`
             : '';
 
         // Лог боя: последние события рейда. Без него вклад других
         // участников выглядит как случайные скачки HP.
         const logEvents = Array.isArray(raid.raid_log) ? raid.raid_log.slice(-6) : [];
+        const myName = escapeHtml(gameState.player?.first_name || '');
         const logHtml = logEvents.length > 0
             ? `<div class="raid-log">${logEvents.map((e) => {
                 const who = escapeHtml(e.player_name || 'Игрок');
+                const isMe = myName && who === myName ? ' raid-log-me' : '';
                 if (e.type === 'attack') {
-                    const parts = [`⚔️ ${who}: −${Number(e.damage) || 0}`];
-                    if (Number(e.counter_damage) > 0) parts.push(`💥 ответ ${Number(e.counter_damage)}`);
+                    const parts = [`⚔️ <span class="${isMe}">${who}</span>: −${formatNumber(Number(e.damage) || 0)}`];
+                    if (Number(e.counter_damage) > 0) parts.push(`💥 ответ ${formatNumber(Number(e.counter_damage))}`);
                     if (e.final) parts.push('💀 добит!');
                     return parts.join(' · ');
                 }
@@ -8971,6 +8979,7 @@ function mainScreenHtml() {
                         <div class="main-currency-badges">
                             <span class="currency-badge coins">🪙 <span id="main-coins-value">0</span></span>
                             <span class="currency-badge stars">⭐ <span id="main-stars-value">0</span></span>
+                            <span class="currency-badge bosses">👹 <span id="main-bosses-killed-value">0</span></span>
                         </div>
                     </div>
 

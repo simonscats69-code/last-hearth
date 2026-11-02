@@ -1171,7 +1171,7 @@ router.get('/', async (req, res) => {
             const masteryMap = {};
             for (const m of masteries) masteryMap[m.boss_id] = m.kills;
 
-            const bossesResult = await client.query('SELECT * FROM bosses ORDER BY id');
+            const bossesResult = await client.query('SELECT id, name, description, level, max_health, damage, reward_experience, reward_coins, reward_items, keys_required, is_group_boss, min_clan_level, icon FROM bosses ORDER BY id');
             const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}), client);
 
             // Ключ выдаёт ПРЕДЫДУЩИЙ босс, поэтому требование к боссу N — это
@@ -1221,7 +1221,6 @@ router.get('/', async (req, res) => {
                     required_keys: keysRequired,
                     owned_keys: ownedKeys,
                     is_unlocked: isUnlocked,
-                    defeated_count: masteryMap[boss.id] || 0,
                     mastery: masteryMap[boss.id] || 0,
                     current_damage: calculateDamage(boss.id, player, masteries, setBonuses),
                     can_start_solo: isUnlocked && !activeBattle,
