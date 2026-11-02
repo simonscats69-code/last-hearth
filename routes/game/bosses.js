@@ -62,7 +62,7 @@ async function getKeysRequiredForBoss(client, bossId) {
 const SOLO_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAMAGE_PER_KILL = 0.1;
-const KILL_DECAY_FACTOR = 0.1;
+const KILL_DECAY_FACTOR = 0.2;
 
 const BOSS_BASE_DAMAGE = 3;
 const BOSS_DAMAGE_PER_LEVEL = 2;
