@@ -2266,6 +2266,7 @@ router.post('/raid/:id/attack', async (req, res) => {
                         // формы ответа. Старые вложенные поля остаются.
                         boss_hp: newHp,
                         boss_max_hp: raid.max_health,
+                        total_damage: Math.max(0, (raid.max_health || 0) - (newHp || 0)),
                         damage_dealt: damage,
                         boss_defeated: killed,
                         damage,

@@ -7702,7 +7702,7 @@ function applyLocalRaidAttack(raidId, data) {
     raid.hp = hp;
     raid.max_hp = maxHp;
     raid.hp_percent = maxHp > 0 ? Math.round((hp / maxHp) * 100) : 0;
-    raid.total_damage = (Number(raid.total_damage) || 0) + damage;
+    raid.total_damage = Number(data.total_damage) || (Number(raid.total_damage) || 0) + damage;
     raid.your_damage = Number(data.your_total_damage) || 0;
     raid.your_damage_pct = raid.total_damage > 0
         ? Math.round((raid.your_damage / raid.total_damage) * 100)
