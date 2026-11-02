@@ -936,6 +936,7 @@ function resolveEquipmentSlot(item) {
      */
     function calculateRepairCost(item) {
         if (!item || typeof item !== 'object') return 0;
+        const info = getDurabilityInfo(item);
         const missing = info.max - info.current;
         if (missing <= 0) return 0;
 

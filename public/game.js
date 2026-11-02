@@ -4546,7 +4546,7 @@ async function renderWorkshopPanel() {
 
         // Монетам в мастерской нужно быть свежими: покупка в магазине или
         // продажа лута меняет баланс, и цена кнопки должна быть актуальной.
-        const coins = Number(gameState.player?.coins ?? data.coins ?? 0);
+        const coins = Number(data?.coins ?? gameState.player?.coins ?? 0);
         root.innerHTML = `
             <h4 class="inv-equipment-title">Мастерская · 🪙 ${formatNumber(coins)}</h4>
             <div class="inv-workshop-list">
