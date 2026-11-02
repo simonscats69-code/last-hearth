@@ -224,6 +224,7 @@ router.put('/update', async (req, res) => {
         await logPlayerAction(playerId, 'profile_update', { fields: fieldNames });
 
         const updatedPlayer = await queryOne('SELECT * FROM players WHERE id = $1', [playerId]);
+        if (!updatedPlayer) return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
 
         res.json({
             success: true,
@@ -505,6 +506,9 @@ router.get('/achievements/progress', async (req, res) => {
  */
 router.post('/achievements/claim', async (req, res) => {
     try {
+        const playerId = req.player?.id;
+        if (!playerId) return unauthorized(res);
+
         const achievement_id = req.body?.achievement_id;
         //
         // ЗДЕСЬ БЫЛ БАГ: проверялось только `!achievement_id`, которое
