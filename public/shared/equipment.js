@@ -1097,6 +1097,12 @@ function resolveEquipmentSlot(item) {
     /** Прибавка урона за каждый уровень игрока при атаке босса. */
     const BOSS_DAMAGE_PER_LEVEL = 2;
 
+    /** Базовая сила ответного удара босса. */
+    const BOSS_COUNTER_BASE = 3;
+
+    /** Прибавка силы ответного удара за каждый уровень босса. */
+    const BOSS_COUNTER_PER_LEVEL = 3;
+
     /* ================= МАГАЗИН ЗА ЗВЁЗДЫ =================
      *
      * Каталог покупок жил в двух копиях: BUFFS_CONFIG/COSMETICS_CONFIG на
@@ -1232,5 +1238,7 @@ getRegenerableHealth,
     // Боссы
     BOSS_BASE_DAMAGE,
     BOSS_DAMAGE_PER_LEVEL,
+    BOSS_COUNTER_BASE,
+    BOSS_COUNTER_PER_LEVEL,
     };
 }));

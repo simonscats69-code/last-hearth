@@ -64,9 +64,6 @@ const MASS_FIGHT_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAMAGE_PER_KILL = 0.1;
 const KILL_DECAY_FACTOR = 0.2;
 
-const BOSS_BASE_DAMAGE = 3;
-const BOSS_DAMAGE_PER_LEVEL = 2;
-
 /** Сколько событий боя рейда храним в raid_progress.raid_log */
 const RAID_LOG_MAX_EVENTS = 20;
 
@@ -143,7 +140,7 @@ function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
     const killBonus = calculateDamageBonus(bossId, masteries);
     // Усиливаем базовую прогрессию, чтобы ранние боссы не были чрезмерно затянутыми.
     const levelDamage = Math.max(1, Number(player.level || 1));
-    const baseDamage = BOSS_BASE_DAMAGE + (levelDamage * BOSS_DAMAGE_PER_LEVEL);
+    const baseDamage = equipmentRules.BOSS_BASE_DAMAGE + (levelDamage * equipmentRules.BOSS_DAMAGE_PER_LEVEL);
     return Math.max(1, Math.floor(baseDamage + killBonus + setDamage + weaponDamage));
 }
 
@@ -177,8 +174,14 @@ function calculateDamage(bossId, player, masteries = [], setBonuses = {}) {
  * @param {number} [options.playerLevel] уровень игрока — даёт защиту
  * @returns {number} урон (может быть 0)
  */
-function calculateBossCounterDamage(boss, maxHealth, equipment, options = {}) {
-    const { currentHealth, playerLevel } = options;
+/** Базовая сила ответного удара босса */
+const BOSS_COUNTER_BASE = 3;
+
+/** Прибавка силы удара за каждый уровень босса */
+const BOSS_COUNTER_PER_LEVEL = 3;
+
+function calculateBossCounterDamage(boss, equipment, options = {}) {
+    const { currentHealth, playerLevel, setDefense } = options;
 
     const bossLevel = Math.max(1, Math.floor(Number(boss && boss.level) || 1));
     const bossMaxHealth = Math.max(1, Number(boss && boss.max_health) || 1);
@@ -200,16 +203,10 @@ function calculateBossCounterDamage(boss, maxHealth, equipment, options = {}) {
 
     const equipmentDefense = equipmentRules.calculateDefenseTotal(equipment || {});
     const levelDefense = equipmentRules.calculateLevelDefense(playerLevel);
-    const defense = equipmentDefense + levelDefense;
+    const defense = equipmentDefense + levelDefense + (Number(setDefense) || 0);
 
     return equipmentRules.applyDefenseReduction(raw, defense);
 }
-
-/** Базовая сила ответного удара босса */
-const BOSS_COUNTER_BASE = 3;
-
-/** Прибавка силы удара за каждый уровень босса */
-const BOSS_COUNTER_PER_LEVEL = 3;
 
 function getNextBossId(bossId) {
     return bossId + 1;
@@ -255,9 +252,15 @@ const COUNTER_HIT_WEAR_SLOTS = equipmentRules.COMBAT_SLOTS;
  */
 async function applyBossCounterHit(client, playerId, boss, player, bossCurrentHp) {
     const equipment = safeJsonParse(player.equipment, {});
-    const damage = calculateBossCounterDamage(boss, player.max_health, equipment, {
+    let setDefense = 0;
+    try {
+        const sb = await getSetBonuses(equipment, client);
+        setDefense = Number(sb && sb.defense) || 0;
+    } catch (_) { /* ignore */ }
+    const damage = calculateBossCounterDamage(boss, equipment, {
         currentHealth: bossCurrentHp,
-        playerLevel: player.level
+        playerLevel: player.level,
+        setDefense
     });
     if (damage <= 0) {
         // Почти добитый босс не бьёт — но износ СНАРЯЖЕНИЯ всё равно идёт:
@@ -1107,7 +1110,6 @@ router.post('/start', async (req, res) => {
                             // бессмысленно, урон рос вместе с запасом.
                             counter_damage: calculateBossCounterDamage(
                                 boss,
-                                player.max_health,
                                 safeJsonParse(player.equipment, {}),
                                 { playerLevel: player.level }
                             )
@@ -1214,7 +1216,6 @@ router.get('/', async (req, res) => {
                     // игрок. Вне активного боя HP = полное (худший случай).
                     counter_damage: calculateBossCounterDamage(
                         boss,
-                        player.max_health,
                         safeJsonParse(player.equipment, {}),
                         { currentHealth: soloProgress, playerLevel: player.level }
                     ),
@@ -1388,6 +1389,12 @@ router.post('/attack-boss', async (req, res) => {
                 [playerId]
             );
             player.equipment = safeJsonParse(eqRow.rows[0]?.equipment || '{}', {});
+            const _setDefense = await (async () => {
+                try {
+                    const sb = await getSetBonuses(player.equipment, client);
+                    return Number(sb && sb.defense) || 0;
+                } catch (_) { return 0; }
+            })();
 
             // Ежедневное задание «Нанеси 100 урона боссам».
             await progressDailyTask(client, playerId, 'boss_damage', damage);
@@ -1455,15 +1462,15 @@ router.post('/attack-boss', async (req, res) => {
                     // формулы в том, что побитый босс бьёт слабее.
                     counter_damage: calculateBossCounterDamage(
                         boss,
-                        player.max_health,
                         safeJsonParse(player.equipment, {}),
                         { currentHealth: newHp, playerLevel: player.level }
                     ),
-                    // Итоговая защита игрока: экипировка + 3 за уровень.
+                    // Итоговая защита игрока: экипировка + 3 за уровень + сетовая защита.
                     // Без этого рост защиты с уровнем был бы не виден —
                     // а именно на него жалуются («броня не защищает»).
                     player_defense: equipmentRules.calculateDefenseTotal(safeJsonParse(player.equipment, {}))
                         + equipmentRules.calculateLevelDefense(player.level)
+                        + _setDefense
                 }
             };
         });
@@ -2260,13 +2267,13 @@ if (grantedItems && grantedItems.length > 0) {
                         // HP босса, чтобы подпись в бою жила вместе с бойом.
                         counter_damage: calculateBossCounterDamage(
                             raidBoss,
-                            player.max_health,
                             safeJsonParse(player.equipment, {}),
                             { currentHealth: newHp, playerLevel: player.level }
                         ),
                         // Итоговая защита: экипировка + 3 за уровень.
                         player_defense: equipmentRules.calculateDefenseTotal(safeJsonParse(player.equipment, {}))
-                            + equipmentRules.calculateLevelDefense(player.level),
+                            + equipmentRules.calculateLevelDefense(player.level)
+                            + (Number(setBonuses && setBonuses.defense) || 0),
                         player_energy: energyResult.rows[0]?.energy ?? player.energy,
                         last_energy_update: energyResult.rows[0]?.last_energy_update || null,
                         your_total_damage: newTotalDamage,
