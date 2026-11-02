@@ -24,12 +24,21 @@ const { normalizeRadiationLevel } = require('./gameConstants');
 function normalizeInventory(value) {
     const parsed = safeJsonParse(value, []);
 
+    const sanitize = (item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+        const copy = { ...item };
+        const q = Number(copy.quantity);
+        copy.quantity = Number.isFinite(q) && q >= 0 ? q : 1;
+        if (copy.id != null) copy.id = Number(copy.id);
+        return copy;
+    };
+
     if (Array.isArray(parsed)) {
-        return parsed.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }));
+        return parsed.map(sanitize).filter(Boolean);
     }
 
     if (parsed && typeof parsed === 'object') {
-        return Object.values(parsed).filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }));
+        return Object.values(parsed).map(sanitize).filter(Boolean);
     }
 
     return [];
@@ -1060,7 +1069,11 @@ function consumeInventoryItem(inventory, itemIndex) {
         return { updatedInventory: inventory, item: null, quantityLeft: 0 };
     }
     
-    const currentQty = Math.max(1, Number(item.quantity || 1));
+    const rawQty = Number(item.quantity);
+    if (!Number.isFinite(rawQty) || rawQty <= 0) {
+        return { updatedInventory: inventory, item: null, quantityLeft: 0 };
+    }
+    const currentQty = rawQty;
     const remainingQty = currentQty - 1;
     
     // Создаём копию инвентаря (иммутабельно)
