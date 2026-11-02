@@ -6175,7 +6175,7 @@ async function attackBoss() {
         // Идемпотентный ключ на текущего босса + бой: защита от двойного
         // списания энергии при повторном выполнении того же удара (ретраи
         // apiRequest, двойной тап, задержка ответа).
-        const attackIdempotencyKey = stableMutationKey(`boss-attack-${gameState.currentBoss.id}`, IDEMPOTENCY_WINDOW_MS);
+        const attackIdempotencyKey = stableMutationKey(`boss-attack-${gameState.currentBoss.id}`, 400);
         const result = await apiRequest('/api/game/bosses/attack-boss', {
             method: 'POST',
             body: { boss_id: gameState.currentBoss.id },
@@ -7742,7 +7742,7 @@ async function attackRaid(raidId) {
     try {
         const result = await apiRequest(`/api/game/bosses/raid/${raidId}/attack`, {
             method: 'POST',
-            idempotencyKey: stableMutationKey(`raid-attack-${raidId}`, IDEMPOTENCY_WINDOW_MS)
+            idempotencyKey: stableMutationKey(`raid-attack-${raidId}`, 400)
         });
 
         if (result?.success) {
