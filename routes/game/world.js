@@ -383,10 +383,15 @@ router.post('/search', async (req, res) => {
         let radiationGain = 0;
         let radiationExpiresAt = null;
         const contaminationDefense = riskProfile.contaminationDefense;
-        let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
+let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         const existingRadiation = normalizeRadiation(updatedPlayer.radiation);
-        
-const now = new Date();
+
+        const now = new Date();
+
+        // Сбрасываем истёкшую радиацию
+        if (existingRadiation.expires_at && new Date(existingRadiation.expires_at) <= now) {
+            resultingRadiationLevel = 0;
+        }
 
         if (riskProfile.contaminationThreat > 0 && !activeBuffs.no_radiation) {
             // P1-7: используем уже посчитанное давление (с учётом защиты)
@@ -632,10 +637,7 @@ const now = new Date();
             params.push(inventoryUpdate);
             setParts.push(`inventory = $${params.length}`);
         }
-        if (expGained > 0) {
-            params.push(expGained);
-            setParts.push(`experience = experience + $${params.length}`);
-        }
+        // XP больше не пишется напрямую: единый путь через progression.grantExperience.
         if (itemsCollected > 0) {
             params.push(itemsCollected);
             setParts.push(`items_collected = COALESCE(items_collected, 0) + $${params.length}`);
@@ -699,6 +701,16 @@ const now = new Date();
         await progressDailyTask(client, playerId, 'search', 1);
         if (itemsCollected > 0) {
             await progressDailyTask(client, playerId, 'collect_items', itemsCollected);
+        }
+
+        // XP через единый сервис прогрессии (с проверкой достижений).
+        if (expGained > 0) {
+            try {
+                const progression = require('../../utils/progression');
+                await progression.grantExperience(playerId, expGained, 'search', client);
+            } catch (e) {
+                // Не роняем поиск из-за XP.
+            }
         }
 
         // Успешный исход: собираем тело ответа и отдаём его наружу, а
@@ -847,6 +859,10 @@ router.post('/move', async (req, res) => {
         const outcome = await transaction(async (client) => {
             const player = await lockPlayer(playerId, client, 'id, level, current_location_id, energy, last_energy_update, active_boss_id, active_raid_id');
 
+            if (!player) {
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+            }
+
             // Запрещаем перемещение во время активного боя/рейда.
             if (player.active_boss_id || player.active_raid_id) {
                 return {
@@ -943,8 +959,14 @@ router.post('/move', async (req, res) => {
                                    || jsonb_build_array(jsonb_build_object('id', $1::integer, 'name', $3::text)))
                               AS t(value)
                         )
-                 WHERE id = $2
-           `, [locationIdNum, playerId, locationData.name]);
+WHERE id = $2
+            `, [locationIdNum, playerId, locationData.name]);
+
+            // Прогресс ежедневного задания «посещение локаций»
+            try {
+                const { progressDailyTask } = require('../../utils/game-helpers');
+                if (typeof progressDailyTask === 'function') await progressDailyTask(client, playerId, 'locations_visited', 1);
+            } catch (_) { /* ignore */ }
 
             return {
                 status: 200,
