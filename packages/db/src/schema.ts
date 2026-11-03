@@ -62,6 +62,8 @@ pvp_losses: number;
   daily_task_rerolls?: number;
   daily_task_reroll_reset_at?: Date;
   daily_tasks_last_generation_at?: Date;
+  reputation?: number;
+  reputation_tier?: string;
   last_hp_regen?: Date;
 }
 
@@ -80,6 +82,45 @@ export interface DailyTaskRow {
   started_at?: Date;
   difficulty: string;
   status: string;
+}
+
+export interface SurvivorContractRow {
+  id: number;
+  player_id: number;
+  clan_id?: number;
+  contract_type: string;
+  target_type: string;
+  target_value: number;
+  current_value: number;
+  reward: Record<string, unknown>;
+  expires_at: Date;
+  completed: boolean;
+  claimed: boolean;
+  claimed_at?: Date;
+  created_at: Date;
+  started_at?: Date;
+  difficulty: string;
+  status: string;
+  reputation_reward: number;
+}
+
+export interface PlayerReputationRow {
+  player_id: number;
+  reputation: number;
+  tier: string;
+  updated_at: Date;
+}
+
+export interface ContractBountyRow {
+  id: number;
+  target_player_id: number;
+  creator_id: number;
+  bounty_amount: number;
+  bounty_currency: string;
+  expires_at: Date;
+  claimed: boolean;
+  claimed_by?: number;
+  created_at: Date;
 }
 
 export interface ItemRow {

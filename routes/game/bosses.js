@@ -638,8 +638,9 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
 
     // Прогресс ежедневного задания «убийство босса»
     try {
-        const { progressDailyTask } = getGameHelpers();
+        const { progressDailyTask, progressContract } = getGameHelpers();
         if (typeof progressDailyTask === 'function') await progressDailyTask(client, playerId, 'boss_kill', 1);
+        if (typeof progressContract === 'function') await progressContract(client, playerId, 'boss_kill', 1);
     } catch (_) { /* ignore */ }
 
     // Множитель 1, а не 0.5: каждый предмет из reward_items выдавался с шансом
@@ -1335,6 +1336,10 @@ router.post('/attack-boss', async (req, res) => {
 
             // Ежедневное задание «Нанеси 100 урона боссам».
             await progressDailyTask(client, playerId, 'boss_damage', damage);
+            try {
+                const { progressContract } = getGameHelpers();
+                if (typeof progressContract === 'function') await progressContract(client, playerId, 'boss_damage', damage);
+            } catch (_) { /* ignore */ }
 
             // Трата энергии НЕ двигает last_energy_update: реген идёт от
             // реально прошедшего времени (то же правило, что в world.js и в
@@ -1898,6 +1903,10 @@ router.post('/raid/:id/attack', async (req, res) => {
             );
             player.equipment = safeJsonParse(eqRow.rows[0]?.equipment || '{}', {});
             await progressDailyTask(client, playerId, 'boss_damage', damage);
+            try {
+                const { progressContract } = getGameHelpers();
+                if (typeof progressContract === 'function') await progressContract(client, playerId, 'boss_damage', damage);
+            } catch (_) { /* ignore */ }
 
             // См. комментарий выше: реген не сбрасывается при трате.
             const energyResult = await client.query(

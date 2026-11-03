@@ -703,6 +703,15 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             await progressDailyTask(client, playerId, 'collect_items', itemsCollected);
         }
 
+        // Прогресс контрактов
+        try {
+            const { progressContract } = require('../../utils/game-helpers');
+            if (typeof progressContract === 'function') {
+                await progressContract(client, playerId, 'scout', 1);
+                if (itemsCollected > 0) await progressContract(client, playerId, 'gather', itemsCollected);
+            }
+        } catch (_) { /* ignore */ }
+
         // XP через единый сервис прогрессии (с проверкой достижений).
         if (expGained > 0) {
             try {
@@ -964,8 +973,9 @@ WHERE id = $2
 
             // Прогресс ежедневного задания «посещение локаций»
             try {
-                const { progressDailyTask } = require('../../utils/game-helpers');
+                const { progressDailyTask, progressContract } = require('../../utils/game-helpers');
                 if (typeof progressDailyTask === 'function') await progressDailyTask(client, playerId, 'locations_visited', 1);
+                if (typeof progressContract === 'function') await progressContract(client, playerId, 'locations_visited', 1);
             } catch (_) { /* ignore */ }
 
             return {

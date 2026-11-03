@@ -117,6 +117,8 @@ export interface PlayerStats {
   daily_task_rerolls: number;
   daily_task_reroll_reset_at: Date | null;
   daily_tasks_last_generation_at: Date | null;
+  reputation: number;
+  reputation_tier: string;
   locations_visited: { id: number; name: string }[];
   clans_joined: number;
   clan_donated: number;
