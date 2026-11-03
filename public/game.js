@@ -2200,6 +2200,7 @@ const SCREENS = [
     'pvp-stats',      // PvP статистика
     'achievements',   // Достижения
     'daily-tasks',    // Ежедневные задания
+    'workshop',       // Мастерская
 ];
 
 /**
@@ -2331,6 +2332,9 @@ function onScreenOpen(screenName) {
             break;
         case 'daily-tasks':
             safeAsync('daily-tasks', loadDailyTasks());
+            break;
+        case 'workshop':
+            safeAsync('workshop', renderWorkshopPanel());
             break;
 
         case 'pvp-players':
@@ -4387,10 +4391,6 @@ async function loadInventory() {
         renderEquipment(data.equipment);
         renderInventoryCapacity();
         renderInventoryWithFilters(inventoryItems);
-        // Мастерская тянет цены ремонта/улучшения с сервера, поэтому грузится
-        // после отрисовки панели снаряжения.
-        renderWorkshopPanel();
-
     } catch (error) {
         console.error('Inventory error:', error);
         showNotification(clientErrorMessage(error, 'Не удалось загрузить инвентарь'), 'error');
@@ -4483,7 +4483,6 @@ function renderEquipment(equipment) {
         </div>
         <!-- Статус собранных сетов -->
         <div id="equipment-set-status" class="equipment-set-status"></div>
-        <div id="workshop-panel" class="inv-workshop"></div>
     `;
 
     // Показываем статус собранных сетов
@@ -4553,12 +4552,17 @@ async function renderWorkshopPanel() {
         const coins = Number(data?.coins ?? gameState.player?.coins ?? 0);
         root.innerHTML = `
             <h4 class="inv-equipment-title">Мастерская · 🪙 ${formatNumber(coins)}</h4>
+            <div class="workshop-actions">
+                <button class="btn btn-primary" id="repair-all-btn">🔧 Починить всё</button>
+                <button class="btn btn-secondary" id="scrap-all-btn">🔨 Разобрать всё сломанное</button>
+            </div>
             <div class="inv-workshop-list">
                 ${slots.map((entry) => renderWorkshopSlot(entry, data)).join('')}
             </div>
         `;
 
         bindWorkshopActions();
+        bindWorkshopAllButtons();
     } catch (error) {
         console.warn('Не удалось загрузить мастерскую:', error);
         showModal('❌ Ошибка', clientErrorMessage(error, 'Не удалось загрузить мастерскую'));
@@ -4668,6 +4672,46 @@ function renderWorkshopSlot(entry, data) {
     `;
 }
 
+async function repairAllEquipment() {
+    if (!lockAction('repairAll')) return;
+    try {
+        const response = await apiRequest('/api/game/workshop/repair-all', {
+            method: 'POST',
+            idempotencyKey: stableMutationKey('workshop-repair-all', 2000)
+        });
+        const data = response?.data || response;
+        showNotification(data?.message || 'Ремонт выполнен', 'success', 3000);
+        RenderCache.clear();
+        await loadInventory();
+        await renderWorkshopPanel();
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        showNotification(clientErrorMessage(error, 'Не удалось починить'), 'error', 4000);
+    } finally {
+        unlockAction('repairAll');
+    }
+}
+
+async function scrapAllBroken() {
+    if (!lockAction('scrapAll')) return;
+    try {
+        const response = await apiRequest('/api/game/workshop/scrap-all', {
+            method: 'POST',
+            idempotencyKey: stableMutationKey('workshop-scrap-all', 2000)
+        });
+        const data = response?.data || response;
+        showNotification(data?.message || 'Разбор выполнен', 'success', 3000);
+        RenderCache.clear();
+        await loadInventory();
+        await renderWorkshopPanel();
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        showNotification(clientErrorMessage(error, 'Не удалось разобрать'), 'error', 4000);
+    } finally {
+        unlockAction('scrapAll');
+    }
+}
+
 /** Обработчики кнопок мастерской */
 function bindWorkshopActions() {
     document.querySelectorAll('[data-heal-index]').forEach(button => {
@@ -4696,6 +4740,17 @@ function bindWorkshopActions() {
             button.dataset.wsModification
         ));
     });
+}
+
+function bindWorkshopAllButtons() {
+    const repairAllBtn = document.getElementById('repair-all-btn');
+    if (repairAllBtn) {
+        bindClickOnce(repairAllBtn, 'repair-all', () => repairAllEquipment());
+    }
+    const scrapAllBtn = document.getElementById('scrap-all-btn');
+    if (scrapAllBtn) {
+        bindClickOnce(scrapAllBtn, 'scrap-all', () => scrapAllBroken());
+    }
 }
 
 async function modifyEquipmentSlot(slot, modification) {
@@ -8824,6 +8879,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
         document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
         document.getElementById('daily-tasks-btn')?.addEventListener('click', () => showScreen('daily-tasks'));
+        document.getElementById('inventory-workshop-btn')?.addEventListener('click', () => showScreen('workshop'));
         
         // Лечение инфекций
                 
@@ -9019,7 +9075,8 @@ const SCREEN_BUILDERS = Object.freeze([
     'pvpFightScreenHtml',
     'pvpStatsScreenHtml',
     'achievementsScreenHtml',
-    'dailyTasksScreenHtml'
+    'dailyTasksScreenHtml',
+    'workshopScreenHtml'
 ]);
 
 function generateScreens() {
@@ -9275,6 +9332,7 @@ function inventoryScreenHtml() {
                         <button class="filter-btn" data-filter="resource">📦</button>
                     </div>
                     <div class="inv-toolbar-row">
+                        <button class="btn btn-secondary" id="inventory-workshop-btn">🔧 Мастерская</button>
                         <label class="inv-capacity">
                             <span class="inv-capacity-label">Слоты</span>
                             <span class="inv-capacity-track"><span class="inv-capacity-fill" id="inventory-capacity" data-level="ok">0 / 100</span></span>
@@ -9732,6 +9790,29 @@ function dailyTasksScreenHtml() {
             </div>
             <div class="screen-content">
                 <div id="daily-tasks-list"></div>
+            </div>
+        </div>
+    `;
+}
+
+function workshopScreenHtml() {
+    return `
+        <!-- Мастерская -->
+        <div class="screen" id="workshop-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="inventory">←</button>
+                <h2>🔧 Мастерская</h2>
+                <div class="workshop-balance">
+                    <span id="workshop-coins">0</span> 🪙
+                    <span id="workshop-stars">0</span> ⭐
+                </div>
+            </div>
+            <div class="screen-content">
+                <div class="workshop-actions">
+                    <button class="btn btn-primary" id="repair-all-btn">🔧 Починить всё</button>
+                    <button class="btn btn-secondary" id="scrap-all-btn">🔨 Разобрать всё сломанное</button>
+                </div>
+                <div id="workshop-panel" class="inv-workshop"></div>
             </div>
         </div>
     `;

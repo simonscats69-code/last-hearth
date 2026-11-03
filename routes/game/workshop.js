@@ -218,10 +218,152 @@ router.post('/repair', async (req, res) => {
     }
 });
 /**
+ * POST /api/game/workshop/repair-all — починить все сломанные/изношенные предметы экипировки.
+ * Считает общую стоимость и восстанавливает durability до max для всех слотов.
+ */
+router.post('/repair-all', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) return unauthorized(res);
+
+        const result = await transaction(async (client) => {
+            const player = await lockPlayer(playerId, client, 'coins, equipment');
+            if (!player) return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+
+            const equipment = normalizeEquipment(player.equipment);
+            const slots = Object.keys(equipment);
+            if (slots.length === 0) {
+                return { status: 400, body: { success: false, error: 'Нет экипировки для ремонта', code: 'NO_EQUIPMENT' } };
+            }
+
+            let totalCost = 0;
+            const repairedSlots = [];
+            for (const slot of slots) {
+                const item = equipment[slot];
+                if (!item) continue;
+                const cost = calculateRepairCost(item);
+                if (cost > 0) {
+                    totalCost += cost;
+                    repairedSlots.push(slot);
+                }
+            }
+
+            if (totalCost === 0) {
+                return { status: 200, body: { success: true, data: { total_cost: 0, repaired: [], message: 'Всё уже в идеальном состоянии' } } };
+            }
+
+            if (Number(player.coins || 0) < totalCost) {
+                return { status: 400, body: { success: false, error: 'Недостаточно монет', code: 'NOT_ENOUGH_COINS', data: { total_cost: totalCost, coins: Number(player.coins || 0) } } };
+            }
+
+            for (const slot of repairedSlots) {
+                const item = equipment[slot];
+                const info = getDurabilityInfo(item);
+                item.durability = info.max;
+                equipment[slot] = item;
+            }
+
+            await client.query(
+                'UPDATE players SET coins = COALESCE(coins,0) - , equipment = ::jsonb WHERE id = ',
+                [totalCost, JSON.stringify(equipment), playerId]
+            );
+
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        total_cost: totalCost,
+                        repaired: repairedSlots,
+                        message: 'Починено ' + repairedSlots.length + ' предметов за ' + totalCost + ' монет'
+                    }
+                }
+            };
+        });
+
+        res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
+        handleError(res, error, 'workshop_repair_all');
+    }
+});
+
+/**
  * POST /api/game/workshop/upgrade — +1 уровень улучшения.
  * Каждый уровень даёт +8% к урону/защите, максимум 10.
  * Цена: монеты + материал по редкости (+ патроны для стрелкового оружия).
  */
+/**
+ * POST /api/game/workshop/scrap-all — разобрать все сломанные предметы в инвентаре.
+ */
+router.post('/scrap-all', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) return unauthorized(res);
+
+        const result = await transaction(async (client) => {
+            const player = await lockPlayer(playerId, client, 'coins, inventory');
+            if (!player) return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+
+            const inventory = normalizeInventory(player.inventory);
+            const toScrap = inventory.filter((item) => {
+                if (!item || !isEquipmentItem(item)) return false;
+                const info = getDurabilityInfo(item);
+                return info.isBroken;
+            });
+
+            if (toScrap.length === 0) {
+                return { status: 200, body: { success: true, data: { scrapped: 0, materials: {}, message: 'Нет сломанных предметов' } } };
+            }
+
+            // Считаем получаемые материалы
+            const gainedMaterials = {};
+            for (const item of toScrap) {
+                const yield_ = calculateScrapYield(item);
+                for (const [mat, qty] of Object.entries(yield_)) {
+                    gainedMaterials[mat] = (gainedMaterials[mat] || 0) + qty;
+                }
+            }
+
+            // Удаляем сломанные предметы из инвентаря
+            const remaining = inventory.filter((item) => {
+                if (!item || !isEquipmentItem(item)) return true;
+                const info = getDurabilityInfo(item);
+                return !info.isBroken;
+            });
+
+            // Добавляем материалы
+            for (const [mat, qty] of Object.entries(gainedMaterials)) {
+                addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty }, null);
+            }
+
+            await client.query(
+                'UPDATE players SET inventory = ::jsonb WHERE id = ',
+                [JSON.stringify(remaining), playerId]
+            );
+
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        scrapped: toScrap.length,
+                        materials: gainedMaterials,
+                        message: 'Разобрано ' + toScrap.length + ' предметов'
+                    }
+                }
+            };
+        });
+
+        res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
+        handleError(res, error, 'workshop_scrap_all');
+    }
+});
+
 router.post('/upgrade', async (req, res) => {
     if (!req.player?.id) return unauthorized(res);
     try {

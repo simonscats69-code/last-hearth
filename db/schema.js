@@ -184,7 +184,7 @@ async function createTables() {
             ammo_type VARCHAR(20) DEFAULT 'none',
             upgrade_level INTEGER DEFAULT 0,
             max_upgrade_level INTEGER DEFAULT 10,
-            modifications JSONB DEFAULT '[]',
+            modifications JSONB DEFAULT '{}',
             price INTEGER DEFAULT 0,
             stars_price INTEGER DEFAULT 0,
             icon VARCHAR(50),
@@ -497,8 +497,54 @@ async function createTables() {
         );
     `);
 
-    // Таблица клановых боссов (clan_bosses) УДАЛЕНА.
-    //
+    // Таблица контрактов выживших
+    await query(`
+        CREATE TABLE IF NOT EXISTS survivor_contracts (
+            id SERIAL PRIMARY KEY,
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            clan_id INTEGER REFERENCES clans(id) ON DELETE SET NULL,
+            contract_type VARCHAR(50) NOT NULL,
+            target_type VARCHAR(50) NOT NULL,
+            target_value INTEGER NOT NULL,
+            current_value INTEGER DEFAULT 0,
+            reward JSONB NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            completed BOOLEAN DEFAULT false,
+            claimed BOOLEAN DEFAULT false,
+            claimed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW(),
+            started_at TIMESTAMP,
+            difficulty VARCHAR(20) DEFAULT 'medium',
+            status VARCHAR(20) DEFAULT 'active',
+            reputation_reward INTEGER DEFAULT 0,
+            UNIQUE(player_id, contract_type, expires_at)
+        );
+    `);
+
+    // Таблица репутации выжившего
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_reputation (
+            player_id BIGINT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+            reputation INTEGER DEFAULT 0,
+            tier VARCHAR(20) DEFAULT 'novice',
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    `);
+
+    // Таблица PvP bounty (награда за голову)
+    await query(`
+        CREATE TABLE IF NOT EXISTS contract_bounties (
+            id SERIAL PRIMARY KEY,
+            target_player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            creator_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            bounty_amount INTEGER NOT NULL,
+            bounty_currency VARCHAR(10) DEFAULT 'coins',
+            expires_at TIMESTAMP NOT NULL,
+            claimed BOOLEAN DEFAULT false,
+            claimed_by BIGINT REFERENCES players(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    `);
     // Только CREATE TABLE, ни одного SELECT/INSERT/UPDATE/DELETE в проекте.
     // Клановых боссов в игре нет: клан-механика ограничена казной, бонусом к
     // добыче, чатом и участниками. Таблица была пустой (0 строк) и
@@ -584,6 +630,19 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_type ON daily_tasks(task_type)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_completed ON daily_tasks(player_id, completed, claimed)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_type_completed ON daily_tasks(player_id, task_type, completed)`);
+
+    // Индексы для survivor_contracts
+    await query(`CREATE INDEX IF NOT EXISTS idx_survivor_contracts_player ON survivor_contracts(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_survivor_contracts_expires ON survivor_contracts(expires_at)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_survivor_contracts_player_expires ON survivor_contracts(player_id, expires_at)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_survivor_contracts_type ON survivor_contracts(contract_type)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_survivor_contracts_clan ON survivor_contracts(clan_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_survivor_contracts_status ON survivor_contracts(player_id, status, claimed)`);
+
+    // Индексы для contract_bounties
+    await query(`CREATE INDEX IF NOT EXISTS idx_contract_bounties_target ON contract_bounties(target_player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_contract_bounties_creator ON contract_bounties(creator_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_contract_bounties_expires ON contract_bounties(expires_at)`);
 
     // Индексы для clan_chat
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_chat_clan ON clan_chat(clan_id)`);
@@ -874,6 +933,10 @@ async function runMigrations() {
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_task_rerolls INTEGER DEFAULT 0`);
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_task_reroll_reset_at TIMESTAMP`);
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_last_generation_at TIMESTAMP`);
+
+    // Миграции для репутации выжившего
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS reputation INTEGER DEFAULT 0`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS reputation_tier VARCHAR(20) DEFAULT 'novice'`);
 
     // Таблица ключей идемпотентности для защиты от повторных мутаций
     await queryTx(`
