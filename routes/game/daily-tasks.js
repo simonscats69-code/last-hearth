@@ -229,12 +229,16 @@ router.post('/claim-all', async (req, res) => {
 
             let totalCoins = 0, totalStars = 0, totalXp = 0;
             const claimedIds = [];
+            const allItems = [];
 
             for (const t of pending.rows) {
                 const reward = (typeof t.reward === 'string') ? JSON.parse(t.reward) : (t.reward || {});
                 if (reward.coins) totalCoins += reward.coins;
                 if (reward.stars) totalStars += reward.stars;
                 if (reward.xp) totalXp += reward.xp;
+                if (reward.items && Array.isArray(reward.items)) {
+                    allItems.push(...reward.items);
+                }
 
                 await client.query(
                     'UPDATE daily_tasks SET claimed = true, claimed_at = NOW(), status = $1 WHERE id = $2',
@@ -248,6 +252,15 @@ router.post('/claim-all', async (req, res) => {
             if (totalXp > 0) {
                 const { PlayerHelper } = require('../../utils/serverApi');
                 await PlayerHelper.addExperience(playerId, totalXp, client);
+            }
+            if (allItems.length > 0) {
+                const { addItemToInventory } = require('../../utils/game-helpers');
+                const player = await client.query('SELECT inventory FROM players WHERE id = $1', [playerId]);
+                const inventory = (typeof player.rows[0]?.inventory === 'string') ? JSON.parse(player.rows[0].inventory) : (player.rows[0]?.inventory || []);
+                for (const item of allItems) {
+                    addItemToInventory(inventory, item, null);
+                }
+                await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
             }
 
             await client.query('UPDATE players SET daily_tasks_completed = COALESCE(daily_tasks_completed, 0) + $1 WHERE id = $2', [pending.rows.length, playerId]);
@@ -325,8 +338,13 @@ router.post('/reroll', async (req, res) => {
                 return { status: 400, body: { success: false, error: 'Нельзя заменить выполненное/полученное задание', code: 'TASK_LOCKED' } };
             }
 
-            // Выбираем новый тип (не совпадающий с текущим)
-            const available = DAILY_TASK_TYPES.filter((dt) => dt.type !== t.task_type);
+            // Выбираем новый тип (не совпадающий с текущим и не дублирующий существующие)
+            const existingTypes = await client.query(
+                `SELECT task_type FROM daily_tasks WHERE player_id = $1 AND expires_at = $2`,
+                [playerId, t.expires_at]
+            );
+            const usedTypes = new Set(existingTypes.rows.map((r) => r.task_type));
+            const available = DAILY_TASK_TYPES.filter((dt) => dt.type !== t.task_type && !usedTypes.has(dt.type));
             if (available.length === 0) {
                 return { status: 400, body: { success: false, error: 'Нет доступных типов для замены', code: 'NO_AVAILABLE_TYPES' } };
             }

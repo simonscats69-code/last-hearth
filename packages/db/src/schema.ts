@@ -59,6 +59,9 @@ pvp_losses: number;
   items_collected?: number;
   daily_tasks_completed?: number;
   daily_tasks_reset_at?: Date;
+  daily_task_rerolls?: number;
+  daily_task_reroll_reset_at?: Date;
+  daily_tasks_last_generation_at?: Date;
   last_hp_regen?: Date;
 }
 
@@ -78,6 +81,8 @@ export interface DailyTaskRow {
   difficulty: string;
   status: string;
 }
+
+export interface ItemRow {
   id: number;
   name: string;
   description?: string;

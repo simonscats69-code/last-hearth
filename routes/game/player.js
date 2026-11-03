@@ -347,6 +347,12 @@ router.post('/daily-bonus', async (req, res) => {
                 [coins, stars, streak, playerId]
             );
 
+            try {
+                const { getGameHelpers } = require('../utils/game-helpers');
+                const h = getGameHelpers();
+                if (h && typeof h.checkAchievements === 'function') await h.checkAchievements(playerId, client);
+            } catch (_) { /* ignore */ }
+
             return {
                 success: true,
                 message: `День ${streak}: +${coins} монет${stars ? ` и +${stars} ⭐` : ''}`,
