@@ -13,6 +13,7 @@ const { query, transaction } = require('../db/database');
 // правдой, пока однажды не появится третья строка, взятая не оттуда.
 const { logger, safeJsonParse, logPlayerAction } = require('./serverApi');
 const { normalizeRadiationLevel } = require('./gameConstants');
+const equipmentRules = require('../public/shared/equipment.js');
 
 // ==========================================
 // ФУНКЦИИ СОСТОЯНИЯ ИГРОКА (из playerState.js)
@@ -253,9 +254,6 @@ const NON_SELLABLE_TYPES = new Set(['key', 'quest', 'currency', 'material']);
 
 /** Доля от цены в магазине, которую игрок получает при продаже (единый источник: equipment.js) */
 const SELL_RATE = equipmentRules.SELL_RATE;
-
-/** Минимальная цена продажи по редкости (единый источник: equipment.js) */
-const SELL_FLOOR_BY_RARITY = equipmentRules.SELL_FLOOR_BY_RARITY;
 
 /**
  * Посчитать цену продажи одного предмета.
@@ -599,7 +597,6 @@ function normalizeEquipment(raw) {
 // Общие правила предметов живут в public/shared/equipment.js — оттуда же
 // берём прочность, апгрейд и бонусы сетов, чтобы сервер и клиент считали
 // одинаково.
-const equipmentRules = require('../public/shared/equipment.js');
 
 /**
  * Бонусы сетов по надетой экипировке.
