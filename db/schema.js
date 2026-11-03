@@ -639,6 +639,16 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_keys_player ON boss_keys(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_boss_keys_boss ON boss_keys(boss_id)`);
 
+    // Миграция: добавить новые колонки в daily_tasks (для существующих таблиц)
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS claimed BOOLEAN DEFAULT false`);
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP`);
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`);
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMP`);
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS difficulty VARCHAR(20) DEFAULT 'medium'`);
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'`);
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS title VARCHAR(255)`);
+    await queryTx(`ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS description TEXT`);
+
     // Индексы для daily_tasks
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player ON daily_tasks(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_expires ON daily_tasks(expires_at)`);
@@ -646,6 +656,7 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_type ON daily_tasks(task_type)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_completed ON daily_tasks(player_id, completed, claimed)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_type_completed ON daily_tasks(player_id, task_type, completed)`);
+
 
     // Индексы для survivor_contracts
     await query(`CREATE INDEX IF NOT EXISTS idx_survivor_contracts_player ON survivor_contracts(player_id)`);
