@@ -368,16 +368,6 @@
         WEAR_PER_HIT: 0.5,
         REPAIR_COST_MULTIPLIER: 0.4,
         UPGRADE_COST_MULTIPLIER: 0.8,
-        BASE_DURABILITY: 500,
-
-        // Цены
-        BASE_PRICE_BY_RARITY: {
-            common: 50,
-            uncommon: 200,
-            rare: 800,
-            epic: 5000,
-            legendary: 50000
-        },
 
         // Дроп монет
         COIN_DROP_CHANCE: 30,
@@ -595,6 +585,10 @@ function resolveEquipmentSlot(item) {
     const MODIFICATION_BY_STAT = Object.freeze({ damage: 'sharpening', defense: 'plating' });
 
     /** Базовая цена ремонта/улучшения, если у предмета price = 0 */
+/** Базовая прочность по умолчанию (единый источник). */
+    const BASE_DURABILITY = 500;
+
+    /** Цены по редкости (единый источник). */
     const BASE_PRICE_BY_RARITY = Object.freeze({
         common: 50,
         uncommon: 200,
@@ -641,7 +635,7 @@ function resolveEquipmentSlot(item) {
      */
     function getDurabilityInfo(item) {
         const maxRaw = Number(item && (item.max_durability !== undefined ? item.max_durability : item.durability));
-        const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 500));
+        const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : BASE_DURABILITY));
 
         // Полей прочности нет вообще (расходник, валюта, пустой объект) —
         // предмет условно «бесконечен»: не ломается и не изнашивается.
@@ -1185,6 +1179,7 @@ getRegenerableHealth,
     UPGRADE_MATERIAL_BY_RARITY,
     SCRAP_YIELD_BY_RARITY,
     BASE_PRICE_BY_RARITY,
+    BASE_DURABILITY,
     AMMO_ITEM_NAME,
     ROCKET_ITEM_NAME,
     MODIFICATIONS,
