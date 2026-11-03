@@ -251,17 +251,11 @@ function normalizePlayerBuffs(value) {
  */
 const NON_SELLABLE_TYPES = new Set(['key', 'quest', 'currency', 'material']);
 
-/** Доля от цены в магазине, которую игрок получает при продаже */
-const SELL_RATE = 0.35;
+/** Доля от цены в магазине, которую игрок получает при продаже (единый источник: equipment.js) */
+const SELL_RATE = equipmentRules.SELL_RATE;
 
-/** Минимальная цена продажи по редкости (для добычи, у price = 0) */
-const SELL_FLOOR_BY_RARITY = {
-    common: 3,
-    uncommon: 8,
-    rare: 20,
-    epic: 45,
-    legendary: 100
-};
+/** Минимальная цена продажи по редкости (единый источник: equipment.js) */
+const SELL_FLOOR_BY_RARITY = equipmentRules.SELL_FLOOR_BY_RARITY;
 
 /**
  * Посчитать цену продажи одного предмета.
@@ -1242,7 +1236,6 @@ module.exports = {
     normalizeEquipment,
     calculateSellPrice,
     addItemToInventory,
-    SELL_FLOOR_BY_RARITY,
 
     // Правила предметов и счётчики прогресса
     equipmentRules,

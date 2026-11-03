@@ -597,6 +597,18 @@ function resolveEquipmentSlot(item) {
         legendary: 50000
     });
 
+    /** Коэффициент продажи (единый источник). */
+    const SELL_RATE = 0.35;
+
+    /** Минимальная цена продажи по редкости (единый источник). */
+    const SELL_FLOOR_BY_RARITY = Object.freeze({
+        common: 3,
+        uncommon: 8,
+        rare: 20,
+        epic: 45,
+        legendary: 100
+    });
+
     /** Привести редкость к известному значению */
     function normalizeRarity(rarity) {
         const value = String(rarity || '').toLowerCase();
@@ -1180,6 +1192,8 @@ getRegenerableHealth,
     SCRAP_YIELD_BY_RARITY,
     BASE_PRICE_BY_RARITY,
     BASE_DURABILITY,
+    SELL_RATE,
+    SELL_FLOOR_BY_RARITY,
     AMMO_ITEM_NAME,
     ROCKET_ITEM_NAME,
     MODIFICATIONS,
