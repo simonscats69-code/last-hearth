@@ -1637,13 +1637,13 @@ async function seedCraftingRecipes() {
 
     for (const recipe of recipes) {
         // Находим result_item_id по имени
-        const itemResult = await query(SELECT id FROM items WHERE name =  LIMIT 1, [recipe.result]);
+        const itemResult = await query('SELECT id FROM items WHERE name = $1 LIMIT 1', [recipe.result]);
         const resultItemId = itemResult.rows[0]?.id;
         if (!resultItemId) continue;
 
         await query(
-            INSERT INTO crafting_recipes (name, result_item_id, result_quantity, required_materials, coins_cost, stars_cost, min_level, category, enabled, unlock_condition, created_at)
-            VALUES (, , , ::jsonb, , 0, , , true, '{}'::jsonb, NOW())
+            `INSERT INTO crafting_recipes (name, result_item_id, result_quantity, required_materials, coins_cost, stars_cost, min_level, category, enabled, unlock_condition, created_at)
+            VALUES ($1, $2, $3, $4::jsonb, $5, 0, $6, $7, true, '{}'::jsonb, NOW())
             ON CONFLICT (name) DO UPDATE SET
                 result_item_id = EXCLUDED.result_item_id,
                 result_quantity = EXCLUDED.result_quantity,
@@ -1651,7 +1651,7 @@ async function seedCraftingRecipes() {
                 coins_cost = EXCLUDED.coins_cost,
                 min_level = EXCLUDED.min_level,
                 category = EXCLUDED.category
-        , [recipe.name, resultItemId, recipe.qty, JSON.stringify(recipe.materials), recipe.coins, recipe.level, recipe.category]);
+        `, [recipe.name, resultItemId, recipe.qty, JSON.stringify(recipe.materials), recipe.coins, recipe.level, recipe.category]);
     }
 }
 
