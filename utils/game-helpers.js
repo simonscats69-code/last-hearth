@@ -753,6 +753,27 @@ async function progressDailyTask(client, playerId, taskType, amount) {
     return { updated: result.rows.length, completed, total_progress: totalProgress };
 }
 
+const CONTRACT_TYPES = [
+    { type: 'hunt', target: (level) => Math.max(1, Math.floor(level / 10) + 1), reward: { coins: 200, xp: 100 }, difficulty: 'hard', reputation: 10, targetType: 'boss_kill' },
+    { type: 'rescue', target: (level) => Math.max(1, Math.floor(level / 5) + 1), reward: { coins: 150, xp: 75 }, difficulty: 'medium', reputation: 8, targetType: 'boss_damage' },
+    { type: 'rat_hunt', target: () => 10, reward: { coins: 50, xp: 20 }, difficulty: 'easy', reputation: 5, targetType: 'rat_kill' },
+    { type: 'scout', target: (level) => Math.max(2, Math.floor(level / 10) + 2), reward: { coins: 60, xp: 25 }, difficulty: 'easy', reputation: 3, targetType: 'locations_visited' },
+    { type: 'gather', target: (level) => Math.max(5, Math.floor(level / 3) + 5), reward: { coins: 75, xp: 30 }, difficulty: 'easy', reputation: 4, targetType: 'collect_items' },
+];
+
+async function progressContract(client, playerId, targetType, amount) {
+    const delta = Math.max(0, Math.round(Number(amount) || 0));
+    if (delta === 0) return { updated: 0, completed: [] };
+
+    const result = await client.query(
+        "UPDATE survivor_contracts SET current_value = LEAST(target_value, current_value + $3), completed = (LEAST(target_value, current_value + $3) >= target_value) WHERE player_id = $1 AND target_type = $2 AND completed = false AND claimed = false AND expires_at > NOW() RETURNING id, current_value, target_value, completed, reward",
+        [playerId, targetType, delta]
+    );
+
+    const completed = result.rows.filter((r) => r.completed);
+    return { updated: result.rows.length, completed };
+}
+
 // ==========================================
 // СИСТЕМА ДОСТИЖЕНИЙ (из achievements.js)
 // ==========================================
@@ -1284,6 +1305,8 @@ module.exports = {
     wearEquipmentSlots,
     trackCollectedItems,
     progressDailyTask,
+    progressContract,
+    CONTRACT_TYPES,
     consumeInventoryItem,
     
     // Валюта
