@@ -2201,6 +2201,7 @@ const SCREENS = [
     'achievements',   // Достижения
     'daily-tasks',    // Ежедневные задания
     'workshop',       // Мастерская
+    'crafting',       // Крафт
 ];
 
 /**
@@ -2335,6 +2336,9 @@ function onScreenOpen(screenName) {
             break;
         case 'workshop':
             safeAsync('workshop', renderWorkshopPanel());
+            break;
+        case 'crafting':
+            safeAsync('crafting', loadCraftingRecipes());
             break;
 
         case 'pvp-players':
@@ -8226,6 +8230,72 @@ function renderDailyTasksScreen(tasks, expiresAt) {
     }).join('');
 }
 
+async function loadCraftingRecipes() {
+    try {
+        const response = await apiRequest('/api/game/crafting/recipes');
+        const data = response?.data || response;
+        const recipes = data?.recipes || data?.data?.recipes || [];
+        renderCraftingRecipes(recipes);
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        console.error('loadCraftingRecipes error:', error);
+        const container = document.getElementById('crafting-recipes-list');
+        if (container) container.innerHTML = Templates.empty('Не удалось загрузить рецепты');
+    }
+}
+
+function renderCraftingRecipes(recipes) {
+    const container = document.getElementById('crafting-recipes-list');
+    if (!container) return;
+
+    if (!Array.isArray(recipes) || recipes.length === 0) {
+        container.innerHTML = Templates.empty('Нет доступных рецептов');
+        return;
+    }
+
+    container.innerHTML = recipes.map((r) => {
+        const materials = (typeof r.required_materials === 'string') ? JSON.parse(r.required_materials) : (r.required_materials || {});
+        const matText = Object.entries(materials).map(([k, v]) => k + ' x ' + v).join(', ');
+        const rewardText = [];
+        if (r.coins_cost) rewardText.push('💰 ' + r.coins_cost);
+        if (r.stars_cost) rewardText.push('⭐ ' + r.stars_cost);
+
+        return '<div class="crafting-recipe-card">' +
+            '<div class="crafting-recipe-header">' +
+                '<span class="crafting-recipe-name">' + escapeHtml(r.result_name || r.name) + '</span>' +
+                '<span class="crafting-recipe-level">Ур. ' + (r.min_level || 1) + '</span>' +
+            '</div>' +
+            '<div class="crafting-recipe-materials">Материалы: ' + escapeHtml(matText) + '</div>' +
+            (rewardText.length ? '<div class="crafting-recipe-cost">Стоимость: ' + rewardText.join(' ') + '</div>' : '') +
+            '<div class="crafting-recipe-action">' +
+                '<button class="btn btn-primary" data-craft-recipe="' + Number(r.id) + '">Скрафтить x1</button>' +
+                '<button class="btn btn-secondary" data-craft-all-recipe="' + Number(r.id) + '">Скрафтить всё</button>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+async function craftItem(recipeId, quantity) {
+    if (!lockAction('craftItem')) return;
+    try {
+        const response = await apiRequest('/api/game/crafting/craft', {
+            method: 'POST',
+            body: { recipe_id: recipeId, quantity: quantity || 1 },
+            idempotencyKey: stableMutationKey('craft-' + recipeId + '-' + (quantity || 1), IDEMPOTENCY_WINDOW_MS)
+        });
+        const data = response?.data || response;
+        showNotification(data?.message || 'Предмет скрафчен', 'success', 3000);
+        RenderCache.clear();
+        await loadProfile();
+        await loadCraftingRecipes();
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        showNotification(clientErrorMessage(error, 'Не удалось скрафтить'), 'error', 4000);
+    } finally {
+        unlockAction('craftItem');
+    }
+}
+
 async function claimDailyTask(taskId) {
     if (!lockAction('claimDailyTask')) return;
     try {
@@ -8880,6 +8950,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
         document.getElementById('daily-tasks-btn')?.addEventListener('click', () => showScreen('daily-tasks'));
         document.getElementById('inventory-workshop-btn')?.addEventListener('click', () => showScreen('workshop'));
+        document.getElementById('inventory-crafting-btn')?.addEventListener('click', () => showScreen('crafting'));
         
         // Лечение инфекций
                 
@@ -8997,6 +9068,18 @@ document.addEventListener('click', (event) => {
         return;
     }
 
+    const craftBtn = target.closest('[data-craft-recipe]');
+    if (craftBtn) {
+        craftItem(Number(craftBtn.dataset.craftRecipe), 1);
+        return;
+    }
+
+    const craftAllBtn = target.closest('[data-craft-all-recipe]');
+    if (craftAllBtn) {
+        craftItem(Number(craftAllBtn.dataset.craftAllRecipe), 0);
+        return;
+    }
+
     if (target.closest('#daily-bonus-btn')) {
         claimDailyBonus();
         return;
@@ -9076,7 +9159,8 @@ const SCREEN_BUILDERS = Object.freeze([
     'pvpStatsScreenHtml',
     'achievementsScreenHtml',
     'dailyTasksScreenHtml',
-    'workshopScreenHtml'
+    'workshopScreenHtml',
+    'craftingScreenHtml'
 ]);
 
 function generateScreens() {
@@ -9333,6 +9417,7 @@ function inventoryScreenHtml() {
                     </div>
                     <div class="inv-toolbar-row">
                         <button class="btn btn-secondary" id="inventory-workshop-btn">🔧 Мастерская</button>
+                        <button class="btn btn-secondary" id="inventory-crafting-btn">⚒️ Крафт</button>
                         <label class="inv-capacity">
                             <span class="inv-capacity-label">Слоты</span>
                             <span class="inv-capacity-track"><span class="inv-capacity-fill" id="inventory-capacity" data-level="ok">0 / 100</span></span>
@@ -9813,6 +9898,25 @@ function workshopScreenHtml() {
                     <button class="btn btn-secondary" id="scrap-all-btn">🔨 Разобрать всё сломанное</button>
                 </div>
                 <div id="workshop-panel" class="inv-workshop"></div>
+            </div>
+        </div>
+    `;
+}
+
+function craftingScreenHtml() {
+    return `
+        <!-- Крафт -->
+        <div class="screen" id="crafting-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="inventory">←</button>
+                <h2>⚒️ Крафт</h2>
+                <div class="crafting-balance">
+                    <span id="crafting-coins">0</span> 🪙
+                    <span id="crafting-stars">0</span> ⭐
+                </div>
+            </div>
+            <div class="screen-content">
+                <div id="crafting-recipes-list"></div>
             </div>
         </div>
     `;

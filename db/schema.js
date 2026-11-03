@@ -497,7 +497,23 @@ async function createTables() {
         );
     `);
 
-    // Таблица контрактов выживших
+    // Таблица рецептов крафта
+    await query(`
+        CREATE TABLE IF NOT EXISTS crafting_recipes (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL UNIQUE,
+            result_item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+            result_quantity INTEGER DEFAULT 1,
+            required_materials JSONB NOT NULL DEFAULT '{}',
+            coins_cost INTEGER DEFAULT 0,
+            stars_cost INTEGER DEFAULT 0,
+            min_level INTEGER DEFAULT 1,
+            category VARCHAR(50) DEFAULT 'craft',
+            enabled BOOLEAN DEFAULT true,
+            unlock_condition JSONB DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    `);
     await query(`
         CREATE TABLE IF NOT EXISTS survivor_contracts (
             id SERIAL PRIMARY KEY,
@@ -1385,6 +1401,37 @@ async function seedDatabase() {
         { name: 'Титан', description: 'Титановые сплавы: материал для лучшей брони и оружия', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 2000, icon: '⛏️' },
         { name: 'Кристалл силы', description: 'Кристалл из бункера: ключ к легендарному снаряжению', type: 'resource', category: 'material', rarity: 'legendary', stackable: true, price: 20000, icon: '💎' },
 
+        // Новые материалы для крафта
+        { name: 'Кожа', description: 'Кожа мутантов: основа для брони', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 15, icon: '🧳' },
+        { name: 'Порох', description: 'Порох для боеприпасов', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 60, icon: '💣' },
+        { name: 'Резина', description: 'Резина: уплотнители и подошвы', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 40, icon: '🛞' },
+        { name: 'Масло', description: 'Смазка для оружия и ремонта', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 25, icon: '🛢️' },
+        { name: 'Споры', description: 'Споры мутантов: медикаменты и еда', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 35, icon: '🍄' },
+        { name: 'Стекло', description: 'Стекло: оптика и прицелы', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 45, icon: '🔍' },
+        { name: 'Аккумулятор', description: 'Аккумуляторы: энергетические устройства', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 250, icon: '🔋' },
+        { name: 'Биомасса', description: 'Биомасса мутантов: медикаменты', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 180, icon: '🧫' },
+        { name: 'Кость мутанта', description: 'Кости мутантов: трофеи и оружие', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 200, icon: '🦴' },
+        { name: 'Фильтрующий элемент', description: 'Фильтры для противогазов', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 70, icon: '🛡️' },
+        { name: 'Нановолокно', description: 'Нановолокно: высокотирная броня', type: 'resource', category: 'material', rarity: 'epic', stackable: true, price: 1500, icon: '🧵' },
+        { name: 'Реактивное топливо', description: 'Топливо для ракет', type: 'resource', category: 'material', rarity: 'rare', stackable: true, price: 400, icon: '🚀' },
+        { name: 'Крысиный хвост', description: 'Хвост крысы: трофей и материал', type: 'resource', category: 'material', rarity: 'common', stackable: true, price: 10, icon: '🐀' },
+
+        // Крафтовые предметы
+        { name: 'Самодельный нож', description: 'Самодельный нож из металлолома', type: 'weapon', category: 'melee', rarity: 'common', price: 80, icon: '🔪', stats: { damage: 4 }, durability: 80, max_durability: 80, slot: 'weapon' },
+        { name: 'Арматурный лом', description: 'Тяжёлый лом из арматуры', type: 'weapon', category: 'melee', rarity: 'common', price: 120, icon: '🔨', stats: { damage: 7 }, durability: 120, max_durability: 120, slot: 'weapon' },
+        { name: 'Самодельный пистолет', description: 'Самодельный пистолет', type: 'weapon', category: 'ranged', rarity: 'uncommon', price: 300, icon: '🔫', stats: { damage: 12 }, durability: 60, max_durability: 60, slot: 'weapon', ammo_type: 'ammo' },
+        { name: 'Охотничий арбалет', description: 'Арбалет для охоты', type: 'weapon', category: 'ranged', rarity: 'rare', price: 800, icon: '🏹', stats: { damage: 40 }, durability: 150, max_durability: 150, slot: 'weapon' },
+        { name: 'Кожаный жилет', description: 'Жилет из кожи мутантов', type: 'armor', category: 'body', rarity: 'common', price: 60, icon: '🧥', stats: { defense: 4 }, durability: 100, max_durability: 100, slot: 'body' },
+        { name: 'Самодельный бронежилет', description: 'Бронежилет из металлолома', type: 'armor', category: 'armor', rarity: 'uncommon', price: 200, icon: '🛡', stats: { defense: 12 }, durability: 120, max_durability: 120, slot: 'armor' },
+        { name: 'Полевой противогаз', description: 'Противогаз с фильтром', type: 'armor', category: 'face', rarity: 'uncommon', price: 150, icon: '😷', stats: { defense: 2, radiation_resist: 20 }, durability: 80, max_durability: 80, slot: 'face' },
+        { name: 'Ботинки из резины', description: 'Резиновые ботинки', type: 'armor', category: 'boots', rarity: 'uncommon', price: 100, icon: '👢', stats: { defense: 6 }, durability: 100, max_durability: 100, slot: 'boots' },
+        { name: 'Полевая аптечка', description: 'Аптечка для полевых условий', type: 'medicine', category: 'medicine', rarity: 'common', price: 80, icon: 'Hospital', stats: { health: 25 }, stackable: true, max_stack: 10 },
+        { name: 'Энергетический батончик', description: 'Батончик для восстановления энергии', type: 'food', category: 'consumable', rarity: 'common', price: 60, icon: 'Chocolate', stats: { energy: 8 }, stackable: true, max_stack: 10 },
+        { name: 'Антирадиационный чай', description: 'Чай от радиации', type: 'medicine', category: 'medicine', rarity: 'uncommon', price: 120, icon: 'Tea', stats: { radiation_cure: 1 }, stackable: true, max_stack: 5 },
+        { name: 'Ремкомплект', description: 'Набор для ремонта снаряжения', type: 'consumable', category: 'consumable', rarity: 'common', price: 50, icon: 'Wrench', stats: { repair: 20 }, stackable: true, max_stack: 10 },
+        { name: 'Фильтр для противогаза', description: 'Сменный фильтр', type: 'resource', category: 'material', rarity: 'uncommon', stackable: true, price: 60, icon: 'Shield' },
+
+
         // Лутовые ресурсы боссов.
         //
         // В отличие от материалов выше, мастерская их не требует: это просто
@@ -1467,6 +1514,9 @@ async function seedDatabase() {
 
     // Сеты предметов (бонус за 2/3/4 надетых части) и связь items.set_id.
     await seedSets();
+
+    // Рецепты крафта
+    await seedCraftingRecipes();
 
     // Боссы — последними: они ссылаются на предметы по имени.
     await seedBosses();
@@ -1566,6 +1616,45 @@ async function seedSets() {
     `);
 }
 
+async function seedCraftingRecipes() {
+    const recipes = [
+        { name: 'Самодельный нож', result: 'Самодельный нож', qty: 1, materials: { 'Металлолом': 3, 'Древесина': 1 }, coins: 0, level: 1, category: 'weapon' },
+        { name: 'Арматурный лом', result: 'Арматурный лом', qty: 1, materials: { 'Металлолом': 4, 'Пластик': 1 }, coins: 0, level: 1, category: 'weapon' },
+        { name: 'Самодельный пистолет', result: 'Самодельный пистолет', qty: 1, materials: { 'Металлолом': 5, 'Провода': 2, 'Пластик': 1, 'Порох': 1 }, coins: 0, level: 5, category: 'weapon' },
+        { name: 'Охотничий арбалет', result: 'Охотничий арбалет', qty: 1, materials: { 'Древесина': 3, 'Провода': 2, 'Титан': 1, 'Стекло': 1 }, coins: 0, level: 10, category: 'weapon' },
+        { name: 'Кожаный жилет', result: 'Кожаный жилет', qty: 1, materials: { 'Ткань': 3, 'Кожа': 1 }, coins: 0, level: 1, category: 'armor' },
+        { name: 'Самодельный бронежилет', result: 'Самодельный бронежилет', qty: 1, materials: { 'Металлолом': 4, 'Ткань': 2, 'Пластик': 1 }, coins: 0, level: 5, category: 'armor' },
+        { name: 'Полевой противогаз', result: 'Полевой противогаз', qty: 1, materials: { 'Пластик': 2, 'Ткань': 1, 'Фильтрующий элемент': 1 }, coins: 0, level: 3, category: 'armor' },
+        { name: 'Ботинки из резины', result: 'Ботинки из резины', qty: 1, materials: { 'Резина': 2, 'Ткань': 1 }, coins: 0, level: 2, category: 'armor' },
+        { name: 'Полевая аптечка', result: 'Полевая аптечка', qty: 1, materials: { 'Ткань': 2, 'Химикаты': 1 }, coins: 0, level: 1, category: 'consumable' },
+        { name: 'Энергетический батончик', result: 'Энергетический батончик', qty: 1, materials: { 'Споры': 1, 'Консервы': 1 }, coins: 0, level: 1, category: 'consumable' },
+        { name: 'Антирадиационный чай', result: 'Антирадиационный чай', qty: 1, materials: { 'Споры': 1, 'Вода': 1 }, coins: 0, level: 3, category: 'consumable' },
+        { name: 'Патроны (самодельные)', result: 'Патроны', qty: 5, materials: { 'Металлолом': 2, 'Порох': 1 }, coins: 0, level: 3, category: 'ammo' },
+        { name: 'Реактивный заряд', result: 'Реактивные гранаты', qty: 1, materials: { 'Титан': 1, 'Порох': 2, 'Уран': 1 }, coins: 0, level: 8, category: 'ammo' },
+        { name: 'Ремкомплект', result: 'Ремкомплект', qty: 1, materials: { 'Металлолом': 2, 'Ткань': 1, 'Масло': 1 }, coins: 0, level: 2, category: 'consumable' },
+        { name: 'Фильтр для противогаза', result: 'Фильтр для противогаза', qty: 1, materials: { 'Пластик': 1, 'Ткань': 1, 'Химикаты': 1 }, coins: 0, level: 2, category: 'resource' },
+    ];
+
+    for (const recipe of recipes) {
+        // Находим result_item_id по имени
+        const itemResult = await query(SELECT id FROM items WHERE name =  LIMIT 1, [recipe.result]);
+        const resultItemId = itemResult.rows[0]?.id;
+        if (!resultItemId) continue;
+
+        await query(
+            INSERT INTO crafting_recipes (name, result_item_id, result_quantity, required_materials, coins_cost, stars_cost, min_level, category, enabled, unlock_condition, created_at)
+            VALUES (, , , ::jsonb, , 0, , , true, '{}'::jsonb, NOW())
+            ON CONFLICT (name) DO UPDATE SET
+                result_item_id = EXCLUDED.result_item_id,
+                result_quantity = EXCLUDED.result_quantity,
+                required_materials = EXCLUDED.required_materials,
+                coins_cost = EXCLUDED.coins_cost,
+                min_level = EXCLUDED.min_level,
+                category = EXCLUDED.category
+        , [recipe.name, resultItemId, recipe.qty, JSON.stringify(recipe.materials), recipe.coins, recipe.level, recipe.category]);
+    }
+}
+
 /**
  * Боссы: параметры боя, ключи и награды предметами.
  *
@@ -1581,6 +1670,44 @@ async function seedSets() {
  * находка окажется ключом от этого босса (routes/game/world.js).
  * keys_required — сколько ключей ЭТОГО босса нужно, чтобы открыть следующего.
  */
+async function seedCraftingRecipes() {
+    const recipes = [
+        { name: 'Самодельный нож', result: 'Самодельный нож', qty: 1, materials: { 'Металлолом': 3, 'Древесина': 1 }, coins: 0, level: 1, category: 'weapon' },
+        { name: 'Арматурный лом', result: 'Арматурный лом', qty: 1, materials: { 'Металлолом': 4, 'Пластик': 1 }, coins: 0, level: 1, category: 'weapon' },
+        { name: 'Самодельный пистолет', result: 'Самодельный пистолет', qty: 1, materials: { 'Металлолом': 5, 'Провода': 2, 'Пластик': 1, 'Порох': 1 }, coins: 0, level: 5, category: 'weapon' },
+        { name: 'Охотничий арбалет', result: 'Охотничий арбалет', qty: 1, materials: { 'Древесина': 3, 'Провода': 2, 'Титан': 1, 'Стекло': 1 }, coins: 0, level: 10, category: 'weapon' },
+        { name: 'Кожаный жилет', result: 'Кожаный жилет', qty: 1, materials: { 'Ткань': 3, 'Кожа': 1 }, coins: 0, level: 1, category: 'armor' },
+        { name: 'Самодельный бронежилет', result: 'Самодельный бронежилет', qty: 1, materials: { 'Металлолом': 4, 'Ткань': 2, 'Пластик': 1 }, coins: 0, level: 5, category: 'armor' },
+        { name: 'Полевой противогаз', result: 'Полевой противогаз', qty: 1, materials: { 'Пластик': 2, 'Ткань': 1, 'Фильтрующий элемент': 1 }, coins: 0, level: 3, category: 'armor' },
+        { name: 'Ботинки из резины', result: 'Ботинки из резины', qty: 1, materials: { 'Резина': 2, 'Ткань': 1 }, coins: 0, level: 2, category: 'armor' },
+        { name: 'Полевая аптечка', result: 'Полевая аптечка', qty: 1, materials: { 'Ткань': 2, 'Химикаты': 1 }, coins: 0, level: 1, category: 'consumable' },
+        { name: 'Энергетический батончик', result: 'Энергетический батончик', qty: 1, materials: { 'Споры': 1, 'Консервы': 1 }, coins: 0, level: 1, category: 'consumable' },
+        { name: 'Антирадиационный чай', result: 'Антирадиационный чай', qty: 1, materials: { 'Споры': 1, 'Вода': 1 }, coins: 0, level: 3, category: 'consumable' },
+        { name: 'Патроны (самодельные)', result: 'Патроны', qty: 5, materials: { 'Металлолом': 2, 'Порох': 1 }, coins: 0, level: 3, category: 'ammo' },
+        { name: 'Реактивный заряд', result: 'Реактивные гранаты', qty: 1, materials: { 'Титан': 1, 'Порох': 2, 'Уран': 1 }, coins: 0, level: 8, category: 'ammo' },
+        { name: 'Ремкомплект', result: 'Ремкомплект', qty: 1, materials: { 'Металлолом': 2, 'Ткань': 1, 'Масло': 1 }, coins: 0, level: 2, category: 'consumable' },
+        { name: 'Фильтр для противогаза', result: 'Фильтр для противогаза', qty: 1, materials: { 'Пластик': 1, 'Ткань': 1, 'Химикаты': 1 }, coins: 0, level: 2, category: 'resource' },
+    ];
+
+    for (const recipe of recipes) {
+        const itemResult = await query('SELECT id FROM items WHERE name = $1 LIMIT 1', [recipe.result]);
+        const resultItemId = itemResult.rows[0]?.id;
+        if (!resultItemId) continue;
+
+        await query(`
+            INSERT INTO crafting_recipes (name, result_item_id, result_quantity, required_materials, coins_cost, stars_cost, min_level, category, enabled, unlock_condition, created_at)
+            VALUES ($1, $2, $3, $4::jsonb, $5, 0, $6, $7, true, '{}'::jsonb, NOW())
+            ON CONFLICT (name) DO UPDATE SET
+                result_item_id = EXCLUDED.result_item_id,
+                result_quantity = EXCLUDED.result_quantity,
+                required_materials = EXCLUDED.required_materials,
+                coins_cost = EXCLUDED.coins_cost,
+                min_level = EXCLUDED.min_level,
+                category = EXCLUDED.category
+        `, [recipe.name, resultItemId, recipe.qty, JSON.stringify(recipe.materials), recipe.coins, recipe.level, recipe.category]);
+    }
+}
+
 async function seedBosses() {
     // key — имя предмета-ключа, который открывает бой с этим боссом.
     // Склеивать его из имени босса нельзя: ключи названы в родительном падеже
