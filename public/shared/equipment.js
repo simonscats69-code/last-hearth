@@ -296,7 +296,6 @@
     }
 
     /** +1 энергия за столько миллисекунд. Тот же интервал у сервере (recalcEnergy). */
-    const ENERGY_REGEN_INTERVAL_MS = 60 * 1000;
 
     /* ================= ПОКУПКА ЭНЕРГИИ =================
      *
@@ -440,8 +439,7 @@
      */
 
     /** +1 HP за столько миллисекунд */
-    const HEALTH_REGEN_INTERVAL_MS = 90 * 1000;
-const HEALTH_REGEN_CAP_RATIO = 0.6;
+    const HEALTH_REGEN_CAP_RATIO = 0.6;
 
 /** Потолок регенерации HP (60% от максимума) */
     function getHealthRegenCap(maxHealth) {
@@ -1170,12 +1168,9 @@ function resolveEquipmentSlot(item) {
     CONTAMINATION_DAMAGE_FROM_LEVEL,
     getRiskTierByScore,
     getExpForLevel,
-    getTotalExpForLevel,
-    HEALTH_REGEN_INTERVAL_MS,
-HEALTH_REGEN_CAP_RATIO,
-getHealthRegenCap,
+getTotalExpForLevel,
+    getHealthRegenCap,
 getRegenerableHealth,
-    ENERGY_REGEN_INTERVAL_MS,
     ENERGY_PURCHASE_STARS_COST,
     ENERGY_PER_PURCHASE,
     CLAN_CREATE_COST,
