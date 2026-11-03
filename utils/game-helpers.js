@@ -694,9 +694,47 @@ async function trackCollectedItems(client, playerId, itemIds) {
  * @param {number} amount на сколько увеличить прогресс
  * @returns {Promise<number>} новое значение current_value (0 — заданий нет)
  */
+const DAILY_TASK_TYPES = [
+    { type: 'search', target: (level) => Math.max(3, Math.floor(level / 5) + 3), reward: { coins: 50, xp: 20 }, difficulty: 'easy' },
+    { type: 'boss_damage', target: (level) => 100 * level, reward: { coins: 100, xp: 50 }, difficulty: 'medium' },
+    { type: 'collect_items', target: (level) => Math.max(5, Math.floor(level / 3) + 5), reward: { coins: 75, xp: 30 }, difficulty: 'easy' },
+    { type: 'pvp_wins', target: () => 1, reward: { coins: 150, xp: 75 }, difficulty: 'hard' },
+    { type: 'locations_visited', target: (level) => Math.max(2, Math.floor(level / 10) + 2), reward: { coins: 60, xp: 25 }, difficulty: 'easy' },
+    { type: 'boss_kill', target: () => 1, reward: { coins: 200, xp: 100 }, difficulty: 'hard' },
+];
+
 async function progressDailyTask(client, playerId, taskType, amount) {
     const delta = Math.max(0, Math.round(Number(amount) || 0));
-    if (delta === 0) return 0;
+    if (delta === 0) return { updated: 0, completed: [], total_progress: 0 };
+
+    // Генерация заданий на день, если их нет
+    const existing = await client.query(
+        `SELECT id FROM daily_tasks WHERE player_id = $1 AND expires_at > NOW()`,
+        [playerId]
+    );
+    if (existing.rows.length === 0) {
+        // Генерируем 3 задания
+        const player = await client.query('SELECT level FROM players WHERE id = $1', [playerId]);
+        const level = Number(player.rows[0]?.level) || 1;
+        const types = DAILY_TASK_TYPES || [];
+        const picked = [];
+        const pool = [...types];
+        while (picked.length < 3 && pool.length > 0) {
+            const idx = Math.floor(Math.random() * pool.length);
+            picked.push(pool.splice(idx, 1)[0]);
+        }
+        const expiresAt = new Date();
+        expiresAt.setHours(24, 0, 0, 0);
+        for (const t of picked) {
+            const target = t.target(level);
+            const reward = { ...t.reward };
+            await client.query(`
+                INSERT INTO daily_tasks (player_id, task_type, target_value, current_value, reward, expires_at, completed, claimed, difficulty, status, created_at)
+                VALUES ($1, $2, $3, 0, $4::jsonb, $5, false, false, $6, 'active', NOW())
+                ON CONFLICT (player_id, task_type, expires_at) DO NOTHING
+            `, [playerId, t.type, target, JSON.stringify(reward), expiresAt, t.difficulty]);
+        }
+    }
 
     const result = await client.query(`
         UPDATE daily_tasks
@@ -706,10 +744,13 @@ async function progressDailyTask(client, playerId, taskType, amount) {
            AND task_type = $2
            AND completed = false
            AND expires_at > NOW()
-        RETURNING current_value
+        RETURNING id, current_value, target_value, completed, reward
     `, [playerId, taskType, delta]);
 
-    return result.rows[0]?.current_value || 0;
+    const completed = result.rows.filter((r) => r.completed);
+    const totalProgress = result.rows.reduce((sum, r) => sum + (r.current_value || 0), 0);
+
+    return { updated: result.rows.length, completed, total_progress: totalProgress };
 }
 
 // ==========================================

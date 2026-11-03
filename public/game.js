@@ -2199,6 +2199,7 @@ const SCREENS = [
     'pvp-fight',      // PvP бой
     'pvp-stats',      // PvP статистика
     'achievements',   // Достижения
+    'daily-tasks',    // Ежедневные задания
 ];
 
 /**
@@ -2327,6 +2328,9 @@ function onScreenOpen(screenName) {
 
         case 'achievements':
             safeAsync('achievements', loadAchievements());
+            break;
+        case 'daily-tasks':
+            safeAsync('daily-tasks', loadDailyTasks());
             break;
 
         case 'pvp-players':
@@ -8094,6 +8098,88 @@ function getAchievementRewardWeight(ach) {
     };
 }
 
+async function loadDailyTasks() {
+    try {
+        const response = await apiRequest('/api/game/daily-tasks');
+        const data = response?.data || response;
+        const tasks = data?.tasks || data?.data?.tasks || [];
+        renderDailyTasksScreen(tasks, data?.expires_at);
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        console.error('loadDailyTasks error:', error);
+        const container = document.getElementById('daily-tasks-list');
+        if (container) container.innerHTML = Templates.empty('Не удалось загрузить задания');
+    }
+}
+
+function renderDailyTasksScreen(tasks, expiresAt) {
+    const container = document.getElementById('daily-tasks-list');
+    if (!container) return;
+
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+        container.innerHTML = Templates.empty('Нет активных заданий');
+        return;
+    }
+
+    container.innerHTML = tasks.map((t) => {
+        const current = Number(t.current_value) || 0;
+        const target = Number(t.target_value) || 1;
+        const percent = Math.max(0, Math.min(100, Math.round((current / target) * 100)));
+        const completed = t.completed === true;
+        const claimed = t.claimed === true;
+        const reward = (typeof t.reward === 'string') ? JSON.parse(t.reward) : (t.reward || {});
+        const rewardText = [];
+        if (reward.coins) rewardText.push(`💰 ${reward.coins}`);
+        if (reward.stars) rewardText.push(`⭐ ${reward.stars}`);
+        if (reward.xp) rewardText.push(`✨ ${reward.xp} XP`);
+        if (reward.items && reward.items.length) rewardText.push(`📦 ${reward.items.length} предмет(ов)`);
+
+        const actionBtn = claimed
+            ? '<span class="badge badge-success">Получено</span>'
+            : completed
+                ? `<button class="btn btn-primary" data-claim-daily-task="${t.id}">Забрать</button>`
+                : '<span class="badge badge-muted">В процессе</span>';
+
+        return `
+            <div class="daily-task-card ${completed ? 'completed' : ''}">
+                <div class="daily-task-header">
+                    <span class="daily-task-type">${escapeHtml(t.task_type)}</span>
+                    <span class="daily-task-difficulty badge badge-${t.difficulty || 'easy'}">${t.difficulty || 'easy'}</span>
+                </div>
+                <div class="progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${percent}%"></div>
+                    </div>
+                    <div class="progress-text">${current}/${target}</div>
+                </div>
+                <div class="daily-task-reward">${rewardText.join(' ')}</div>
+                <div class="daily-task-action">${actionBtn}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function claimDailyTask(taskId) {
+    if (!lockAction('claimDailyTask')) return;
+    try {
+        const response = await apiRequest('/api/game/daily-tasks/claim', {
+            method: 'POST',
+            body: JSON.stringify({ task_id: taskId }),
+            idempotencyKey: stableMutationKey('daily-task-claim-' + taskId, IDEMPOTENCY_WINDOW_MS)
+        });
+        const data = response?.data || response;
+        showNotification('Награда получена!', 'success', 3000);
+        RenderCache.clear();
+        await loadProfile();
+        await loadDailyTasks();
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        showNotification(clientErrorMessage(error, 'Не удалось получить награду'), 'error', 4000);
+    } finally {
+        unlockAction('claimDailyTask');
+    }
+}
+
 /**
  * Группа достижения для порядка вывода:
  *   1 — выполнено, награда НЕ получена (нужно нажать «Получить») — вверх
@@ -8720,6 +8806,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
         document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
         document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
+        document.getElementById('daily-tasks-btn')?.addEventListener('click', () => showScreen('daily-tasks'));
         
         // Лечение инфекций
                 
@@ -8831,6 +8918,12 @@ document.addEventListener('click', (event) => {
         return;
     }
 
+    const claimTaskBtn = target.closest('[data-claim-daily-task]');
+    if (claimTaskBtn) {
+        claimDailyTask(Number(claimTaskBtn.dataset.claimDailyTask));
+        return;
+    }
+
     if (target.closest('#daily-bonus-btn')) {
         claimDailyBonus();
         return;
@@ -8908,7 +9001,8 @@ const SCREEN_BUILDERS = Object.freeze([
     'ratingScreenHtml',    'pvpPlayersScreenHtml',
     'pvpFightScreenHtml',
     'pvpStatsScreenHtml',
-    'achievementsScreenHtml'
+    'achievementsScreenHtml',
+    'dailyTasksScreenHtml'
 ]);
 
 function generateScreens() {
@@ -9075,6 +9169,7 @@ function mainScreenHtml() {
                     <button class="extra-btn" id="rating-btn">🏆 Рейтинг</button>
                     <button class="extra-btn" id="pvp-btn">⚔️ PvP</button>
                     <button class="extra-btn" id="achievements-btn">🎖️ Достижения</button>
+                    <button class="extra-btn" id="daily-tasks-btn">📋 Задания</button>
                 </section>
 
                 <!-- Убраны три блока-дубли:
@@ -9605,6 +9700,21 @@ function achievementsScreenHtml() {
             <div class="screen-content">
                 <div class="achievements-categories" id="achievements-categories"></div>
                 <div class="achievements-list" id="achievements-list"></div>
+            </div>
+        </div>
+    `;
+}
+
+function dailyTasksScreenHtml() {
+    return `
+        <!-- Ежедневные задания -->
+        <div class="screen" id="daily-tasks-screen">
+            <div class="screen-header">
+                <button class="back-btn" data-screen="main">←</button>
+                <h2>📋 Ежедневные задания</h2>
+            </div>
+            <div class="screen-content">
+                <div id="daily-tasks-list"></div>
             </div>
         </div>
     `;

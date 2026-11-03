@@ -106,6 +106,7 @@ const workshopRouter = safeRequire('./workshop', 'workshop');
 const statusRouter = safeRequire('./status', 'status');
 const minigamesRouter = safeRequire('./minigames', 'minigames');
 const debuffsRouter = safeRequire('./debuffs', 'debuffs');
+const dailyTasksRouter = safeRequire('./daily-tasks', 'daily-tasks');
 
 async function upsertPlayerFromTelegramUser(user) {
     const telegramId = Number(user.id);
@@ -322,6 +323,9 @@ router.use('/workshop/upgrade', purchaseLimiter);
 router.use('/workshop/modify', purchaseLimiter);
 router.use('/items/buy', purchaseLimiter);
 router.use('/items/buy-stars', purchaseLimiter);
+router.use('/daily-tasks/claim', purchaseLimiter);
+router.use('/daily-tasks/claim-all', purchaseLimiter);
+router.use('/daily-tasks/reroll', purchaseLimiter);
 // Алиас /inventory монтирует тот же роутер предметов (см. конец файла),
 // поэтому лимиты трат монет нужно продублировать: иначе /inventory/buy
 // и /inventory/buy-stars проходили бы мимо purchaseLimiter.
@@ -362,6 +366,7 @@ router.use('/workshop', workshopRouter);
 router.use('/status', statusRouter);
 router.use('/minigames', minigamesRouter);
 router.use('/debuffs', debuffsRouter);
+router.use('/daily-tasks', dailyTasksRouter);
 
 // Алиасы для обратной совместимости
 router.use('/locations', worldRouter);
@@ -369,6 +374,7 @@ router.use('/profile', playerRouter);
 router.use('/inventory', itemsRouter);
 router.use('/wheel', minigamesRouter);
 router.use('/purchase', minigamesRouter);
+router.use('/tasks', dailyTasksRouter);
 
 // 404 для неизвестных /api/game/* путей
 router.use((req, res) => {

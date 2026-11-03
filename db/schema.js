@@ -480,13 +480,19 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS daily_tasks (
             id SERIAL PRIMARY KEY,
-            player_id BIGINT REFERENCES players(id),
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
             task_type VARCHAR(50) NOT NULL,
             target_value INTEGER NOT NULL,
             current_value INTEGER DEFAULT 0,
             reward JSONB NOT NULL,
             expires_at TIMESTAMP NOT NULL,
             completed BOOLEAN DEFAULT false,
+            claimed BOOLEAN DEFAULT false,
+            claimed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW(),
+            started_at TIMESTAMP,
+            difficulty VARCHAR(20) DEFAULT 'medium',
+            status VARCHAR(20) DEFAULT 'active',
             UNIQUE(player_id, task_type, expires_at)
         );
     `);
@@ -574,6 +580,10 @@ async function createTables() {
     // Индексы для daily_tasks
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player ON daily_tasks(player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_expires ON daily_tasks(expires_at)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_expires ON daily_tasks(player_id, expires_at)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_type ON daily_tasks(task_type)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_completed ON daily_tasks(player_id, completed, claimed)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_daily_tasks_player_type_completed ON daily_tasks(player_id, task_type, completed)`);
 
     // Индексы для clan_chat
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_chat_clan ON clan_chat(clan_id)`);
@@ -698,6 +708,31 @@ async function runMigrations() {
                 ALTER TABLE players
                 ADD CONSTRAINT fk_players_active_raid
                 FOREIGN KEY (active_raid_id) REFERENCES raid_progress(id) ON DELETE SET NULL;
+            END IF;
+        END $do$
+    `);
+
+    // Миграция: FK daily_tasks.player_id → players(id) ON DELETE CASCADE
+    await queryTx(`
+        DO $do$
+        BEGIN
+            -- Drop old FK if exists without CASCADE
+            IF EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE constraint_name = 'daily_tasks_player_id_fkey'
+                  AND delete_rule != 'CASCADE'
+            ) THEN
+                ALTER TABLE daily_tasks DROP CONSTRAINT daily_tasks_player_id_fkey;
+                ALTER TABLE daily_tasks
+                ADD CONSTRAINT fk_daily_tasks_player
+                FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
+            ELSIF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE constraint_name = 'fk_daily_tasks_player'
+            ) THEN
+                ALTER TABLE daily_tasks
+                ADD CONSTRAINT fk_daily_tasks_player
+                FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
             END IF;
         END $do$
     `);
@@ -835,6 +870,10 @@ async function runMigrations() {
 
     // Миграции для daily_tasks в таблице players
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_completed INTEGER DEFAULT 0`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_reset_at TIMESTAMP`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_task_rerolls INTEGER DEFAULT 0`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_task_reroll_reset_at TIMESTAMP`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_last_generation_at TIMESTAMP`);
 
     // Таблица ключей идемпотентности для защиты от повторных мутаций
     await queryTx(`
@@ -1010,7 +1049,10 @@ async function runMigrations() {
         ['clans', 'chk_clans_coins', 'CHECK (coins >= 0)', ['coins']],
         ['clans', 'chk_clans_total_members', 'CHECK (total_members >= 1)', ['total_members']],
         ['daily_tasks', 'chk_daily_tasks_target', 'CHECK (target_value >= 1)', ['target_value']],
-        ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)', ['current_value']]
+        ['daily_tasks', 'chk_daily_tasks_current', 'CHECK (current_value >= 0)', ['current_value']],
+        ['daily_tasks', 'chk_daily_tasks_current_lte_target', 'CHECK (current_value <= target_value)', ['current_value', 'target_value']],
+        ['daily_tasks', 'chk_daily_tasks_difficulty', "CHECK (difficulty IN ('easy','medium','hard'))", ['difficulty']],
+        ['daily_tasks', 'chk_daily_tasks_status', "CHECK (status IN ('active','completed','claimed','expired'))", ['status']]
     ];
 
     for (const [tableName, constraintName, definition, requiredColumns] of checkConstraints) {

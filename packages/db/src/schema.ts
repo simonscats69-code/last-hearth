@@ -62,7 +62,22 @@ pvp_losses: number;
   last_hp_regen?: Date;
 }
 
-export interface ItemRow {
+export interface DailyTaskRow {
+  id: number;
+  player_id: number;
+  task_type: string;
+  target_value: number;
+  current_value: number;
+  reward: Record<string, unknown>;
+  expires_at: Date;
+  completed: boolean;
+  claimed: boolean;
+  claimed_at?: Date;
+  created_at: Date;
+  started_at?: Date;
+  difficulty: string;
+  status: string;
+}
   id: number;
   name: string;
   description?: string;
