@@ -21,24 +21,113 @@ const { normalizeRadiationLevel } = require('./gameConstants');
 /**
  * Нормализация инвентаря
  */
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+}
+
+function deepClone(value) {
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(deepClone);
+    if (!isPlainObject(value)) return value;
+    const out = {};
+    for (const key of Object.keys(value)) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+        out[key] = deepClone(value[key]);
+    }
+    return out;
+}
+
+function toSafeInt(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || !Number.isSafeInteger(n)) return fallback;
+    return n;
+}
+
+function toFiniteNumber(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return n;
+}
+
+const VALID_RARITIES = new Set(['common', 'uncommon', 'rare', 'epic', 'legendary']);
+
+function normalizeInventoryItem(raw) {
+    if (!isPlainObject(raw)) return null;
+    const copy = deepClone(raw);
+
+    // id: валидный safe-integer или null (не приводим null/undefined к 0)
+    if (copy.id !== null && copy.id !== undefined) {
+        const idNum = Number(copy.id);
+        copy.id = Number.isSafeInteger(idNum) ? idNum : null;
+    } else {
+        copy.id = null;
+    }
+
+    // quantity: положительное целое, иначе 1
+    const q = Number(copy.quantity);
+    copy.quantity = (Number.isFinite(q) && Number.isInteger(q) && q > 0) ? q : 1;
+
+    // rarity: из известного набора, иначе common
+    if (typeof copy.rarity !== 'string' || !VALID_RARITIES.has(copy.rarity)) {
+        copy.rarity = 'common';
+    }
+
+    // upgrade_level: неотрицательное целое
+    const ul = Number(copy.upgrade_level);
+    copy.upgrade_level = (Number.isFinite(ul) && Number.isInteger(ul) && ul >= 0) ? ul : 0;
+
+    // durability / max_durability: неотрицательные конечные числа
+    copy.durability = toFiniteNumber(copy.durability, 0);
+    if (copy.durability < 0) copy.durability = 0;
+    copy.max_durability = toFiniteNumber(copy.max_durability, 100);
+    if (copy.max_durability < 1) copy.max_durability = 100;
+    if (copy.durability > copy.max_durability) copy.durability = copy.max_durability;
+
+    // stats / modifications: plain object или {}
+    copy.stats = isPlainObject(copy.stats) ? deepClone(copy.stats) : {};
+    copy.modifications = isPlainObject(copy.modifications) ? deepClone(copy.modifications) : {};
+
+    // name/type/category/icon/slot: строки
+    if (typeof copy.name !== 'string') copy.name = String(copy.name ?? 'Предмет');
+    if (typeof copy.type !== 'string') copy.type = String(copy.type ?? 'misc');
+    if (typeof copy.category !== 'string') copy.category = String(copy.category ?? copy.type);
+    if (typeof copy.icon !== 'string') copy.icon = String(copy.icon ?? '📦');
+    if (copy.slot !== null && copy.slot !== undefined && typeof copy.slot !== 'string') {
+        copy.slot = String(copy.slot);
+    }
+
+    // числовые статы: привести к конечным числам
+    for (const key of Object.keys(copy.stats)) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+            delete copy.stats[key];
+            continue;
+        }
+        const v = Number(copy.stats[key]);
+        if (!Number.isFinite(v)) {
+            delete copy.stats[key];
+        } else {
+            copy.stats[key] = v;
+        }
+    }
+
+    return copy;
+}
+
 function normalizeInventory(value) {
     const parsed = safeJsonParse(value, []);
 
-    const sanitize = (item) => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-        const copy = { ...item };
-        const q = Number(copy.quantity);
-        copy.quantity = Number.isFinite(q) && q >= 0 ? q : 1;
-        if (copy.id != null) copy.id = Number(copy.id);
-        return copy;
-    };
-
     if (Array.isArray(parsed)) {
-        return parsed.map(sanitize).filter(Boolean);
+        return parsed.map(normalizeInventoryItem).filter(Boolean);
     }
 
-    if (parsed && typeof parsed === 'object') {
-        return Object.values(parsed).map(sanitize).filter(Boolean);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        // Если объект имеет признаки предмета (id/name/type) — обернуть в массив
+        if (isPlainObject(parsed) && (parsed.id !== undefined || parsed.name !== undefined || parsed.type !== undefined)) {
+            const item = normalizeInventoryItem(parsed);
+            return item ? [item] : [];
+        }
+        return Object.values(parsed).map(normalizeInventoryItem).filter(Boolean);
     }
 
     return [];
@@ -49,58 +138,72 @@ function normalizeInventory(value) {
  */
 function normalizePlainObject(value) {
     const parsed = safeJsonParse(value, {});
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    // Защита от прототипного загрязнения: копируем только собственные безопасные ключи
+    const out = Object.create(null);
+    for (const key of Object.keys(parsed)) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+        out[key] = parsed[key];
+    }
+    return out;
 }
 
 /**
  * Нормализация stats предмета
  */
 function normalizeItemStats(value) {
-    return normalizePlainObject(value);
+    const obj = normalizePlainObject(value);
+    if (!isPlainObject(obj)) return {};
+    const out = {};
+    for (const key of Object.keys(obj)) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+        const v = Number(obj[key]);
+        if (Number.isFinite(v)) out[key] = v;
+    }
+    return out;
 }
 
 /**
  * Построить унифицированный предмет инвентаря
  */
 function createInventoryItem(item, options = {}) {
-    const source = item && typeof item === 'object' ? item : {};
-    const stats = normalizeItemStats(options.stats !== undefined ? options.stats : source.stats);
-    const durability = Number(options.durability ?? source.durability ?? 100);
-    const rawModifications = options.modifications ?? source.modifications ?? {};
-    const modifications = rawModifications && typeof rawModifications === 'object' && !Array.isArray(rawModifications)
-        ? { ...rawModifications }
-        : {};
+    const opts = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
+    const source = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
+
+    const stats = normalizeItemStats(opts.stats !== undefined ? opts.stats : source.stats);
+    const durability = toFiniteNumber(opts.durability ?? source.durability ?? 100, 100);
+    const maxDurability = toFiniteNumber(opts.max_durability ?? source.max_durability ?? 100, 100);
+    const rawModifications = opts.modifications ?? source.modifications ?? {};
+    const modifications = isPlainObject(rawModifications) ? deepClone(rawModifications) : {};
+
+    const safeId = (v) => {
+        const n = Number(v);
+        return Number.isSafeInteger(n) ? n : null;
+    };
 
     return {
-        ...source,
-        id: source.id ?? options.id ?? null,
-        name: source.name || options.name || 'Предмет',
-        type: source.type || options.type || 'misc',
-        category: source.category || options.category || source.type || options.type || 'misc',
-        rarity: options.rarity || source.rarity || 'common',
-        icon: source.icon || options.icon || '📦',
-        slot: source.slot || options.slot || null,
+        id: (opts.id !== undefined ? safeId(opts.id) : (source.id !== undefined ? safeId(source.id) : null)),
+        name: String(opts.name ?? source.name ?? 'Предмет'),
+        type: String(opts.type ?? source.type ?? 'misc'),
+        category: String(opts.category ?? source.category ?? opts.type ?? source.type ?? 'misc'),
+        rarity: VALID_RARITIES.has(opts.rarity ?? source.rarity) ? (opts.rarity ?? source.rarity) : 'common',
+        icon: String(opts.icon ?? source.icon ?? '📦'),
+        slot: (opts.slot ?? source.slot) == null ? null : String(opts.slot ?? source.slot),
         stats,
-        damage: Number(options.damage ?? source.damage ?? stats.damage ?? 0),
-        defense: Number(options.defense ?? source.defense ?? stats.defense ?? 0),
-        heal: Number(options.heal ?? source.heal ?? stats.health ?? stats.health_restore ?? 0),
-        rad_removal: Number(options.rad_removal ?? source.rad_removal ?? stats.radiation_cure ?? 0),
-        // Заражение зоны одно: сопротивления радиации и инфекции сведены
-        // в один стат contamination_resist. Старое имя infection_resist
-        // читаем тоже — предметы могли сохраниться в инвентаре со старой
-        // схемой, и защита не должна пропадать.
-        contamination_resist: Number(
-            options.contamination_resist ?? source.contamination_resist
-            ?? options.radiation_resist ?? source.radiation_resist
-            ?? options.infection_resist ?? source.infection_resist
-            ?? stats.radiation_resist ?? stats.infection_resist ?? 0
-        ),
-        // Сохраняем и старое имя, чтобы не ломать инвентари, где оно уже лежит
-        radiation_resist: Number(options.radiation_resist ?? source.radiation_resist ?? stats.radiation_resist ?? 0),
-        durability,
-        max_durability: Number(options.max_durability ?? source.max_durability ?? 100),
-        quantity: (() => { const q = Number(options.quantity ?? source.quantity ?? 1); return Number.isFinite(q) && q > 0 ? q : 1; })(),
-        upgrade_level: Number(options.upgrade_level ?? source.upgrade_level ?? 0),
+        damage: toFiniteNumber(opts.damage ?? source.damage ?? stats.damage ?? 0, 0),
+        defense: toFiniteNumber(opts.defense ?? source.defense ?? stats.defense ?? 0, 0),
+        heal: toFiniteNumber(opts.heal ?? source.heal ?? stats.health ?? stats.health_restore ?? 0, 0),
+        rad_removal: toFiniteNumber(opts.rad_removal ?? source.rad_removal ?? stats.radiation_cure ?? 0, 0),
+        contamination_resist: toFiniteNumber(
+            opts.contamination_resist ?? source.contamination_resist
+            ?? opts.radiation_resist ?? source.radiation_resist
+            ?? opts.infection_resist ?? source.infection_resist
+            ?? stats.radiation_resist ?? stats.infection_resist ?? 0, 0),
+        radiation_resist: toFiniteNumber(opts.radiation_resist ?? source.radiation_resist ?? stats.radiation_resist ?? 0, 0),
+        durability: Math.max(0, Math.min(durability, maxDurability)),
+        max_durability: Math.max(1, maxDurability),
+        quantity: (() => { const q = Number(opts.quantity ?? source.quantity ?? 1); return Number.isFinite(q) && Number.isInteger(q) && q > 0 ? q : 1; })(),
+        upgrade_level: (() => { const u = Number(opts.upgrade_level ?? source.upgrade_level ?? 0); return Number.isFinite(u) && Number.isInteger(u) && u >= 0 ? u : 0; })(),
         modifications
     };
 }
@@ -209,36 +312,66 @@ const EQUIPMENT_TYPES = new Set([
 ]);
 
 function addItemToInventory(inventory, newItem, dbItem) {
-    if (!Array.isArray(inventory) || !newItem) return 0;
+    if (!Array.isArray(inventory)) return 0;
+    if (!newItem || typeof newItem !== 'object' || Array.isArray(newItem)) return 0;
 
-    const type = String(newItem.type || dbItem?.type || '').toLowerCase();
-    const category = String(newItem.category || dbItem?.category || type).toLowerCase();
-    // Снаряжение (у него есть slot) и ключи НИКОГДА не стакаются:
-    // два меча в одном слоте — это поломанный предмет, а не стопка.
-    const isEquipment = Boolean(newItem.slot || dbItem?.slot)
+    const item = deepClone(newItem);
+
+    const type = String(item.type || dbItem?.type || '').toLowerCase();
+    const category = String(item.category || dbItem?.category || type).toLowerCase();
+
+    const isEquipment = Boolean(item.slot || dbItem?.slot)
         || EQUIPMENT_TYPES.has(type)
         || EQUIPMENT_TYPES.has(category);
-    const stackable = dbItem ? (dbItem.stackable !== false && dbItem.stackable !== 0 && dbItem.stackable !== '0' && dbItem.stackable !== 'false') : true;
 
-    const maxStack = Math.max(1, Number(dbItem?.max_stack || 99));
-    const rawQty = Number(newItem.quantity || 1);
-    const quantity = Number.isFinite(rawQty) && rawQty > 0 ? rawQty : 1;
+    // stackable: явная проверка falsy-значений (включая null)
+    const stackable = dbItem
+        ? (dbItem.stackable !== false && dbItem.stackable !== 0 && dbItem.stackable !== '0'
+           && dbItem.stackable !== 'false' && dbItem.stackable !== null)
+        : true;
+
+    // maxStack: конечное целое >= 1, с капом 10000
+    const rawMax = Number(dbItem?.max_stack ?? 99);
+    const maxStack = (Number.isFinite(rawMax) && rawMax >= 1) ? Math.min(Math.floor(rawMax), 10000) : 99;
+
+    const rawQty = Number(item.quantity);
+    const quantity = (Number.isFinite(rawQty) && Number.isInteger(rawQty) && rawQty > 0) ? rawQty : 1;
+
+    // id: валидный safe-integer или null
+    const newItemId = (item.id !== null && item.id !== undefined) ? (Number.isSafeInteger(Number(item.id)) ? Number(item.id) : null) : null;
 
     let remaining = quantity;
 
-    if (stackable && !isEquipment && type !== 'key' && Number(newItem.upgrade_level || 0) === 0) {
+    // Безопасное глубокое сравнение без JSON.stringify (защита от циклов/BigInt)
+    const deepEqual = (a, b) => {
+        if (a === b) return true;
+        if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+        if (Array.isArray(a) !== Array.isArray(b)) return false;
+        const ka = Object.keys(a).sort();
+        const kb = Object.keys(b).sort();
+        if (ka.length !== kb.length) return false;
+        for (let i = 0; i < ka.length; i++) {
+            if (ka[i] !== kb[i]) return false;
+            if (!deepEqual(a[ka[i]], b[kb[i]])) return false;
+        }
+        return true;
+    };
+
+    if (stackable && !isEquipment && type !== 'key' && Number(item.upgrade_level || 0) === 0 && newItemId !== null) {
         for (let i = 0; i < inventory.length && remaining > 0; i++) {
             const existing = inventory[i];
-            if (!existing || Number(existing.id) !== Number(newItem.id)) continue;
-            if (existing.rarity !== newItem.rarity) continue;
+            if (!existing || typeof existing !== 'object' || Array.isArray(existing)) continue;
+            const existingId = (existing.id !== null && existing.id !== undefined) ? (Number.isSafeInteger(Number(existing.id)) ? Number(existing.id) : null) : null;
+            if (existingId !== newItemId) continue;
+            if (existing.rarity !== item.rarity) continue;
             if (Number(existing.upgrade_level || 0) !== 0) continue;
             // Не стакать предметы с разной прочностью/модификациями/статами
-            if (Number(existing.durability) !== Number(newItem.durability)) continue;
-            if (Number(existing.max_durability) !== Number(newItem.max_durability)) continue;
-            if (JSON.stringify(existing.modifications || null) !== JSON.stringify(newItem.modifications || null)) continue;
-            if (JSON.stringify(existing.stats || null) !== JSON.stringify(newItem.stats || null)) continue;
+            if (Number(existing.durability || 0) !== Number(item.durability || 0)) continue;
+            if (Number(existing.max_durability || 0) !== Number(item.max_durability || 0)) continue;
+            if (!deepEqual(existing.modifications || null, item.modifications || null)) continue;
+            if (!deepEqual(existing.stats || null, item.stats || null)) continue;
 
-            const currentQty = Math.max(0, Number(existing.quantity || 1));
+            const currentQty = Math.max(0, Number.isFinite(Number(existing.quantity)) ? Number(existing.quantity) : 0);
             if (currentQty >= maxStack) continue;
 
             const toAdd = Math.min(maxStack - currentQty, remaining);
@@ -248,15 +381,15 @@ function addItemToInventory(inventory, newItem, dbItem) {
     }
 
     // Что не влезло в стеки — новыми слотами.
-    // Остаток режем на полные стеки и возвращаем точное число новых слотов:
-    // иначе покупка 4 в стек из 4 при max_stack=5 дала бы 5 + 4 = 9 вместо
-    // 5 + 3, а покупка 12 при max_stack=10 — один слот на 12 штук.
     let slotsAdded = 0;
-    while (remaining > 0) {
+    let iterations = 0;
+    const MAX_ITERATIONS = 10000;
+    while (remaining > 0 && iterations < MAX_ITERATIONS) {
         const chunk = Math.min(maxStack, remaining);
-        inventory.push({ ...newItem, quantity: chunk });
+        inventory.push({ ...item, quantity: chunk });
         remaining -= chunk;
         slotsAdded++;
+        iterations++;
     }
 
     return slotsAdded;
@@ -451,14 +584,16 @@ async function regenerateHealth(client, player) {
  */
 function normalizeEquipment(raw) {
     const eq = safeJsonParse(raw, {});
-    if (!eq || typeof eq !== 'object' || Array.isArray(eq)) return {};
 
-    const out = {};
+    if (!isPlainObject(eq)) return {};
+
+    const out = Object.create(null);
     for (const slot of Object.keys(eq)) {
+        if (slot === '__proto__' || slot === 'constructor' || slot === 'prototype') continue;
         const item = eq[slot];
-        if (item && typeof item === 'object' && !Array.isArray(item)) {
-            out[slot] = { ...item, stats: item.stats ? { ...item.stats } : item.stats, modifications: item.modifications ? { ...item.modifications } : item.modifications };
-        }
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+        const normalized = normalizeInventoryItem(item);
+        if (normalized) out[slot] = normalized;
     }
     return out;
 }
