@@ -8127,24 +8127,36 @@ function renderDailyTasksScreen(tasks, expiresAt) {
         const percent = Math.max(0, Math.min(100, Math.round((current / target) * 100)));
         const completed = t.completed === true;
         const claimed = t.claimed === true;
-        const reward = (typeof t.reward === 'string') ? JSON.parse(t.reward) : (t.reward || {});
+        const reward = (function() { try { return (typeof t.reward === 'string') ? JSON.parse(t.reward) : (t.reward || {}); } catch (_) { return {}; } })();
         const rewardText = [];
         if (reward.coins) rewardText.push(`💰 ${reward.coins}`);
         if (reward.stars) rewardText.push(`⭐ ${reward.stars}`);
         if (reward.xp) rewardText.push(`✨ ${reward.xp} XP`);
         if (reward.items && reward.items.length) rewardText.push(`📦 ${reward.items.length} предмет(ов)`);
 
+        const safeDifficulty = escapeHtml(t.difficulty || 'easy');
         const actionBtn = claimed
             ? '<span class="badge badge-success">Получено</span>'
             : completed
-                ? `<button class="btn btn-primary" data-claim-daily-task="${t.id}">Забрать</button>`
+                ? `<button class="btn btn-primary" data-claim-daily-task="${Number(t.id)}">Забрать</button>`
                 : '<span class="badge badge-muted">В процессе</span>';
+
+        const TASK_TYPE_LABELS = {
+        search: 'Поиск предметов',
+        boss_damage: 'Урон по боссам',
+        collect_items: 'Сбор предметов',
+        pvp_wins: 'Победы в PvP',
+        locations_visited: 'Посещение локаций',
+        boss_kill: 'Убийство босса'
+    };
+
+    const typeLabel = TASK_TYPE_LABELS[t.task_type] || t.task_type;
 
         return `
             <div class="daily-task-card ${completed ? 'completed' : ''}">
                 <div class="daily-task-header">
-                    <span class="daily-task-type">${escapeHtml(t.task_type)}</span>
-                    <span class="daily-task-difficulty badge badge-${t.difficulty || 'easy'}">${t.difficulty || 'easy'}</span>
+                    <span class="daily-task-type">${escapeHtml(typeLabel)}</span>
+                    <span class="daily-task-difficulty badge badge-${safeDifficulty}">${safeDifficulty}</span>
                 </div>
                 <div class="progress">
                     <div class="progress-bar">
@@ -8164,11 +8176,16 @@ async function claimDailyTask(taskId) {
     try {
         const response = await apiRequest('/api/game/daily-tasks/claim', {
             method: 'POST',
-            body: JSON.stringify({ task_id: taskId }),
+            body: { task_id: taskId },
             idempotencyKey: stableMutationKey('daily-task-claim-' + taskId, IDEMPOTENCY_WINDOW_MS)
         });
         const data = response?.data || response;
-        showNotification('Награда получена!', 'success', 3000);
+        const reward = data?.reward || {};
+        const parts = [];
+        if (reward.coins) parts.push(`+${reward.coins} монет`);
+        if (reward.stars) parts.push(`+${reward.stars} ⭐`);
+        if (reward.xp) parts.push(`+${reward.xp} XP`);
+        showNotification(parts.length ? `Награда получена: ${parts.join(', ')}` : 'Награда получена!', 'success', 3000);
         RenderCache.clear();
         await loadProfile();
         await loadDailyTasks();

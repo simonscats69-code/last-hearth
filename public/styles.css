@@ -4658,6 +4658,50 @@ html, body {
     background: var(--accent-gold);
 }
 
+/* Ежедневные задания */
+.daily-task-card {
+    background-color: var(--card-bg);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border-color);
+}
+
+.daily-task-card.completed {
+    border-color: var(--accent-gold);
+    background: linear-gradient(135deg, #2d2d1a, #3d3d2a);
+}
+
+.daily-task-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.daily-task-type {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.daily-task-reward {
+    margin: 8px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.daily-task-action {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.daily-tasks-expires {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
 .achievement-card .info {
     flex: 1;
 }
