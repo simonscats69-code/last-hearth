@@ -23,7 +23,7 @@ import {
   MODIFICATION_BY_STAT,
   MAX_INVENTORY_SLOTS,
 } from './types';
-import { GAME_CONFIG, WEAR_PER_HIT, REPAIR_COST_MULTIPLIER, UPGRADE_COST_MULTIPLIER } from './config';
+import { WEAR_PER_HIT, REPAIR_COST_MULTIPLIER, UPGRADE_COST_MULTIPLIER } from './config';
 
 /** Слоты экипировки, которые участвуют в расчёте защиты */
 export const EQUIPMENT_SLOTS_LIST: readonly EquipmentSlot[] = Object.freeze(DEFENSE_SLOTS);
@@ -197,11 +197,13 @@ export function isEquipmentItem(item: InventoryItem | null | undefined): boolean
 }
 
 /** Текущая и максимальная прочность предмета */
+const BASE_DURABILITY = 500;
+
 export function getDurabilityInfo(item: InventoryItem | null | undefined): {
   current: number; max: number; isBroken: boolean; ratio: number
 } {
   const maxRaw = Number(item && (item.max_durability || item.durability));
-  const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : GAME_CONFIG.BASE_DURABILITY));
+  const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : BASE_DURABILITY));
 
   const hasDurabilityData = Boolean(item && (item.durability !== undefined || item.max_durability !== undefined));
   if (!hasDurabilityData) {
