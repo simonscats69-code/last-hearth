@@ -35,7 +35,7 @@ const { getGameHelpers } = require('../../utils/getGameHelpers');
 
 // Экспортируемые функции через getGameHelpers()
 const helpers = getGameHelpers();
-const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory, trackCollectedItems } = helpers;
+const { getActiveBuffs, normalizeInventory, recalcEnergy, normalizeEquipment, getSetBonuses, wearEquipmentSlots, addItemToInventory, trackCollectedItems, progressDailyTask } = helpers;
 // Валидация ID — общая, см. utils/validate.js.
 const { validateId } = require('../../utils/validate');
 // Файл правил предметов импортируется один раз: брать его и по имени
@@ -772,8 +772,8 @@ router.post('/attack-hit', async (req, res) => {
             // ручной список отставал от канона (в нём оставался удалённый
             // слот 'head' и не было 'face'), и маски с противогазами не
             // изнашивались в PvP вообще.
-            const attackerBroken = wearEquipmentSlots(client, attackerId, attackerEq, ['weapon']);
-            const defenderBroken = wearEquipmentSlots(client, defenderId, defenderEq, equipmentRules.EQUIPMENT_SLOTS);
+            const attackerBroken = wearEquipmentSlots(attackerEq, ['weapon']);
+            const defenderBroken = wearEquipmentSlots(defenderEq, equipmentRules.EQUIPMENT_SLOTS);
 
             await client.query(`
                 UPDATE players
@@ -921,6 +921,19 @@ await client.query(`
                 
                 // Используем playerHelper.addExperience для корректного level-up
                 const expResult = await playerHelper.addExperience(attackerId, pvpExpReward, client);
+                try {
+                    const progression = require('../utils/progression');
+                    await progression.grantExperience(attackerId, pvpExpReward, 'pvp_win', client);
+                try {
+                    await progressDailyTask(client, attackerId, 'pvp_wins', 1);
+                } catch (_) { /* ignore */ }
+                } catch (_) {
+                    try {
+                        const { getGameHelpers } = require('../utils/game-helpers');
+                        const h = getGameHelpers();
+                        if (h && typeof h.checkAchievements === 'function') await h.checkAchievements(attackerId, client);
+                    } catch (__) { /* ignore */ }
+                }
                 expLogData = expResult.logData;
 
                 // Обновляем PvP статистику проигравшего

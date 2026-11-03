@@ -640,7 +640,7 @@ async function getSetBonuses(equipment, client) {
  * @param {string[]} slots какие слоты изнашивать
  * @returns {string[]} список слотов, где предмет сломался (для ответа клиенту)
  */
-function wearEquipmentSlots(client, playerId, equipment, slots) {
+function wearEquipmentSlots(equipment, slots) {
     if (!equipment || !Array.isArray(slots) || slots.length === 0) return [];
 
     const broken = [];

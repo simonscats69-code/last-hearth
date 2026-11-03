@@ -82,9 +82,11 @@ const RAID_LAST_HIT_BONUS = 0.05;
 function formatDuration(ms) {
     const hours = Math.floor(ms / (60 * 60 * 1000));
     const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+    const seconds = Math.floor((ms % (60 * 1000)) / 1000);
     if (hours > 0 && minutes > 0) return `${hours} ч ${minutes} мин`;
     if (hours > 0) return `${hours} ч`;
-    return `${minutes} мин`;
+    if (minutes > 0) return `${minutes} мин`;
+    return `${seconds} сек`;
 }
 
 
@@ -179,12 +181,10 @@ async function applyBossCounterHit(client, playerId, boss, player, bossCurrentHp
         // Почти добитый босс не бьёт — но износ СНАРЯЖЕНИЯ всё равно идёт:
         // игрок продолжал махать оружием, работа шла. Иначе добивание
         // становилось бы бесконечным и бесплатным по прочности.
-        const brokenSlots = wearEquipmentSlots(
-            client,
-            playerId,
+const brokenSlots = wearEquipmentSlots(
             equipment,
             COUNTER_HIT_WEAR_SLOTS
-            );
+        );
             await client.query(
                 'UPDATE players SET equipment = $1::jsonb WHERE id = $2',
                 [JSON.stringify(equipment), playerId]
@@ -192,7 +192,7 @@ async function applyBossCounterHit(client, playerId, boss, player, bossCurrentHp
             return { damage: 0, health: Number(player.health || 0), broken_slots: brokenSlots };
     }
 
-    const health = Math.max(0, Number(player.health || 0) - damage);
+    const health = Math.max(0, (Number(player.health) || 0) - damage);
     const brokenSlots = wearEquipmentSlots(
         client,
         playerId,
@@ -623,11 +623,24 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
 
     if (rewards.coins > 0)
         await client.query('UPDATE players SET coins = coins + $1 WHERE id = $2', [rewards.coins, playerId]);
-    if (experienceReward > 0)
-        await playerHelper.addExperience(playerId, experienceReward, client);
+    if (experienceReward > 0) {
+        try {
+            const progression = require('../../utils/progression');
+            await progression.grantExperience(playerId, experienceReward, 'boss_kill', client);
+        } catch (_) {
+            await playerHelper.addExperience(playerId, experienceReward, client);
+            try { await helpers.checkAchievements(playerId, client); } catch (__) { /* ignore */ }
+        }
+    }
 
     const grantedKey = await grantNextBossKey(client, playerId, bossId);
     if (grantedKey) rewards.key = grantedKey;
+
+    // Прогресс ежедневного задания «убийство босса»
+    try {
+        const { progressDailyTask } = getGameHelpers();
+        if (typeof progressDailyTask === 'function') await progressDailyTask(client, playerId, 'boss_kill', 1);
+    } catch (_) { /* ignore */ }
 
     // Множитель 1, а не 0.5: каждый предмет из reward_items выдавался с шансом
     // 50% (calculateGrantedQuantity), из-за чего обещанная награда за босса
@@ -1294,7 +1307,7 @@ router.post('/attack-boss', async (req, res) => {
             // пула (max 20) — при >10 боях пул исчерпывался и писал 500.
             const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}), client);
             const damage = combat.calculateDamage(bossId, player, masteries, setBonuses);
-            const newHp = Math.max(0, activeBattle.boss.hp - damage);
+            const newHp = Math.max(0, (Number(activeBattle.boss.hp) || 0) - (Number(damage) || 0));
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
             // Ответный удар босса и износ снаряжения.
@@ -1862,7 +1875,7 @@ router.post('/raid/:id/attack', async (req, res) => {
             const masteries = await getBossMasteries(client, playerId);
             const setBonuses = await getSetBonuses(safeJsonParse(player.equipment, {}), client);
             const damage = combat.calculateDamage(raid.boss_id, player, masteries, setBonuses);
-            const newHp = Math.max(0, raid.current_health - damage);
+            const newHp = Math.max(0, (Number(raid.current_health) || 0) - (Number(damage) || 0));
             const newTotalDamage = session.damage_dealt + damage;
             const energyCost = activeBuffs.free_energy ? 0 : 1;
 
@@ -2101,6 +2114,11 @@ if (grantedItems && grantedItems.length > 0) {
                         const expResult = await playerHelper.addExperience(pid, expReward, client);
                         expLogs.push({ playerId: pid, logData: expResult.logData });
                     }
+                }
+
+                // Событийная проверка достижений для всех участников рейда
+                for (const entry of shares) {
+                    try { await helpers.checkAchievements(entry.participantId, client); } catch (_) { /* ignore */ }
                 }
 
                 // Батчовый UPDATE bosses_killed и boss_mastery
