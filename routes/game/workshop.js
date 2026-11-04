@@ -241,7 +241,7 @@ router.post('/repair-all', async (req, res) => {
             for (const slot of slots) {
                 const item = equipment[slot];
                 if (!item) continue;
-                const cost = calculateRepairCost(item);
+                const cost = equipmentRules.calculateRepairCost(item);
                 if (cost > 0) {
                     totalCost += cost;
                     repairedSlots.push(slot);
@@ -258,7 +258,7 @@ router.post('/repair-all', async (req, res) => {
 
             for (const slot of repairedSlots) {
                 const item = equipment[slot];
-                const info = getDurabilityInfo(item);
+                const info = equipmentRules.getDurabilityInfo(item);
                 item.durability = info.max;
                 equipment[slot] = item;
             }
@@ -308,8 +308,8 @@ router.post('/scrap-all', async (req, res) => {
 
             const inventory = normalizeInventory(player.inventory);
             const toScrap = inventory.filter((item) => {
-                if (!item || !isEquipmentItem(item)) return false;
-                const info = getDurabilityInfo(item);
+                if (!item || !equipmentRules.isEquipmentItem(item)) return false;
+                const info = equipmentRules.getDurabilityInfo(item);
                 return info.isBroken;
             });
 
@@ -320,7 +320,7 @@ router.post('/scrap-all', async (req, res) => {
             // Считаем получаемые материалы
             const gainedMaterials = {};
             for (const item of toScrap) {
-                const yield_ = calculateScrapYield(item);
+                const yield_ = equipmentRules.calculateScrapYield(item);
                 for (const [mat, qty] of Object.entries(yield_)) {
                     gainedMaterials[mat] = (gainedMaterials[mat] || 0) + qty;
                 }
@@ -328,8 +328,8 @@ router.post('/scrap-all', async (req, res) => {
 
             // Удаляем сломанные предметы из инвентаря
             const remaining = inventory.filter((item) => {
-                if (!item || !isEquipmentItem(item)) return true;
-                const info = getDurabilityInfo(item);
+                if (!item || !equipmentRules.isEquipmentItem(item)) return true;
+                const info = equipmentRules.getDurabilityInfo(item);
                 return !info.isBroken;
             });
 
