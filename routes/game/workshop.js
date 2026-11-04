@@ -264,7 +264,7 @@ router.post('/repair-all', async (req, res) => {
             }
 
             await client.query(
-                'UPDATE players SET coins = COALESCE(coins,0) - , equipment = ::jsonb WHERE id = ',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb WHERE id = $3',
                 [totalCost, JSON.stringify(equipment), playerId]
             );
 
@@ -339,7 +339,7 @@ router.post('/scrap-all', async (req, res) => {
             }
 
             await client.query(
-                'UPDATE players SET inventory = ::jsonb WHERE id = ',
+                'UPDATE players SET inventory = $1::jsonb WHERE id = $2',
                 [JSON.stringify(remaining), playerId]
             );
 
