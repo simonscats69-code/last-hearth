@@ -4582,10 +4582,21 @@ async function renderWorkshopPanel() {
         // Монетам в мастерской нужно быть свежими: покупка в магазине или
         // продажа лута меняет баланс, и цена кнопки должна быть актуальной.
         const coins = Number(data?.coins ?? gameState.player?.coins ?? 0);
+        const stars = Number(data?.stars ?? gameState.player?.stars ?? 0);
+
+        // Обновляем баланс в шапке экрана
+        const workshopCoins = document.getElementById('workshop-coins');
+        const workshopStars = document.getElementById('workshop-stars');
+        if (workshopCoins) workshopCoins.textContent = formatNumber(coins);
+        if (workshopStars) workshopStars.textContent = formatNumber(stars);
+
+        // Считаем общую стоимость ремонта
+        const totalRepairCost = slots.reduce((sum, e) => sum + (Number(e.repair_cost) || 0), 0);
+
         root.innerHTML = `
             <h4 class="inv-equipment-title">Мастерская · 🪙 ${formatNumber(coins)}</h4>
             <div class="workshop-actions">
-                <button class="btn btn-primary" id="repair-all-btn">🔧 Починить всё</button>
+                <button class="btn btn-primary" id="repair-all-btn">🔧 Починить всё (${formatNumber(totalRepairCost)} 🪙)</button>
                 <button class="btn btn-secondary" id="scrap-all-btn">🔨 Разобрать всё сломанное</button>
             </div>
             <div class="inv-workshop-list">
@@ -4593,7 +4604,6 @@ async function renderWorkshopPanel() {
             </div>
         `;
 
-        bindWorkshopActions();
         bindWorkshopAllButtons();
     } catch (error) {
         console.warn('Не удалось загрузить мастерскую:', error);
