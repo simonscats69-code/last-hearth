@@ -74,9 +74,9 @@ ok('в TS-пакете тоже нет автохила',
 console.log('\n=== 4. Единое место правды для регена ===');
 const eq = require(path.join(__dirname, EQ));
 ok('HEALTH_REGEN_INTERVAL_MS = 90 000 (1 HP / 90 с)', eq.HEALTH_REGEN_INTERVAL_MS === 90000, eq.HEALTH_REGEN_INTERVAL_MS);
-ok('HEALTH_REGEN_CAP_RATIO = 0.6 (потолок 60 HP)', eq.HEALTH_REGEN_CAP_RATIO === 0.6, eq.HEALTH_REGEN_CAP_RATIO);
-ok('getHealthRegenCap(100) = 60', eq.getHealthRegenCap(100) === 60, eq.getHealthRegenCap(100));
-ok('getRegenerableHealth(0, 100) = 60', eq.getRegenerableHealth(0, 100) === 60, eq.getRegenerableHealth(0, 100));
+ok('HEALTH_REGEN_CAP_RATIO = 1 (полный реген до 100%)', eq.HEALTH_REGEN_CAP_RATIO === 1, eq.HEALTH_REGEN_CAP_RATIO);
+ok('getHealthRegenCap(100) = 100', eq.getHealthRegenCap(100) === 100, eq.getHealthRegenCap(100));
+ok('getRegenerableHealth(0, 100) = 100', eq.getRegenerableHealth(0, 100) === 100, eq.getRegenerableHealth(0, 100));
 
 const regenDefs = (gameSrc.match(/HEALTH_REGEN_INTERVAL_MS\s*=\s*90/g) || []).length;
 ok('нет локального дубля константы в game.js', regenDefs === 0, 'найдено ' + regenDefs);

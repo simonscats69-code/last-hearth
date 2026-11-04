@@ -509,7 +509,7 @@ async function recalcEnergy(client, player) {
  */
 async function regenerateHealth(client, player) {
     const maxHealth = Math.max(100, Number(player.max_health) || 100);
-    const cap = Math.floor(maxHealth * (equipmentRules.HEALTH_REGEN_CAP_RATIO || 0.6));
+    const cap = Math.floor(maxHealth * (equipmentRules.HEALTH_REGEN_CAP_RATIO || 1.0));
     const effectiveMax = Math.max(1, cap);
     const current = Math.max(0, Number(player.health) || 0);
 
