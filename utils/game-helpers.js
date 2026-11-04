@@ -1016,8 +1016,11 @@ async function getPlayerProgress(playerId) {
 
         if (!playerResult.rows.length) return null;
 
-        const p = playerResult.rows[0];
-        const runtimeContext = await getAchievementRuntimeContext(null, playerId);
+const p = playerResult.rows[0];
+    let runtimeContext = { totalBossesKilled: 0 };
+    try {
+        runtimeContext = await getAchievementRuntimeContext(null, playerId);
+    } catch (_) { /* fallback */ }
 
         const progress = {
             level: { current: p.level, achievements: [] },

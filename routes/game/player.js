@@ -122,8 +122,14 @@ router.get(['/', '/profile'], async (req, res) => {
             player.last_energy_update = locked.last_energy_update;
         }
 
-        const achievements = await getPlayerAchievements(playerId);
-        const progress = await getPlayerProgress(playerId);
+        let achievements = [];
+        let progress = null;
+        try {
+            achievements = await getPlayerAchievements(playerId);
+        } catch (_) { /* ignore */ }
+        try {
+            progress = await getPlayerProgress(playerId);
+        } catch (_) { /* ignore */ }
         const status = buildPlayerStatus(player);
 
         // Единый источник истины для числа убитых боссов — агрегат из boss_mastery
