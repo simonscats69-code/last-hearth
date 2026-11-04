@@ -48,7 +48,7 @@ function calculateDamageBonus(bossId, masteries, opts) {
 // --- Урон игрока по боссу ---
 function calculateDamage(bossId, player, masteries, setBonuses, equipment) {
     const eq = equipment || (player && player.equipment) || {};
-    const weaponDamage = equipmentRules.getWeaponDamageForContext(eq, equipmentRules.WEAPON_CONTEXTS.BOSS);
+    const weaponDamage = equipmentRules.getWeaponDamageForContext(eq.weapon, equipmentRules.WEAPON_CONTEXTS.BOSS);
     const setDamage = (setBonuses && setBonuses.damage) || 0;
     const bonus = calculateDamageBonus(bossId, masteries || []);
     const levelDamage = Math.max(1, Math.floor(Number(player && player.level) || 1));

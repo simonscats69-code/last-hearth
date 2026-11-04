@@ -193,12 +193,10 @@ const brokenSlots = wearEquipmentSlots(
     }
 
     const health = Math.max(0, (Number(player.health) || 0) - damage);
-    const brokenSlots = wearEquipmentSlots(
-        client,
-        playerId,
-        equipment,
-        COUNTER_HIT_WEAR_SLOTS
-    );
+const brokenSlots = wearEquipmentSlots(
+            equipment,
+            COUNTER_HIT_WEAR_SLOTS
+        );
 
     // Урон и износ фиксируем одним UPDATE: здоровье после ответного удара
     // и снаряжение должны соблюдаться вместе, иначе в БД остаётся урон

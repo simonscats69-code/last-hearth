@@ -412,7 +412,7 @@ export function collectSetPieceCounts(equipment: PlayerEquipment | null | undefi
   const counts: Record<number, number> = {};
   if (!equipment) return counts;
 
-  for (const slot of EQUIPMENT_SLOTS) {
+  for (const slot of COMBAT_SLOTS) {
     const item = equipment[slot];
     if (!item) continue;
     const statsSetId = item.stats && typeof item.stats === 'object'
