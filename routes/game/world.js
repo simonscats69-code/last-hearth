@@ -748,6 +748,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                     last_update: lastEnergyUpdate,
                     coins: Number(energyResult.rows[0].coins || 0)
                 },
+                health: Number(updatedPlayer.health || 0) - (radiationDamage || 0),
                 // Заражение зоной — одно. Инфекции объединены с радиацией,
                 // поэтому отдельный блок infection больше не отдаётся:
                 // весь «урон зоне» считается в radiation.
