@@ -4,7 +4,7 @@
 'use strict';
 
 const { PlayerHelper } = require('./serverApi');
-const { getGameHelpers } = require('./game-helpers');
+const { checkAchievements } = require('./game-helpers');
 
 /**
  * Начислить опыт игроку с учётом level-up и проверки достижений.
@@ -22,9 +22,8 @@ async function grantExperience(playerId, amount, source, client) {
 
     // Событийная проверка достижений (мгновенная обратная связь).
     try {
-        const helpers = getGameHelpers();
-        if (helpers && typeof helpers.checkAchievements === 'function') {
-            await helpers.checkAchievements(playerId, client);
+        if (typeof checkAchievements === 'function') {
+            await checkAchievements(playerId, client);
         }
     } catch (e) {
         // Не роняем основной поток из-за ошибки проверки достижений.
@@ -32,11 +31,13 @@ async function grantExperience(playerId, amount, source, client) {
         console.warn('[progression] checkAchievements failed:', e && e.message);
     }
 
-    // Аудит-лог XP (если есть logPlayerAction).
+// Аудит-лог XP (если есть logPlayerAction).
+    // Всегда fire-and-forget через пул (не внутри транзакции), чтобы
+    // медленный INSERT не прерывал транзакцию и не вызывал rollback.
     try {
         const { logPlayerAction } = require('./log');
         if (typeof logPlayerAction === 'function') {
-            await logPlayerAction(playerId, 'grant_experience', { amount: exp, source, leveled_up: result.leveled_up, new_level: result.level });
+            logPlayerAction(playerId, 'grant_experience', { amount: exp, source, leveled_up: result.leveled_up, new_level: result.level }).catch(() => {});
         }
     } catch (_) { /* ignore */ }
 
