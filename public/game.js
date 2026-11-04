@@ -5994,16 +5994,11 @@ async function startSoloBossFight(bossId) {
     // отправляли два POST /bosses/start.
     if (!lockAction('startBossFight')) return;
     try {
-        let result;
-        if (preloadedData) {
-            result = preloadedData;
-        } else {
-            result = await apiRequest('/api/game/bosses/start', {
+        const result = await apiRequest('/api/game/bosses/start', {
             method: 'POST',
             body: { boss_id: bossId },
             idempotencyKey: stableMutationKey(`boss-start-solo-${bossId}`, IDEMPOTENCY_WINDOW_MS)
         });
-        }
         
         const bossData = result?.data || result;
 
