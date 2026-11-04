@@ -1,4 +1,5 @@
-/**
+/*
+        }*
  * Утилиты и хелперы для фронтенда
  * Общие функции, используемые во всей игре
  */
@@ -968,7 +969,7 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             // Ждём и повторяем, чтобы не терять удар.
             if (status === 409 && error.code === 'IDEMPOTENCY_IN_PROGRESS') {
                 if (!isLastAttempt) {
-                    await delay(500);
+                    await delay(1500);
                     continue;
                 }
             }
@@ -2497,7 +2498,7 @@ function goToMain() {
  * @param {Object} boss - объект босса
  * @param {number} [timeRemainingMs] - оставшееся время в мс (опционально)
  */
-async function startBossFight(boss, timeRemainingMs = null) {
+async function startBossFight(boss, timeRemainingMs = null, preloadedData = null) {
     if (!lockAction('attackBoss')) return;
 
     try {
@@ -2506,11 +2507,16 @@ async function startBossFight(boss, timeRemainingMs = null) {
         // кнопка «Начать бой» всегда получала 404 Not found и бой не начинался.
         // Ответ /start содержит ровно то, что читает код ниже: data.boss с hp
         // и data.time_remaining_ms.
-        const result = await apiRequest('/api/game/bosses/start', {
+        let result;
+        if (preloadedData) {
+            result = preloadedData;
+        } else {
+            result = await apiRequest('/api/game/bosses/start', {
             method: 'POST',
             body: { boss_id: boss.id },
             idempotencyKey: stableMutationKey(`boss-start-${boss.id}`, IDEMPOTENCY_WINDOW_MS)
         });
+        }
         
         if (result?.success) {
             // Запускаем бой
@@ -4022,7 +4028,7 @@ async function searchLoot() {
         const response = await apiRequest('/api/game/locations/search', {
             method: 'POST',
             body: {},
-            idempotencyKey: stableMutationKey('location-search', IDEMPOTENCY_WINDOW_MS)
+            idempotencyKey: stableMutationKey('location-search', 400)
         });
         
         const result = response?.data || response;
@@ -4075,6 +4081,19 @@ async function searchLoot() {
                     result.energy.last_update || null
                 );
                 refreshPlayerEnergyUI();
+            }
+
+            // Синхронизируем HP после поиска (урон от радиации).
+            if (result.health !== undefined) {
+                if (!gameState.player.status) gameState.player.status = {};
+                gameState.player.health = Number(result.health) || 0;
+                gameState.player.status.health = Number(result.health) || 0;
+                updatePlayerHealthUi();
+            }
+
+            // Синхронизируем монеты после поиска.
+            if (result.energy?.coins !== undefined) {
+                gameState.player.coins = Number(result.energy.coins) || 0;
             }
             
             // Обновляем радиацию после поиска (всегда, не только при увеличении).
@@ -5965,16 +5984,21 @@ async function startSoloBossFight(bossId) {
     // отправляли два POST /bosses/start.
     if (!lockAction('startBossFight')) return;
     try {
-        const result = await apiRequest('/api/game/bosses/start', {
+        let result;
+        if (preloadedData) {
+            result = preloadedData;
+        } else {
+            result = await apiRequest('/api/game/bosses/start', {
             method: 'POST',
             body: { boss_id: bossId },
             idempotencyKey: stableMutationKey(`boss-start-solo-${bossId}`, IDEMPOTENCY_WINDOW_MS)
         });
+        }
         
         const bossData = result?.data || result;
 
         if (result?.success && bossData.boss) {
-            startBossFight(bossData.boss, bossData.time_remaining_ms);
+            startBossFight(bossData.boss, bossData.time_remaining_ms, result);
         } else {
             showModal('⚠️ Внимание', bossData.error || result.error || result.message || 'Не удалось начать бой');
         }
@@ -6282,6 +6306,12 @@ async function attackBoss() {
             
             // Обновляем HP босса
             updateBossHealthUi(result.boss_hp, result.boss_max_hp);
+
+            // Синхронизируем энергию после удара
+            if (result.player_energy !== undefined) {
+                syncPlayerEnergyState(result.player_energy, result.player_max_energy, null);
+                refreshPlayerEnergyUI();
+            }
 
             // Обновляем «Ваш урон»: сервер считал его той же calculateDamage,
             // что и первый удар, поэтому после удара показываем фактическое

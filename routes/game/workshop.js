@@ -281,7 +281,7 @@ router.post('/repair-all', async (req, res) => {
             };
         });
 
-        res.status(outcome.status).json(outcome.body);
+        res.status(result.status).json(result.body);
     } catch (error) {
         handleError(res, error, 'workshop_repair_all');
     }
@@ -333,7 +333,7 @@ router.post('/scrap-all', async (req, res) => {
 
             // Добавляем материалы
             for (const [mat, qty] of Object.entries(gainedMaterials)) {
-                addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty }, null);
+                helpers.addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty }, null);
             }
 
             await client.query(
@@ -354,7 +354,7 @@ router.post('/scrap-all', async (req, res) => {
             };
         });
 
-        res.status(outcome.status).json(outcome.body);
+        res.status(result.status).json(result.body);
     } catch (error) {
         handleError(res, error, 'workshop_scrap_all');
     }
@@ -402,7 +402,7 @@ router.post('/upgrade', async (req, res) => {
 
             // Сначала проверяем весь список: нельзя списать часть материалов
             // и упасть на нехватке следующего.
-            for (const [name, required] of Object.entries(cost.materials)) {
+            for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 if (!material) {
                     logger.warn('[workshop] Материал улучшения отсутствует в каталоге', { name });
@@ -425,7 +425,7 @@ router.post('/upgrade', async (req, res) => {
                 }
             }
 
-            for (const [name, required] of Object.entries(cost.materials)) {
+            for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
@@ -451,7 +451,7 @@ router.post('/upgrade', async (req, res) => {
             };
 
             await client.query(
-                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb, inventory = $3 WHERE id = $4',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb, inventory = $3::jsonb WHERE id = $4',
                 [cost.coins, JSON.stringify(equipment), JSON.stringify(inventory), req.player.id]
             );
 
@@ -543,7 +543,7 @@ router.post('/modify', async (req, res) => {
             const inventory = normalizeInventory(player.inventory);
             const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
 
-            for (const [name, required] of Object.entries(cost.materials)) {
+            for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 if (!material) {
                     logger.warn('[workshop] Материал модификации отсутствует в каталоге', { name });
@@ -567,7 +567,7 @@ router.post('/modify', async (req, res) => {
             }
 
 // Списываем материалы пачками (проверка выше гарантирует, что хватит).
-            for (const [name, required] of Object.entries(cost.materials)) {
+            for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
@@ -592,7 +592,7 @@ router.post('/modify', async (req, res) => {
             equipment[slot] = { ...item, modifications };
 
             await client.query(
-                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb, inventory = $3 WHERE id = $4',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb, inventory = $3::jsonb WHERE id = $4',
                 [cost.coins, JSON.stringify(equipment), JSON.stringify(inventory), req.player.id]
             );
 
