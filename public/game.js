@@ -964,6 +964,15 @@ async function apiRequest(endpoint, options = {}, retries = 2, params = {}) {
             // а клиент шлёт тот же запрос ещё два раза с нарастающей паузой,
             // разгоняя лавину. Раньше именно это превращало одну ошибку лимита
             // в серию из трёх запросов на каждый чих.
+            // 409 IDEMPOTENCY_IN_PROGRESS: предыдущий запрос с тем же ключом ещё выполняется.
+            // Ждём и повторяем, чтобы не терять удар.
+            if (status === 409 && error.code === 'IDEMPOTENCY_IN_PROGRESS') {
+                if (!isLastAttempt) {
+                    await delay(500);
+                    continue;
+                }
+            }
+
             if (status >= 400 && status < 500 && status !== 408) {
                 if (!silent) {
                     console.warn(`[apiRequest] ${status} ${normalizedEndpoint}: ${error.message}`);
