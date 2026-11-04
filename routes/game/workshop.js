@@ -283,8 +283,6 @@ router.post('/repair-all', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleConnectionError, handleError } = require('../../utils/serverApi');
-        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'workshop_repair_all');
     }
 });
@@ -358,8 +356,6 @@ router.post('/scrap-all', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleConnectionError, handleError } = require('../../utils/serverApi');
-        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'workshop_scrap_all');
     }
 });
