@@ -804,7 +804,7 @@ async function runMigrations() {
         BEGIN
             -- Drop old FK if exists without CASCADE
             IF EXISTS (
-                SELECT 1 FROM information_schema.table_constraints
+                SELECT 1 FROM information_schema.referential_constraints
                 WHERE constraint_name = 'daily_tasks_player_id_fkey'
                   AND delete_rule != 'CASCADE'
             ) THEN
