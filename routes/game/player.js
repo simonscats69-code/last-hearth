@@ -128,11 +128,14 @@ router.get(['/', '/profile'], async (req, res) => {
 
         // Единый источник истины для числа убитых боссов — агрегат из boss_mastery
         // (а не players.bosses_killed, который может расходиться при рейдах).
-        const bossKillsRow = await queryOne(
-            `SELECT COALESCE(SUM(kills), 0) AS total FROM boss_mastery WHERE player_id = $1`,
-            [playerId]
-        );
-        const bossesKilled = Number(bossKillsRow?.total || 0);
+        let bossesKilled = Number(player.bosses_killed || 0);
+        try {
+            const bossKillsRow = await queryOne(
+                `SELECT COALESCE(SUM(kills), 0) AS total FROM boss_mastery WHERE player_id = $1`,
+                [playerId]
+            );
+            if (bossKillsRow) bossesKilled = Number(bossKillsRow.total || 0);
+        } catch (_) { /* fallback to players.bosses_killed */ }
 
         res.json({
             success: true,
