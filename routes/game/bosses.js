@@ -1552,8 +1552,6 @@ router.post('/raid/start', async (req, res) => {
                  VALUES ($1, $2, $3, 0, NOW(), NOW())
              ON CONFLICT (boss_id, player_id, raid_id)
                   DO UPDATE SET raid_id = EXCLUDED.raid_id,
-                                damage_dealt = 0,
-                                rewards_earned = false,
                                 joined_at = NOW(),
                                 last_hit_at = NOW()`,
                 [bossId, playerId, raidId]
