@@ -66,6 +66,7 @@ async function setupMenuButton() {
             { command: 'locations', description: '🗺️ Локации' },
             { command: 'shop', description: '🏪 Магазин' },
             { command: 'daily', description: '🎁 Ежедневный бонус' },
+            { command: 'admin', description: '🛡 Админ-панель' },
             { command: 'help', description: '❓ Помощь' }
         ]);
     } catch (error) {
@@ -332,6 +333,296 @@ async function setupWebhook(app) {
             }
         );
     });
+
+    // ===== АДМИН-ПАНЕЛЬ В ЧАТЕ (только для ADMIN_IDS) =====
+    const { isAdmin } = require('./utils/adminIds');
+    const { getMetrics } = require('./utils/metrics');
+    const { getSchedulerMetrics } = require('./utils/scheduler');
+
+    function adminOnly(ctx) {
+        if (!isAdmin(ctx.from?.id)) {
+            ctx.reply('⛔ Доступ запрещён. Ваш Telegram ID не в ADMIN_IDS.');
+            return false;
+        }
+        return true;
+    }
+
+    function adminKeyboard() {
+        return {
+            inline_keyboard: [
+                [{ text: '📊 Сводка', callback_data: 'admin:stats' }, { text: '🏆 Топ-10', callback_data: 'admin:top' }],
+                [{ text: '📈 Метрики', callback_data: 'admin:metrics' }, { text: '⚠️ Ошибки', callback_data: 'admin:errors' }],
+                [{ text: '👤 Игрок', callback_data: 'admin:player' }, { text: '🚫 Забаненные', callback_data: 'admin:banned' }],
+                [{ text: '👹 Боссы', callback_data: 'admin:bosses' }, { text: '🛠 Обслуживание', callback_data: 'admin:maint' }],
+                [{ text: '🔄 Обновить', callback_data: 'admin:refresh' }]
+            ]
+        };
+    }
+
+    async function adminStatsText() {
+        const totalPlayers = await queryOne('SELECT COUNT(*)::int AS c FROM players');
+        const totalClans = await queryOne('SELECT COUNT(*)::int AS c FROM clans');
+        const active24 = await queryOne("SELECT COUNT(*)::int AS c FROM players WHERE last_action_time > NOW() - INTERVAL '24 hours'");
+        const banned = await queryOne('SELECT COUNT(*)::int AS c FROM players WHERE banned = true');
+        return (
+            '🛡 <b>Админ-панель — сводка</b>\n\n' +
+            `👥 Игроков: <b>${totalPlayers?.c ?? 0}</b>\n` +
+            `🏰 Кланов: <b>${totalClans?.c ?? 0}</b>\n` +
+            `🟢 Активных за 24ч: <b>${active24?.c ?? 0}</b>\n` +
+            `🚫 Забаненных: <b>${banned?.c ?? 0}</b>`
+        );
+    }
+
+    async function adminTopText() {
+        const rows = await query('SELECT telegram_id, username, level, strength FROM players ORDER BY level DESC, experience DESC LIMIT 10');
+        const lines = (rows.rows || []).map((r, i) => `${i + 1}. ${r.username || 'Без имени'} (ID ${r.telegram_id}) — ур. ${r.level}, сила ${r.strength}`);
+        return '🏆 <b>Топ-10 игроков</b>\n\n' + (lines.length ? lines.join('\n') : 'Нет данных');
+    }
+
+    function adminMetricsText() {
+        const m = getMetrics();
+        const s = getSchedulerMetrics();
+        return (
+            '📈 <b>Метрики сервера</b>\n\n' +
+            `⏱ Uptime: ${m.uptime} с\n` +
+            `📥 Запросов: ${m.requests.total} (ok ${m.requests.success}, err ${m.requests.errors})\n` +
+            `⚡ RPS: ${m.performance.requestsPerSecond} | avg ${m.performance.avgResponseTime} мс\n` +
+            `🖥 CPU: ${m.system.cpu}% | RAM: ${m.system.memory.used}/${m.system.memory.total} МБ\n` +
+            `🔧 Планировщик: energy=${s.energy?.total ?? 0}, daily=${s.dailyActivity?.total ?? 0}, ` +
+            `ach=${s.achievements?.total ?? 0}, cleanup=${s.cleanup?.total ?? 0}, tasks=${s.dailyTasks?.total ?? 0}`
+        );
+    }
+
+    function adminErrorsText() {
+        const m = getMetrics();
+        return (
+            '⚠️ <b>Ошибки и логи</b>\n\n' +
+            `HTTP ошибок: ${m.requests.errors}\n` +
+            'Уведомления об ошибках отправляются автоматически всем админам при logger.error и 5xx.\n' +
+            'Файловые логи: logs/error.log, logs/combined.log.\n' +
+            'Просмотр player_logs через БД: таблица player_logs (ретеншен 30 дней).'
+        );
+    }
+
+    async function adminBannedText() {
+        const rows = await query('SELECT telegram_id, username, ban_reason, last_action_time FROM players WHERE banned = true ORDER BY last_action_time DESC LIMIT 20');
+        const lines = (rows.rows || []).map((r) => `• ${r.username || 'Без имени'} (ID ${r.telegram_id}) — ${r.ban_reason || 'без причины'}`);
+        return '🚫 <b>Забаненные игроки</b>\n\n' + (lines.length ? lines.join('\n') : 'Забаненных нет');
+    }
+
+    async function adminBossesText() {
+        const rows = await query('SELECT id, name, level, max_health, damage, reward_experience FROM bosses ORDER BY level');
+        const lines = (rows.rows || []).map((r) => `#${r.id} ${r.name} (ур.${r.level}) HP ${r.max_health} DMG ${r.damage} EXP ${r.reward_experience}`);
+        return '👹 <b>Боссы</b>\n\n' + (lines.length ? lines.join('\n') : 'Нет данных') +
+            '\n\nИзменение: /boss_set <id> <поле> <значение>\nПоля: name, max_health, damage, reward_experience';
+    }
+
+    function adminMaintenanceText() {
+        const s = getSchedulerMetrics();
+        return (
+            '🛠 <b>Обслуживание</b>\n\n' +
+            `energy: ${s.energy?.total ?? 0} (посл. ${s.energy?.lastDuration ?? 0} мс)\n` +
+            `dailyActivity: ${s.dailyActivity?.total ?? 0}\n` +
+            `achievements: ${s.achievements?.total ?? 0} (обработано ${s.achievements?.playersProcessed ?? 0}, ошибок ${s.achievements?.errors ?? 0})\n` +
+            `cleanup: ${s.cleanup?.total ?? 0}\n` +
+            `dailyTasks: ${s.dailyTasks?.total ?? 0}\n\n` +
+            'Команды:\n/player <id>\n/resources <id> <energy> <health> <exp>\n/ban <id> [причина]\n/unban <id>\n/boss_set <id> <поле> <значение>'
+        );
+    }
+
+    bot.command('admin', async (ctx) => {
+        if (!adminOnly(ctx)) return;
+        await ctx.reply('🛡 <b>Админ-панель</b>', { parse_mode: 'HTML', reply_markup: adminKeyboard() });
+    });
+
+    bot.action(/^admin:(.+)$/, async (ctx) => {
+        if (!adminOnly(ctx)) {
+            await ctx.answerCbQuery('Нет доступа');
+            return;
+        }
+        const action = ctx.match[1];
+        await ctx.answerCbQuery();
+        let text = '';
+        try {
+            switch (action) {
+                case 'stats': text = await adminStatsText(); break;
+                case 'top': text = await adminTopText(); break;
+                case 'metrics': text = adminMetricsText(); break;
+                case 'errors': text = adminErrorsText(); break;
+                case 'player': text = '👤 <b>Поиск игрока</b>\n\nИспользуйте команды:\n/player <telegram_id>\n/resources <id> <energy> <health> <exp>\n/ban <id> [причина]\n/unban <id>'; break;
+                case 'banned': text = await adminBannedText(); break;
+                case 'bosses': text = await adminBossesText(); break;
+                case 'maint': text = adminMaintenanceText(); break;
+                case 'refresh': text = await adminStatsText(); break;
+                default: text = 'Неизвестное действие';
+            }
+        } catch (e) {
+            logger.error('[bot][admin] Ошибка:', e);
+            text = '❌ Ошибка при выполнении действия';
+        }
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: adminKeyboard() });
+        } catch (_) {
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: adminKeyboard() });
+        }
+    });
+
+    // Команды админа
+    bot.command('player', async (ctx) => {
+        if (!adminOnly(ctx)) return;
+        const parts = (ctx.message.text || '').trim().split(/\s+/);
+        const id = parts[1];
+        if (!id || !/^\d+$/.test(id)) {
+            await ctx.reply('Использование: /player <telegram_id>');
+            return;
+        }
+        try {
+            const p = await queryOne('SELECT telegram_id, username, level, strength, endurance, agility, intelligence, luck, health, radiation, energy, max_energy, experience, created_at, last_action_time, banned, ban_reason FROM players WHERE telegram_id = $1', [id]);
+            if (!p) {
+                await ctx.reply('Игрок не найден');
+                return;
+            }
+            await ctx.reply(
+                `👤 <b>${p.username || 'Без имени'}</b> (ID ${p.telegram_id})\n` +
+                `Ур. ${p.level} | Опыт ${p.experience}\n` +
+                `Сила ${p.strength} Вын ${p.endurance} Лов ${p.agility} Инт ${p.intelligence} Удача ${p.luck}\n` +
+                `HP ${p.health} | Энергия ${p.energy}/${p.max_energy}\n` +
+                `Радиация ${typeof p.radiation === 'object' ? (p.radiation?.level ?? 0) : p.radiation}\n` +
+                `Бан: ${p.banned ? 'да (' + (p.ban_reason || '-') + ')' : 'нет'}\n` +
+                `Создан: ${p.created_at}\nПоследняя активность: ${p.last_action_time}`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {
+            logger.error('[bot][admin] /player:', e);
+            await ctx.reply('Ошибка при получении игрока');
+        }
+    });
+
+    bot.command('resources', async (ctx) => {
+        if (!adminOnly(ctx)) return;
+        const parts = (ctx.message.text || '').trim().split(/\s+/);
+        const id = parts[1];
+        if (!id || !/^\d+$/.test(id)) {
+            await ctx.reply('Использование: /resources <telegram_id> <energy> <health> <experience>');
+            return;
+        }
+        const energy = parts[2] !== undefined ? Number(parts[2]) : null;
+        const health = parts[3] !== undefined ? Number(parts[3]) : null;
+        const exp = parts[4] !== undefined ? Number(parts[4]) : null;
+        if ((energy !== null && (!Number.isInteger(energy) || energy < 0 || energy > 10000)) ||
+            (health !== null && (!Number.isInteger(health) || health < 0 || health > 10000)) ||
+            (exp !== null && (!Number.isInteger(exp) || exp < 0 || exp > 1000000))) {
+            await ctx.reply('Значения: energy 0-10000, health 0-10000, experience 0-1000000 (целые).');
+            return;
+        }
+        const sets = [];
+        const vals = [];
+        let i = 1;
+        if (energy !== null) { sets.push(`energy = $${i++}`); vals.push(energy); }
+        if (health !== null) { sets.push(`health = $${i++}`); vals.push(health); sets.push('last_hp_regen = NOW()'); }
+        if (exp !== null) { sets.push(`experience = $${i++}`); vals.push(exp); }
+        if (sets.length === 0) {
+            await ctx.reply('Укажите хотя бы одно значение: /resources <id> <energy> <health> <exp>');
+            return;
+        }
+        vals.push(id);
+        try {
+            const r = await query(`UPDATE players SET ${sets.join(', ')} WHERE telegram_id = $${i} RETURNING telegram_id`, vals);
+            if (!r.rows || r.rows.length === 0) {
+                await ctx.reply('Игрок не найден');
+                return;
+            }
+            await ctx.reply(`✅ Ресурсы обновлены для ID ${id}`);
+        } catch (e) {
+            logger.error('[bot][admin] /resources:', e);
+            await ctx.reply('Ошибка при изменении ресурсов');
+        }
+    });
+
+    bot.command('ban', async (ctx) => {
+        if (!adminOnly(ctx)) return;
+        const parts = (ctx.message.text || '').trim().split(/\s+/);
+        const id = parts[1];
+        const reason = parts.slice(2).join(' ') || 'Нарушение правил';
+        if (!id || !/^\d+$/.test(id)) {
+            await ctx.reply('Использование: /ban <telegram_id> [причина]');
+            return;
+        }
+        try {
+            const r = await query('UPDATE players SET banned = true, ban_reason = $1 WHERE telegram_id = $2 RETURNING telegram_id', [reason, id]);
+            if (!r.rows || r.rows.length === 0) {
+                await ctx.reply('Игрок не найден');
+                return;
+            }
+            await ctx.reply(`🚫 Игрок ${id} забанен. Причина: ${reason}`);
+        } catch (e) {
+            logger.error('[bot][admin] /ban:', e);
+            await ctx.reply('Ошибка при бане');
+        }
+    });
+
+    bot.command('unban', async (ctx) => {
+        if (!adminOnly(ctx)) return;
+        const parts = (ctx.message.text || '').trim().split(/\s+/);
+        const id = parts[1];
+        if (!id || !/^\d+$/.test(id)) {
+            await ctx.reply('Использование: /unban <telegram_id>');
+            return;
+        }
+        try {
+            const r = await query('UPDATE players SET banned = false, ban_reason = NULL WHERE telegram_id = $1 RETURNING telegram_id', [id]);
+            if (!r.rows || r.rows.length === 0) {
+                await ctx.reply('Игрок не найден');
+                return;
+            }
+            await ctx.reply(`✅ Игрок ${id} разбанен`);
+        } catch (e) {
+            logger.error('[bot][admin] /unban:', e);
+            await ctx.reply('Ошибка при разбане');
+        }
+    });
+
+    bot.command('boss_set', async (ctx) => {
+        if (!adminOnly(ctx)) return;
+        const parts = (ctx.message.text || '').trim().split(/\s+/);
+        const id = parts[1];
+        const field = parts[2];
+        const value = parts.slice(3).join(' ');
+        const allowed = ['name', 'max_health', 'damage', 'reward_experience'];
+        if (!id || !/^\d+$/.test(id) || !allowed.includes(field) || value === '') {
+            await ctx.reply('Использование: /boss_set <id> <поле> <значение>\nПоля: name, max_health, damage, reward_experience');
+            return;
+        }
+        const numericFields = ['max_health', 'damage', 'reward_experience'];
+        let sqlValue = value;
+        if (numericFields.includes(field)) {
+            const num = Number(value);
+            if (!Number.isInteger(num)) {
+                await ctx.reply('Значение должно быть целым числом');
+                return;
+            }
+            if (field === 'max_health' && (num < 1 || num > 1000000)) { await ctx.reply('max_health: 1-1000000'); return; }
+            if (field === 'damage' && (num < 0 || num > 100000)) { await ctx.reply('damage: 0-100000'); return; }
+            if (field === 'reward_experience' && (num < 0 || num > 1000000)) { await ctx.reply('reward_experience: 0-1000000'); return; }
+            sqlValue = num;
+        } else if (field === 'name' && value.length > 100) {
+            await ctx.reply('name: до 100 символов');
+            return;
+        }
+        try {
+            const r = await query(`UPDATE bosses SET ${field} = $1 WHERE id = $2 RETURNING id, name`, [sqlValue, id]);
+            if (!r.rows || r.rows.length === 0) {
+                await ctx.reply('Босс не найден');
+                return;
+            }
+            await ctx.reply(`✅ Босс #${id} (${r.rows[0].name}): ${field} обновлён`);
+        } catch (e) {
+            logger.error('[bot][admin] /boss_set:', e);
+            await ctx.reply('Ошибка при изменении босса');
+        }
+    });
+
+    // ===== КОНЕЦ АДМИН-ПАНЕЛИ =====
 
     // Обработка текстовых сообщений
     bot.on('text', async (ctx) => {

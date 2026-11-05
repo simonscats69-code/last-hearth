@@ -14,7 +14,7 @@ try {
     }
 }
 
-const { getAdminIds } = require('./utils/adminIds');
+const { getAdminIds, isAdmin } = require('./utils/adminIds');
 
 // ADMIN_IDS парсится один раз при старте через общий модуль
 const ADMIN_IDS = getAdminIds();
@@ -615,7 +615,7 @@ app.get('/metrics', telegramAuthMiddleware, (req, res) => {
 
     const telegramId = String(req.telegramUser.id);
     
-    if (!getAdminIds().includes(telegramId)) {
+    if (!isAdmin(telegramId)) {
         logger.warn({ type: 'metrics_access_denied', telegramId, ip: req.ip });
         return res.status(403).json({ error: 'Доступ запрещён' });
     }
@@ -764,7 +764,7 @@ async function validateStartupConfig() {
     }
 
     // ADMIN_IDS: пустой список = все /api/admin/* молча 403.
-    if (ADMIN_IDS.length === 0) {
+    if (getAdminIds().length === 0) {
         warnings.push('ADMIN_IDS пуст: все /api/admin/* будут отвечать 403. Проверь .env.');
     }
 

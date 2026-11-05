@@ -1,10 +1,22 @@
 /**
  * Единый источник истины для ADMIN_IDS.
- * index.js и routes/admin.js должны использовать эту функцию, чтобы
- * парсинг не разошёлся при изменении переменной окружения без рестарта.
+ *
+ * Парсинг выполняется при каждом вызове (без кэширования), чтобы изменения
+ * переменной окружения применялись без рассинхрона при перезапуске.
+ * Нормализация: trim, фильтрация пустых значений, уникальность.
  */
 function getAdminIds() {
-    return (process.env.ADMIN_IDS || '').split(',').filter(Boolean);
+    const raw = process.env.ADMIN_IDS || '';
+    const ids = raw
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+    return [...new Set(ids)];
 }
 
-module.exports = { getAdminIds };
+function isAdmin(telegramId) {
+    if (telegramId === undefined || telegramId === null) return false;
+    return getAdminIds().includes(String(telegramId).trim());
+}
+
+module.exports = { getAdminIds, isAdmin };
