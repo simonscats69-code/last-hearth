@@ -109,7 +109,7 @@ router.post('/craft', async (req, res) => {
             // Проверка материалов
             for (const [matName, matQty] of Object.entries(materials)) {
                 const needed = matQty * quantity;
-                const owned = inventory.filter((i) => i.name === matName && i.type === 'resource').reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+                const owned = inventory.filter((i) => i.name === matName).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
                 if (owned < needed) {
                     return { status: 400, body: { success: false, error: `Недостаточно ${matName}: нужно ${needed}, есть ${owned}`, code: 'NOT_ENOUGH_MATERIALS' } };
                 }
@@ -240,7 +240,7 @@ router.post('/craft-all', async (req, res) => {
         // Считаем максимальное количество
         let maxQty = 100; // кап
         for (const [matName, matQty] of Object.entries(materials)) {
-            const owned = inventory.filter((i) => i.name === matName && i.type === 'resource').reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+            const owned = inventory.filter((i) => i.name === matName).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
             const possible = Math.floor(owned / matQty);
             if (possible < maxQty) maxQty = possible;
         }
@@ -424,9 +424,18 @@ router.post('/refine', async (req, res) => {
             }
 
             const resultQty = Math.floor(quantity * (1 - lossPercent / 100));
+            if (resultQty <= 0) {
+                return { status: 400, body: { success: false, error: 'Рафинирование даёт 0 результата при таком количестве/потерях', code: 'ZERO_RESULT' } };
+            }
             if (resultQty > 0) {
                 const { addItemToInventory } = require('../../utils/game-helpers');
-                addItemToInventory(inventory, { name: toMat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: resultQty }, null);
+                const MAX_SLOTS = 100;
+                const slotsBefore = inventory.length;
+                addItemToInventory(inventory, { name: toMat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: resultQty, durability: 100, max_durability: 100 }, null);
+                if (inventory.length > MAX_SLOTS) {
+                    inventory.length = slotsBefore;
+                    return { status: 400, body: { success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' } };
+                }
             }
 
             if (coinsCost > 0) {

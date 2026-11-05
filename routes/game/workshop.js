@@ -10,7 +10,7 @@ const express = require('express');
 const router = express.Router();
 const { transaction, query } = require('../../db/database');
 const { lockPlayer } = require('../../db/players');
-const { handleError, logger, notFound, fail, unauthorized } = require('../../utils/serverApi');
+const { handleError, handleConnectionError, logger, notFound, fail, unauthorized } = require('../../utils/serverApi');
 
 // Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
 // правды для equipmentRules/normalizeEquipment/normalizeInventory.
@@ -344,7 +344,7 @@ router.post('/scrap-all', async (req, res) => {
 
             // Добавляем материалы
             for (const [mat, qty] of Object.entries(gainedMaterials)) {
-                helpers.addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty }, null);
+                helpers.addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty, durability: 100, max_durability: 100 }, null);
             }
 
             await client.query(
