@@ -991,7 +991,7 @@ function resolveEquipmentSlot(item) {
 
         const rarity = normalizeRarity(item && item.rarity);
         const yieldMap = SCRAP_YIELD_BY_RARITY[rarity] || SCRAP_YIELD_BY_RARITY.common;
-        const factor = Math.max(1, Math.min(5, Math.round(Number(quantity) || 1)));
+        const factor = Math.max(1, Math.round(Number(quantity) || 1));
 
         const result = {};
         for (const [name, count] of Object.entries(yieldMap)) {

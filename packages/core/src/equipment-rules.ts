@@ -318,7 +318,7 @@ export function calculateUpgradeCost(item: InventoryItem | null | undefined): {
   const ammoType = String(item.ammo_type || '').toLowerCase();
   if (ammoType === 'rockets') {
     materials[ROCKET_ITEM_NAME] = (materials[ROCKET_ITEM_NAME] || 0) + (level + 1);
-  } else if (ammoType === 'ammo' || String(item.category || '').toLowerCase() === 'ranged') {
+  } else if (ammoType === 'ammo' || (ammoType === '' && String(item.category || '').toLowerCase() === 'ranged')) {
     materials[AMMO_ITEM_NAME] = (materials[AMMO_ITEM_NAME] || 0) + (level + 1);
   }
 
@@ -333,7 +333,7 @@ export function calculateScrapYield(item: InventoryItem | null | undefined, quan
   const yieldMap = SCRAP_YIELD_BY_RARITY[rarity as keyof typeof SCRAP_YIELD_BY_RARITY] ?? SCRAP_YIELD_BY_RARITY['common'];
   if (!yieldMap) return {};
 
-  const factor = Math.max(1, Math.min(5, Math.round(Number(quantity) || 1)));
+  const factor = Math.max(1, Math.round(Number(quantity) || 1));
 
   const result: Record<string, number> = {};
   const yieldEntries = Object.entries(yieldMap);
