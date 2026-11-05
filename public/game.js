@@ -8279,6 +8279,10 @@ async function loadCraftingRecipes() {
         const response = await apiRequest('/api/game/crafting/recipes');
         const data = response?.data || response;
         const recipes = data?.recipes || data?.data?.recipes || [];
+        const coinsEl = document.getElementById('crafting-coins');
+        const starsEl = document.getElementById('crafting-stars');
+        if (coinsEl && gameState.player?.coins !== undefined) coinsEl.textContent = formatNumber(gameState.player.coins);
+        if (starsEl && gameState.player?.stars !== undefined) starsEl.textContent = formatNumber(gameState.player.stars);
         renderCraftingRecipes(recipes);
     } catch (error) {
         if (error?.isManualAbort || error?.name === 'AbortError') return;
@@ -8331,6 +8335,10 @@ async function craftItem(recipeId, quantity) {
         showNotification(data?.message || 'Предмет скрафчен', 'success', 3000);
         RenderCache.clear();
         await loadProfile();
+        const coinsEl = document.getElementById('crafting-coins');
+        const starsEl = document.getElementById('crafting-stars');
+        if (coinsEl) coinsEl.textContent = formatNumber(gameState.player?.coins || 0);
+        if (starsEl) starsEl.textContent = formatNumber(gameState.player?.stars || 0);
         await loadCraftingRecipes();
     } catch (error) {
         if (error?.isManualAbort || error?.name === 'AbortError') return;
@@ -9120,7 +9128,7 @@ document.addEventListener('click', (event) => {
 
     const craftAllBtn = target.closest('[data-craft-all-recipe]');
     if (craftAllBtn) {
-        craftItem(Number(craftAllBtn.dataset.craftAllRecipe), 0);
+        craftItem(Number(craftAllBtn.dataset.craftAllRecipe), 10);
         return;
     }
 

@@ -65,7 +65,11 @@ router.post('/craft', async (req, res) => {
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const recipeId = Number(req.body?.recipe_id);
-        const quantity = Math.max(1, Math.min(10, Number(req.body?.quantity) || 1));
+        const rawQty = Number(req.body?.quantity);
+        if (!Number.isFinite(rawQty) || !Number.isInteger(rawQty) || rawQty < 1) {
+            return res.status(400).json({ success: false, error: 'Количество должно быть целым числом >= 1', code: 'INVALID_QUANTITY' });
+        }
+        const quantity = Math.min(10, rawQty);
 
         if (!Number.isInteger(recipeId) || recipeId <= 0) {
             return res.status(400).json({ success: false, error: 'Неверный ID рецепта', code: 'INVALID_RECIPE_ID' });
@@ -90,7 +94,12 @@ router.post('/craft', async (req, res) => {
                 return { status: 400, body: { success: false, error: 'Недостаточный уровень', code: 'LEVEL_TOO_LOW' } };
             }
 
-            const materials = (typeof r.required_materials === 'string') ? JSON.parse(r.required_materials) : (r.required_materials || {});
+            let materials = {};
+            try {
+                materials = (typeof r.required_materials === 'string') ? JSON.parse(r.required_materials) : (r.required_materials || {});
+            } catch (_) {
+                return { status: 400, body: { success: false, error: 'Неверный формат материалов', code: 'INVALID_MATERIALS' } };
+            }
             const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
 
             // Проверка материалов
@@ -141,18 +150,22 @@ router.post('/craft', async (req, res) => {
                 }
             }
 
-            // Списываем монеты и звёзды
-            if (totalCoins > 0) await client.query('UPDATE players SET coins = COALESCE(coins, 0) - $1 WHERE id = $2', [totalCoins, playerId]);
-            if (totalStars > 0) await client.query('UPDATE players SET stars = COALESCE(stars, 0) - $1 WHERE id = $2', [totalStars, playerId]);
-
             // Создаём результат
             const { createInventoryItem, addItemToInventory } = require('../../utils/game-helpers');
             const resultItemObj = createInventoryItem(dbItem, { quantity: r.result_quantity * quantity });
-            const slotsAdded = addItemToInventory(inventory, resultItemObj, dbItem);
 
-            if (slotsAdded === 0) {
+            // Проверяем вместимость ДО списания монет
+            const slotsBefore = inventory.length;
+            const slotsAdded = addItemToInventory(inventory, resultItemObj, dbItem);
+            if (inventory.length > MAX_SLOTS) {
+                // Откатываем добавление
+                inventory.length = slotsBefore;
                 return { status: 400, body: { success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' } };
             }
+
+            // Списываем монеты и звёзды ТОЛЬКО после успешного добавления
+            if (totalCoins > 0) await client.query('UPDATE players SET coins = COALESCE(coins, 0) - $1 WHERE id = $2', [totalCoins, playerId]);
+            if (totalStars > 0) await client.query('UPDATE players SET stars = COALESCE(stars, 0) - $1 WHERE id = $2', [totalStars, playerId]);
 
             await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
 
