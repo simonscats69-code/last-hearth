@@ -159,16 +159,8 @@ async function setupWebhook(app) {
                         }
                         // stats приходит из jsonb-колонки (уже объект), но исторически мог быть
                         // строкой — разбор без try/catch ронял весь обработчик /start.
-                        let stats = row.stats;
-                        if (typeof stats === 'string') {
-                            try {
-                                stats = JSON.parse(stats);
-                            } catch {
-                                stats = {};
-                            }
-                        } else if (!stats || typeof stats !== 'object') {
-                            stats = {};
-                        }
+                        const { safeJsonParse } = require('./utils/serverApi');
+                        let stats = safeJsonParse(row.stats, {});
                         starterItems.push({
                             id: row.id,
                             name: row.name,
