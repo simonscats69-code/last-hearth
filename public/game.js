@@ -8348,6 +8348,71 @@ async function craftItem(recipeId, quantity) {
     }
 }
 
+async function discoverRecipe() {
+    if (!lockAction('discoverRecipe')) return;
+    try {
+        // Собираем 2-3 материала из инвентаря
+        const materials = [];
+        const inv = gameState.player?.inventory || [];
+        // Берём первые 3 уникальных материала
+        const seen = new Set();
+        for (const item of inv) {
+            if (item.type === 'resource' && item.category === 'material' && !seen.has(item.name)) {
+                seen.add(item.name);
+                materials.push(item.name);
+                if (materials.length >= 3) break;
+            }
+        }
+        if (materials.length === 0) {
+            showNotification('Нет материалов для исследования', 'error', 3000);
+            return;
+        }
+        const response = await apiRequest('/api/game/crafting/discover', {
+            method: 'POST',
+            body: { materials },
+            idempotencyKey: stableMutationKey('craft-discover', IDEMPOTENCY_WINDOW_MS)
+        });
+        const data = response?.data || response;
+        showNotification(data?.message || 'Рецепт открыт!', 'success', 3000);
+        RenderCache.clear();
+        await loadProfile();
+        await loadCraftingRecipes();
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        showNotification(clientErrorMessage(error, 'Не удалось открыть рецепт'), 'error', 4000);
+    } finally {
+        unlockAction('discoverRecipe');
+    }
+}
+
+async function showRefineDialog() {
+    // Простой диалог: выбираем from_material и to_material
+    const fromMat = prompt('Какой материал рафинировать?');
+    if (!fromMat) return;
+    const toMat = prompt('В какой материал?');
+    if (!toMat) return;
+    const qty = parseInt(prompt('Количество (1-50):') || '1', 10);
+    if (!qty || qty < 1 || qty > 50) return;
+
+    if (!lockAction('refineMaterial')) return;
+    try {
+        const response = await apiRequest('/api/game/crafting/refine', {
+            method: 'POST',
+            body: { from_material: fromMat, to_material: toMat, quantity: qty },
+            idempotencyKey: stableMutationKey('craft-refine-' + fromMat + '-' + toMat, IDEMPOTENCY_WINDOW_MS)
+        });
+        const data = response?.data || response;
+        showNotification(data?.message || 'Рафинирование выполнено', 'success', 3000);
+        RenderCache.clear();
+        await loadProfile();
+        await loadCraftingRecipes();
+    } catch (error) {
+        if (error?.isManualAbort || error?.name === 'AbortError') return;
+        showNotification(clientErrorMessage(error, 'Не удалось рафинировать'), 'error', 4000);
+    } finally {
+        unlockAction('refineMaterial');
+    }
+}
 async function claimDailyTask(taskId) {
     if (!lockAction('claimDailyTask')) return;
     try {
@@ -9003,6 +9068,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('daily-tasks-btn')?.addEventListener('click', () => showScreen('daily-tasks'));
         document.getElementById('inventory-workshop-btn')?.addEventListener('click', () => showScreen('workshop'));
         document.getElementById('inventory-crafting-btn')?.addEventListener('click', () => showScreen('crafting'));
+        document.getElementById('crafting-discover-btn')?.addEventListener('click', () => discoverRecipe());
+        document.getElementById('crafting-refine-btn')?.addEventListener('click', () => showRefineDialog());
         
         // Лечение инфекций
                 
@@ -9968,6 +10035,10 @@ function craftingScreenHtml() {
                 </div>
             </div>
             <div class="screen-content">
+                <div class="crafting-actions">
+                    <button class="btn btn-secondary" id="crafting-discover-btn">🔍 Открыть рецепт</button>
+                    <button class="btn btn-secondary" id="crafting-refine-btn">⚗️ Рафинировать</button>
+                </div>
                 <div id="crafting-recipes-list"></div>
             </div>
         </div>
