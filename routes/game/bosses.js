@@ -604,6 +604,12 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
              WHERE id = $3`,
             [JSON.stringify(inventory), totalGrantedCount, playerId]
         );
+
+        // Синхронизация инвентаря в нормализованную таблицу
+        try {
+            const { syncInventoryToTable } = require('../../utils/game-helpers');
+            if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+        } catch (_) { /* ignore */ }
     }
 
     return { granted, undropped };

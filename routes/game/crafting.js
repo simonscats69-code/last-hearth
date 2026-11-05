@@ -173,6 +173,12 @@ router.post('/craft', async (req, res) => {
 
             await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
 
+            // Синхронизация инвентаря в нормализованную таблицу
+            try {
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+            } catch (_) { /* ignore */ }
+
             // Трекинг для достижений
             const { trackCollectedItems } = require('../../utils/game-helpers');
             if (dbItem.id) await trackCollectedItems(client, playerId, [dbItem.id]);

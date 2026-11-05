@@ -271,6 +271,12 @@ router.post('/repair-all', async (req, res) => {
                 [totalCost, JSON.stringify(equipment), playerId]
             );
 
+            // Синхронизация инвентаря в нормализованную таблицу
+            try {
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, normalizeInventory(player.inventory));
+            } catch (_) { /* ignore */ }
+
             return {
                 status: 200,
                 body: {

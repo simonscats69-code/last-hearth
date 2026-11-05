@@ -637,6 +637,13 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             params.push(inventoryUpdate);
             setParts.push(`inventory = $${params.length}`);
         }
+        // Синхронизация инвентаря в нормализованную таблицу
+        try {
+            const { syncInventoryToTable, normalizeInventory } = require('../../utils/game-helpers');
+            if (typeof syncInventoryToTable === 'function') {
+                await syncInventoryToTable(client, playerId, normalizeInventory(inventoryUpdate));
+            }
+        } catch (_) { /* ignore */ }
         // XP больше не пишется напрямую: единый путь через progression.grantExperience.
         if (itemsCollected > 0) {
             params.push(itemsCollected);
