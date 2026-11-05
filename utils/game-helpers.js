@@ -1280,6 +1280,50 @@ function consumeInventoryItem(inventory, itemIndex) {
 
 // Синхронизация инвентаря из JSONB в нормализованную таблицу player_inventory.
 // Вызывается после мутаций инвентаря для поддержания актуальности новой таблицы.
+// Чтение инвентаря из нормализованной таблицы player_inventory.
+// Возвращает массив предметов (с fallback на JSONB, если таблица пуста).
+async function loadInventoryFromTable(client, playerId) {
+    if (!client || !playerId) return null;
+    try {
+        const result = await client.query(
+            'SELECT pi.item_id, pi.quantity, pi.durability, pi.max_durability, pi.upgrade_level, pi.modifications, pi.stats, i.name, i.type, i.category, i.rarity, i.icon, i.slot, i.price, i.ammo_type, i.max_stack, i.stackable, i.set_id FROM player_inventory pi JOIN items i ON i.id = pi.item_id WHERE pi.player_id = $1',
+            [playerId]
+        );
+        if (result.rows.length === 0) return null; // fallback to JSONB
+        return result.rows.map((row) => ({
+            id: row.item_id,
+            name: row.name,
+            type: row.type,
+            category: row.category,
+            rarity: row.rarity,
+            icon: row.icon,
+            slot: row.slot,
+            price: row.price,
+            ammo_type: row.ammo_type,
+            max_stack: row.max_stack,
+            stackable: row.stackable,
+            set_id: row.set_id,
+            quantity: Number(row.quantity) || 0,
+            durability: Number(row.durability) || 100,
+            max_durability: Number(row.max_durability) || 100,
+            upgrade_level: Number(row.upgrade_level) || 0,
+            modifications: (typeof row.modifications === 'string') ? JSON.parse(row.modifications) : (row.modifications || {}),
+            stats: (typeof row.stats === 'string') ? JSON.parse(row.stats) : (row.stats || {})
+        }));
+    } catch (e) {
+        return null; // fallback to JSONB
+    }
+}
+
+// Запись инвентаря в обе системы (JSONB + player_inventory).
+async function saveInventoryBoth(client, playerId, inventory) {
+    if (!client || !playerId || !Array.isArray(inventory)) return;
+    // JSONB
+    await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
+    // player_inventory
+    await syncInventoryToTable(client, playerId, inventory);
+}
+
 async function syncInventoryToTable(client, playerId, inventory) {
     if (!client || !playerId || !Array.isArray(inventory)) return;
     try {
@@ -1325,6 +1369,8 @@ module.exports = {
     safeJsonParse,
     normalizeInventory,
     syncInventoryToTable,
+    loadInventoryFromTable,
+    saveInventoryBoth,
     createInventoryItem,
     normalizeRadiation,
     getActiveBuffs,
