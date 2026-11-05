@@ -185,6 +185,9 @@ router.get(['/', '/profile'], async (req, res) => {
         });
     } catch (err) {
         logger.error({ type: 'profile_error', message: err.message });
+        if (err?.code === 'PLAYER_NOT_FOUND') {
+            return res.status(404).json({ success: false, error: err.message, code: err.code });
+        }
         res.status(500).json({ error: 'Ошибка получения профиля' });
     }
 });
@@ -245,6 +248,9 @@ router.put('/update', async (req, res) => {
         });
     } catch (err) {
         logger.error({ type: 'update_profile_error', message: err.message });
+        if (err?.code === 'NOT_FOUND' || err?.code === 'PLAYER_NOT_FOUND') {
+            return res.status(404).json({ success: false, error: err.message, code: err.code });
+        }
         res.status(500).json({ error: 'Ошибка обновления профиля' });
     }
 });
@@ -259,8 +265,8 @@ router.post('/buy-energy', async (req, res) => {
         // Цена и объём — из общего файла правил, тем же файлом пользуется
         // клиент (public/game.js, restoreEnergy). Раньше «5» и «25» были
         // записаны здесь отдельно, а клиент держал свою копию цены.
-        const STARS_COST = equipmentRules.ENERGY_PURCHASE_STARS_COST;
-        const ENERGY_PER_PURCHASE = equipmentRules.ENERGY_PER_PURCHASE;
+        const STARS_COST = Number.isFinite(equipmentRules.ENERGY_PURCHASE_STARS_COST) ? equipmentRules.ENERGY_PURCHASE_STARS_COST : 5;
+        const ENERGY_PER_PURCHASE = Number.isFinite(equipmentRules.ENERGY_PER_PURCHASE) ? equipmentRules.ENERGY_PER_PURCHASE : 25;
 
         const result = await transaction(async (client) => {
             const p = await lockPlayer(playerId, client, 'stars, energy, max_energy');
@@ -344,7 +350,7 @@ router.post('/daily-bonus', async (req, res) => {
             const cappedDay = Math.min(streak, DAILY_BONUS_STREAK_LIMIT);
 
             const coins = DAILY_BONUS_BASE_COINS + (cappedDay - 1) * DAILY_BONUS_COINS_PER_DAY;
-            const stars = streak % DAILY_BONUS_STAR_EVERY === 0 ? 1 : 0;
+            const stars = cappedDay % DAILY_BONUS_STAR_EVERY === 0 ? 1 : 0;
 
             await client.query(
                 `UPDATE players
@@ -357,8 +363,8 @@ router.post('/daily-bonus', async (req, res) => {
             );
 
             try {
-                const { getGameHelpers } = require('../utils/game-helpers');
-                const h = getGameHelpers();
+                const helpers = getGameHelpers();
+                const h = helpers;
                 if (h && typeof h.checkAchievements === 'function') await h.checkAchievements(playerId, client);
             } catch (_) { /* ignore */ }
 

@@ -29,7 +29,8 @@ const { equipmentRules, normalizeEquipment, normalizeInventory } = helpers;
 const VALID_SLOTS = equipmentRules.COMBAT_SLOTS;
 
 function isValidSlot(slot) {
-    return VALID_SLOTS.includes(String(slot));
+    if (typeof slot !== 'string') return false;
+    return VALID_SLOTS.includes(slot);
 }
 
 /**
@@ -333,6 +334,13 @@ router.post('/scrap-all', async (req, res) => {
                 const info = equipmentRules.getDurabilityInfo(item);
                 return !info.isBroken;
             });
+
+            // Проверяем, что добавление материалов не превысит лимит слотов
+            const MAX_SLOTS = 100;
+            const materialCount = Object.keys(gainedMaterials).length;
+            if (remaining.length + materialCount > MAX_SLOTS) {
+                return { status: 400, body: { success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' } };
+            }
 
             // Добавляем материалы
             for (const [mat, qty] of Object.entries(gainedMaterials)) {

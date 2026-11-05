@@ -386,7 +386,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
         res.json(result);
     } catch (error) {
-        if (['ITEM_NOT_IN_INVENTORY', 'PLAYER_NOT_FOUND', 'NOT_EQUIPMENT'].includes(error.code)) {
+        if (['ITEM_NOT_IN_INVENTORY', 'PLAYER_NOT_FOUND', 'NOT_EQUIPMENT', 'INVENTORY_FULL'].includes(error.code)) {
             // statusCode может отсутствовать — res.status(undefined) дал бы
             // невалидный HTTP-код. Фоллбэк 404 соответствует смыслу ошибки.
             const status = Number(error.statusCode) || 404;
