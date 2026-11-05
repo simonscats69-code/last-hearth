@@ -86,7 +86,7 @@ router.get(['/', '/inventory'], async (req, res) => {
             return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
         }
 
-        const inventory = normalizeInventory(player.inventory);
+        const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
         const equipment = normalizeEquipment(player.equipment);
 
         // Цены продажи считаем по таблице items, а не берём из JSON инвентаря.
@@ -170,7 +170,7 @@ router.post('/buy', async (req, res) => {
                 };
             }
 
-            const inventory = normalizeInventory(player.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
 
             const newItem = createInventoryItem(shopItem, { quantity });
             const addedAsNewSlots = addItemToInventory(inventory, newItem, shopItem);
@@ -252,7 +252,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
             if (!playerRow) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
 
-            const inventory = normalizeInventory(playerRow.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(playerRow.inventory);
 
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
@@ -425,7 +425,7 @@ router.post('/sell', async (req, res) => {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
-            const inventory = normalizeInventory(playerRow.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(playerRow.inventory);
 
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
@@ -534,7 +534,7 @@ router.post('/drop', async (req, res) => {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
-            const inventory = normalizeInventory(playerRow.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(playerRow.inventory);
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
@@ -682,7 +682,7 @@ router.post('/unequip', async (req, res) => {
                 throw { message: 'В этом слоте ничего нет', code: 'SLOT_EMPTY', statusCode: 400 };
             }
 
-            const inventory = normalizeInventory(player.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
             if (inventory.length >= MAX_INVENTORY_SLOTS) {
                 throw {
                     message: `Инвентарь полон (макс. ${MAX_INVENTORY_SLOTS}). Продай или разбери что-нибудь.`,
@@ -775,7 +775,7 @@ router.post('/buy-stars', async (req, res) => {
                 };
             }
 
-            const inventory = normalizeInventory(player.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
             const newItem = createInventoryItem(shopItemRow, { quantity });
             const addedAsNewSlots = addItemToInventory(inventory, newItem, shopItemRow);
 
