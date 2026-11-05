@@ -3,7 +3,9 @@
 const express = require('express');
 const { transaction, query, queryOne } = require('../../db/database');
 const { validateId, requireAuth } = require('../../utils/validate');
-const { getGameHelpers } = require('../../utils/game-helpers');
+const { getGameHelpers, normalizeInventory } = require('../../utils/game-helpers');
+const { safeJsonParse } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
 const { logPlayerAction } = require('../../utils/log');
 
 const router = express.Router();
@@ -70,12 +72,12 @@ router.post('/:poiId/search', async (req, res) => {
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id, energy, last_energy_update, level, current_location_id, radiation FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id, energy, last_energy_update, level, current_location_id, radiation');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
-            const player = lockedPlayer.rows[0];
+            const player = lockedPlayer;
             const poi = await client.query('SELECT * FROM location_pois WHERE id = $1 AND enabled = true', [poiId]);
             if (!poi.rows[0]) {
                 return { status: 404, body: { success: false, error: 'Точка интереса не найдена', code: 'POI_NOT_FOUND' } };
@@ -96,7 +98,7 @@ router.post('/:poiId/search', async (req, res) => {
 
             // Проверка required_item
             if (poiData.required_item_id) {
-                const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
+                const inventory = normalizeInventory(player.inventory);
                 const hasItem = inventory.some((i) => Number(i.id) === Number(poiData.required_item_id) && Number(i.quantity) > 0);
                 if (!hasItem) {
                     return { status: 400, body: { success: false, error: 'Нужен специальный предмет', code: 'MISSING_REQUIRED_ITEM' } };
@@ -141,7 +143,7 @@ router.post('/:poiId/search', async (req, res) => {
             `, [playerId, poiId]);
 
             // Генерируем лут из loot_table (упрощённо)
-            const lootTable = (typeof poiData.loot_table === 'string') ? JSON.parse(poiData.loot_table) : (poiData.loot_table || {});
+            const lootTable = safeJsonParse(poiData.loot_table, {});
             const foundItem = null; // TODO: реализовать генерацию лута из loot_table
 
             // Прогресс контрактов

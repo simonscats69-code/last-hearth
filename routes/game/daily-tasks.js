@@ -3,7 +3,9 @@
 const express = require('express');
 const { transaction, query, queryOne } = require('../../db/database');
 const { validateId, requireAuth } = require('../../utils/validate');
-const { getGameHelpers } = require('../../utils/game-helpers');
+const { getGameHelpers, normalizeInventory } = require('../../utils/game-helpers');
+const { safeJsonParse } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
 const { logPlayerAction } = require('../../utils/log');
 
 const router = express.Router();
@@ -57,11 +59,11 @@ router.get('/', async (req, res) => {
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const player = await client.query('SELECT id, level FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!player.rows[0]) {
+            const player = await lockPlayer(playerId, client, 'id, level');
+            if (!player) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
-            const level = Number(player.rows[0].level) || 1;
+            const level = Number(player.level) || 1;
 
             // Проверяем, есть ли задания на сегодня
             const existing = await client.query(
@@ -123,8 +125,8 @@ router.post('/claim', async (req, res) => {
         const taskId = idCheck.value;
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id, coins, stars, experience FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id, coins, stars, experience');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
@@ -146,7 +148,7 @@ router.post('/claim', async (req, res) => {
                 return { status: 400, body: { success: false, error: 'Награда уже получена', code: 'TASK_ALREADY_CLAIMED' } };
             }
 
-            const reward = (typeof t.reward === 'string') ? JSON.parse(t.reward) : (t.reward || {});
+            const reward = safeJsonParse(t.reward, {});
 
             // Начисляем награды
             if (reward.coins) {
@@ -162,7 +164,7 @@ router.post('/claim', async (req, res) => {
             if (reward.items && Array.isArray(reward.items)) {
                 const { addItemToInventory } = require('../../utils/game-helpers');
                 const player = await client.query('SELECT inventory FROM players WHERE id = $1', [playerId]);
-                const inventory = (typeof player.rows[0]?.inventory === 'string') ? JSON.parse(player.rows[0].inventory) : (player.rows[0]?.inventory || []);
+                const inventory = normalizeInventory(player.rows[0]?.inventory);
                 for (const item of reward.items) {
                     addItemToInventory(inventory, item, null);
                 }
@@ -213,8 +215,8 @@ router.post('/claim-all', async (req, res) => {
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
@@ -232,7 +234,7 @@ router.post('/claim-all', async (req, res) => {
             const allItems = [];
 
             for (const t of pending.rows) {
-                const reward = (typeof t.reward === 'string') ? JSON.parse(t.reward) : (t.reward || {});
+                const reward = safeJsonParse(t.reward, {});
                 if (reward.coins) totalCoins += reward.coins;
                 if (reward.stars) totalStars += reward.stars;
                 if (reward.xp) totalXp += reward.xp;
@@ -256,7 +258,7 @@ router.post('/claim-all', async (req, res) => {
             if (allItems.length > 0) {
                 const { addItemToInventory } = require('../../utils/game-helpers');
                 const player = await client.query('SELECT inventory FROM players WHERE id = $1', [playerId]);
-                const inventory = (typeof player.rows[0]?.inventory === 'string') ? JSON.parse(player.rows[0].inventory) : (player.rows[0]?.inventory || []);
+                const inventory = normalizeInventory(player.rows[0]?.inventory);
                 for (const item of allItems) {
                     addItemToInventory(inventory, item, null);
                 }
@@ -303,12 +305,12 @@ router.post('/reroll', async (req, res) => {
         const taskId = idCheck.value;
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id, level, daily_task_rerolls, daily_task_reroll_reset_at FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id, level, daily_task_rerolls, daily_task_reroll_reset_at');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
-            const player = lockedPlayer.rows[0];
+            const player = lockedPlayer;
             const level = Number(player.level) || 1;
 
             // Сброс счётчика reroll раз в день

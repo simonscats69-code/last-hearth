@@ -3,7 +3,9 @@
 const express = require('express');
 const { transaction, query, queryOne } = require('../../db/database');
 const { validateId, requireAuth } = require('../../utils/validate');
-const { getGameHelpers } = require('../../utils/game-helpers');
+const { getGameHelpers, normalizeInventory } = require('../../utils/game-helpers');
+const { safeJsonParse } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
 const { logPlayerAction } = require('../../utils/log');
 
 const router = express.Router();
@@ -78,12 +80,12 @@ router.post('/craft', async (req, res) => {
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id, level, coins, stars, inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id, level, coins, stars, inventory');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
-            const player = lockedPlayer.rows[0];
+            const player = lockedPlayer;
             const level = Number(player.level) || 1;
 
             const recipe = await client.query('SELECT * FROM crafting_recipes WHERE id = $1 AND enabled = true', [recipeId]);
@@ -98,11 +100,11 @@ router.post('/craft', async (req, res) => {
 
             let materials = {};
             try {
-                materials = (typeof r.required_materials === 'string') ? JSON.parse(r.required_materials) : (r.required_materials || {});
+                materials = safeJsonParse(r.required_materials, {});
             } catch (_) {
                 return { status: 400, body: { success: false, error: 'Неверный формат материалов', code: 'INVALID_MATERIALS' } };
             }
-            const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
+            const inventory = normalizeInventory(player.inventory);
 
             // Проверка материалов
             for (const [matName, matQty] of Object.entries(materials)) {
@@ -232,8 +234,8 @@ router.post('/craft-all', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Недостаточный уровень', code: 'LEVEL_TOO_LOW' });
         }
 
-        const materials = (typeof recipe.required_materials === 'string') ? JSON.parse(recipe.required_materials) : (recipe.required_materials || {});
-        const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
+        const materials = safeJsonParse(recipe.required_materials, {});
+        const inventory = normalizeInventory(player.inventory);
 
         // Считаем максимальное количество
         let maxQty = 100; // кап
@@ -302,15 +304,15 @@ router.post('/discover', async (req, res) => {
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id, level, inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id, level, inventory');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
-            const player = lockedPlayer.rows[0];
+            const player = lockedPlayer;
             const level = Number(player.level) || 1;
 
-            const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
+            const inventory = normalizeInventory(player.inventory);
             for (const matName of materials) {
                 const idx = inventory.findIndex((i) => i.name === matName && i.type === 'resource' && Number(i.quantity) > 0);
                 if (idx === -1) {
@@ -373,12 +375,12 @@ router.post('/refine', async (req, res) => {
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id, level, inventory, coins FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id, level, inventory, coins');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
-            const player = lockedPlayer.rows[0];
+            const player = lockedPlayer;
             const level = Number(player.level) || 1;
 
             const refinement = await client.query(
@@ -394,7 +396,7 @@ router.post('/refine', async (req, res) => {
             const lossPercent = Number(r.loss_percent) || 0;
             const coinsCost = (r.coins_cost || 0) * quantity;
 
-            const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
+            const inventory = normalizeInventory(player.inventory);
 
             const owned = inventory.filter((i) => i.name === fromMat && i.type === 'resource').reduce((s, i) => s + (Number(i.quantity) || 0), 0);
             const needed = ratio * quantity;

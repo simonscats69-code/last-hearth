@@ -3,7 +3,9 @@
 const express = require('express');
 const { transaction, query, queryOne } = require('../../db/database');
 const { validateId, requireAuth } = require('../../utils/validate');
-const { getGameHelpers } = require('../../utils/game-helpers');
+const { getGameHelpers, normalizeInventory } = require('../../utils/game-helpers');
+const { safeJsonParse } = require('../../utils/serverApi');
+const { lockPlayer } = require('../../db/players');
 const { logPlayerAction } = require('../../utils/log');
 
 const router = express.Router();
@@ -56,11 +58,11 @@ router.get('/', async (req, res) => {
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const player = await client.query('SELECT id, level FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!player.rows[0]) {
+            const player = await lockPlayer(playerId, client, 'id, level');
+            if (!player) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
-            const level = Number(player.rows[0].level) || 1;
+            const level = Number(player.level) || 1;
 
             // Проверяем, есть ли активные контракты
             const existing = await client.query(
@@ -124,8 +126,8 @@ router.post('/accept', async (req, res) => {
         const contractId = idCheck.value;
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
@@ -179,8 +181,8 @@ router.post('/progress', async (req, res) => {
         if (amount === 0) return res.status(400).json({ success: false, error: 'Неверное количество', code: 'INVALID_AMOUNT' });
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
@@ -244,8 +246,8 @@ router.post('/claim', async (req, res) => {
         const contractId = idCheck.value;
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id, coins, stars, experience FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id, coins, stars, experience');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
@@ -266,7 +268,7 @@ router.post('/claim', async (req, res) => {
                 return { status: 400, body: { success: false, error: 'Награда уже получена', code: 'CONTRACT_ALREADY_CLAIMED' } };
             }
 
-            const reward = (typeof c.reward === 'string') ? JSON.parse(c.reward) : (c.reward || {});
+            const reward = safeJsonParse(c.reward, {});
 
             // Начисляем награды
             if (reward.coins) await client.query('UPDATE players SET coins = COALESCE(coins, 0) + $1 WHERE id = $2', [reward.coins, playerId]);
@@ -278,7 +280,7 @@ router.post('/claim', async (req, res) => {
             if (reward.items && Array.isArray(reward.items)) {
                 const { addItemToInventory } = require('../../utils/game-helpers');
                 const player = await client.query('SELECT inventory FROM players WHERE id = $1', [playerId]);
-                const inventory = (typeof player.rows[0]?.inventory === 'string') ? JSON.parse(player.rows[0].inventory) : (player.rows[0]?.inventory || []);
+                const inventory = normalizeInventory(player.rows[0]?.inventory);
                 for (const item of reward.items) {
                     addItemToInventory(inventory, item, null);
                 }
@@ -288,7 +290,7 @@ router.post('/claim', async (req, res) => {
                 // Материалы добавляются как предметы типа 'material'
                 const { addItemToInventory } = require('../../utils/game-helpers');
                 const player = await client.query('SELECT inventory FROM players WHERE id = $1', [playerId]);
-                const inventory = (typeof player.rows[0]?.inventory === 'string') ? JSON.parse(player.rows[0].inventory) : (player.rows[0]?.inventory || []);
+                const inventory = normalizeInventory(player.rows[0]?.inventory);
                 for (const [matName, qty] of Object.entries(reward.materials)) {
                     addItemToInventory(inventory, { name: matName, type: 'material', category: 'material', rarity: 'common', icon: '📦', quantity: qty }, null);
                 }
@@ -359,8 +361,8 @@ router.post('/abandon', async (req, res) => {
         const contractId = idCheck.value;
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
-            const lockedPlayer = await client.query('SELECT id FROM players WHERE id = $1 FOR UPDATE', [playerId]);
-            if (!lockedPlayer.rows[0]) {
+            const lockedPlayer = await lockPlayer(playerId, client, 'id');
+            if (!lockedPlayer) {
                 return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
