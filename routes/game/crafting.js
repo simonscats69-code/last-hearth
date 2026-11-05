@@ -31,7 +31,8 @@ router.get('/recipes', async (req, res) => {
 
         res.json({ success: true, data: { recipes: recipes.rows } });
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'crafting_recipes');
     }
 });
@@ -53,7 +54,8 @@ router.get('/materials', async (req, res) => {
 
         res.json({ success: true, data: { materials } });
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'crafting_materials');
     }
 });
@@ -197,7 +199,8 @@ router.post('/craft', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'crafting_craft');
     }
 });
@@ -279,7 +282,8 @@ router.post('/craft-all', async (req, res) => {
         // Перенаправляем на /craft
         res.redirect(307, '/api/game/crafting/craft');
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'crafting_craft_all');
     }
 });
@@ -348,7 +352,8 @@ router.post('/discover', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'crafting_discover');
     }
 });
@@ -446,7 +451,8 @@ router.post('/refine', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'crafting_refine');
     }
 });

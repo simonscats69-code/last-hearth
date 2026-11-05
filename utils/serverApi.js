@@ -761,6 +761,27 @@ async function idempotencyMiddleware(req, res, next) {
     next();
 }
 
+/**
+ * Обработка ошибок соединения с БД. Возвращает true, если ошибка обработана (503 отправлен).
+ * @returns {boolean}
+ */
+function handleConnectionError(res, error) {
+    if (!error) return false;
+    const code = error.code || '';
+    const message = error.message || '';
+    if (code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'ENOTFOUND' ||
+        message.includes('connect ECONNREFUSED') || message.includes('timeout') ||
+        message.includes('Connection terminated')) {
+        res.status(503).json({
+            success: false,
+            error: 'Сервис временно недоступен',
+            code: 'SERVICE_UNAVAILABLE'
+        });
+        return true;
+    }
+    return false;
+}
+
 module.exports = {
     // Логирование.
     // sanitize здесь не экспортируется: он используется только внутри
@@ -781,6 +802,7 @@ module.exports = {
     // его поведение (сокрытие внутренних сообщений при 5xx) можно было
     // проверить тестами без поднятия HTTP-сервера
     handleError,
+    handleConnectionError,
     notFound,
     unauthorized,
     requireAuth,

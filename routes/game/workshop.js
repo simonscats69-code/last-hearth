@@ -146,6 +146,7 @@ router.get('/', async (req, res) => {
             materials: summarizeMaterials(normalizeInventory(player.inventory))
         });
     } catch (error) {
+        if (handleConnectionError(res, error)) return;
         return handleError(res, error, 'workshop_view');
     }
 });
@@ -214,6 +215,7 @@ router.post('/repair', async (req, res) => {
                 code: error.code
             });
         }
+        if (handleConnectionError(res, error)) return;
         return handleError(res, error, 'workshop_repair');
     }
 });
@@ -283,6 +285,7 @@ router.post('/repair-all', async (req, res) => {
 
         res.status(result.status).json(result.body);
     } catch (error) {
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'workshop_repair_all');
     }
 });
@@ -356,6 +359,7 @@ router.post('/scrap-all', async (req, res) => {
 
         res.status(result.status).json(result.body);
     } catch (error) {
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'workshop_scrap_all');
     }
 });
@@ -479,6 +483,7 @@ router.post('/upgrade', async (req, res) => {
                 code: error.code
             });
         }
+        if (handleConnectionError(res, error)) return;
         return handleError(res, error, 'workshop_upgrade');
     }
 });
@@ -624,6 +629,7 @@ router.post('/modify', async (req, res) => {
                 code: error.code
             });
         }
+        if (handleConnectionError(res, error)) return;
         return handleError(res, error, 'workshop_modify');
     }
 });

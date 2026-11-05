@@ -106,7 +106,8 @@ router.get('/', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'contracts_list');
     }
 });
@@ -158,7 +159,8 @@ router.post('/accept', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'contract_accept');
     }
 });
@@ -224,7 +226,8 @@ router.post('/progress', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'contract_progress');
     }
 });
@@ -338,7 +341,8 @@ router.post('/claim', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'contract_claim');
     }
 });
@@ -403,7 +407,8 @@ router.post('/abandon', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'contract_abandon');
     }
 });

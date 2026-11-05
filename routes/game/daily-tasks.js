@@ -105,7 +105,8 @@ router.get('/', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'daily_tasks_list');
     }
 });
@@ -199,7 +200,8 @@ router.post('/claim', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'daily_task_claim');
     }
 });
@@ -283,7 +285,8 @@ router.post('/claim-all', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'daily_task_claim_all');
     }
 });
@@ -384,7 +387,8 @@ router.post('/reroll', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleError } = require('../../utils/serverApi');
+        const { handleConnectionError, handleError } = require('../../utils/serverApi');
+        if (handleConnectionError(res, error)) return;
         handleError(res, error, 'daily_task_reroll');
     }
 });
