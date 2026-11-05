@@ -284,4 +284,171 @@ router.post('/craft-all', async (req, res) => {
     }
 });
 
+
+
+// POST /crafting/discover - experimental machine: discover a random recipe
+router.post('/discover', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
+
+        const materials = Array.isArray(req.body?.materials) ? req.body.materials : [];
+        if (materials.length === 0) {
+            return res.status(400).json({ success: false, error: 'Укажите материалы', code: 'NO_MATERIALS' });
+        }
+
+        const outcome = await (require('../../db/database').transaction)(async (client) => {
+            const lockedPlayer = await client.query('SELECT id, level, inventory FROM players WHERE id = $1 FOR UPDATE', [playerId]);
+            if (!lockedPlayer.rows[0]) {
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+            }
+
+            const player = lockedPlayer.rows[0];
+            const level = Number(player.level) || 1;
+
+            const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
+            for (const matName of materials) {
+                const idx = inventory.findIndex((i) => i.name === matName && i.type === 'resource' && Number(i.quantity) > 0);
+                if (idx === -1) {
+                    return { status: 400, body: { success: false, error: 'Материал не найден: ' + matName, code: 'MATERIAL_NOT_FOUND' } };
+                }
+                inventory[idx].quantity = Number(inventory[idx].quantity) - 1;
+                if (inventory[idx].quantity <= 0) inventory.splice(idx, 1);
+            }
+
+            const recipes = await client.query(
+                'SELECT id, name FROM crafting_recipes WHERE enabled = true AND min_level <= $1 ORDER BY RANDOM() LIMIT 1',
+                [level]
+            );
+            if (recipes.rows.length === 0) {
+                return { status: 404, body: { success: false, error: 'Нет доступных рецептов', code: 'NO_RECIPES' } };
+            }
+
+            const recipe = recipes.rows[0];
+
+            await client.query(
+                'INSERT INTO player_recipes (player_id, recipe_id, unlocked_at, unlock_source) VALUES ($1, $2, NOW(), $3) ON CONFLICT DO NOTHING',
+                [playerId, recipe.id, 'discovery']
+            );
+
+            await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
+
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        recipe_id: recipe.id,
+                        recipe_name: recipe.name,
+                        message: 'Открыт новый рецепт: ' + recipe.name
+                    }
+                }
+            };
+        });
+
+        res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+        const { handleError } = require('../../utils/serverApi');
+        handleError(res, error, 'crafting_discover');
+    }
+});
+
+// POST /crafting/refine - конверсия материалов
+router.post('/refine', async (req, res) => {
+    try {
+        const playerId = req.player?.id;
+        if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
+
+        const fromMat = String(req.body?.from_material || '').trim();
+        const toMat = String(req.body?.to_material || '').trim();
+        const quantity = Math.max(1, Math.min(50, Number(req.body?.quantity) || 1));
+
+        if (!fromMat || !toMat) {
+            return res.status(400).json({ success: false, error: 'Укажите материалы', code: 'INVALID_MATERIALS' });
+        }
+
+        const outcome = await (require('../../db/database').transaction)(async (client) => {
+            const lockedPlayer = await client.query('SELECT id, level, inventory, coins FROM players WHERE id = $1 FOR UPDATE', [playerId]);
+            if (!lockedPlayer.rows[0]) {
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+            }
+
+            const player = lockedPlayer.rows[0];
+            const level = Number(player.level) || 1;
+
+            const refinement = await client.query(
+                'SELECT * FROM material_refinements WHERE from_material = $1 AND to_material = $2 AND enabled = true AND min_level <= $3',
+                [fromMat, toMat, level]
+            );
+            if (!refinement.rows[0]) {
+                return { status: 404, body: { success: false, error: 'Рафинирование недоступно', code: 'REFINEMENT_NOT_FOUND' } };
+            }
+
+            const r = refinement.rows[0];
+            const ratio = Number(r.ratio) || 3;
+            const lossPercent = Number(r.loss_percent) || 0;
+            const coinsCost = (r.coins_cost || 0) * quantity;
+
+            const inventory = (typeof player.inventory === 'string') ? JSON.parse(player.inventory) : (player.inventory || []);
+
+            const owned = inventory.filter((i) => i.name === fromMat && i.type === 'resource').reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+            const needed = ratio * quantity;
+            if (owned < needed) {
+                return { status: 400, body: { success: false, error: 'Недостаточно ' + fromMat + ': нужно ' + needed + ', есть ' + owned, code: 'NOT_ENOUGH_MATERIALS' } };
+            }
+
+            if (coinsCost > 0 && Number(player.coins || 0) < coinsCost) {
+                return { status: 400, body: { success: false, error: 'Недостаточно монет', code: 'NOT_ENOUGH_COINS' } };
+            }
+
+            let remaining = needed;
+            for (let i = 0; i < inventory.length && remaining > 0; i++) {
+                const item = inventory[i];
+                if (!item || item.name !== fromMat || item.type !== 'resource') continue;
+                const currentQty = Number(item.quantity || 0);
+                if (currentQty <= 0) continue;
+                const toRemove = Math.min(currentQty, remaining);
+                inventory[i] = { ...item, quantity: currentQty - toRemove };
+                remaining -= toRemove;
+                if (inventory[i].quantity <= 0) {
+                    inventory.splice(i, 1);
+                    i--;
+                }
+            }
+
+            const resultQty = Math.floor(quantity * (1 - lossPercent / 100));
+            if (resultQty > 0) {
+                const { addItemToInventory } = require('../../utils/game-helpers');
+                addItemToInventory(inventory, { name: toMat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: resultQty }, null);
+            }
+
+            if (coinsCost > 0) {
+                await client.query('UPDATE players SET coins = COALESCE(coins, 0) - $1 WHERE id = $2', [coinsCost, playerId]);
+            }
+            await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
+
+            return {
+                status: 200,
+                body: {
+                    success: true,
+                    data: {
+                        from: fromMat,
+                        to: toMat,
+                        quantity,
+                        result_qty: resultQty,
+                        loss_percent: lossPercent,
+                        coins_spent: coinsCost,
+                        message: 'Рафинировано ' + quantity + ' ' + fromMat + ' → ' + resultQty + ' ' + toMat
+                    }
+                }
+            };
+        });
+
+        res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+        const { handleError } = require('../../utils/serverApi');
+        handleError(res, error, 'crafting_refine');
+    }
+});
+
 module.exports = router;

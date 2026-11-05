@@ -592,6 +592,16 @@ async function createTables() {
         );
     `);
 
+    // Таблица кулдаунов POI
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_poi_cooldowns (
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            poi_id INTEGER REFERENCES location_pois(id) ON DELETE CASCADE,
+            last_used_at TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (player_id, poi_id)
+        );
+    `);
+
     // Таблица открытых рецептов игрока
     await query(`
         CREATE TABLE IF NOT EXISTS player_recipes (
@@ -1618,6 +1628,7 @@ async function seedDatabase() {
 
     // Рецепты крафта
     await seedCraftingRecipes();
+    await seedMaterialRefinements();
 
     // Боссы — последними: они ссылаются на предметы по имени.
     await seedBosses();
@@ -1806,6 +1817,30 @@ async function seedCraftingRecipes() {
                 min_level = EXCLUDED.min_level,
                 category = EXCLUDED.category
         `, [recipe.name, resultItemId, recipe.qty, JSON.stringify(recipe.materials), recipe.coins, recipe.level, recipe.category]);
+    }
+}
+
+async function seedMaterialRefinements() {
+    const refinements = [
+        { from: 'Металлолом', to: 'Пластик', ratio: 5, loss: 0, level: 1, coins: 0 },
+        { from: 'Пластик', to: 'Титан', ratio: 5, loss: 10, level: 5, coins: 50 },
+        { from: 'Титан', to: 'Пластик', ratio: 1, loss: 20, level: 5, coins: 0 },
+        { from: 'Ткань', to: 'Кожа', ratio: 3, loss: 0, level: 1, coins: 0 },
+        { from: 'Химикаты', to: 'Споры', ratio: 2, loss: 0, level: 1, coins: 0 },
+        { from: 'Древесина', to: 'Пластик', ratio: 4, loss: 0, level: 1, coins: 0 },
+        { from: 'Пластик', to: 'Стекло', ratio: 3, loss: 5, level: 3, coins: 20 },
+        { from: 'Металлолом', to: 'Провода', ratio: 4, loss: 0, level: 2, coins: 0 },
+    ];
+    for (const r of refinements) {
+        await query(`
+            INSERT INTO material_refinements (from_material, to_material, ratio, loss_percent, min_level, coins_cost, enabled)
+            VALUES ($1, $2, $3, $4, $5, $6, true)
+            ON CONFLICT (from_material, to_material) DO UPDATE SET
+                ratio = EXCLUDED.ratio,
+                loss_percent = EXCLUDED.loss_percent,
+                min_level = EXCLUDED.min_level,
+                coins_cost = EXCLUDED.coins_cost
+        `, [r.from, r.to, r.ratio, r.loss, r.level, r.coins]);
     }
 }
 
