@@ -1,11 +1,11 @@
 -- Guard: skip if tables do not exist yet (fresh DB)
-DO 
+DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'boss_mastery') THEN
     RAISE NOTICE 'Skipping migration 010: boss_mastery table does not exist yet';
     RETURN;
   END IF;
-END ;
+END $$;
 
 -- Расширение boss_mastery: урон, разбивка соло/рейд, временные метки
 ALTER TABLE boss_mastery
