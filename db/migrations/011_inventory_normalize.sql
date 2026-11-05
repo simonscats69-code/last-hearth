@@ -1,6 +1,19 @@
 -- Миграция: перенос инвентаря из JSONB в нормализованную таблицу player_inventory
 -- Идемпотентная: пропускает уже существующие записи.
 
+CREATE TABLE IF NOT EXISTS player_inventory (
+    id SERIAL PRIMARY KEY,
+    player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+    item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 0),
+    durability INTEGER DEFAULT 100,
+    max_durability INTEGER DEFAULT 100,
+    upgrade_level INTEGER DEFAULT 0,
+    modifications JSONB DEFAULT '{}'::jsonb,
+    stats JSONB DEFAULT '{}'::jsonb,
+    UNIQUE(player_id, item_id, upgrade_level, durability)
+);
+
 INSERT INTO player_inventory (player_id, item_id, quantity, durability, max_durability, upgrade_level, modifications, stats)
 SELECT
     p.id AS player_id,
