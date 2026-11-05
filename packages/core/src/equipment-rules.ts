@@ -192,7 +192,7 @@ export function getUpgradeMultiplier(item: InventoryItem | null | undefined): nu
 export function isEquipmentItem(item: InventoryItem | null | undefined): boolean {
   if (!item || typeof item !== 'object') return false;
   const type = String(item.type || '').toLowerCase();
-  if (type === 'weapon' || type === 'armor') return true;
+  if (type === 'weapon' || type === 'armor' || type === 'equipment') return true;
   return Boolean(item.slot);
 }
 

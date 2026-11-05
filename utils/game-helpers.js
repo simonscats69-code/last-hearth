@@ -81,7 +81,7 @@ function normalizeInventoryItem(raw) {
     // durability / max_durability: неотрицательные конечные числа
     copy.durability = toFiniteNumber(copy.durability, 0);
     if (copy.durability < 0) copy.durability = 0;
-    copy.max_durability = toFiniteNumber(copy.max_durability, 100);
+    copy.max_durability = toFiniteNumber(copy.max_durability, equipmentRules.BASE_DURABILITY || 500);
     if (copy.max_durability < 1) copy.max_durability = 100;
     if (copy.durability > copy.max_durability) copy.durability = copy.max_durability;
 
@@ -172,8 +172,8 @@ function createInventoryItem(item, options = {}) {
     const source = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
 
     const stats = normalizeItemStats(opts.stats !== undefined ? opts.stats : source.stats);
-    const durability = toFiniteNumber(opts.durability ?? source.durability ?? 100, 100);
-    const maxDurability = toFiniteNumber(opts.max_durability ?? source.max_durability ?? 100, 100);
+    const durability = toFiniteNumber(opts.durability ?? source.durability ?? (equipmentRules.BASE_DURABILITY || 500), (equipmentRules.BASE_DURABILITY || 500));
+    const maxDurability = toFiniteNumber(opts.max_durability ?? source.max_durability ?? (equipmentRules.BASE_DURABILITY || 500), (equipmentRules.BASE_DURABILITY || 500));
     const rawModifications = opts.modifications ?? source.modifications ?? {};
     const modifications = isPlainObject(rawModifications) ? deepClone(rawModifications) : {};
 

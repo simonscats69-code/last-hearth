@@ -634,7 +634,7 @@ function resolveEquipmentSlot(item) {
     function isEquipmentItem(item) {
         if (!item || typeof item !== 'object') return false;
         const type = String(item.type || '').toLowerCase();
-        if (type === 'weapon' || type === 'armor') return true;
+        if (type === 'weapon' || type === 'armor' || type === 'equipment') return true;
         return Boolean(item.slot);
     }
 
@@ -973,7 +973,7 @@ function resolveEquipmentSlot(item) {
         const ammoType = String(item.ammo_type || '').toLowerCase();
         if (ammoType === 'rockets') {
             materials[ROCKET_ITEM_NAME] = (materials[ROCKET_ITEM_NAME] || 0) + (level + 1);
-        } else if (ammoType === 'ammo' || String((item && item.category) || '').toLowerCase() === 'ranged') {
+        } else if (ammoType === 'ammo' || (ammoType === '' && String((item && item.category) || '').toLowerCase() === 'ranged')) {
             materials[AMMO_ITEM_NAME] = (materials[AMMO_ITEM_NAME] || 0) + (level + 1);
         }
 
