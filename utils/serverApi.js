@@ -451,6 +451,18 @@ function handleError(res, error, action = 'unknown', playerId = null) {
         stack: error.stack
     });
 
+    // Отправляем ошибку администратору в Telegram (только для 5xx)
+    if (statusCode >= 500) {
+        try {
+            const { notifyAdminSync } = require('./telegramNotifier');
+            notifyAdminSync(`[${action}] ${internalMessage}`, {
+                stack: error.stack,
+                playerId,
+                context: action
+            });
+        } catch (_) { /* ignore */ }
+    }
+
     const message = isClientError
         ? internalMessage
         : 'Внутренняя ошибка сервера. Попробуй позже.';

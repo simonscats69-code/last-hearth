@@ -18,6 +18,23 @@ const { getAdminIds } = require('./utils/adminIds');
 
 // ADMIN_IDS парсится один раз при старте через общий модуль
 const ADMIN_IDS = getAdminIds();
+
+// Patch logger.error to also notify admin via Telegram (fire-and-forget, rate-limited)
+try {
+    const { logger } = require('./utils/log');
+    const { notifyAdminSync } = require('./utils/telegramNotifier');
+    if (logger && typeof logger.error === 'function') {
+        const originalError = logger.error.bind(logger);
+        logger.error = function (message, meta) {
+            originalError(message, meta);
+            try {
+                const text = typeof message === 'string' ? message : JSON.stringify(message);
+                notifyAdminSync(text, meta || {});
+            } catch (_) { /* ignore */ }
+            return this;
+        };
+    }
+} catch (_) { /* ignore */ }
 const DEV_MODE = process.env.DEV_MODE === 'true';
 // Окно валидации initData (MAX_INIT_DATA_AGE_SECONDS, по умолчанию 1 ч)
 // читается напрямую в utils/serverApi.js (validateTelegramInitData) —
@@ -50,6 +67,15 @@ async function handleFatalRuntimeError(kind, error) {
             message: error?.message || String(error),
             stack: error?.stack || null
         });
+        // Отправляем администратору
+        try {
+            const { notifyAdminSync } = require('./utils/telegramNotifier');
+            notifyAdminSync(`FATAL: ${kind}`, {
+                message: error?.message || String(error),
+                stack: error?.stack,
+                context: kind
+            });
+        } catch (_) { /* ignore */ }
     } catch {
         console.error(kind, error?.message);
     }
@@ -87,6 +113,15 @@ process.on('unhandledRejection', async (reason) => {
             message: reason?.message || String(reason),
             stack: reason?.stack || null
         });
+        // Отправляем администратору
+        try {
+            const { notifyAdminSync } = require('./utils/telegramNotifier');
+            notifyAdminSync(`UNHANDLED REJECTION: ${reason?.message || String(reason)}`, {
+                message: reason?.message || String(reason),
+                stack: reason?.stack,
+                context: 'unhandled_rejection'
+            });
+        } catch (_) { /* ignore */ }
     } catch {
         console.error('UNHANDLED REJECTION:', reason?.message || reason);
     }
