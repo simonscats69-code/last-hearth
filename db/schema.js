@@ -207,7 +207,24 @@ async function createTables() {
             bonus_3 JSONB DEFAULT '{}'::jsonb,
             bonus_4 JSONB DEFAULT '{}'::jsonb
         )
+    `)
+
+    // Таблица инвентаря игроков (нормализованная)
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_inventory (
+            id SERIAL PRIMARY KEY,
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 0),
+            durability INTEGER DEFAULT 100,
+            max_durability INTEGER DEFAULT 100,
+            upgrade_level INTEGER DEFAULT 0,
+            modifications JSONB DEFAULT '{}'::jsonb,
+            stats JSONB DEFAULT '{}'::jsonb,
+            UNIQUE(player_id, item_id, upgrade_level, durability)
+        );
     `);
+;
 
     await query(`
         CREATE TABLE IF NOT EXISTS item_set_items (
@@ -1168,6 +1185,11 @@ async function runMigrations() {
         )
     `);
     await queryTx(`CREATE INDEX IF NOT EXISTS idx_pvp_battle_log_battle ON pvp_battle_log(battle_id)`);
+
+    // Индексы для player_inventory
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_inventory_player ON player_inventory(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_inventory_item ON player_inventory(item_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_inventory_player_item ON player_inventory(player_id, item_id)`);
 
     // raid_rewards: поле о невыданных предметах из-за переполнения инвентаря.
     await queryTx(`ALTER TABLE raid_rewards ADD COLUMN IF NOT EXISTS undropped_items JSONB NOT NULL DEFAULT '[]'`);
