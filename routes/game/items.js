@@ -86,7 +86,7 @@ router.get(['/', '/inventory'], async (req, res) => {
             return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
         }
 
-        const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
+        const inventory = normalizeInventory(player.inventory);
         const equipment = normalizeEquipment(player.equipment);
 
         // Цены продажи считаем по таблице items, а не берём из JSON инвентаря.
