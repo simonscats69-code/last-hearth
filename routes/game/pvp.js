@@ -919,19 +919,16 @@ await client.query(`
                     [attackerId, Number(attacker.pvp_streak || 0) + 1]
                 );
                 
-                // Используем playerHelper.addExperience для корректного level-up
+// Используем playerHelper.addExperience для корректного level-up
                 const expResult = await playerHelper.addExperience(attackerId, pvpExpReward, client);
                 try {
                     const progression = require('../utils/progression');
                     await progression.grantExperience(attackerId, pvpExpReward, 'pvp_win', client);
-                try {
-                    await progressDailyTask(client, attackerId, 'pvp_wins', 1);
-                } catch (_) { /* ignore */ }
                 } catch (_) {
                     try {
                         const { getGameHelpers } = require('../utils/game-helpers');
                         const h = getGameHelpers();
-                        if (h && typeof h.checkAchievements === 'function') await h.checkAchievements(attackerId, client);
+                        if (h && typeof h.checkAchievements === 'function') h.checkAchievements(attackerId, client).catch(() => {});
                     } catch (__) { /* ignore */ }
                 }
                 expLogData = expResult.logData;
