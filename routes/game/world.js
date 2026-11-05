@@ -979,6 +979,16 @@ WHERE id = $2
                 if (typeof progressContract === 'function') await progressContract(client, playerId, 'locations_visited', 1);
             } catch (_) { /* ignore */ }
 
+            // Обновление освоения локации
+            try {
+                await client.query(`
+                    INSERT INTO location_mastery (player_id, location_id, visits_count, last_visit_at)
+                    VALUES ($1, $2, 1, NOW())
+                    ON CONFLICT (player_id, location_id)
+                    DO UPDATE SET visits_count = location_mastery.visits_count + 1, last_visit_at = NOW()
+                `, [playerId, locationIdNum]);
+            } catch (_) { /* ignore */ }
+
             return {
                 status: 200,
                 body: {

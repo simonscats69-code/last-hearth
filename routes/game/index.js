@@ -108,6 +108,7 @@ const minigamesRouter = safeRequire('./minigames', 'minigames');
 const debuffsRouter = safeRequire('./debuffs', 'debuffs');
 const contractsRouter = safeRequire('./contracts', 'contracts');
 const craftingRouter = safeRequire('./crafting', 'crafting');
+const poisRouter = safeRequire('./pois', 'pois');
 const dailyTasksRouter = safeRequire('./daily-tasks', 'daily-tasks');
 
 async function upsertPlayerFromTelegramUser(user) {
@@ -373,6 +374,7 @@ router.use('/minigames', minigamesRouter);
 router.use('/debuffs', debuffsRouter);
 router.use('/contracts', contractsRouter);
 router.use('/crafting', craftingRouter);
+router.use('/pois', poisRouter);
 router.use('/daily-tasks', dailyTasksRouter);
 
 // Алиасы для обратной совместимости
