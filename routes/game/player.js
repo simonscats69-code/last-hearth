@@ -233,7 +233,7 @@ router.put('/update', async (req, res) => {
             );
         });
 
-        await logPlayerAction(playerId, 'profile_update', { fields: fieldNames });
+        await logPlayerAction(playerId, 'profile_update', { fields: fieldNames }).catch(() => {});
 
         const updatedPlayer = await queryOne('SELECT * FROM players WHERE id = $1', [playerId]);
         if (!updatedPlayer) return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
