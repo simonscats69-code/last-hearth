@@ -46,7 +46,7 @@ router.get('/materials', async (req, res) => {
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const player = await queryOne('SELECT inventory FROM players WHERE id = $1', [playerId]);
-        const inventory = (typeof player?.inventory === 'string') ? JSON.parse(player.inventory) : (player?.inventory || []);
+        const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player?.inventory);
 
         const materials = inventory.filter((item) => {
             const type = String(item?.type || '').toLowerCase();

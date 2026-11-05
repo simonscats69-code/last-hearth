@@ -532,7 +532,7 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
 
     const playerRow = await lockPlayer(playerId, client, 'inventory');
     if (!playerRow) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-    const inventory = normalizeInventory(playerRow.inventory);
+    const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(playerRow.inventory);
     const granted = [];
     const undropped = [];
     let totalGrantedCount = 0;

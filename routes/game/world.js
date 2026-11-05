@@ -510,7 +510,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             
             if (foundItem) {
                 lootRolled = true;
-                const inventory = normalizeInventory(updatedPlayer.inventory);
+                const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(updatedPlayer.inventory);
 
                 // Проверяем место в инвентаре перед добавлением предмета.
                 // Если инвентарь полон, не пытаемся добавить — выбрасываем

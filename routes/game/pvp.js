@@ -849,8 +849,8 @@ router.post('/attack-hit', async (req, res) => {
                 const coinsReward = pvp.calculateCoinsToSteal(defender.coins);
 
                 // Шанс украсть предмет (снижено с 30% до 10%)
-                const defenderInventory = normalizeInventory(defender.inventory);
-                const attackerInventory = normalizeInventory(attacker.inventory);
+                const defenderInventory = await helpers.loadInventoryFromTable(client, defenderId) || normalizeInventory(defender.inventory);
+                const attackerInventory = await helpers.loadInventoryFromTable(client, attackerId) || normalizeInventory(attacker.inventory);
                 let stolenItem = null;
 
                 if (crypto.randomInt(10) === 0) {

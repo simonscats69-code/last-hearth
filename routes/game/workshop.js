@@ -314,7 +314,7 @@ router.post('/scrap-all', async (req, res) => {
             const player = await lockPlayer(playerId, client, 'coins, inventory');
             if (!player) return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
 
-            const inventory = normalizeInventory(player.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
             const toScrap = inventory.filter((item) => {
                 if (!item || !equipmentRules.isEquipmentItem(item)) return false;
                 const info = equipmentRules.getDurabilityInfo(item);
@@ -416,7 +416,7 @@ router.post('/upgrade', async (req, res) => {
             }
 
             const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
-            const inventory = normalizeInventory(player.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
 
             // Сначала проверяем весь список: нельзя списать часть материалов
             // и упасть на нехватке следующего.
@@ -559,7 +559,7 @@ router.post('/modify', async (req, res) => {
                 };
             }
 
-            const inventory = normalizeInventory(player.inventory);
+            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
             const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
 
             for (const [name, required] of Object.entries(cost.materials || {})) {
