@@ -287,6 +287,27 @@ export function wearEquipment(item: InventoryItem, amount = 1): InventoryItem {
   };
 }
 
+
+
+export function getDurabilityState(percent: number): { state: string } {
+  const ratio = Math.max(0, Math.min(100, Number(percent) || 0));
+  if (ratio <= 0) return { state: 'broken' };
+  if (ratio <= 25) return { state: 'critical' };
+  if (ratio <= 60) return { state: 'low' };
+  return { state: 'ok' };
+}
+
+export function getHealthRegenCap(maxHealth: number): number {
+  const HEALTH_REGEN_CAP_RATIO = 1.0;
+  return Math.max(0, Math.floor((Number(maxHealth) || 0) * HEALTH_REGEN_CAP_RATIO));
+}
+
+export function getRegenerableHealth(currentHealth: number, maxHealth: number): number {
+  const cap = getHealthRegenCap(maxHealth);
+  const missing = Math.max(0, (Number(maxHealth) || 0) - (Number(currentHealth) || 0));
+  return Math.max(0, Math.min(cap, missing));
+}
+
 /** Цена ремонта */
 export function calculateRepairCost(item: InventoryItem | null | undefined): number {
   if (!item) return 0;
