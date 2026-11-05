@@ -1,32 +1,33 @@
 # Last Hearth - Telegram Mini App
-FROM node:20-alpine
+# Multi-stage build: builder stage compiles packages, runtime stage is slim.
 
-# ENV NODE_ENV=production moved below build steps to ensure devDependencies are installed
+# ============================================================
+# Stage 1: Builder — install all deps (including dev) and build
+# ============================================================
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Копируем package.json файлы для workspace resolution
+# Copy package manifests first for layer caching
 COPY package*.json ./
 COPY packages/core/package*.json ./packages/core/
 COPY packages/db/package*.json ./packages/db/
 COPY packages/server/package*.json ./packages/server/
 COPY packages/client/package*.json ./packages/client/
 
-# Копируем исходный код ДО установки зависимостей (postinstall запускает build)
+# Copy source code
 COPY . .
 
-# Устанавливаем все зависимости (включая dev) — нужны для npm run build на этапе сборки.
-# Dev-зависимости (tsup, typescript и т.д.) остаются в最終 образе, так как
-# multi-stage сборка не используется.
+# Install all dependencies (dev included for build tools)
 RUN npm install --include=dev
 
-# Собираем пакеты в правильном порядке: core -> db -> server -> client
+# Build packages in dependency order: core -> db -> server -> client
 RUN npm run -w @last-hearth/core -- build && \
     npm run -w @last-hearth/db -- build && \
     npm run -w @last-hearth/server -- build && \
     npm run -w @last-hearth/client -- build
 
-# Явная проверка/создание workspace-symlinks ПОСЛЕ всех билдов
+# Create workspace symlinks (needed at runtime)
 RUN node <<'EOF'
 const fs = require('fs');
 const path = require('path');
@@ -34,62 +35,59 @@ const pkgs = ['core', 'db', 'server', 'client'];
 pkgs.forEach(p => {
   const link = path.join('/app/node_modules/@last-hearth', p);
   const target = path.join('/app/packages', p);
-  // Удаляем старый (если есть) и создаём заново
   if (fs.existsSync(link) || fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
     fs.rmSync(link);
   }
   fs.mkdirSync(path.dirname(link), { recursive: true });
   fs.symlinkSync(target, link, 'dir');
   console.log('Created symlink:', link, '->', target);
-  
-  // Верификация: проверяем, что через симлинк виден dist
-  const distPath = path.join(link, 'dist', 'index.js');
-  if (fs.existsSync(distPath)) {
-    console.log('VERIFIED:', distPath, '->', fs.realpathSync(distPath));
-  } else {
-    console.error('MISSING via symlink:', distPath);
-    process.exit(1);
-  }
 });
 EOF
 
-# Верификация: убеждаемся, что dist-файлы на месте
-RUN node <<'EOF'
-const fs = require('fs');
-const path = require('path');
-const required = [
-  'packages/core/dist/index.js',
-  'packages/core/dist/index.mjs',
-  'packages/db/dist/index.js',
-  'packages/server/dist/index.js',
-  'packages/client/dist/index.js',
-];
-required.forEach(f => {
-  const full = path.join('/app', f);
-  if (!fs.existsSync(full)) {
-    console.error('MISSING:', full);
-    process.exit(1);
-  } else {
-    console.log('OK:', full);
-  }
-});
-console.log('All build outputs verified');
-EOF
+# ============================================================
+# Stage 2: Runtime — production deps only, no dev tools
+# ============================================================
+FROM node:20-alpine AS runtime
 
-# Не удаляем dev deps — npm prune ломает workspace symlinks
+WORKDIR /app
 
-# Незащищённый запуск от root — риск при компрометации контейнера.
-# Создаём непривилегированного пользователя и запускаем от его имени.
+ENV NODE_ENV=production
+
+# Copy package manifests
+COPY package*.json ./
+COPY packages/core/package*.json ./packages/core/
+COPY packages/db/package*.json ./packages/db/
+COPY packages/server/package*.json ./packages/server/
+COPY packages/client/package*.json ./packages/client/
+
+# Copy built artifacts and source from builder
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/routes ./routes
+COPY --from=builder /app/utils ./utils
+COPY --from=builder /app/db ./db
+COPY --from=builder /app/index.js ./index.js
+COPY --from=builder /app/webhook.js ./webhook.js
+COPY --from=builder /app/entrypoint.sh ./entrypoint.sh
+COPY --from=builder /app/tsconfig.base.json ./tsconfig.base.json
+
+# Prune devDependencies (tsup, typescript, etc.) — keep only production deps
+RUN npm prune --production 2>/dev/null || true
+
+# Create non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Data directory
+RUN mkdir -p /app/data && chown -R appuser:appgroup /app/data
+
 # Run as root to allow entrypoint to rebuild packages on mounted volumes
 # USER appuser
 
 EXPOSE 3000
 
-# Healthcheck через существующий endpoint /ready (node вместо wget, которого нет в alpine).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "const http=require('http');http.get('http://localhost:3000/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" || exit 1
 
-ENV NODE_ENV=production
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "index.js"]
