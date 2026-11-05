@@ -9,6 +9,7 @@ const router = express.Router();
 const { query, queryOne, describeError } = require('../../db/database');
 const rateLimit = require('express-rate-limit');
 const { validateTelegramInitData, logger, idempotencyMiddleware } = require('../../utils/serverApi');
+const { requirePlayer } = require('../../utils/gameMiddleware');
 
 // ====== ЛИМИТЫ ЗАПРОСОВ ======
 //
@@ -296,6 +297,7 @@ router.use(ipFloodLimiter);
 
 // ====== 2. ВАЛИДАЦИЯ ИГРОКА ======
 router.use(validatePlayer);
+router.use(requirePlayer);
 
 // ====== 3. ЛИМИТЫ ОТДЕЛЬНЫХ ДЕЙСТВИЙ (уже по id игрока) ======
 //
