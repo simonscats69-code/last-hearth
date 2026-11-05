@@ -1307,8 +1307,8 @@ async function loadInventoryFromTable(client, playerId) {
             durability: Number(row.durability) || 100,
             max_durability: Number(row.max_durability) || 100,
             upgrade_level: Number(row.upgrade_level) || 0,
-            modifications: (typeof row.modifications === 'string') ? JSON.parse(row.modifications) : (row.modifications || {}),
-            stats: (typeof row.stats === 'string') ? JSON.parse(row.stats) : (row.stats || {})
+            modifications: safeJsonParse(row.modifications, {}),
+            stats: safeJsonParse(row.stats, {})
         }));
     } catch (e) {
         return null; // fallback to JSONB

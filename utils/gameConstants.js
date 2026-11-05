@@ -3,6 +3,8 @@
  * Централизованное хранилище игровой логики
  */
 
+const { safeJsonParse } = require('./serverApi');
+
 // Правила предметов и формула опыта живут в public/shared/equipment.js —
 // том же файле, что читает браузер, поэтому там не может быть require().
 // Здесь реэкспорт для существующего кода.
@@ -249,15 +251,7 @@ function calculateDebuffModifiers(player) {
     let radiation = { level: 0 };
 
     if (player.radiation) {
-        if (typeof player.radiation === 'string') {
-            try {
-                radiation = JSON.parse(player.radiation);
-            } catch {
-                radiation = { level: 0 };
-            }
-        } else {
-            radiation = player.radiation || { level: 0 };
-        }
+        radiation = safeJsonParse(player.radiation, { level: 0 });
     }
 
     // Уровень заражения — единственный источник эффектов. Раньше здесь
