@@ -560,7 +560,76 @@ async function createTables() {
             claimed_by BIGINT REFERENCES players(id) ON DELETE SET NULL,
             created_at TIMESTAMP DEFAULT NOW()
         );
+    `)
+
+    // Таблица точек интереса (POI) в локациях
+    await query(`
+        CREATE TABLE IF NOT EXISTS location_pois (
+            id SERIAL PRIMARY KEY,
+            location_id INTEGER REFERENCES locations(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            energy_cost INTEGER DEFAULT 5,
+            risk_level INTEGER DEFAULT 0,
+            required_item_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
+            loot_table JSONB NOT NULL DEFAULT '{}',
+            cooldown_minutes INTEGER DEFAULT 0,
+            max_uses_per_day INTEGER DEFAULT 0,
+            enabled BOOLEAN DEFAULT true,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
     `);
+
+    // Таблица освоения локаций
+    await query(`
+        CREATE TABLE IF NOT EXISTS location_mastery (
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            location_id INTEGER REFERENCES locations(id) ON DELETE CASCADE,
+            mastery_level INTEGER DEFAULT 0,
+            visits_count INTEGER DEFAULT 0,
+            last_visit_at TIMESTAMP,
+            PRIMARY KEY (player_id, location_id)
+        );
+    `);
+
+    // Таблица открытых рецептов игрока
+    await query(`
+        CREATE TABLE IF NOT EXISTS player_recipes (
+            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
+            recipe_id INTEGER REFERENCES crafting_recipes(id) ON DELETE CASCADE,
+            unlocked_at TIMESTAMP DEFAULT NOW(),
+            unlock_source VARCHAR(50),
+            PRIMARY KEY (player_id, recipe_id)
+        );
+    `);
+
+    // Таблица чертежей (источники открытия рецептов)
+    await query(`
+        CREATE TABLE IF NOT EXISTS blueprints (
+            id SERIAL PRIMARY KEY,
+            recipe_id INTEGER REFERENCES crafting_recipes(id) ON DELETE CASCADE,
+            drop_source VARCHAR(50) NOT NULL,
+            drop_chance REAL DEFAULT 0.1,
+            location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+            enabled BOOLEAN DEFAULT true
+        );
+    `);
+
+    // Таблица рафинирования материалов
+    await query(`
+        CREATE TABLE IF NOT EXISTS material_refinements (
+            id SERIAL PRIMARY KEY,
+            from_material VARCHAR(255) NOT NULL,
+            to_material VARCHAR(255) NOT NULL,
+            ratio INTEGER NOT NULL DEFAULT 3,
+            loss_percent REAL DEFAULT 0,
+            min_level INTEGER DEFAULT 1,
+            coins_cost INTEGER DEFAULT 0,
+            enabled BOOLEAN DEFAULT true,
+            UNIQUE(from_material, to_material)
+        );
+    `);
+;
     // Только CREATE TABLE, ни одного SELECT/INSERT/UPDATE/DELETE в проекте.
     // Клановых боссов в игре нет: клан-механика ограничена казной, бонусом к
     // добыче, чатом и участниками. Таблица была пустой (0 строк) и
@@ -670,6 +739,25 @@ async function createTables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_contract_bounties_target ON contract_bounties(target_player_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_contract_bounties_creator ON contract_bounties(creator_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_contract_bounties_expires ON contract_bounties(expires_at)`);
+
+    // Индексы для location_pois
+    await query(`CREATE INDEX IF NOT EXISTS idx_location_pois_location ON location_pois(location_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_location_pois_enabled ON location_pois(enabled)`);
+
+    // Индексы для location_mastery
+    await query(`CREATE INDEX IF NOT EXISTS idx_location_mastery_player ON location_mastery(player_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_location_mastery_location ON location_mastery(location_id)`);
+
+    // Индексы для player_recipes
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_recipes_player ON player_recipes(player_id)`);
+
+    // Индексы для blueprints
+    await query(`CREATE INDEX IF NOT EXISTS idx_blueprints_recipe ON blueprints(recipe_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_blueprints_location ON blueprints(location_id)`);
+
+    // Индексы для material_refinements
+    await query(`CREATE INDEX IF NOT EXISTS idx_material_refinements_from ON material_refinements(from_material)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_material_refinements_to ON material_refinements(to_material)`);
 
     // Индексы для clan_chat
     await query(`CREATE INDEX IF NOT EXISTS idx_clan_chat_clan ON clan_chat(clan_id)`);
@@ -960,6 +1048,8 @@ async function runMigrations() {
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_task_rerolls INTEGER DEFAULT 0`);
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_task_reroll_reset_at TIMESTAMP`);
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS daily_tasks_last_generation_at TIMESTAMP`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS reputation INTEGER DEFAULT 0`);
+    await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS reputation_tier VARCHAR(20) DEFAULT 'novice'`);
 
     // Миграции для репутации выжившего
     await queryTx(`ALTER TABLE players ADD COLUMN IF NOT EXISTS reputation INTEGER DEFAULT 0`);

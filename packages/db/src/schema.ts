@@ -123,6 +123,56 @@ export interface ContractBountyRow {
   created_at: Date;
 }
 
+export interface LocationPoiRow {
+  id: number;
+  location_id: number;
+  name: string;
+  description?: string;
+  energy_cost: number;
+  risk_level: number;
+  required_item_id?: number;
+  loot_table: Record<string, unknown>;
+  cooldown_minutes: number;
+  max_uses_per_day: number;
+  enabled: boolean;
+  created_at: Date;
+}
+
+export interface LocationMasteryRow {
+  player_id: number;
+  location_id: number;
+  mastery_level: number;
+  visits_count: number;
+  last_visit_at?: Date;
+}
+
+export interface PlayerRecipeRow {
+  player_id: number;
+  recipe_id: number;
+  unlocked_at: Date;
+  unlock_source?: string;
+}
+
+export interface BlueprintRow {
+  id: number;
+  recipe_id: number;
+  drop_source: string;
+  drop_chance: number;
+  location_id?: number;
+  enabled: boolean;
+}
+
+export interface MaterialRefinementRow {
+  id: number;
+  from_material: string;
+  to_material: string;
+  ratio: number;
+  loss_percent: number;
+  min_level: number;
+  coins_cost: number;
+  enabled: boolean;
+}
+
 export interface ItemRow {
   id: number;
   name: string;
