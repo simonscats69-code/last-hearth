@@ -199,8 +199,11 @@ router.get('/:locationId/mastery', async (req, res) => {
                 last_visit_at: mastery?.last_visit_at || null
             }
         });
+
     } catch (error) {
         const { handleError } = require('../../utils/serverApi');
         handleError(res, error, 'location_mastery');
     }
 });
+
+module.exports = router;
