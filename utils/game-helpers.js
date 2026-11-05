@@ -1278,6 +1278,41 @@ function consumeInventoryItem(inventory, itemIndex) {
     return { updatedInventory, item, quantityLeft: remainingQty };
 }
 
+// Синхронизация инвентаря из JSONB в нормализованную таблицу player_inventory.
+// Вызывается после мутаций инвентаря для поддержания актуальности новой таблицы.
+async function syncInventoryToTable(client, playerId, inventory) {
+    if (!client || !playerId || !Array.isArray(inventory)) return;
+    try {
+        // Очищаем старые записи
+        await client.query('DELETE FROM player_inventory WHERE player_id = $1', [playerId]);
+        // Вставляем актуальные
+        for (const item of inventory) {
+            if (!item || typeof item !== 'object') continue;
+            const itemId = Number.isSafeInteger(Number(item.id)) ? Number(item.id) : null;
+            if (itemId === null) continue;
+            const qty = Math.max(0, Number(item.quantity) || 0);
+            if (qty <= 0) continue;
+            await client.query(
+                `INSERT INTO player_inventory (player_id, item_id, quantity, durability, max_durability, upgrade_level, modifications, stats)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)
+                ON CONFLICT (player_id, item_id, upgrade_level, durability) DO UPDATE SET
+                    quantity = player_inventory.quantity + EXCLUDED.quantity,
+                    modifications = EXCLUDED.modifications,
+                    stats = EXCLUDED.stats
+            `, [
+                playerId, itemId, qty,
+                Number(item.durability) || 100,
+                Number(item.max_durability) || 100,
+                Number(item.upgrade_level) || 0,
+                JSON.stringify(item.modifications || {}),
+                JSON.stringify(item.stats || {})
+            ]);
+        }
+    } catch (e) {
+        // Не роняем основной поток
+    }
+}
+
 module.exports = {
     // Функции состояния игрока.
     //
@@ -1289,6 +1324,7 @@ module.exports = {
     // gameConstants.js).
     safeJsonParse,
     normalizeInventory,
+    syncInventoryToTable,
     createInventoryItem,
     normalizeRadiation,
     getActiveBuffs,
