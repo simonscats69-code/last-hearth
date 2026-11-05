@@ -54,7 +54,7 @@ async function generateContracts(client, playerId, level, count = 1) {
 // GET /contracts — список доступных контрактов
 router.get('/', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
@@ -117,7 +117,7 @@ router.get('/', async (req, res) => {
 // POST /contracts/accept — принять контракт
 router.post('/accept', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');
@@ -170,7 +170,7 @@ router.post('/accept', async (req, res) => {
 // POST /contracts/progress — обновить прогресс контракта
 router.post('/progress', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');
@@ -237,7 +237,7 @@ router.post('/progress', async (req, res) => {
 // POST /contracts/claim — забрать награду
 router.post('/claim', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');
@@ -352,7 +352,7 @@ router.post('/claim', async (req, res) => {
 // POST /contracts/abandon — отказаться от контракта
 router.post('/abandon', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');

@@ -13,7 +13,7 @@ const router = express.Router();
 // GET /crafting/recipes — список рецептов
 router.get('/recipes', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const player = await queryOne('SELECT level FROM players WHERE id = $1', [playerId]);
@@ -42,7 +42,7 @@ router.get('/recipes', async (req, res) => {
 // GET /crafting/materials — список материалов игрока
 router.get('/materials', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const player = await queryOne('SELECT inventory FROM players WHERE id = $1', [playerId]);
@@ -65,7 +65,7 @@ router.get('/materials', async (req, res) => {
 // POST /crafting/craft — крафт предмета
 router.post('/craft', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const recipeId = Number(req.body?.recipe_id);
@@ -210,7 +210,7 @@ router.post('/craft', async (req, res) => {
 // POST /crafting/craft-all — крафт максимального количества
 router.post('/craft-all', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const recipeId = Number(req.body?.recipe_id);
@@ -295,7 +295,7 @@ router.post('/craft-all', async (req, res) => {
 // POST /crafting/discover - experimental machine: discover a random recipe
 router.post('/discover', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const materials = Array.isArray(req.body?.materials) ? req.body.materials : [];
@@ -363,7 +363,7 @@ router.post('/discover', async (req, res) => {
 // POST /crafting/refine - конверсия материалов
 router.post('/refine', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const fromMat = String(req.body?.from_material || '').trim();

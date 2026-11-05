@@ -55,7 +55,7 @@ async function generateDailyTasks(client, playerId, level) {
 // GET /daily-tasks — получить список заданий на день
 router.get('/', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
@@ -116,7 +116,7 @@ router.get('/', async (req, res) => {
 // POST /daily-tasks/claim — забрать награду за выполненное задание
 router.post('/claim', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.task_id, 'ID задания');
@@ -211,7 +211,7 @@ router.post('/claim', async (req, res) => {
 // POST /daily-tasks/claim-all — забрать все выполненные задания
 router.post('/claim-all', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
@@ -296,7 +296,7 @@ router.post('/claim-all', async (req, res) => {
 // POST /daily-tasks/reroll — заменить задание
 router.post('/reroll', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.task_id, 'ID задания');

@@ -192,6 +192,7 @@ async function validatePlayer(req, res, next) {
         }
         
         req.player = buildRequestPlayer(validated.user, dbPlayer);
+        req.playerId = dbPlayer.id;
         req.telegramAuth = validated;
 
         // Отметка активности. Колонка last_action_time была DEFAULT NOW()

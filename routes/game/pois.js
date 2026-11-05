@@ -13,7 +13,7 @@ const router = express.Router();
 // GET /locations/:locationId/pois — список POI в локации
 router.get('/:locationId', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const locationId = Number(req.params.locationId);
@@ -63,7 +63,7 @@ router.get('/:locationId', async (req, res) => {
 // POST /locations/poi/:poiId/search — поиск через POI
 router.post('/:poiId/search', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const poiId = Number(req.params.poiId);
@@ -177,7 +177,7 @@ router.post('/:poiId/search', async (req, res) => {
 // GET /locations/:locationId/mastery — освоение локации
 router.get('/:locationId/mastery', async (req, res) => {
     try {
-        const playerId = req.player?.id;
+        const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
         const locationId = Number(req.params.locationId);
