@@ -633,7 +633,7 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
             await progression.grantExperience(playerId, experienceReward, 'boss_kill', client);
         } catch (_) {
             await playerHelper.addExperience(playerId, experienceReward, client);
-            try { await helpers.checkAchievements(playerId, client); } catch (__) { /* ignore */ }
+            helpers.checkAchievements(playerId, client).catch(() => {});
         }
     }
 
@@ -2129,7 +2129,7 @@ if (grantedItems && grantedItems.length > 0) {
 
                 // Событийная проверка достижений для всех участников рейда
                 for (const entry of shares) {
-                    try { await helpers.checkAchievements(entry.participantId, client); } catch (_) { /* ignore */ }
+                    helpers.checkAchievements(entry.participantId, client).catch(() => {});
                 }
 
                 // Батчовый UPDATE bosses_killed и boss_mastery

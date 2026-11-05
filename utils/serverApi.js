@@ -638,10 +638,7 @@ async function idempotencyMiddleware(req, res, next) {
         return next(); // Только для мутаций
     }
 
-    const idempotencyKey = req.headers['idempotency-key'];
-    if (!idempotencyKey) {
-        return next(); // Ключ опционален: мутация выполняется без идемпотентности
-    }
+    const idempotencyKey = req.headers['idempotency-key'] || `auto:${method}:${req.path}:${JSON.stringify(req.body || {})}`;
 
     // Нормализуем ключ: playerId + ключ клиента
     const playerId = req.player?.id;
