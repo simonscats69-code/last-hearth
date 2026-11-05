@@ -190,6 +190,12 @@ router.post('/buy', async (req, res) => {
                 [totalPrice, JSON.stringify(inventory), playerId, quantity]
             );
 
+            // Синхронизация инвентаря
+            try {
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+            } catch (_) { /* ignore */ }
+
             // P2: покупка тоже идёт в уникальный collection-tracker, иначе
             // достижение «Коллекционер» считало только лутом и звёздным
             // магазином, а купленные предметы в него не попадали.
@@ -296,6 +302,12 @@ router.post(['/use', '/use-item'], async (req, res) => {
                     'UPDATE players SET equipment = $1, inventory = $2 WHERE id = $3',
                     [JSON.stringify(equipment), JSON.stringify(inventory), playerId]
                 );
+
+                // Синхронизация инвентаря
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+                } catch (_) { /* ignore */ }
 
                 return {
                     success: true,
