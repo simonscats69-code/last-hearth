@@ -1,5 +1,6 @@
 # Last Hearth - Telegram Mini App
 # Multi-stage build: builder stage compiles packages, runtime stage is slim.
+# Cache-bust: 2026-11-05-v2
 
 # ============================================================
 # Stage 1: Builder — install all deps (including dev) and build

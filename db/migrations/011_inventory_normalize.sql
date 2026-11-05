@@ -1,3 +1,16 @@
+-- Guard: skip if tables do not exist yet (fresh DB)
+DO 
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'players') THEN
+    RAISE NOTICE 'Skipping migration 011: players table does not exist yet';
+    RETURN;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'items') THEN
+    RAISE NOTICE 'Skipping migration 011: items table does not exist yet';
+    RETURN;
+  END IF;
+END ;
+
 -- Миграция: перенос инвентаря из JSONB в нормализованную таблицу player_inventory
 -- Идемпотентная: пропускает уже существующие записи.
 

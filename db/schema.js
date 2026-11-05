@@ -917,24 +917,26 @@ async function runMigrations() {
     await queryTx(`
         DO $do$
         BEGIN
-            -- Drop old FK if exists without CASCADE
+            -- Drop old FK if exists (regardless of delete_rule)
             IF EXISTS (
-                SELECT 1 FROM information_schema.referential_constraints
+                SELECT 1 FROM information_schema.table_constraints
                 WHERE constraint_name = 'daily_tasks_player_id_fkey'
-                  AND delete_rule != 'CASCADE'
             ) THEN
                 ALTER TABLE daily_tasks DROP CONSTRAINT daily_tasks_player_id_fkey;
-                ALTER TABLE daily_tasks
-                ADD CONSTRAINT fk_daily_tasks_player
-                FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
-            ELSIF NOT EXISTS (
+            END IF;
+            IF EXISTS (
                 SELECT 1 FROM information_schema.table_constraints
                 WHERE constraint_name = 'fk_daily_tasks_player'
             ) THEN
-                ALTER TABLE daily_tasks
-                ADD CONSTRAINT fk_daily_tasks_player
-                FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
+                ALTER TABLE daily_tasks DROP CONSTRAINT fk_daily_tasks_player;
             END IF;
+            -- Add new FK with CASCADE
+            ALTER TABLE daily_tasks
+            ADD CONSTRAINT fk_daily_tasks_player
+            FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
+        EXCEPTION WHEN OTHERS THEN
+            -- Ignore errors (e.g., if FK already exists with CASCADE)
+            NULL;
         END $do$
     `);
 
