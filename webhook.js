@@ -414,7 +414,7 @@ async function setupWebhook(app) {
         const rows = await query('SELECT id, name, level, max_health, damage, reward_experience FROM bosses ORDER BY level');
         const lines = (rows.rows || []).map((r) => `#${r.id} ${r.name} (ур.${r.level}) HP ${r.max_health} DMG ${r.damage} EXP ${r.reward_experience}`);
         return '👹 <b>Боссы</b>\n\n' + (lines.length ? lines.join('\n') : 'Нет данных') +
-            '\n\nИзменение: /boss_set <id> <поле> <значение>\nПоля: name, max_health, damage, reward_experience';
+            '\n\nИзменение: /boss_set &lt;id&gt; &lt;поле&gt; &lt;значение&gt;\nПоля: name, max_health, damage, reward_experience';
     }
 
     function adminMaintenanceText() {
@@ -426,7 +426,7 @@ async function setupWebhook(app) {
             `achievements: ${s.achievements?.total ?? 0} (обработано ${s.achievements?.playersProcessed ?? 0}, ошибок ${s.achievements?.errors ?? 0})\n` +
             `cleanup: ${s.cleanup?.total ?? 0}\n` +
             `dailyTasks: ${s.dailyTasks?.total ?? 0}\n\n` +
-            'Команды:\n/player <id>\n/resources <id> <energy> <health> <exp>\n/ban <id> [причина]\n/unban <id>\n/boss_set <id> <поле> <значение>'
+            'Команды:\n/player &lt;id&gt;\n/resources &lt;id&gt; &lt;energy&gt; &lt;health&gt; &lt;exp&gt;\n/ban &lt;id&gt; [причина]\n/unban &lt;id&gt;\n/boss_set &lt;id&gt; &lt;поле&gt; &lt;значение&gt;'
         );
     }
 
