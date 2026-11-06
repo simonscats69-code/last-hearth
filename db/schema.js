@@ -224,7 +224,7 @@ async function createTables() {
             UNIQUE(player_id, item_id, upgrade_level, durability)
         );
     `);
-;
+
 
     await query(`
         CREATE TABLE IF NOT EXISTS item_set_items (
@@ -656,7 +656,7 @@ async function createTables() {
             UNIQUE(from_material, to_material)
         );
     `);
-;
+
     // Только CREATE TABLE, ни одного SELECT/INSERT/UPDATE/DELETE в проекте.
     // Клановых боссов в игре нет: клан-механика ограничена казной, бонусом к
     // добыче, чатом и участниками. Таблица была пустой (0 строк) и
@@ -1806,44 +1806,6 @@ async function seedCraftingRecipes() {
  * находка окажется ключом от этого босса (routes/game/world.js).
  * keys_required — сколько ключей ЭТОГО босса нужно, чтобы открыть следующего.
  */
-async function seedCraftingRecipes() {
-    const recipes = [
-        { name: 'Самодельный нож', result: 'Самодельный нож', qty: 1, materials: { 'Металлолом': 3, 'Древесина': 1 }, coins: 0, level: 1, category: 'weapon' },
-        { name: 'Арматурный лом', result: 'Арматурный лом', qty: 1, materials: { 'Металлолом': 4, 'Пластик': 1 }, coins: 0, level: 1, category: 'weapon' },
-        { name: 'Самодельный пистолет', result: 'Самодельный пистолет', qty: 1, materials: { 'Металлолом': 5, 'Провода': 2, 'Пластик': 1, 'Порох': 1 }, coins: 0, level: 5, category: 'weapon' },
-        { name: 'Охотничий арбалет', result: 'Охотничий арбалет', qty: 1, materials: { 'Древесина': 3, 'Провода': 2, 'Титан': 1, 'Стекло': 1 }, coins: 0, level: 10, category: 'weapon' },
-        { name: 'Кожаный жилет', result: 'Кожаный жилет', qty: 1, materials: { 'Ткань': 3, 'Кожа': 1 }, coins: 0, level: 1, category: 'armor' },
-        { name: 'Самодельный бронежилет', result: 'Самодельный бронежилет', qty: 1, materials: { 'Металлолом': 4, 'Ткань': 2, 'Пластик': 1 }, coins: 0, level: 5, category: 'armor' },
-        { name: 'Полевой противогаз', result: 'Полевой противогаз', qty: 1, materials: { 'Пластик': 2, 'Ткань': 1, 'Фильтрующий элемент': 1 }, coins: 0, level: 3, category: 'armor' },
-        { name: 'Ботинки из резины', result: 'Ботинки из резины', qty: 1, materials: { 'Резина': 2, 'Ткань': 1 }, coins: 0, level: 2, category: 'armor' },
-        { name: 'Полевая аптечка', result: 'Полевая аптечка', qty: 1, materials: { 'Ткань': 2, 'Химикаты': 1 }, coins: 0, level: 1, category: 'consumable' },
-        { name: 'Энергетический батончик', result: 'Энергетический батончик', qty: 1, materials: { 'Споры': 1, 'Консервы': 1 }, coins: 0, level: 1, category: 'consumable' },
-        { name: 'Антирадиационный чай', result: 'Антирадиационный чай', qty: 1, materials: { 'Споры': 1, 'Вода': 1 }, coins: 0, level: 3, category: 'consumable' },
-        { name: 'Патроны (самодельные)', result: 'Патроны', qty: 5, materials: { 'Металлолом': 2, 'Порох': 1 }, coins: 0, level: 3, category: 'ammo' },
-        { name: 'Реактивный заряд', result: 'Реактивные гранаты', qty: 1, materials: { 'Титан': 1, 'Порох': 2, 'Уран': 1 }, coins: 0, level: 8, category: 'ammo' },
-        { name: 'Ремкомплект', result: 'Ремкомплект', qty: 1, materials: { 'Металлолом': 2, 'Ткань': 1, 'Масло': 1 }, coins: 0, level: 2, category: 'consumable' },
-        { name: 'Фильтр для противогаза', result: 'Фильтр для противогаза', qty: 1, materials: { 'Пластик': 1, 'Ткань': 1, 'Химикаты': 1 }, coins: 0, level: 2, category: 'resource' },
-    ];
-
-    for (const recipe of recipes) {
-        const itemResult = await query('SELECT id FROM items WHERE name = $1 LIMIT 1', [recipe.result]);
-        const resultItemId = itemResult.rows[0]?.id;
-        if (!resultItemId) continue;
-
-        await query(`
-            INSERT INTO crafting_recipes (name, result_item_id, result_quantity, required_materials, coins_cost, stars_cost, min_level, category, enabled, unlock_condition, created_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5, 0, $6, $7, true, '{}'::jsonb, NOW())
-            ON CONFLICT (name) DO UPDATE SET
-                result_item_id = EXCLUDED.result_item_id,
-                result_quantity = EXCLUDED.result_quantity,
-                required_materials = EXCLUDED.required_materials,
-                coins_cost = EXCLUDED.coins_cost,
-                min_level = EXCLUDED.min_level,
-                category = EXCLUDED.category
-        `, [recipe.name, resultItemId, recipe.qty, JSON.stringify(recipe.materials), recipe.coins, recipe.level, recipe.category]);
-    }
-}
-
 async function seedMaterialRefinements() {
     const refinements = [
         { from: 'Металлолом', to: 'Пластик', ratio: 5, loss: 0, level: 1, coins: 0 },

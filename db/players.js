@@ -1,35 +1,34 @@
 /**
- * Запросы к БД для игроков.
+ * 0?@>AK :  4;O 83@>:>2.
  *
- * В проекте используется только addExperienceWithLevelUp; остальные
- * операции (создание игрока, обновление инвентаря и экипировки) делают
- * роуты своими UPDATE.
+ *  ?@>5:B5 8A?>;L7C5BAO B>;L:> addExperienceWithLevelUp; >AB0;L=K5
+ * >?5@0F88 (A>740=85 83@>:0, >1=>2;5=85 8=25=B0@O 8 M:8?8@>2:8) 45;0NB
+ * @>CBK A2>8<8 UPDATE.
  */
 const { query: defaultQuery } = require('./database');
-// Общая валидация ID. Импортируется из utils/validate.js, а НЕ из
-// serverApi: тот лениво требует этот же файл (require внутри
-// PlayerHelper.addExperience), и верхнеуровневый импорт дал бы цикл.
-// utils/validate.js зависимостей не имеет, поэтому цикла не будет.
+// 1I0O 20;840F8O ID. <?>@B8@C5BAO 87 utils/validate.js, 0  87
+// serverApi: B>B ;5=82> B@51C5B MB>B 65 D09; (require 2=CB@8
+// PlayerHelper.addExperience), 8 25@E=5C@>2=52K9 8<?>@B 40; 1K F8:;.
+// utils/validate.js 7028A8<>AB59 =5 8<55B, ?>MB><C F8:;0 =5 1C45B.
 const { requireId } = require('../utils/validate');
 const equipmentRules = require('../public/shared/equipment.js');
 
-const ERR_PLAYER_NOT_FOUND = 'Игрок не найден';
+const ERR_PLAYER_NOT_FOUND = '3@>: =5 =0945=';
 
 function getExecutor(client) {
     return client ? client.query.bind(client) : defaultQuery;
 }
 
 function validateExperience(exp) {
-    if (!Number.isFinite(exp) || exp <= 0) throw new Error('Опыт должен быть положительным');
+    if (!Number.isFinite(exp) || exp <= 0) throw new Error('?KB 4>;65= 1KBL ?>;>68B5;L=K<');
 }
 
-// Логирование берём из utils/log.js, а НЕ из utils/serverApi.js.
-// Раньше здесь стоял импорт serverApi, а тот грузил этот же файл
-// лениво (require внутри PlayerHelper.addExperience) — получался цикл
-// db/players.js <-> utils/serverApi.js, удерживаемый только тем, что
-// оба импорта не выполнялись на верхнем уровне. Теперь цикла нет:
-// log.js не ссылается ни на serverApi, ни на players.
-const { logPlayerAction } = require('../utils/log');
+// >38@>20=85 15@Q< 87 utils/log.js, 0  87 utils/serverApi.js.
+//  0=LH5 745AL AB>O; 8<?>@B serverApi, 0 B>B 3@C78; MB>B 65 D09;
+// ;5=82> (require 2=CB@8 PlayerHelper.addExperience)  ?>;CG0;AO F8:;
+// db/players.js <-> utils/serverApi.js, C45@68205<K9 B>;L:> B5<, GB>
+// >10 8<?>@B0 =5 2K?>;=O;8AL =0 25@E=5< C@>2=5. "5?5@L F8:;0 =5B:
+// log.js =5 AAK;05BAO =8 =0 serverApi, =8 =0 players.
 
 async function updatePlayerExperience(playerId, exp, options = {}) {
     const { client = null, updateTimestamp = true } = options;
@@ -47,8 +46,8 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
     playerId = requireId(playerId, 'playerId');
     const exec = getExecutor(client);
     
-    // Формула прокачки удачи: каждый уровень даёт +1 к удаче
-    // С ограничением MAX_LUCK = 150
+    // $>@<C;0 ?@>:0G:8 C40G8: :064K9 C@>25=L 40QB +1 : C40G5
+    // ! >3@0=8G5=85< MAX_LUCK = 150
     const luckBonusPerLevel = 1;
     const luckBonus = levelsGained * luckBonusPerLevel;
     const maxLuck = equipmentRules.GAME_CONFIG.MAX_LUCK;
@@ -68,13 +67,13 @@ async function levelUpPlayer(playerId, client, levelsGained = 1, newExperience =
 }
 
 async function lockPlayer(playerId, client, columns = '*') {
-    if (!client) throw new Error('lockPlayer требует client');
+    if (!client) throw new Error('lockPlayer B@51C5B client');
     playerId = requireId(playerId, 'playerId');
     let cols = '*';
     if (columns && columns !== '*') {
         const parts = columns.split(',').map(c => c.trim()).filter(Boolean);
         if (!parts.length || !parts.every(p => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p))) {
-            throw new Error('Недопустимые имена колонок в lockPlayer');
+            throw new Error('54>?CAB8<K5 8<5=0 :>;>=>: 2 lockPlayer');
         }
         cols = parts.join(', ');
     }
@@ -83,7 +82,7 @@ async function lockPlayer(playerId, client, columns = '*') {
 }
 
 async function addExperienceWithLevelUp(client, playerId, exp, getExpForLevel) {
-    if (!client) throw new Error('addExperienceWithLevelUp требует client');
+    if (!client) throw new Error('addExperienceWithLevelUp B@51C5B client');
     playerId = requireId(playerId, 'playerId');
     validateExperience(exp);
 
@@ -124,7 +123,7 @@ async function addExperienceWithLevelUp(client, playerId, exp, getExpForLevel) {
 }
 
 module.exports = {
-    // Из всего модуля используется только addExperienceWithLevelUp
+    // 7 2A53> <>4C;O 8A?>;L7C5BAO B>;L:> addExperienceWithLevelUp
     // (utils/serverApi.js -> PlayerHelper.addExperience).
     addExperienceWithLevelUp,
     lockPlayer

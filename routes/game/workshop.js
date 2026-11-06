@@ -1,9 +1,9 @@
-/**
- * Мастерская: ремонт и улучшение снаряжения.
+﻿/**
+ * 0AB5@A:0O: @5<>=B 8 C;CGH5=85 A=0@O65=8O.
  * 
- * Прочность и уровень улучшения изнашиваются в бою (routes/game/bosses.js).
- * Здесь: починить, улучшить, установить модификацию (заточка/облицовка).
- * Это даёт смысл материалам, ради которых имеет смысл фармить лут.
+ * @>G=>ABL 8 C@>25=L C;CGH5=8O 87=0H820NBAO 2 1>N (routes/game/bosses.js).
+ * 45AL: ?>G8=8BL, C;CGH8BL, CAB0=>28BL <>48D8:0F8N (70B>G:0/>1;8F>2:0).
+ * -B> 40QB A<KA; <0B5@80;0<, @048 :>B>@KE 8<55B A<KA; D0@<8BL ;CB.
  */
 
 const express = require('express');
@@ -11,10 +11,12 @@ const router = express.Router();
 const { transaction, query } = require('../../db/database');
 const { lockPlayer } = require('../../db/players');
 const { handleError, handleConnectionError, logger, notFound, fail, unauthorized } = require('../../utils/serverApi');
+const { playerIdGuard, handleRouteError } = require('../../utils/routeHelpers');
+const { setPlayerInventory } = require('../../db/playerRepository');
 
-// Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
-// правды для equipmentRules/normalizeEquipment/normalizeInventory.
-// @last-hearth/core (TS-модуль) не экспортирует эти функции.
+// 5=820O 703@C7:0 helpers: utils/game-helpers.js  548=AB25==K9 8AB>G=8:
+// ?@024K 4;O equipmentRules/normalizeEquipment/normalizeInventory.
+// @last-hearth/core (TS-<>4C;L) =5 M:A?>@B8@C5B MB8 DC=:F88.
 let gameHelpers = null;
 function getGameHelpers() {
     if (!gameHelpers) {
@@ -34,8 +36,8 @@ function isValidSlot(slot) {
 }
 
 /**
- * Разрешить имена материалов в строки каталога items.
- * @returns {Promise<Map<string, object>>} имя -> строка items
+ *  07@5H8BL 8<5=0 <0B5@80;>2 2 AB@>:8 :0B0;>30 items.
+ * @returns {Promise<Map<string, object>>} 8<O -> AB@>:0 items
  */
 async function loadMaterials(client, names) {
     if (!Array.isArray(names) || names.length === 0) return new Map();
@@ -48,7 +50,7 @@ async function loadMaterials(client, names) {
     return new Map(rows.rows.map((row) => [row.name, row]));
 }
 
-/** Описание одного слота для UI: прочность, цена ремонта, цена улучшения */
+/** ?8A0=85 >4=>3> A;>B0 4;O UI: ?@>G=>ABL, F5=0 @5<>=B0, F5=0 C;CGH5=8O */
 function describeSlot(slot, item) {
     if (!item) return null;
 
@@ -58,8 +60,8 @@ function describeSlot(slot, item) {
         slot,
         item: {
             id: item.id ?? null,
-            name: item.name || 'Предмет',
-            icon: item.icon || '📦',
+            name: item.name || '@54<5B',
+            icon: item.icon || '=пїЅ',
             rarity: item.rarity || 'common',
             category: item.category || item.type || null,
             stats: item.stats || {},
@@ -80,11 +82,11 @@ function describeSlot(slot, item) {
 }
 
 /**
- * Модификации предмета для UI.
+ * >48D8:0F88 ?@54<5B0 4;O UI.
  *
- * Колонка items.modifications была мёртвой — теперь её читает бой
- * (getEffectiveStatValue) и эта панель. Возвращаем только применимые
- * предмету модификации, чтобы кнопки не предлагали «Заточку» броне.
+ * >;>=:0 items.modifications 1K;0 <Q@B2>9  B5?5@L 5Q G8B05B 1>9
+ * (getEffectiveStatValue) 8 MB0 ?0=5;L. >72@0I05< B>;L:> ?@8<5=8<K5
+ * ?@54<5BC <>48D8:0F88, GB>1K :=>?:8 =5 ?@54;030;8 пїЅ0B>G:CпїЅ 1@>=5.
  */
 function describeModifications(item) {
     const list = [];
@@ -105,24 +107,24 @@ function describeModifications(item) {
     return list;
 }
 
-/** Сколько материалов (material/ammo) лежит в инвентаре */
+/** !:>;L:> <0B5@80;>2 (material/ammo) ;568B 2 8=25=B0@5 */
 function summarizeMaterials(inventory) {
     const counts = {};
     for (const item of Array.isArray(inventory) ? inventory : []) {
         const category = String(item.category || item.type || '').toLowerCase();
         if (!['material', 'ammo'].includes(category)) continue;
-        const name = item.name || 'Предмет';
+        const name = item.name || '@54<5B';
         counts[name] = (counts[name] || 0) + Math.max(0, Number(item.quantity || 1));
     }
     return counts;
 }
 
 /**
- * GET /api/game/workshop — что надето, сколько стоит починка и апгрейд.
+ * GET /api/game/workshop  GB> =045B>, A:>;L:> AB>8B ?>G8=:0 8 0?3@594.
  */
 router.get('/', async (req, res) => {
     try {
-        if (!req.player?.id) return unauthorized(res);
+        if (!playerIdGuard(req, res)) return;
 
         const playerResult = await query(
             'SELECT coins, equipment, inventory FROM players WHERE id = $1',
@@ -131,7 +133,7 @@ router.get('/', async (req, res) => {
         const player = playerResult.rows[0] || null;
 
         if (!player) {
-            return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
+            return notFound(res, '3@>: =5 =0945=', 'PLAYER_NOT_FOUND');
         }
 
         const equipment = normalizeEquipment(player.equipment);
@@ -147,43 +149,42 @@ router.get('/', async (req, res) => {
             materials: summarizeMaterials(normalizeInventory(player.inventory))
         });
     } catch (error) {
-        if (handleConnectionError(res, error)) return;
-        return handleError(res, error, 'workshop_view');
+        return handleRouteError(res, error, 'workshop_view', req.playerId);
     }
 });
 /**
- * POST /api/game/workshop/repair — восстановить прочность слота.
- * Стоимость: половина цены предмета за полный износ
- * (calculateRepairCost в public/shared/equipment.js).
+ * POST /api/game/workshop/repair  2>AAB0=>28BL ?@>G=>ABL A;>B0.
+ * !B>8<>ABL: ?>;>28=0 F5=K ?@54<5B0 70 ?>;=K9 87=>A
+ * (calculateRepairCost 2 public/shared/equipment.js).
  */
 router.post('/repair', async (req, res) => {
-    if (!req.player?.id) return unauthorized(res);
+    if (!playerIdGuard(req, res)) return;
     try {
         const slot = String(req.body?.slot || '');
         if (!isValidSlot(slot)) {
-            return fail(res, 'Укажите корректный слот', 'INVALID_SLOT');
+            return fail(res, '#:068B5 :>@@5:B=K9 A;>B', 'INVALID_SLOT');
         }
 
         const result = await transaction(async (client) => {
             const player = await lockPlayer(req.player?.id, client, 'coins, equipment');
 
             if (!player) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+                throw { message: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
             const equipment = normalizeEquipment(player.equipment);
             const item = equipment[slot];
             if (!item) {
-                throw { message: 'В этом слоте ничего нет', code: 'SLOT_EMPTY', statusCode: 400 };
+                throw { message: ' MB>< A;>B5 =8G53> =5B', code: 'SLOT_EMPTY', statusCode: 400 };
             }
 
             const cost = equipmentRules.calculateRepairCost(item);
             if (!Number.isFinite(cost) || cost <= 0) {
-                throw { message: 'Предмет не изношен', code: 'NOT_BROKEN', statusCode: 400 };
+                throw { message: '@54<5B =5 87=>H5=', code: 'NOT_BROKEN', statusCode: 400 };
             }
             if (Number(player.coins || 0) < cost) {
                 throw {
-                    message: `Недостаточно монет. Нужно ${cost}, у вас ${player.coins}`,
+                    message: `54>AB0B>G=> <>=5B. C6=> ${cost}, C 20A ${player.coins}`,
                     code: 'INSUFFICIENT_COINS',
                     statusCode: 400
                 };
@@ -199,7 +200,7 @@ router.post('/repair', async (req, res) => {
 
             return {
                 success: true,
-                message: `${item.name || 'Предмет'} отремонтирован`,
+                message: `${item.name || '@54<5B'} >B@5<>=B8@>20=`,
                 slot,
                 coins_spent: cost,
                 coins_total: Number(player.coins || 0) - cost,
@@ -221,8 +222,8 @@ router.post('/repair', async (req, res) => {
     }
 });
 /**
- * POST /api/game/workshop/repair-all — починить все сломанные/изношенные предметы экипировки.
- * Считает общую стоимость и восстанавливает durability до max для всех слотов.
+ * POST /api/game/workshop/repair-all  ?>G8=8BL 2A5 A;><0==K5/87=>H5==K5 ?@54<5BK M:8?8@>2:8.
+ * !G8B05B >1ICN AB>8<>ABL 8 2>AAB0=02;8205B durability 4> max 4;O 2A5E A;>B>2.
  */
 router.post('/repair-all', async (req, res) => {
     try {
@@ -231,12 +232,12 @@ router.post('/repair-all', async (req, res) => {
 
         const result = await transaction(async (client) => {
             const player = await lockPlayer(playerId, client, 'coins, equipment');
-            if (!player) return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+            if (!player) return { status: 404, body: { success: false, error: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND' } };
 
             const equipment = normalizeEquipment(player.equipment);
             const slots = Object.keys(equipment);
             if (slots.length === 0) {
-                return { status: 400, body: { success: false, error: 'Нет экипировки для ремонта', code: 'NO_EQUIPMENT' } };
+                return { status: 400, body: { success: false, error: '5B M:8?8@>2:8 4;O @5<>=B0', code: 'NO_EQUIPMENT' } };
             }
 
             let totalCost = 0;
@@ -252,11 +253,11 @@ router.post('/repair-all', async (req, res) => {
             }
 
             if (totalCost === 0) {
-                return { status: 200, body: { success: true, data: { total_cost: 0, repaired: [], message: 'Всё уже в идеальном состоянии' } } };
+                return { status: 200, body: { success: true, data: { total_cost: 0, repaired: [], message: 'AQ C65 2 8450;L=>< A>AB>O=88' } } };
             }
 
             if (Number(player.coins || 0) < totalCost) {
-                return { status: 400, body: { success: false, error: 'Недостаточно монет', code: 'NOT_ENOUGH_COINS', data: { total_cost: totalCost, coins: Number(player.coins || 0) } } };
+                return { status: 400, body: { success: false, error: '54>AB0B>G=> <>=5B', code: 'NOT_ENOUGH_COINS', data: { total_cost: totalCost, coins: Number(player.coins || 0) } } };
             }
 
             for (const slot of repairedSlots) {
@@ -271,7 +272,7 @@ router.post('/repair-all', async (req, res) => {
                 [totalCost, JSON.stringify(equipment), playerId]
             );
 
-            // Синхронизация инвентаря в нормализованную таблицу
+            // !8=E@>=870F8O 8=25=B0@O 2 =>@<0;87>20==CN B01;8FC
             try {
                 const { syncInventoryToTable } = require('../../utils/game-helpers');
                 if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, normalizeInventory(player.inventory));
@@ -284,7 +285,7 @@ router.post('/repair-all', async (req, res) => {
                     data: {
                         total_cost: totalCost,
                         repaired: repairedSlots,
-                        message: 'Починено ' + repairedSlots.length + ' предметов за ' + totalCost + ' монет'
+                        message: '>G8=5=> ' + repairedSlots.length + ' ?@54<5B>2 70 ' + totalCost + ' <>=5B'
                     }
                 }
             };
@@ -292,18 +293,17 @@ router.post('/repair-all', async (req, res) => {
 
         res.status(result.status).json(result.body);
     } catch (error) {
-        if (handleConnectionError(res, error)) return;
-        handleError(res, error, 'workshop_repair_all');
+        handleRouteError(res, error, 'workshop_repair_all', req.playerId);
     }
 });
 
 /**
- * POST /api/game/workshop/upgrade — +1 уровень улучшения.
- * Каждый уровень даёт +8% к урону/защите, максимум 10.
- * Цена: монеты + материал по редкости (+ патроны для стрелкового оружия).
+ * POST /api/game/workshop/upgrade  +1 C@>25=L C;CGH5=8O.
+ * 064K9 C@>25=L 40QB +8% : C@>=C/70I8B5, <0:A8<C< 10.
+ * &5=0: <>=5BK + <0B5@80; ?> @54:>AB8 (+ ?0B@>=K 4;O AB@5;:>2>3> >@C68O).
  */
 /**
- * POST /api/game/workshop/scrap-all — разобрать все сломанные предметы в инвентаре.
+ * POST /api/game/workshop/scrap-all  @07>1@0BL 2A5 A;><0==K5 ?@54<5BK 2 8=25=B0@5.
  */
 router.post('/scrap-all', async (req, res) => {
     try {
@@ -312,9 +312,9 @@ router.post('/scrap-all', async (req, res) => {
 
         const result = await transaction(async (client) => {
             const player = await lockPlayer(playerId, client, 'coins, inventory');
-            if (!player) return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+            if (!player) return { status: 404, body: { success: false, error: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND' } };
 
-            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
+            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id) || normalizeInventory(player.inventory);
             const toScrap = inventory.filter((item) => {
                 if (!item || !equipmentRules.isEquipmentItem(item)) return false;
                 const info = equipmentRules.getDurabilityInfo(item);
@@ -322,10 +322,10 @@ router.post('/scrap-all', async (req, res) => {
             });
 
             if (toScrap.length === 0) {
-                return { status: 200, body: { success: true, data: { scrapped: 0, materials: {}, message: 'Нет сломанных предметов' } } };
+                return { status: 200, body: { success: true, data: { scrapped: 0, materials: {}, message: '5B A;><0==KE ?@54<5B>2' } } };
             }
 
-            // Считаем получаемые материалы
+            // !G8B05< ?>;CG05<K5 <0B5@80;K
             const gainedMaterials = {};
             for (const item of toScrap) {
                 const yield_ = equipmentRules.calculateScrapYield(item);
@@ -334,29 +334,26 @@ router.post('/scrap-all', async (req, res) => {
                 }
             }
 
-            // Удаляем сломанные предметы из инвентаря
+            // #40;O5< A;><0==K5 ?@54<5BK 87 8=25=B0@O
             const remaining = inventory.filter((item) => {
                 if (!item || !equipmentRules.isEquipmentItem(item)) return true;
                 const info = equipmentRules.getDurabilityInfo(item);
                 return !info.isBroken;
             });
 
-            // Проверяем, что добавление материалов не превысит лимит слотов
+            // @>25@O5<, GB> 4>102;5=85 <0B5@80;>2 =5 ?@52KA8B ;8<8B A;>B>2
             const MAX_SLOTS = 100;
             const materialCount = Object.keys(gainedMaterials).length;
             if (remaining.length + materialCount > MAX_SLOTS) {
-                return { status: 400, body: { success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' } };
+                return { status: 400, body: { success: false, error: '=25=B0@L ?5@5?>;=5=', code: 'INVENTORY_FULL' } };
             }
 
-            // Добавляем материалы
+            // >102;O5< <0B5@80;K
             for (const [mat, qty] of Object.entries(gainedMaterials)) {
-                helpers.addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty, durability: 100, max_durability: 100 }, null);
+                helpers.addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '=пїЅ', quantity: qty, durability: 100, max_durability: 100 }, null);
             }
 
-            await client.query(
-                'UPDATE players SET inventory = $1::jsonb WHERE id = $2',
-                [JSON.stringify(remaining), playerId]
-            );
+            await setPlayerInventory(req.player?.id, remaining, client, { jsonb: false });
 
             return {
                 status: 200,
@@ -365,7 +362,7 @@ router.post('/scrap-all', async (req, res) => {
                     data: {
                         scrapped: toScrap.length,
                         materials: gainedMaterials,
-                        message: 'Разобрано ' + toScrap.length + ' предметов'
+                        message: ' 07>1@0=> ' + toScrap.length + ' ?@54<5B>2'
                     }
                 }
             };
@@ -373,58 +370,57 @@ router.post('/scrap-all', async (req, res) => {
 
         res.status(result.status).json(result.body);
     } catch (error) {
-        if (handleConnectionError(res, error)) return;
-        handleError(res, error, 'workshop_scrap_all');
+        handleRouteError(res, error, 'workshop_scrap_all', req.playerId);
     }
 });
 
 router.post('/upgrade', async (req, res) => {
-    if (!req.player?.id) return unauthorized(res);
+    if (!playerIdGuard(req, res)) return;
     try {
         const slot = String(req.body?.slot || '');
         if (!isValidSlot(slot)) {
-            return fail(res, 'Укажите корректный слот', 'INVALID_SLOT');
+            return fail(res, '#:068B5 :>@@5:B=K9 A;>B', 'INVALID_SLOT');
         }
 
         const result = await transaction(async (client) => {
             const player = await lockPlayer(req.player?.id, client, 'coins, equipment, inventory');
 
             if (!player) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+                throw { message: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
             const equipment = normalizeEquipment(player.equipment);
             const item = equipment[slot];
             if (!item) {
-                throw { message: 'В этом слоте ничего нет', code: 'SLOT_EMPTY', statusCode: 400 };
+                throw { message: ' MB>< A;>B5 =8G53> =5B', code: 'SLOT_EMPTY', statusCode: 400 };
             }
 
             const cost = equipmentRules.calculateUpgradeCost(item);
             if (!cost || typeof cost !== 'object') {
                 throw {
-                    message: `Максимальный уровень улучшения: ${equipmentRules.MAX_UPGRADE_LEVEL}`,
+                    message: `0:A8<0;L=K9 C@>25=L C;CGH5=8O: ${equipmentRules.MAX_UPGRADE_LEVEL}`,
                     code: 'MAX_UPGRADE_LEVEL',
                     statusCode: 400
                 };
             }
             if (Number(player.coins || 0) < cost.coins) {
                 throw {
-                    message: `Недостаточно монет. Нужно ${cost.coins}, у вас ${player.coins}`,
+                    message: `54>AB0B>G=> <>=5B. C6=> ${cost.coins}, C 20A ${player.coins}`,
                     code: 'INSUFFICIENT_COINS',
                     statusCode: 400
                 };
             }
 
             const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
-            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
+            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id) || normalizeInventory(player.inventory);
 
-            // Сначала проверяем весь список: нельзя списать часть материалов
-            // и упасть на нехватке следующего.
+            // !=0G0;0 ?@>25@O5< 25AL A?8A>:: =5;L7O A?8A0BL G0ABL <0B5@80;>2
+            // 8 C?0ABL =0 =5E20B:5 A;54CNI53>.
             for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 if (!material) {
-                    logger.warn('[workshop] Материал улучшения отсутствует в каталоге', { name });
-                    throw { message: `Материал «${name}» недоступен`, code: 'MATERIAL_MISSING', statusCode: 500 };
+                    logger.warn('[workshop] 0B5@80; C;CGH5=8O >BACBAB2C5B 2 :0B0;>35', { name });
+                    throw { message: `0B5@80; пїЅ${name}пїЅ =54>ABC?5=`, code: 'MATERIAL_MISSING', statusCode: 500 };
                 }
 
                 const owned = inventory
@@ -433,7 +429,7 @@ router.post('/upgrade', async (req, res) => {
 
                 if (owned < required) {
                     throw {
-                        message: `Не хватает материала «${name}»: нужно ${required}, есть ${owned}`,
+                        message: `5 E20B05B <0B5@80;0 пїЅ${name}пїЅ: =C6=> ${required}, 5ABL ${owned}`,
                         code: 'INSUFFICIENT_MATERIALS',
                         statusCode: 400,
                         material: name,
@@ -464,7 +460,7 @@ router.post('/upgrade', async (req, res) => {
             equipment[slot] = {
                 ...item,
                 upgrade_level: cost.next_level,
-                // Улучшили — прочность восстанавливается полностью.
+                // #;CGH8;8  ?@>G=>ABL 2>AAB0=02;8205BAO ?>;=>ABLN.
                 durability: equipmentRules.getDurabilityInfo(item).max
             };
 
@@ -476,7 +472,7 @@ router.post('/upgrade', async (req, res) => {
             const upgraded = equipment[slot];
             return {
                 success: true,
-                message: `${item.name || 'Предмет'} улучшен до +${cost.next_level}`,
+                message: `${item.name || '@54<5B'} C;CGH5= 4> +${cost.next_level}`,
                 slot,
                 upgrade_level: cost.next_level,
                 coins_spent: cost.coins,
@@ -503,41 +499,41 @@ router.post('/upgrade', async (req, res) => {
 });
 
 /**
- * POST /api/game/workshop/modify — установить модификацию на слот.
+ * POST /api/game/workshop/modify  CAB0=>28BL <>48D8:0F8N =0 A;>B.
  * body: { slot, modification: 'sharpening' | 'plating' }
  *
- * Модификация даёт ПЛОСКИЙ бонус (Заточка +4 урона за уровень, Облицовка
- * +3 защиты), максимум 3 уровня. Материалы: у оружия — металл и провода,
- * у брони — дерево, ткань и пластик.
+ * >48D8:0F8O 40QB ! 1>=CA (0B>G:0 +4 C@>=0 70 C@>25=L, 1;8F>2:0
+ * +3 70I8BK), <0:A8<C< 3 C@>2=O. 0B5@80;K: C >@C68O  <5B0;; 8 ?@>2>40,
+ * C 1@>=8  45@52>, B:0=L 8 ?;0AB8:.
  */
 router.post('/modify', async (req, res) => {
-    if (!req.player?.id) return unauthorized(res);
+    if (!playerIdGuard(req, res)) return;
     try {
         const slot = String(req.body?.slot || '');
         const modification = String(req.body?.modification || '');
 
         if (!isValidSlot(slot)) {
-            return fail(res, 'Укажите корректный слот', 'INVALID_SLOT');
+            return fail(res, '#:068B5 :>@@5:B=K9 A;>B', 'INVALID_SLOT');
         }
         if (!Object.prototype.hasOwnProperty.call(equipmentRules.MODIFICATIONS, modification) || !equipmentRules.MODIFICATIONS[modification]) {
-            return res.status(400).json({ success: false, error: 'Неизвестная модификация', code: 'INVALID_MODIFICATION' });
+            return res.status(400).json({ success: false, error: '58725AB=0O <>48D8:0F8O', code: 'INVALID_MODIFICATION' });
         }
 
         const result = await transaction(async (client) => {
             const player = await lockPlayer(req.player?.id, client, 'coins, equipment, inventory');
 
             if (!player) {
-                throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+                throw { message: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
             const equipment = normalizeEquipment(player.equipment);
             const item = equipment[slot];
             if (!item) {
-                throw { message: 'В этом слоте ничего нет', code: 'SLOT_EMPTY', statusCode: 400 };
+                throw { message: ' MB>< A;>B5 =8G53> =5B', code: 'SLOT_EMPTY', statusCode: 400 };
             }
             if (!equipmentRules.isModificationApplicable(item, modification)) {
                 throw {
-                    message: `«${equipmentRules.MODIFICATIONS[modification].name}» не подходит этому предмету`,
+                    message: `пїЅ${equipmentRules.MODIFICATIONS[modification].name}пїЅ =5 ?>4E>48B MB><C ?@54<5BC`,
                     code: 'MODIFICATION_NOT_APPLICABLE',
                     statusCode: 400
                 };
@@ -546,27 +542,27 @@ router.post('/modify', async (req, res) => {
             const cost = equipmentRules.calculateModificationCost(item, modification);
             if (!cost || typeof cost !== 'object') {
                 throw {
-                    message: `Максимальный уровень модификации: ${equipmentRules.MAX_MODIFICATION_LEVEL}`,
+                    message: `0:A8<0;L=K9 C@>25=L <>48D8:0F88: ${equipmentRules.MAX_MODIFICATION_LEVEL}`,
                     code: 'MAX_MODIFICATION_LEVEL',
                     statusCode: 400
                 };
             }
             if (Number(player.coins || 0) < cost.coins) {
                 throw {
-                    message: `Недостаточно монет. Нужно ${cost.coins}, у вас ${player.coins}`,
+                    message: `54>AB0B>G=> <>=5B. C6=> ${cost.coins}, C 20A ${player.coins}`,
                     code: 'INSUFFICIENT_COINS',
                     statusCode: 400
                 };
             }
 
-            const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(player.inventory);
+            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id) || normalizeInventory(player.inventory);
             const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
 
             for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 if (!material) {
-                    logger.warn('[workshop] Материал модификации отсутствует в каталоге', { name });
-                    throw { message: `Материал «${name}» недоступен`, code: 'MATERIAL_MISSING', statusCode: 500 };
+                    logger.warn('[workshop] 0B5@80; <>48D8:0F88 >BACBAB2C5B 2 :0B0;>35', { name });
+                    throw { message: `0B5@80; пїЅ${name}пїЅ =54>ABC?5=`, code: 'MATERIAL_MISSING', statusCode: 500 };
                 }
 
                 const owned = inventory
@@ -575,7 +571,7 @@ router.post('/modify', async (req, res) => {
 
                 if (owned < required) {
                     throw {
-                        message: `Не хватает материала «${name}»: нужно ${required}, есть ${owned}`,
+                        message: `5 E20B05B <0B5@80;0 пїЅ${name}пїЅ: =C6=> ${required}, 5ABL ${owned}`,
                         code: 'INSUFFICIENT_MATERIALS',
                         statusCode: 400,
                         material: name,
@@ -585,7 +581,7 @@ router.post('/modify', async (req, res) => {
                 }
             }
 
-// Списываем материалы пачками (проверка выше гарантирует, что хватит).
+// !?8AK205< <0B5@80;K ?0G:0<8 (?@>25@:0 2KH5 30@0=B8@C5B, GB> E20B8B).
             for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 let left = required;
@@ -618,7 +614,7 @@ router.post('/modify', async (req, res) => {
             const modified = equipment[slot];
             return {
                 success: true,
-                message: `${item.name || 'Предмет'}: ${equipmentRules.MODIFICATIONS[modification].name} +${cost.next_level}`,
+                message: `${item.name || '@54<5B'}: ${equipmentRules.MODIFICATIONS[modification].name} +${cost.next_level}`,
                 slot,
                 modification,
                 level: cost.next_level,
@@ -649,3 +645,4 @@ router.post('/modify', async (req, res) => {
 });
 
 module.exports = router;
+

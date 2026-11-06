@@ -1,58 +1,34 @@
-/**
- * Состояние игрока (здоровье, голод, радиация и т.д.)
+﻿/**
+ * РЎРѕСЃС‚РѕСЏРЅРёРµ РёРіСЂРѕРєР° (Р·РґРѕСЂРѕРІСЊРµ, РіРѕР»РѕРґ, СЂР°РґРёР°С†РёСЏ Рё С‚.Рґ.)
  */
-
+const { transaction } = require('../../db/database');
 const express = require('express');
 const router = express.Router();
-const { transaction, queryOne } = require('../../db/database');
 const { lockPlayer } = require('../../db/players');
 const { DEBUFF_CONFIG, getDebuffTier, normalizeRadiationLevel, calculateRadiationDamage } = require('../../utils/gameConstants');
-// Порог урона от заражения больше не нужен здесь: нормализация уровня и
-// сама формула урона теперь в utils/gameConstants.js (debuffs.js считает
-// тем же путем) — раньше «5» было вписано и здесь, и в debuffs.js.
-const { handleError, logPlayerAction, unauthorized, ok, safeJsonParse } = require('../../utils/serverApi');
-const { validateId } = require('../../utils/validate');
-
-// Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
-// функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
-// (иначе цикл загрузки модулей). Общий загрузчик — utils/getGameHelpers.js.
-const { getGameHelpers } = require('../../utils/getGameHelpers');
-
-// Экспортируемые функции через getGameHelpers()
-const helpers = getGameHelpers();
-const { buildPlayerStatus, normalizeInventory, consumeInventoryItem } = helpers;
-
-
-
-/**
- * Универсальная функция получения статуса игрока
- * @param {object} player - Объект игрока из БД
- * @returns {object} Статус игрока
- */
-function getPlayerStatus(player) {
-    return {
-        success: true,
-        ...buildPlayerStatus(player)
-    };
-}
-
+// РџРѕСЂРѕРі СѓСЂРѕРЅР° РѕС‚ Р·Р°СЂР°Р¶РµРЅРёСЏ Р±РѕР»СЊС€Рµ РЅРµ РЅСѓР¶РµРЅ Р·РґРµСЃСЊ: РЅРѕСЂРјР°Р»РёР·Р°С†РёСЏ СѓСЂРѕРІРЅСЏ Рё
+// СЃР°РјР° С„РѕСЂРјСѓР»Р° СѓСЂРѕРЅР° С‚РµРїРµСЂСЊ РІ utils/gameConstants.js (debuffs.js СЃС‡РёС‚Р°РµС‚
+// С‚РµРј Р¶Рµ РїСѓС‚РµРј) вЂ” СЂР°РЅСЊС€Рµ В«5В» Р±С‹Р»Рѕ РІРїРёСЃР°РЅРѕ Рё Р·РґРµСЃСЊ, Рё РІ debuffs.js.
+const { handleError, logPlayerAction, unauthorized } = require('../../utils/serverApi');
+const { parseRadiation } = require('../../utils/normalizePlayerJson');
+const { setPlayerRadiation } = require('../../db/playerRepository');
 async function runStatusCheck(client, playerId) {
     const p = await lockPlayer(playerId, client, 'health, radiation');
 
     if (!p) {
-        throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+        throw { message: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
     }
 
     const radConfig = DEBUFF_CONFIG?.radiation || { damagePerLevel: 5, maxLevel: 10 };
     const now = new Date();
 
     let radiationLevel = normalizeRadiationLevel(p.radiation);
-    const radiation = safeJsonParse(p.radiation, { level: 0, expires_at: null });
+    const radiation = parseRadiation(p.radiation);
     if (radiation.expires_at) {
         const expiresAt = new Date(radiation.expires_at);
         if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= now) {
             radiationLevel = 0;
-            await client.query(`UPDATE players SET radiation = $1 WHERE id = $2`, [JSON.stringify({ level: 0, expires_at: null, applied_at: null }), playerId]);
+            await setPlayerRadiation(playerId, { level: 0, expires_at: null, applied_at: null }, client, { jsonb: false });
         }
     }
     radiationLevel = Math.min(radiationLevel, radConfig.maxLevel || 10);
@@ -91,9 +67,9 @@ async function runStatusCheck(client, playerId) {
 
 
 /**
- * Проверка состояния (ежедневный эффект)
- * POST /status/check → POST /api/game/status/check
- * Путь: /check (внутри роутера)
+ * РџСЂРѕРІРµСЂРєР° СЃРѕСЃС‚РѕСЏРЅРёСЏ (РµР¶РµРґРЅРµРІРЅС‹Р№ СЌС„С„РµРєС‚)
+ * POST /status/check в†’ POST /api/game/status/check
+ * РџСѓС‚СЊ: /check (РІРЅСѓС‚СЂРё СЂРѕСѓС‚РµСЂР°)
  */
 router.post('/check', async (req, res) => {
     try {
@@ -104,10 +80,10 @@ router.post('/check', async (req, res) => {
             return unauthorized(res);
         }
         
-        // Используем транзакцию с блокировкой строки
+        // РСЃРїРѕР»СЊР·СѓРµРј С‚СЂР°РЅР·Р°РєС†РёСЋ СЃ Р±Р»РѕРєРёСЂРѕРІРєРѕР№ СЃС‚СЂРѕРєРё
         const result = await transaction(async (client) => runStatusCheck(client, playerId));
         
-        // Логируем действие
+        // Р›РѕРіРёСЂСѓРµРј РґРµР№СЃС‚РІРёРµ
         await logPlayerAction(playerId, 'status_check', {
             damage: result.totalDamage,
             effects: result.effects
@@ -120,7 +96,7 @@ router.post('/check', async (req, res) => {
             health: result.health,
             effects: result.effects,
             states: result.states,
-            message: result.radiationLevel > 0 ? 'Получено урона от дебаффов!' : 'Всё в порядке'
+            message: result.radiationLevel > 0 ? 'РџРѕР»СѓС‡РµРЅРѕ СѓСЂРѕРЅР° РѕС‚ РґРµР±Р°С„С„РѕРІ!' : 'Р’СЃС‘ РІ РїРѕСЂСЏРґРєРµ'
         });
         
     } catch (error) {

@@ -424,7 +424,7 @@ router.post('/clan/leave', wrap(async (req, res) => {
     }
     
     if (player.clan_role === 'leader') {
-        const result = await withPlayerLock(playerId, async (client, lockedPlayer) => {
+        await withPlayerLock(playerId, async (client, lockedPlayer) => {
             if (!lockedPlayer) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }

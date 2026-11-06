@@ -1,12 +1,12 @@
 // routes/game/contracts.js
 // Контракты выживших: генерация, прогресс, выдача наград, claim, abandon, reroll.
 const express = require('express');
-const { transaction, query, queryOne } = require('../../db/database');
-const { validateId, requireAuth } = require('../../utils/validate');
-const { getGameHelpers, normalizeInventory } = require('../../utils/game-helpers');
 const { safeJsonParse } = require('../../utils/serverApi');
 const { lockPlayer } = require('../../db/players');
 const { logPlayerAction } = require('../../utils/log');
+const { playerIdGuard, handleRouteError } = require('../../utils/routeHelpers');
+const { normalizeInventory } = require('../../utils/game-helpers');
+const { setPlayerInventory } = require('../../db/playerRepository');
 
 const router = express.Router();
 
@@ -54,8 +54,8 @@ async function generateContracts(client, playerId, level, count = 1) {
 // GET /contracts — список доступных контрактов
 router.get('/', async (req, res) => {
     try {
-        const playerId = req.playerId;
-        if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
+        const playerId = playerIdGuard(req, res);
+        if (!playerId) return;
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const player = await lockPlayer(playerId, client, 'id, level');
@@ -108,17 +108,15 @@ router.get('/', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleConnectionError, handleError } = require('../../utils/serverApi');
-        if (handleConnectionError(res, error)) return;
-        handleError(res, error, 'contracts_list');
+        handleRouteError(res, error, 'contracts_list', req.playerId);
     }
 });
 
 // POST /contracts/accept — принять контракт
 router.post('/accept', async (req, res) => {
     try {
-        const playerId = req.playerId;
-        if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
+        const playerId = playerIdGuard(req, res);
+        if (!playerId) return;
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');
         if (!idCheck.ok) return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
@@ -161,17 +159,15 @@ router.post('/accept', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleConnectionError, handleError } = require('../../utils/serverApi');
-        if (handleConnectionError(res, error)) return;
-        handleError(res, error, 'contract_accept');
+        handleRouteError(res, error, 'contract_accept', req.playerId);
     }
 });
 
 // POST /contracts/progress — обновить прогресс контракта
 router.post('/progress', async (req, res) => {
     try {
-        const playerId = req.playerId;
-        if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
+        const playerId = playerIdGuard(req, res);
+        if (!playerId) return;
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');
         if (!idCheck.ok) return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
@@ -228,17 +224,15 @@ router.post('/progress', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        const { handleConnectionError, handleError } = require('../../utils/serverApi');
-        if (handleConnectionError(res, error)) return;
-        handleError(res, error, 'contract_progress');
+        handleRouteError(res, error, 'contract_progress', req.playerId);
     }
 });
 
 // POST /contracts/claim — забрать награду
 router.post('/claim', async (req, res) => {
     try {
-        const playerId = req.playerId;
-        if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
+        const playerId = playerIdGuard(req, res);
+        if (!playerId) return;
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');
         if (!idCheck.ok) return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
@@ -284,7 +278,7 @@ router.post('/claim', async (req, res) => {
                 for (const item of reward.items) {
                     addItemToInventory(inventory, item, null);
                 }
-                await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
+                await setPlayerInventory(playerId, inventory, client);
             }
             if (reward.materials && typeof reward.materials === 'object') {
                 // Материалы добавляются как предметы типа 'material'
@@ -294,7 +288,7 @@ router.post('/claim', async (req, res) => {
                 for (const [matName, qty] of Object.entries(reward.materials)) {
                     addItemToInventory(inventory, { name: matName, type: 'material', category: 'material', rarity: 'common', icon: '📦', quantity: qty }, null);
                 }
-                await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
+                await setPlayerInventory(playerId, inventory, client);
             }
 
             // Репутация
@@ -343,17 +337,15 @@ router.post('/claim', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleConnectionError, handleError } = require('../../utils/serverApi');
-        if (handleConnectionError(res, error)) return;
-        handleError(res, error, 'contract_claim');
+        handleRouteError(res, error, 'contract_claim', req.playerId);
     }
 });
 
 // POST /contracts/abandon — отказаться от контракта
 router.post('/abandon', async (req, res) => {
     try {
-        const playerId = req.playerId;
-        if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
+        const playerId = playerIdGuard(req, res);
+        if (!playerId) return;
 
         const idCheck = (require('../../utils/validate').validateId)(req.body?.contract_id, 'ID контракта');
         if (!idCheck.ok) return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
@@ -409,9 +401,7 @@ router.post('/abandon', async (req, res) => {
             } catch (_) { /* ignore */ }
         }
     } catch (error) {
-        const { handleConnectionError, handleError } = require('../../utils/serverApi');
-        if (handleConnectionError(res, error)) return;
-        handleError(res, error, 'contract_abandon');
+        handleRouteError(res, error, 'contract_abandon', req.playerId);
     }
 });
 

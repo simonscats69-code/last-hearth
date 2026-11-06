@@ -1,15 +1,15 @@
-/**
- * Локации и поиск лута
+﻿/**
+ * Р›РѕРєР°С†РёРё Рё РїРѕРёСЃРє Р»СѓС‚Р°
  * @module game/world
  */
 
 const express = require('express');
 const router = express.Router();
-// Раньше обработчики поиска и перемещения сами брали соединение из пула
-// и вручную писали BEGIN/COMMIT/ROLLBACK. Теперь это делает
-// transaction() — он же и освобождает соединение в finally.
-// См. пояснение в POST /world/search.
-const { query, queryAll, describeError, transaction } = require('../../db/database');
+// Р Р°РЅСЊС€Рµ РѕР±СЂР°Р±РѕС‚С‡РёРєРё РїРѕРёСЃРєР° Рё РїРµСЂРµРјРµС‰РµРЅРёСЏ СЃР°РјРё Р±СЂР°Р»Рё СЃРѕРµРґРёРЅРµРЅРёРµ РёР· РїСѓР»Р°
+// Рё РІСЂСѓС‡РЅСѓСЋ РїРёСЃР°Р»Рё BEGIN/COMMIT/ROLLBACK. РўРµРїРµСЂСЊ СЌС‚Рѕ РґРµР»Р°РµС‚
+// transaction() вЂ” РѕРЅ Р¶Рµ Рё РѕСЃРІРѕР±РѕР¶РґР°РµС‚ СЃРѕРµРґРёРЅРµРЅРёРµ РІ finally.
+// РЎРј. РїРѕСЏСЃРЅРµРЅРёРµ РІ POST /world/search.
+const { query, queryAll, transaction } = require('../../db/database');
 const { lockPlayer } = require('../../db/players');
 const {
     DEBUFF_CONFIG,
@@ -19,22 +19,24 @@ const {
     calculateLocationRiskProfile,
     calculateRadiationDamage
 } = require('../../utils/gameConstants');
-const { logger, safeJsonParse, handleError, unauthorized } = require('../../utils/serverApi');
+const { logger, safeJsonParse, unauthorized } = require('../../utils/serverApi');
+const { playerIdGuard, handleRouteError } = require('../../utils/routeHelpers');
+const { setPlayerRadiation } = require('../../db/playerRepository');
 
-// Ленивая загрузка helpers: utils/game-helpers.js — единственный источник
-// функций состояния игрока. Он тянет db/database, поэтому импорт ленивый
-// (иначе цикл загрузки модулей). Общий загрузчик — utils/getGameHelpers.js.
+// Р›РµРЅРёРІР°СЏ Р·Р°РіСЂСѓР·РєР° helpers: utils/game-helpers.js вЂ” РµРґРёРЅСЃС‚РІРµРЅРЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє
+// С„СѓРЅРєС†РёР№ СЃРѕСЃС‚РѕСЏРЅРёСЏ РёРіСЂРѕРєР°. РћРЅ С‚СЏРЅРµС‚ db/database, РїРѕСЌС‚РѕРјСѓ РёРјРїРѕСЂС‚ Р»РµРЅРёРІС‹Р№
+// (РёРЅР°С‡Рµ С†РёРєР» Р·Р°РіСЂСѓР·РєРё РјРѕРґСѓР»РµР№). РћР±С‰РёР№ Р·Р°РіСЂСѓР·С‡РёРє вЂ” utils/getGameHelpers.js.
 const { getGameHelpers } = require('../../utils/getGameHelpers');
 
-// Экспортируемые функции через getGameHelpers()
+// Р­РєСЃРїРѕСЂС‚РёСЂСѓРµРјС‹Рµ С„СѓРЅРєС†РёРё С‡РµСЂРµР· getGameHelpers()
 const helpers = getGameHelpers();
 const { normalizeInventory, normalizeRadiation, normalizeEquipment, getActiveBuffs, createInventoryItem, recalcEnergy, regenerateHealth, addItemToInventory, equipmentRules, trackCollectedItems, progressDailyTask } = helpers;
-const { lootPoolCache, getLootCacheReady, buildLootCache, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
+const { getLootCacheReady, getLootTypePool, getRandomLootItemFromPool } = require('../../utils/lootCache');
 const crypto = require('crypto');
-// Один require на файл правил: раньше путь '../../public/shared/equipment.js'
-// фигурировал дважды (отдельно для calculateCoinDrop, отдельно для
-// MAX_INVENTORY_SLOTS). Node кэширует модуль, поэтому это было безвредно,
-// но выглядело как два разных источника одних и тех же правил.
+// РћРґРёРЅ require РЅР° С„Р°Р№Р» РїСЂР°РІРёР»: СЂР°РЅСЊС€Рµ РїСѓС‚СЊ '../../public/shared/equipment.js'
+// С„РёРіСѓСЂРёСЂРѕРІР°Р» РґРІР°Р¶РґС‹ (РѕС‚РґРµР»СЊРЅРѕ РґР»СЏ calculateCoinDrop, РѕС‚РґРµР»СЊРЅРѕ РґР»СЏ
+// MAX_INVENTORY_SLOTS). Node РєСЌС€РёСЂСѓРµС‚ РјРѕРґСѓР»СЊ, РїРѕСЌС‚РѕРјСѓ СЌС‚Рѕ Р±С‹Р»Рѕ Р±РµР·РІСЂРµРґРЅРѕ,
+// РЅРѕ РІС‹РіР»СЏРґРµР»Рѕ РєР°Рє РґРІР° СЂР°Р·РЅС‹С… РёСЃС‚РѕС‡РЅРёРєР° РѕРґРЅРёС… Рё С‚РµС… Р¶Рµ РїСЂР°РІРёР».
 const equipmentShared = require('../../public/shared/equipment.js');
 const {
     calculateCoinDrop,
@@ -46,10 +48,10 @@ const {
 } = equipmentShared;
 
 // =============================================================================
-// УТИЛИТЫ
+// РЈРўРР›РРўР«
 // =============================================================================
 
-// --- Баланс опыта за поиск берётся из equipment.js (единый источник правды) --
+// --- Р‘Р°Р»Р°РЅСЃ РѕРїС‹С‚Р° Р·Р° РїРѕРёСЃРє Р±РµСЂС‘С‚СЃСЏ РёР· equipment.js (РµРґРёРЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє РїСЂР°РІРґС‹) --
 
 function validateLocationId(locationId) {
     const num = Number(locationId);
@@ -57,7 +59,7 @@ function validateLocationId(locationId) {
 }
 
 async function getRandomLootItem(client, rarity, locationId) {
-    // P2-9: используем кэш пула ID вместо ORDER BY random() на всей таблице
+    // P2-9: РёСЃРїРѕР»СЊР·СѓРµРј РєСЌС€ РїСѓР»Р° ID РІРјРµСЃС‚Рѕ ORDER BY random() РЅР° РІСЃРµР№ С‚Р°Р±Р»РёС†Рµ
     if (getLootCacheReady()) {
         const itemId = getRandomLootItemFromPool(rarity, locationId);
         if (itemId) {
@@ -74,7 +76,7 @@ async function getRandomLootItem(client, rarity, locationId) {
         }
     }
     
-    // Fallback: прямой запрос если кэш не готов
+    // Fallback: РїСЂСЏРјРѕР№ Р·Р°РїСЂРѕСЃ РµСЃР»Рё РєСЌС€ РЅРµ РіРѕС‚РѕРІ
     const types = getLootTypePool(locationId);
     const result = await client.query(
         `SELECT id, name, type, category, rarity, icon, slot, durability, stats,
@@ -93,28 +95,28 @@ return null;
 
 
 /**
- * Шансы выпадения ключей боссов из поиска.
+ * РЁР°РЅСЃС‹ РІС‹РїР°РґРµРЅРёСЏ РєР»СЋС‡РµР№ Р±РѕСЃСЃРѕРІ РёР· РїРѕРёСЃРєР°.
  *
- * Источник данных — bosses.key_drop_chance (проценты от дропа) вместе с
- * именем/иконкой ключевого предмета. Множитель риска локации сохраняем:
- * чем опаснее зона, тем выше шанс сорвать ключ.
+ * РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С… вЂ” bosses.key_drop_chance (РїСЂРѕС†РµРЅС‚С‹ РѕС‚ РґСЂРѕРїР°) РІРјРµСЃС‚Рµ СЃ
+ * РёРјРµРЅРµРј/РёРєРѕРЅРєРѕР№ РєР»СЋС‡РµРІРѕРіРѕ РїСЂРµРґРјРµС‚Р°. РњРЅРѕР¶РёС‚РµР»СЊ СЂРёСЃРєР° Р»РѕРєР°С†РёРё СЃРѕС…СЂР°РЅСЏРµРј:
+ * С‡РµРј РѕРїР°СЃРЅРµРµ Р·РѕРЅР°, С‚РµРј РІС‹С€Рµ С€Р°РЅСЃ СЃРѕСЂРІР°С‚СЊ РєР»СЋС‡.
  *
- * ОГРАНИЧЕНИЕ: ключи выпадают ТОЛЬКО для следующего босса в последовательности.
- * Игрок не может получить ключ от босса N+2, пока не разблокировал N+1.
- * Это обеспечивает строгую последовательность прогрессии.
+ * РћР“Р РђРќРР§Р•РќРР•: РєР»СЋС‡Рё РІС‹РїР°РґР°СЋС‚ РўРћР›Р¬РљРћ РґР»СЏ СЃР»РµРґСѓСЋС‰РµРіРѕ Р±РѕСЃСЃР° РІ РїРѕСЃР»РµРґРѕРІР°С‚РµР»СЊРЅРѕСЃС‚Рё.
+ * РРіСЂРѕРє РЅРµ РјРѕР¶РµС‚ РїРѕР»СѓС‡РёС‚СЊ РєР»СЋС‡ РѕС‚ Р±РѕСЃСЃР° N+2, РїРѕРєР° РЅРµ СЂР°Р·Р±Р»РѕРєРёСЂРѕРІР°Р» N+1.
+ * Р­С‚Рѕ РѕР±РµСЃРїРµС‡РёРІР°РµС‚ СЃС‚СЂРѕРіСѓСЋ РїРѕСЃР»РµРґРѕРІР°С‚РµР»СЊРЅРѕСЃС‚СЊ РїСЂРѕРіСЂРµСЃСЃРёРё.
  *
- * @param {object} client клиент БД (транзакция)
- * @param {number} playerId ID игрока
+ * @param {object} client РєР»РёРµРЅС‚ Р‘Р” (С‚СЂР°РЅР·Р°РєС†РёСЏ)
+ * @param {number} playerId ID РёРіСЂРѕРєР°
  * @returns {Promise<Array<{bossId:number,chance:number,name:string,icon:string,rarity:string,bossName:string}>>}
  */
 async function getBossKeyChances(client, playerId) {
-    // Определяем следующий босса, которого нужно открыть.
-    // Ищем максимальный boss_id в boss_keys, где у игрока есть ключи,
-    // плюс 1. Если ключей нет — следующий босс = 2 (первый с ключом).
+    // РћРїСЂРµРґРµР»СЏРµРј СЃР»РµРґСѓСЋС‰РёР№ Р±РѕСЃСЃР°, РєРѕС‚РѕСЂРѕРіРѕ РЅСѓР¶РЅРѕ РѕС‚РєСЂС‹С‚СЊ.
+    // РС‰РµРј РјР°РєСЃРёРјР°Р»СЊРЅС‹Р№ boss_id РІ boss_keys, РіРґРµ Сѓ РёРіСЂРѕРєР° РµСЃС‚СЊ РєР»СЋС‡Рё,
+    // РїР»СЋСЃ 1. Р•СЃР»Рё РєР»СЋС‡РµР№ РЅРµС‚ вЂ” СЃР»РµРґСѓСЋС‰РёР№ Р±РѕСЃСЃ = 2 (РїРµСЂРІС‹Р№ СЃ РєР»СЋС‡РѕРј).
     //
-    // Три отдельных запроса (прогресс -> максимум боссов -> ключ) заменены
-    // одним: в нём макс. босс считается подзапросом, а ключ — джойном к нему.
-    // Один roundtrip вместо трёх на КАЖДОМ вызове поиска лута.
+    // РўСЂРё РѕС‚РґРµР»СЊРЅС‹С… Р·Р°РїСЂРѕСЃР° (РїСЂРѕРіСЂРµСЃСЃ -> РјР°РєСЃРёРјСѓРј Р±РѕСЃСЃРѕРІ -> РєР»СЋС‡) Р·Р°РјРµРЅРµРЅС‹
+    // РѕРґРЅРёРј: РІ РЅС‘Рј РјР°РєСЃ. Р±РѕСЃСЃ СЃС‡РёС‚Р°РµС‚СЃСЏ РїРѕРґР·Р°РїСЂРѕСЃРѕРј, Р° РєР»СЋС‡ вЂ” РґР¶РѕР№РЅРѕРј Рє РЅРµРјСѓ.
+    // РћРґРёРЅ roundtrip РІРјРµСЃС‚Рѕ С‚СЂС‘С… РЅР° РљРђР–Р”РћРњ РІС‹Р·РѕРІРµ РїРѕРёСЃРєР° Р»СѓС‚Р°.
     const result = await client.query(`
         WITH next_boss AS (
             SELECT LEAST(
@@ -133,7 +135,7 @@ async function getBossKeyChances(client, playerId) {
     `, [playerId]);
 
     if (result.rows.length === 0) {
-        return []; // Ключ для этого босса не существует или шанс 0
+        return []; // РљР»СЋС‡ РґР»СЏ СЌС‚РѕРіРѕ Р±РѕСЃСЃР° РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚ РёР»Рё С€Р°РЅСЃ 0
     }
 
     const row = result.rows[0];
@@ -148,16 +150,16 @@ async function getBossKeyChances(client, playerId) {
 }
 
 // =============================================================================
-// УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК СПИСКА ЛОКАЦИЙ
+// РЈРќРР’Р•Р РЎРђР›Р¬РќР«Р™ РћР‘Р РђР‘РћРўР§РРљ РЎРџРРЎРљРђ Р›РћРљРђР¦РР™
 // =============================================================================
 
 /**
- * Получение списка локаций
- * GET /api/game/locations (через алиас из index.js)
+ * РџРѕР»СѓС‡РµРЅРёРµ СЃРїРёСЃРєР° Р»РѕРєР°С†РёР№
+ * GET /api/game/locations (С‡РµСЂРµР· Р°Р»РёР°СЃ РёР· index.js)
  * GET /api/game/world/locations
  */
 async function handleLocationsList(req, res) {
-    logger.info('[world] GET /locations вызван', { playerId: req.player?.id, query: req.query });
+    logger.info('[world] GET /locations РІС‹Р·РІР°РЅ', { playerId: req.player?.id, query: req.query });
     try {
         const player = req.player;
 
@@ -183,8 +185,8 @@ async function handleLocationsList(req, res) {
         `, [limit, offset]);
         
         const availableLocations = locations.map(loc => {
-            // Строим превью лута для клиента: типы предметов, шансы редкостей,
-            // примерные предметы и информацию о ключе босса.
+            // РЎС‚СЂРѕРёРј РїСЂРµРІСЊСЋ Р»СѓС‚Р° РґР»СЏ РєР»РёРµРЅС‚Р°: С‚РёРїС‹ РїСЂРµРґРјРµС‚РѕРІ, С€Р°РЅСЃС‹ СЂРµРґРєРѕСЃС‚РµР№,
+            // РїСЂРёРјРµСЂРЅС‹Рµ РїСЂРµРґРјРµС‚С‹ Рё РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ РєР»СЋС‡Рµ Р±РѕСЃСЃР°.
             const lootTable = loc.loot_table && typeof loc.loot_table === 'object' && !Array.isArray(loc.loot_table) && Object.keys(loc.loot_table).length > 0
                 ? loc.loot_table
                 : null;
@@ -227,50 +229,50 @@ async function handleLocationsList(req, res) {
         });
         
     } catch (error) {
-        handleError(res, error, 'locations_list');
+        handleRouteError(res, error, 'locations_list', req.playerId);
     }
 }
 
-// Оба маршрута используют один обработчик
+// РћР±Р° РјР°СЂС€СЂСѓС‚Р° РёСЃРїРѕР»СЊР·СѓСЋС‚ РѕРґРёРЅ РѕР±СЂР°Р±РѕС‚С‡РёРє
 router.get('/', handleLocationsList);
 router.get('/locations', handleLocationsList);
 
 // =============================================================================
-// ПОИСК ЛУТА
+// РџРћРРЎРљ Р›РЈРўРђ
 // =============================================================================
 
 /**
- * Поиск лута на локации
- * POST /world/search → POST /api/game/world/search
+ * РџРѕРёСЃРє Р»СѓС‚Р° РЅР° Р»РѕРєР°С†РёРё
+ * POST /world/search в†’ POST /api/game/world/search
  */
 router.post('/search', async (req, res) => {
-    // Фильтруем чувствительные заголовки перед логированием
+    // Р¤РёР»СЊС‚СЂСѓРµРј С‡СѓРІСЃС‚РІРёС‚РµР»СЊРЅС‹Рµ Р·Р°РіРѕР»РѕРІРєРё РїРµСЂРµРґ Р»РѕРіРёСЂРѕРІР°РЅРёРµРј
     const safeHeaderKeys = Object.keys(req.headers).filter(k => !['authorization', 'cookie', 'x-init-data'].includes(k.toLowerCase()));
-    logger.info('[world] POST /search вызван', { playerId: req.player?.id, body: req.body, headers: safeHeaderKeys });
+    logger.info('[world] POST /search РІС‹Р·РІР°РЅ', { playerId: req.player?.id, body: req.body, headers: safeHeaderKeys });
 
     if (!req.player) {
         return unauthorized(res);
     }
-    if (!req.player?.id) return unauthorized(res);
-    const playerId = req.player?.id;
+    const playerId = playerIdGuard(req, res);
+    if (!playerId) return;
 
-    // Раньше здесь вручную бралось соединение, а ветки отказа («нет
-    // игрока», «нет здоровья», «нет энергии», «локация не найдена»,
-    // «инвентарь полон») каждая вызывала ROLLBACK и отвечала прямо из
-    // try. С transaction() тело возвращает результат, а HTTP-ответ
-    // отправляется один раз ПОСЛЕ завершения транзакции. Это чинит
-    // реальный дефект прежней записи: res.json стоял уже после COMMIT,
-    // и если он бросал исключение, catch выполнял ROLLBACK по закрытой
-    // транзакции.
+    // Р Р°РЅСЊС€Рµ Р·РґРµСЃСЊ РІСЂСѓС‡РЅСѓСЋ Р±СЂР°Р»РѕСЃСЊ СЃРѕРµРґРёРЅРµРЅРёРµ, Р° РІРµС‚РєРё РѕС‚РєР°Р·Р° (В«РЅРµС‚
+    // РёРіСЂРѕРєР°В», В«РЅРµС‚ Р·РґРѕСЂРѕРІСЊСЏВ», В«РЅРµС‚ СЌРЅРµСЂРіРёРёВ», В«Р»РѕРєР°С†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°В»,
+    // В«РёРЅРІРµРЅС‚Р°СЂСЊ РїРѕР»РѕРЅВ») РєР°Р¶РґР°СЏ РІС‹Р·С‹РІР°Р»Р° ROLLBACK Рё РѕС‚РІРµС‡Р°Р»Р° РїСЂСЏРјРѕ РёР·
+    // try. РЎ transaction() С‚РµР»Рѕ РІРѕР·РІСЂР°С‰Р°РµС‚ СЂРµР·СѓР»СЊС‚Р°С‚, Р° HTTP-РѕС‚РІРµС‚
+    // РѕС‚РїСЂР°РІР»СЏРµС‚СЃСЏ РѕРґРёРЅ СЂР°Р· РџРћРЎР›Р• Р·Р°РІРµСЂС€РµРЅРёСЏ С‚СЂР°РЅР·Р°РєС†РёРё. Р­С‚Рѕ С‡РёРЅРёС‚
+    // СЂРµР°Р»СЊРЅС‹Р№ РґРµС„РµРєС‚ РїСЂРµР¶РЅРµР№ Р·Р°РїРёСЃРё: res.json СЃС‚РѕСЏР» СѓР¶Рµ РїРѕСЃР»Рµ COMMIT,
+    // Рё РµСЃР»Рё РѕРЅ Р±СЂРѕСЃР°Р» РёСЃРєР»СЋС‡РµРЅРёРµ, catch РІС‹РїРѕР»РЅСЏР» ROLLBACK РїРѕ Р·Р°РєСЂС‹С‚РѕР№
+    // С‚СЂР°РЅР·Р°РєС†РёРё.
     try {
         const outcome = await transaction(async (client) => {
-            // SELECT с явным списком полей вместо SELECT *. Два поля обязательны:
-            // total_actions — для comboBonus по (total_actions+1) % 10, иначе
-            // комбо-бонус не даётся никогда;
-            // max_health и last_hp_regen — для regenerateHealth(): без максимума
-            // regenerable всегда 0, хелпер уходит в ветку «на потолке» и пишет
-            // last_hp_regen = NOW(), то есть поиск не лечит И обнуляет
-            // накопленное время регена.
+            // SELECT СЃ СЏРІРЅС‹Рј СЃРїРёСЃРєРѕРј РїРѕР»РµР№ РІРјРµСЃС‚Рѕ SELECT *. Р”РІР° РїРѕР»СЏ РѕР±СЏР·Р°С‚РµР»СЊРЅС‹:
+            // total_actions вЂ” РґР»СЏ comboBonus РїРѕ (total_actions+1) % 10, РёРЅР°С‡Рµ
+            // РєРѕРјР±Рѕ-Р±РѕРЅСѓСЃ РЅРµ РґР°С‘С‚СЃСЏ РЅРёРєРѕРіРґР°;
+            // max_health Рё last_hp_regen вЂ” РґР»СЏ regenerateHealth(): Р±РµР· РјР°РєСЃРёРјСѓРјР°
+            // regenerable РІСЃРµРіРґР° 0, С…РµР»РїРµСЂ СѓС…РѕРґРёС‚ РІ РІРµС‚РєСѓ В«РЅР° РїРѕС‚РѕР»РєРµВ» Рё РїРёС€РµС‚
+            // last_hp_regen = NOW(), С‚Рѕ РµСЃС‚СЊ РїРѕРёСЃРє РЅРµ Р»РµС‡РёС‚ Р РѕР±РЅСѓР»СЏРµС‚
+            // РЅР°РєРѕРїР»РµРЅРЅРѕРµ РІСЂРµРјСЏ СЂРµРіРµРЅР°.
             const updatedPlayer = await lockPlayer(playerId, client, 'id, energy, max_energy, current_location_id, radiation, inventory, equipment, luck, health, max_health, last_hp_regen, level, experience, buffs, total_actions, last_energy_update, empty_searches_streak');
 
             if (!updatedPlayer) {
@@ -278,19 +280,19 @@ router.post('/search', async (req, res) => {
                     status: 404,
                     body: {
                         success: false,
-                        error: 'Игрок не найден',
+                        error: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ',
                         code: 'PLAYER_NOT_FOUND'
                     }
                 };
             }
 
-            // P0-2: запрет поиска при нулевом здоровье
+            // P0-2: Р·Р°РїСЂРµС‚ РїРѕРёСЃРєР° РїСЂРё РЅСѓР»РµРІРѕРј Р·РґРѕСЂРѕРІСЊРµ
             if (Number(updatedPlayer.health || 0) <= 0) {
                 return {
                     status: 400,
                     body: {
                         success: false,
-                        error: 'Вы истощены. Сначала восстановите здоровье.',
+                        error: 'Р’С‹ РёСЃС‚РѕС‰РµРЅС‹. РЎРЅР°С‡Р°Р»Р° РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚Рµ Р·РґРѕСЂРѕРІСЊРµ.',
                         code: 'NO_HEALTH',
                         health: 0,
                         max_health: updatedPlayer.max_health
@@ -300,12 +302,12 @@ router.post('/search', async (req, res) => {
 
             const activeBuffs = getActiveBuffs(updatedPlayer.buffs);
 
-            // Запрос локации вынесен ПЕРЕД проверкой энергии: сначала убеждаемся,
-            // что зона доступна и игрок соответствует уровню, и только потом
-            // считаем стоимость действия.
+            // Р—Р°РїСЂРѕСЃ Р»РѕРєР°С†РёРё РІС‹РЅРµСЃРµРЅ РџР•Р Р•Р” РїСЂРѕРІРµСЂРєРѕР№ СЌРЅРµСЂРіРёРё: СЃРЅР°С‡Р°Р»Р° СѓР±РµР¶РґР°РµРјСЃСЏ,
+            // С‡С‚Рѕ Р·РѕРЅР° РґРѕСЃС‚СѓРїРЅР° Рё РёРіСЂРѕРє СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓРµС‚ СѓСЂРѕРІРЅСЋ, Рё С‚РѕР»СЊРєРѕ РїРѕС‚РѕРј
+            // СЃС‡РёС‚Р°РµРј СЃС‚РѕРёРјРѕСЃС‚СЊ РґРµР№СЃС‚РІРёСЏ.
             if (!updatedPlayer.current_location_id) {
                 throw {
-                    message: 'Локация не найдена',
+                    message: 'Р›РѕРєР°С†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°',
                     code: 'LOCATION_NOT_FOUND',
                     statusCode: 404
                 };
@@ -317,7 +319,7 @@ router.post('/search', async (req, res) => {
 
             if (location.rows.length === 0) {
                 throw {
-                    message: 'Локация не найдена',
+                    message: 'Р›РѕРєР°С†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°',
                     code: 'LOCATION_NOT_FOUND',
                     statusCode: 404
                 };
@@ -330,7 +332,7 @@ router.post('/search', async (req, res) => {
                     status: 403,
                     body: {
                         success: false,
-                        error: 'Эта локация сейчас недоступна для исследований',
+                        error: 'Р­С‚Р° Р»РѕРєР°С†РёСЏ СЃРµР№С‡Р°СЃ РЅРµРґРѕСЃС‚СѓРїРЅР° РґР»СЏ РёСЃСЃР»РµРґРѕРІР°РЅРёР№',
                         code: 'LOCATION_UNAVAILABLE'
                     }
                 };
@@ -341,7 +343,7 @@ router.post('/search', async (req, res) => {
                     status: 403,
                     body: {
                         success: false,
-                        error: `Для исследований в этой зоне нужен уровень ${locationData.min_level}+`,
+                        error: `Р”Р»СЏ РёСЃСЃР»РµРґРѕРІР°РЅРёР№ РІ СЌС‚РѕР№ Р·РѕРЅРµ РЅСѓР¶РµРЅ СѓСЂРѕРІРµРЅСЊ ${locationData.min_level}+`,
                         code: 'INSUFFICIENT_LEVEL',
                         required_level: Number(locationData.min_level),
                         current_level: Number(updatedPlayer.level || 1)
@@ -349,19 +351,19 @@ router.post('/search', async (req, res) => {
                 };
             }
 
-            // P0-1: пересчитываем энергию по реальному времени (не сбрасывая таймер)
+            // P0-1: РїРµСЂРµСЃС‡РёС‚С‹РІР°РµРј СЌРЅРµСЂРіРёСЋ РїРѕ СЂРµР°Р»СЊРЅРѕРјСѓ РІСЂРµРјРµРЅРё (РЅРµ СЃР±СЂР°СЃС‹РІР°СЏ С‚Р°Р№РјРµСЂ)
             await recalcEnergy(client, updatedPlayer);
-            // То же для здоровья: медленный реген после боя. Без него игрок,
-            // израсходовавший все аптечки, оставался с 1 HP навсегда.
+            // РўРѕ Р¶Рµ РґР»СЏ Р·РґРѕСЂРѕРІСЊСЏ: РјРµРґР»РµРЅРЅС‹Р№ СЂРµРіРµРЅ РїРѕСЃР»Рµ Р±РѕСЏ. Р‘РµР· РЅРµРіРѕ РёРіСЂРѕРє,
+            // РёР·СЂР°СЃС…РѕРґРѕРІР°РІС€РёР№ РІСЃРµ Р°РїС‚РµС‡РєРё, РѕСЃС‚Р°РІР°Р»СЃСЏ СЃ 1 HP РЅР°РІСЃРµРіРґР°.
             await regenerateHealth(client, updatedPlayer);
 
-            // Валидация экипировки через normalizeEquipment: гарантирует чистую
-            // структуру слотов перед расчётом защиты и риска.
+            // Р’Р°Р»РёРґР°С†РёСЏ СЌРєРёРїРёСЂРѕРІРєРё С‡РµСЂРµР· normalizeEquipment: РіР°СЂР°РЅС‚РёСЂСѓРµС‚ С‡РёСЃС‚СѓСЋ
+            // СЃС‚СЂСѓРєС‚СѓСЂСѓ СЃР»РѕС‚РѕРІ РїРµСЂРµРґ СЂР°СЃС‡С‘С‚РѕРј Р·Р°С‰РёС‚С‹ Рё СЂРёСЃРєР°.
             const equipment = normalizeEquipment(updatedPlayer.equipment);
             const riskProfile = calculateLocationRiskProfile(locationData, equipment);
 
-            // Дифференцированная стоимость поиска по типу зоны.
-            // Безопасные зоны дешевле, опасные — стоят больше энергии.
+            // Р”РёС„С„РµСЂРµРЅС†РёСЂРѕРІР°РЅРЅР°СЏ СЃС‚РѕРёРјРѕСЃС‚СЊ РїРѕРёСЃРєР° РїРѕ С‚РёРїСѓ Р·РѕРЅС‹.
+            // Р‘РµР·РѕРїР°СЃРЅС‹Рµ Р·РѕРЅС‹ РґРµС€РµРІР»Рµ, РѕРїР°СЃРЅС‹Рµ вЂ” СЃС‚РѕСЏС‚ Р±РѕР»СЊС€Рµ СЌРЅРµСЂРіРёРё.
             const ENERGY_COST_BY_TIER = {
                 safe: 1,
                 warning: 1,
@@ -371,7 +373,7 @@ router.post('/search', async (req, res) => {
             const energyCost = activeBuffs.free_energy ? 0 : (ENERGY_COST_BY_TIER[riskProfile.tier] || 1);
             if (Number(updatedPlayer.energy || 0) < energyCost) {
                 throw {
-                    message: 'Недостаточно энергии',
+                    message: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЌРЅРµСЂРіРёРё',
                     code: 'INSUFFICIENT_ENERGY',
                     statusCode: 400,
                     energy: Math.max(0, updatedPlayer.energy),
@@ -379,7 +381,7 @@ router.post('/search', async (req, res) => {
                 };
             }
         
-        // Заражение зоной считается unified: radiation + любые угрозы зоны.
+        // Р—Р°СЂР°Р¶РµРЅРёРµ Р·РѕРЅРѕР№ СЃС‡РёС‚Р°РµС‚СЃСЏ unified: radiation + Р»СЋР±С‹Рµ СѓРіСЂРѕР·С‹ Р·РѕРЅС‹.
         let radiationGain = 0;
         let radiationExpiresAt = null;
         const contaminationDefense = riskProfile.contaminationDefense;
@@ -388,13 +390,13 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
         const now = new Date();
 
-        // Сбрасываем истёкшую радиацию
+        // РЎР±СЂР°СЃС‹РІР°РµРј РёСЃС‚С‘РєС€СѓСЋ СЂР°РґРёР°С†РёСЋ
         if (existingRadiation.expires_at && new Date(existingRadiation.expires_at) <= now) {
             resultingRadiationLevel = 0;
         }
 
         if (riskProfile.contaminationThreat > 0 && !activeBuffs.no_radiation) {
-            // P1-7: используем уже посчитанное давление (с учётом защиты)
+            // P1-7: РёСЃРїРѕР»СЊР·СѓРµРј СѓР¶Рµ РїРѕСЃС‡РёС‚Р°РЅРЅРѕРµ РґР°РІР»РµРЅРёРµ (СЃ СѓС‡С‘С‚РѕРј Р·Р°С‰РёС‚С‹)
             const randomFactor = 0.7 + crypto.randomInt(600) / 1000;
             radiationGain = Math.max(0, Math.ceil(riskProfile.contaminationPressure * randomFactor));
 
@@ -407,19 +409,16 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 
                 resultingRadiationLevel = Math.min(radiationConfig.maxLevel, existingRadiation.level + radiationGain);
                 
-                await client.query(
-                    `UPDATE players SET radiation = $1::jsonb WHERE id = $2`,
-                    [JSON.stringify({
+                await setPlayerRadiation(playerId, {
                         level: resultingRadiationLevel,
                         expires_at: expiresAt.toISOString(),
                         applied_at: now.toISOString()
-                    }), playerId]
-                );
+                    }, client);
             }
         }
         
-        // Если радиация не накапливалась в этом поиске, но уже была активна,
-        // берём expires_at из существующих данных, чтобы клиент видел срок действия.
+        // Р•СЃР»Рё СЂР°РґРёР°С†РёСЏ РЅРµ РЅР°РєР°РїР»РёРІР°Р»Р°СЃСЊ РІ СЌС‚РѕРј РїРѕРёСЃРєРµ, РЅРѕ СѓР¶Рµ Р±С‹Р»Р° Р°РєС‚РёРІРЅР°,
+        // Р±РµСЂС‘Рј expires_at РёР· СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёС… РґР°РЅРЅС‹С…, С‡С‚РѕР±С‹ РєР»РёРµРЅС‚ РІРёРґРµР» СЃСЂРѕРє РґРµР№СЃС‚РІРёСЏ.
         if (!radiationExpiresAt && resultingRadiationLevel > 0 && existingRadiation.expires_at && new Date(existingRadiation.expires_at) > now) {
             radiationExpiresAt = existingRadiation.expires_at;
         }
@@ -427,7 +426,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         updatedPlayer.radiation = { level: resultingRadiationLevel, expires_at: radiationExpiresAt || null };
 
         const modifiers = calculateDebuffModifiers(updatedPlayer);
-        // Удача от экипировки (например, Сталкерского пояса) слотом accessory.
+        // РЈРґР°С‡Р° РѕС‚ СЌРєРёРїРёСЂРѕРІРєРё (РЅР°РїСЂРёРјРµСЂ, РЎС‚Р°Р»РєРµСЂСЃРєРѕРіРѕ РїРѕСЏСЃР°) СЃР»РѕС‚РѕРј accessory.
         const equipmentLuckBonus = equipmentRules.calculateEquipmentLuckBonus(equipment);
         const effectiveLuck = Math.max(1, Math.round((updatedPlayer.luck * modifiers.luck + equipmentLuckBonus) * 10) / 10);
         const riskAdjustedLuck = Math.max(1, Math.round((effectiveLuck + riskProfile.rarityLuckBonus) * 10) / 10);
@@ -444,26 +443,26 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         let coinDrop = null;
         let lootRolled = false;
         
-        // Pity timer: после PITY_THRESHOLD подряд пустых поисков следующая
-        // вылазка гарантированно даёт предмет редкостью не ниже uncommon.
+        // Pity timer: РїРѕСЃР»Рµ PITY_THRESHOLD РїРѕРґСЂСЏРґ РїСѓСЃС‚С‹С… РїРѕРёСЃРєРѕРІ СЃР»РµРґСѓСЋС‰Р°СЏ
+        // РІС‹Р»Р°Р·РєР° РіР°СЂР°РЅС‚РёСЂРѕРІР°РЅРЅРѕ РґР°С‘С‚ РїСЂРµРґРјРµС‚ СЂРµРґРєРѕСЃС‚СЊСЋ РЅРµ РЅРёР¶Рµ uncommon.
         const PITY_THRESHOLD = 10;
         const emptyStreak = Number(updatedPlayer.empty_searches_streak || 0);
         const pityActive = emptyStreak >= PITY_THRESHOLD;
         
-        // Учёт истощения зоны: чем выше exhaustion, тем ниже шанс редкого лута.
+        // РЈС‡С‘С‚ РёСЃС‚РѕС‰РµРЅРёСЏ Р·РѕРЅС‹: С‡РµРј РІС‹С€Рµ exhaustion, С‚РµРј РЅРёР¶Рµ С€Р°РЅСЃ СЂРµРґРєРѕРіРѕ Р»СѓС‚Р°.
         const locationExhaustion = Number(locationData.exhaustion || 0);
-        const exhaustionPenalty = Math.min(0.5, locationExhaustion / 200); // до -50% шанса
+        const exhaustionPenalty = Math.min(0.5, locationExhaustion / 200); // РґРѕ -50% С€Р°РЅСЃР°
         const adjustedDropChance = Math.max(0.01, dropChance * (1 - exhaustionPenalty));
         
         if (rolled <= adjustedDropChance) {
-            // Ключи боссов. Шансы берём из bosses.key_drop_chance (в процентах
-            // от дропа), а предмет — джойном items -> bosses по
-            // required_key_id: без этого джойна ключ не находится вовсе,
-            // энергия тратится, а лут не выпадает.
+            // РљР»СЋС‡Рё Р±РѕСЃСЃРѕРІ. РЁР°РЅСЃС‹ Р±РµСЂС‘Рј РёР· bosses.key_drop_chance (РІ РїСЂРѕС†РµРЅС‚Р°С…
+            // РѕС‚ РґСЂРѕРїР°), Р° РїСЂРµРґРјРµС‚ вЂ” РґР¶РѕР№РЅРѕРј items -> bosses РїРѕ
+            // required_key_id: Р±РµР· СЌС‚РѕРіРѕ РґР¶РѕР№РЅР° РєР»СЋС‡ РЅРµ РЅР°С…РѕРґРёС‚СЃСЏ РІРѕРІСЃРµ,
+            // СЌРЅРµСЂРіРёСЏ С‚СЂР°С‚РёС‚СЃСЏ, Р° Р»СѓС‚ РЅРµ РІС‹РїР°РґР°РµС‚.
             //
-            // Ключи выпадают ТОЛЬКО для следующего босса в последовательности.
-            // getBossKeyChances теперь принимает playerId и возвращает ключ
-            // только для следующего босса в прогрессии игрока.
+            // РљР»СЋС‡Рё РІС‹РїР°РґР°СЋС‚ РўРћР›Р¬РљРћ РґР»СЏ СЃР»РµРґСѓСЋС‰РµРіРѕ Р±РѕСЃСЃР° РІ РїРѕСЃР»РµРґРѕРІР°С‚РµР»СЊРЅРѕСЃС‚Рё.
+            // getBossKeyChances С‚РµРїРµСЂСЊ РїСЂРёРЅРёРјР°РµС‚ playerId Рё РІРѕР·РІСЂР°С‰Р°РµС‚ РєР»СЋС‡
+            // С‚РѕР»СЊРєРѕ РґР»СЏ СЃР»РµРґСѓСЋС‰РµРіРѕ Р±РѕСЃСЃР° РІ РїСЂРѕРіСЂРµСЃСЃРёРё РёРіСЂРѕРєР°.
             const keyChanceRows = await getBossKeyChances(client, playerId);
             const keyRoll = crypto.randomInt(10000) / 100;
 
@@ -480,8 +479,8 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
             if (foundKey) {
                 lootRolled = true;
-                // Ключ «Ключ от X» открывает бой с X, а хранится он под
-                // владельцем предыдущего босса: boss_keys.boss_id = X - 1.
+                // РљР»СЋС‡ В«РљР»СЋС‡ РѕС‚ XВ» РѕС‚РєСЂС‹РІР°РµС‚ Р±РѕР№ СЃ X, Р° С…СЂР°РЅРёС‚СЃСЏ РѕРЅ РїРѕРґ
+                // РІР»Р°РґРµР»СЊС†РµРј РїСЂРµРґС‹РґСѓС‰РµРіРѕ Р±РѕСЃСЃР°: boss_keys.boss_id = X - 1.
                 const ownerBossId = Math.max(1, foundKey.bossId - 1);
                 await client.query(`
                     INSERT INTO boss_keys (player_id, boss_id, quantity)
@@ -492,13 +491,13 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
                 foundKeyInfo = {
                     name: foundKey.name,
-                    icon: foundKey.icon || '🗝️',
+                    icon: foundKey.icon || 'рџ—ќпёЏ',
                     rarity: foundKey.rarity || 'epic',
                     boss_id: foundKey.bossId,
                     boss_name: foundKey.bossName
                 };
             } else {
-                // Pity timer: если активен, принудительно выбираем редкость не ниже uncommon.
+                // Pity timer: РµСЃР»Рё Р°РєС‚РёРІРµРЅ, РїСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ РІС‹Р±РёСЂР°РµРј СЂРµРґРєРѕСЃС‚СЊ РЅРµ РЅРёР¶Рµ uncommon.
                 let forcedRarity = null;
                 if (pityActive) {
                     forcedRarity = 'uncommon';
@@ -510,14 +509,14 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             
             if (foundItem) {
                 lootRolled = true;
-                const inventory = await helpers.loadInventoryFromTable(client, playerId) || normalizeInventory(updatedPlayer.inventory);
+                const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(updatedPlayer.inventory);
 
-                // Проверяем место в инвентаре перед добавлением предмета.
-                // Если инвентарь полон, не пытаемся добавить — выбрасываем
-                // ошибку сразу, чтобы не мутировать инвентарь впустую.
+                // РџСЂРѕРІРµСЂСЏРµРј РјРµСЃС‚Рѕ РІ РёРЅРІРµРЅС‚Р°СЂРµ РїРµСЂРµРґ РґРѕР±Р°РІР»РµРЅРёРµРј РїСЂРµРґРјРµС‚Р°.
+                // Р•СЃР»Рё РёРЅРІРµРЅС‚Р°СЂСЊ РїРѕР»РѕРЅ, РЅРµ РїС‹С‚Р°РµРјСЃСЏ РґРѕР±Р°РІРёС‚СЊ вЂ” РІС‹Р±СЂР°СЃС‹РІР°РµРј
+                // РѕС€РёР±РєСѓ СЃСЂР°Р·Сѓ, С‡С‚РѕР±С‹ РЅРµ РјСѓС‚РёСЂРѕРІР°С‚СЊ РёРЅРІРµРЅС‚Р°СЂСЊ РІРїСѓСЃС‚СѓСЋ.
                 if (inventory.length >= MAX_INVENTORY_SLOTS) {
                     throw {
-                        message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
+                        message: `РРЅРІРµРЅС‚Р°СЂСЊ РїРµСЂРµРїРѕР»РЅРµРЅ (РјР°РєСЃ. ${MAX_INVENTORY_SLOTS} СЃР»РѕС‚РѕРІ). РСЃРїРѕР»СЊР·СѓР№ СЂР°СЃС…РѕРґРЅРёРєРё РёР»Рё СЌРєРёРїРёСЂСѓР№ Р»РёС€РЅРµРµ.`,
                         code: 'INVENTORY_FULL',
                         statusCode: 400
                     };
@@ -533,31 +532,31 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                     modifications: {}
                 });
 
-                // Стакование: однотипные предметы складываются в один слот, иначе
-                // 100 слотов забиваются быстрее, чем игрок успевает их разбирать.
+                // РЎС‚Р°РєРѕРІР°РЅРёРµ: РѕРґРЅРѕС‚РёРїРЅС‹Рµ РїСЂРµРґРјРµС‚С‹ СЃРєР»Р°РґС‹РІР°СЋС‚СЃСЏ РІ РѕРґРёРЅ СЃР»РѕС‚, РёРЅР°С‡Рµ
+                // 100 СЃР»РѕС‚РѕРІ Р·Р°Р±РёРІР°СЋС‚СЃСЏ Р±С‹СЃС‚СЂРµРµ, С‡РµРј РёРіСЂРѕРє СѓСЃРїРµРІР°РµС‚ РёС… СЂР°Р·Р±РёСЂР°С‚СЊ.
                 addItemToInventory(inventory, newItem, foundItem);
                 itemsCollected += 1;
 
-                // Бафф x2 к добыче дублирует обычный предмет, но не ключ.
-                // Проверяем место в инвентаре ДО добавления второго экземпляра,
-                // чтобы бафф не вызвал полный откат транзакции из-за переполнения.
+                // Р‘Р°С„С„ x2 Рє РґРѕР±С‹С‡Рµ РґСѓР±Р»РёСЂСѓРµС‚ РѕР±С‹С‡РЅС‹Р№ РїСЂРµРґРјРµС‚, РЅРѕ РЅРµ РєР»СЋС‡.
+                // РџСЂРѕРІРµСЂСЏРµРј РјРµСЃС‚Рѕ РІ РёРЅРІРµРЅС‚Р°СЂРµ Р”Рћ РґРѕР±Р°РІР»РµРЅРёСЏ РІС‚РѕСЂРѕРіРѕ СЌРєР·РµРјРїР»СЏСЂР°,
+                // С‡С‚РѕР±С‹ Р±Р°С„С„ РЅРµ РІС‹Р·РІР°Р» РїРѕР»РЅС‹Р№ РѕС‚РєР°С‚ С‚СЂР°РЅР·Р°РєС†РёРё РёР·-Р·Р° РїРµСЂРµРїРѕР»РЅРµРЅРёСЏ.
                 if (activeBuffs.loot_x2 && newItem.type !== 'key') {
                     const wouldExceed = inventory.length >= MAX_INVENTORY_SLOTS;
                     if (!wouldExceed) {
                         addItemToInventory(inventory, { ...newItem }, foundItem);
                         itemsCollected += 1;
-                        // trackCollectedItems для дубля loot_x2 — иначе
-                        // достижение «Коллекционер» не учитывает второй экземпляр.
+                        // trackCollectedItems РґР»СЏ РґСѓР±Р»СЏ loot_x2 вЂ” РёРЅР°С‡Рµ
+                        // РґРѕСЃС‚РёР¶РµРЅРёРµ В«РљРѕР»Р»РµРєС†РёРѕРЅРµСЂВ» РЅРµ СѓС‡РёС‚С‹РІР°РµС‚ РІС‚РѕСЂРѕР№ СЌРєР·РµРјРїР»СЏСЂ.
                         if (foundItem?.id) {
                             await trackCollectedItems(client, playerId, [foundItem.id]);
                         }
                     }
                 }
 
-                // Проверка лимита слотов ПОСЛЕ всех добавлений (включая loot_x2).
+                // РџСЂРѕРІРµСЂРєР° Р»РёРјРёС‚Р° СЃР»РѕС‚РѕРІ РџРћРЎР›Р• РІСЃРµС… РґРѕР±Р°РІР»РµРЅРёР№ (РІРєР»СЋС‡Р°СЏ loot_x2).
                 if (inventory.length > MAX_INVENTORY_SLOTS) {
                     throw {
-                        message: `Инвентарь переполнен (макс. ${MAX_INVENTORY_SLOTS} слотов). Используй расходники или экипируй лишнее.`,
+                        message: `РРЅРІРµРЅС‚Р°СЂСЊ РїРµСЂРµРїРѕР»РЅРµРЅ (РјР°РєСЃ. ${MAX_INVENTORY_SLOTS} СЃР»РѕС‚РѕРІ). РСЃРїРѕР»СЊР·СѓР№ СЂР°СЃС…РѕРґРЅРёРєРё РёР»Рё СЌРєРёРїРёСЂСѓР№ Р»РёС€РЅРµРµ.`,
                         code: 'INVENTORY_FULL',
                         statusCode: 400
                     };
@@ -565,10 +564,10 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
                 inventoryUpdate = JSON.stringify(inventory);
                 
-                // Опыт: базовый + бонус редкости, домножается на бонус
-                // локации и на комбо за серию действий.
-                // Бонус локации растёт нелинейно: каждая следующая зона
-                // даёт пропорционально больше опыта за риск.
+                // РћРїС‹С‚: Р±Р°Р·РѕРІС‹Р№ + Р±РѕРЅСѓСЃ СЂРµРґРєРѕСЃС‚Рё, РґРѕРјРЅРѕР¶Р°РµС‚СЃСЏ РЅР° Р±РѕРЅСѓСЃ
+                // Р»РѕРєР°С†РёРё Рё РЅР° РєРѕРјР±Рѕ Р·Р° СЃРµСЂРёСЋ РґРµР№СЃС‚РІРёР№.
+                // Р‘РѕРЅСѓСЃ Р»РѕРєР°С†РёРё СЂР°СЃС‚С‘С‚ РЅРµР»РёРЅРµР№РЅРѕ: РєР°Р¶РґР°СЏ СЃР»РµРґСѓСЋС‰Р°СЏ Р·РѕРЅР°
+                // РґР°С‘С‚ РїСЂРѕРїРѕСЂС†РёРѕРЅР°Р»СЊРЅРѕ Р±РѕР»СЊС€Рµ РѕРїС‹С‚Р° Р·Р° СЂРёСЃРє.
                 const rarityExp = SEARCH_RARITY_XP[itemRarity] ?? 0;
                 const locBonus = Math.pow(1.2, locationData.id - 1);
                 const comboBonus = (Number(updatedPlayer.total_actions || 0) + 1) % SEARCH_COMBO_EVERY === 0 ? SEARCH_COMBO_MULTIPLIER : 1;
@@ -581,8 +580,8 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             }
         }
 
-        // Выпадение монет при поиске — независимо от выпадения лута/ключа.
-        // 30% шанс, зависит от риска, удачи, уровня.
+        // Р’С‹РїР°РґРµРЅРёРµ РјРѕРЅРµС‚ РїСЂРё РїРѕРёСЃРєРµ вЂ” РЅРµР·Р°РІРёСЃРёРјРѕ РѕС‚ РІС‹РїР°РґРµРЅРёСЏ Р»СѓС‚Р°/РєР»СЋС‡Р°.
+        // 30% С€Р°РЅСЃ, Р·Р°РІРёСЃРёС‚ РѕС‚ СЂРёСЃРєР°, СѓРґР°С‡Рё, СѓСЂРѕРІРЅСЏ.
         try {
             const playerLuck = updatedPlayer.luck || 0;
             const playerLevel = updatedPlayer.level || 1;
@@ -596,11 +595,11 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 coinDrop = coinDropResult.amount;
             }
         } catch (err) {
-            logger.warn('Ошибка расчёта выпадения монет', { error: err.message });
+            logger.warn('РћС€РёР±РєР° СЂР°СЃС‡С‘С‚Р° РІС‹РїР°РґРµРЅРёСЏ РјРѕРЅРµС‚', { error: err.message });
         }
 
-        // Вычисляем урон от радиации ВНЕ блока лута: здоровье теряется при
-        // любом поиске, даже если лут не выпал. Значение уходит в setParts как $2.
+        // Р’С‹С‡РёСЃР»СЏРµРј СѓСЂРѕРЅ РѕС‚ СЂР°РґРёР°С†РёРё Р’РќР• Р±Р»РѕРєР° Р»СѓС‚Р°: Р·РґРѕСЂРѕРІСЊРµ С‚РµСЂСЏРµС‚СЃСЏ РїСЂРё
+        // Р»СЋР±РѕРј РїРѕРёСЃРєРµ, РґР°Р¶Рµ РµСЃР»Рё Р»СѓС‚ РЅРµ РІС‹РїР°Р». Р—РЅР°С‡РµРЅРёРµ СѓС…РѕРґРёС‚ РІ setParts РєР°Рє $2.
         let radiationEffect = null;
         let radiationDamage = 0;
 
@@ -614,20 +613,20 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             radiationEffect = 'applied';
         }
 
-        // Строим UPDATE динамически с правильными позициями параметров
-        // P0-1: НЕ трогаем last_energy_update — реген идёт от реального времени
-        // GREATEST(0, ...) — страховка от гонки: колонка под CHECK (energy >= 0),
-        // та же логика, что в бою с боссом, PvP и колесе.
+        // РЎС‚СЂРѕРёРј UPDATE РґРёРЅР°РјРёС‡РµСЃРєРё СЃ РїСЂР°РІРёР»СЊРЅС‹РјРё РїРѕР·РёС†РёСЏРјРё РїР°СЂР°РјРµС‚СЂРѕРІ
+        // P0-1: РќР• С‚СЂРѕРіР°РµРј last_energy_update вЂ” СЂРµРіРµРЅ РёРґС‘С‚ РѕС‚ СЂРµР°Р»СЊРЅРѕРіРѕ РІСЂРµРјРµРЅРё
+        // GREATEST(0, ...) вЂ” СЃС‚СЂР°С…РѕРІРєР° РѕС‚ РіРѕРЅРєРё: РєРѕР»РѕРЅРєР° РїРѕРґ CHECK (energy >= 0),
+        // С‚Р° Р¶Рµ Р»РѕРіРёРєР°, С‡С‚Рѕ РІ Р±РѕСЋ СЃ Р±РѕСЃСЃРѕРј, PvP Рё РєРѕР»РµСЃРµ.
         const setParts = [
             'energy = GREATEST(0, energy - $1)',
-            // COALESCE: у старых записей счётчик мог быть NULL, и счётчик
-            // действий навечно замирал в NULL вместо роста.
+            // COALESCE: Сѓ СЃС‚Р°СЂС‹С… Р·Р°РїРёСЃРµР№ СЃС‡С‘С‚С‡РёРє РјРѕРі Р±С‹С‚СЊ NULL, Рё СЃС‡С‘С‚С‡РёРє
+            // РґРµР№СЃС‚РІРёР№ РЅР°РІРµС‡РЅРѕ Р·Р°РјРёСЂР°Р» РІ NULL РІРјРµСЃС‚Рѕ СЂРѕСЃС‚Р°.
             'total_actions = COALESCE(total_actions, 0) + 1',
             'health = GREATEST(0, health - $2)'
         ];
         const params = [energyCost, radiationDamage];
 
-        // Монеты из поиска (если выпали)
+        // РњРѕРЅРµС‚С‹ РёР· РїРѕРёСЃРєР° (РµСЃР»Рё РІС‹РїР°Р»Рё)
         if (coinDrop) {
             params.push(coinDrop);
             setParts.push(`coins = COALESCE(coins, 0) + $${params.length}`);
@@ -637,14 +636,14 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             params.push(inventoryUpdate);
             setParts.push(`inventory = $${params.length}`);
         }
-        // Синхронизация инвентаря в нормализованную таблицу
+        // РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РёРЅРІРµРЅС‚Р°СЂСЏ РІ РЅРѕСЂРјР°Р»РёР·РѕРІР°РЅРЅСѓСЋ С‚Р°Р±Р»РёС†Сѓ
         try {
             const { syncInventoryToTable, normalizeInventory } = require('../../utils/game-helpers');
             if (typeof syncInventoryToTable === 'function') {
                 await syncInventoryToTable(client, playerId, normalizeInventory(inventoryUpdate));
             }
         } catch (_) { /* ignore */ }
-        // XP больше не пишется напрямую: единый путь через progression.grantExperience.
+        // XP Р±РѕР»СЊС€Рµ РЅРµ РїРёС€РµС‚СЃСЏ РЅР°РїСЂСЏРјСѓСЋ: РµРґРёРЅС‹Р№ РїСѓС‚СЊ С‡РµСЂРµР· progression.grantExperience.
         if (itemsCollected > 0) {
             params.push(itemsCollected);
             setParts.push(`items_collected = COALESCE(items_collected, 0) + $${params.length}`);
@@ -656,7 +655,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         const energyResult = await client.query(updateSql, params);
 
         if (!energyResult.rows[0]) {
-            throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            throw { message: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
         }
 
         const newEnergy = energyResult.rows[0].energy;
@@ -664,13 +663,13 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         const lastEnergyUpdate = energyResult.rows[0].last_energy_update;
         const newHealth = energyResult.rows[0].health;
 
-        // Проверка смерти от радиации: если здоровье упало до 0, игрок погиб.
+        // РџСЂРѕРІРµСЂРєР° СЃРјРµСЂС‚Рё РѕС‚ СЂР°РґРёР°С†РёРё: РµСЃР»Рё Р·РґРѕСЂРѕРІСЊРµ СѓРїР°Р»Рѕ РґРѕ 0, РёРіСЂРѕРє РїРѕРіРёР±.
         if (newHealth <= 0) {
             return {
                 status: 200,
                 body: {
                     success: false,
-                    error: 'Вы погибли от радиации в этой зоне. Нужно восстановить здоровье.',
+                    error: 'Р’С‹ РїРѕРіРёР±Р»Рё РѕС‚ СЂР°РґРёР°С†РёРё РІ СЌС‚РѕР№ Р·РѕРЅРµ. РќСѓР¶РЅРѕ РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ Р·РґРѕСЂРѕРІСЊРµ.',
                     code: 'PLAYER_DEAD_FROM_RADIATION',
                     health: 0,
                     max_health: updatedPlayer.max_health,
@@ -686,22 +685,22 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             };
         }
 
-        // Обновление истощения локации: каждый поиск увеличивает exhaustion.
-        // Истощение снижает шансы редкого лута, восстанавливается со временем.
+        // РћР±РЅРѕРІР»РµРЅРёРµ РёСЃС‚РѕС‰РµРЅРёСЏ Р»РѕРєР°С†РёРё: РєР°Р¶РґС‹Р№ РїРѕРёСЃРє СѓРІРµР»РёС‡РёРІР°РµС‚ exhaustion.
+        // РСЃС‚РѕС‰РµРЅРёРµ СЃРЅРёР¶Р°РµС‚ С€Р°РЅСЃС‹ СЂРµРґРєРѕРіРѕ Р»СѓС‚Р°, РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°РµС‚СЃСЏ СЃРѕ РІСЂРµРјРµРЅРµРј.
         await client.query(
             `UPDATE locations SET exhaustion = LEAST(100, exhaustion + 5) WHERE id = $1`,
             [locationData.id]
         );
 
-        // Pity timer: сбрасываем при находке предмета или ключа, иначе инкрементируем.
+        // Pity timer: СЃР±СЂР°СЃС‹РІР°РµРј РїСЂРё РЅР°С…РѕРґРєРµ РїСЂРµРґРјРµС‚Р° РёР»Рё РєР»СЋС‡Р°, РёРЅР°С‡Рµ РёРЅРєСЂРµРјРµРЅС‚РёСЂСѓРµРј.
         const newStreak = (foundItem || foundKeyInfo) ? 0 : (emptyStreak + 1);
         await client.query(
             `UPDATE players SET empty_searches_streak = $1 WHERE id = $2`,
             [newStreak, playerId]
         );
 
-        // Счётчики прогресса: без них достижения «Коллекционер»/«Ежедневная
-        // победа» и ежедневные задания остаются на нуле при любых действиях.
+        // РЎС‡С‘С‚С‡РёРєРё РїСЂРѕРіСЂРµСЃСЃР°: Р±РµР· РЅРёС… РґРѕСЃС‚РёР¶РµРЅРёСЏ В«РљРѕР»Р»РµРєС†РёРѕРЅРµСЂВ»/В«Р•Р¶РµРґРЅРµРІРЅР°СЏ
+        // РїРѕР±РµРґР°В» Рё РµР¶РµРґРЅРµРІРЅС‹Рµ Р·Р°РґР°РЅРёСЏ РѕСЃС‚Р°СЋС‚СЃСЏ РЅР° РЅСѓР»Рµ РїСЂРё Р»СЋР±С‹С… РґРµР№СЃС‚РІРёСЏС….
         if (foundItem?.id) {
             await trackCollectedItems(client, playerId, [foundItem.id]);
         }
@@ -710,7 +709,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             await progressDailyTask(client, playerId, 'collect_items', itemsCollected);
         }
 
-        // Прогресс контрактов
+        // РџСЂРѕРіСЂРµСЃСЃ РєРѕРЅС‚СЂР°РєС‚РѕРІ
         try {
             const { progressContract } = require('../../utils/game-helpers');
             if (typeof progressContract === 'function') {
@@ -719,19 +718,19 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             }
         } catch (_) { /* ignore */ }
 
-        // XP через единый сервис прогрессии (с проверкой достижений).
+        // XP С‡РµСЂРµР· РµРґРёРЅС‹Р№ СЃРµСЂРІРёСЃ РїСЂРѕРіСЂРµСЃСЃРёРё (СЃ РїСЂРѕРІРµСЂРєРѕР№ РґРѕСЃС‚РёР¶РµРЅРёР№).
         if (expGained > 0) {
             try {
                 const progression = require('../../utils/progression');
                 await progression.grantExperience(playerId, expGained, 'search', client);
             } catch (e) {
-                // Не роняем поиск из-за XP.
+                // РќРµ СЂРѕРЅСЏРµРј РїРѕРёСЃРє РёР·-Р·Р° XP.
             }
         }
 
-        // Успешный исход: собираем тело ответа и отдаём его наружу, а
-        // транзакция коммитится сама. Ответ уходит из transaction()
-        // ниже — уже после COMMIT, как и раньше, но без ручного COMMIT.
+        // РЈСЃРїРµС€РЅС‹Р№ РёСЃС…РѕРґ: СЃРѕР±РёСЂР°РµРј С‚РµР»Рѕ РѕС‚РІРµС‚Р° Рё РѕС‚РґР°С‘Рј РµРіРѕ РЅР°СЂСѓР¶Сѓ, Р°
+        // С‚СЂР°РЅР·Р°РєС†РёСЏ РєРѕРјРјРёС‚РёС‚СЃСЏ СЃР°РјР°. РћС‚РІРµС‚ СѓС…РѕРґРёС‚ РёР· transaction()
+        // РЅРёР¶Рµ вЂ” СѓР¶Рµ РїРѕСЃР»Рµ COMMIT, РєР°Рє Рё СЂР°РЅСЊС€Рµ, РЅРѕ Р±РµР· СЂСѓС‡РЅРѕРіРѕ COMMIT.
         return {
             status: 200,
             body: {
@@ -745,8 +744,8 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                     stats: foundItem.damage ? { damage: foundItem.damage } :
                            foundItem.defense ? { defense: foundItem.defense } : null
                 } : null,
-                // Ключ босса в инвентарь не попадает (хранится в boss_keys),
-                // поэтому клиенту нужен отдельный сигнал, чтобы показать находку.
+                // РљР»СЋС‡ Р±РѕСЃСЃР° РІ РёРЅРІРµРЅС‚Р°СЂСЊ РЅРµ РїРѕРїР°РґР°РµС‚ (С…СЂР°РЅРёС‚СЃСЏ РІ boss_keys),
+                // РїРѕСЌС‚РѕРјСѓ РєР»РёРµРЅС‚Сѓ РЅСѓР¶РµРЅ РѕС‚РґРµР»СЊРЅС‹Р№ СЃРёРіРЅР°Р», С‡С‚РѕР±С‹ РїРѕРєР°Р·Р°С‚СЊ РЅР°С…РѕРґРєСѓ.
                 found_key: foundKeyInfo,
                 energy: {
                     current: newEnergy,
@@ -756,9 +755,9 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                     coins: Number(energyResult.rows[0].coins || 0)
                 },
                 health: Number(updatedPlayer.health || 0) - (radiationDamage || 0),
-                // Заражение зоной — одно. Инфекции объединены с радиацией,
-                // поэтому отдельный блок infection больше не отдаётся:
-                // весь «урон зоне» считается в radiation.
+                // Р—Р°СЂР°Р¶РµРЅРёРµ Р·РѕРЅРѕР№ вЂ” РѕРґРЅРѕ. РРЅС„РµРєС†РёРё РѕР±СЉРµРґРёРЅРµРЅС‹ СЃ СЂР°РґРёР°С†РёРµР№,
+                // РїРѕСЌС‚РѕРјСѓ РѕС‚РґРµР»СЊРЅС‹Р№ Р±Р»РѕРє infection Р±РѕР»СЊС€Рµ РЅРµ РѕС‚РґР°С‘С‚СЃСЏ:
+                // РІРµСЃСЊ В«СѓСЂРѕРЅ Р·РѕРЅРµВ» СЃС‡РёС‚Р°РµС‚СЃСЏ РІ radiation.
                 radiation: {
                     level: resultingRadiationLevel,
                     gained: radiationGain,
@@ -780,7 +779,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 },
                 location: {
                     name: locationData.name,
-                    // Данные мира, по ним клиент рисует карточку локации.
+                    // Р”Р°РЅРЅС‹Рµ РјРёСЂР°, РїРѕ РЅРёРј РєР»РёРµРЅС‚ СЂРёСЃСѓРµС‚ РєР°СЂС‚РѕС‡РєСѓ Р»РѕРєР°С†РёРё.
                     radiation: locationData.radiation,
                     exhaustion: locationData.exhaustion,
                     is_available: locationData.is_available
@@ -794,7 +793,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 exp_gained: expGained,
                 coin_drop: coinDrop
             },
-            // Данные для лога: нужны только при успешном поиске.
+            // Р”Р°РЅРЅС‹Рµ РґР»СЏ Р»РѕРіР°: РЅСѓР¶РЅС‹ С‚РѕР»СЊРєРѕ РїСЂРё СѓСЃРїРµС€РЅРѕРј РїРѕРёСЃРєРµ.
             log: {
                 foundItemName: foundItem?.name || null,
                 effectiveLuck,
@@ -805,9 +804,9 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         };
     });
 
-        // Логируем только при выполненном поиске — в ветках отказа лота не было.
+        // Р›РѕРіРёСЂСѓРµРј С‚РѕР»СЊРєРѕ РїСЂРё РІС‹РїРѕР»РЅРµРЅРЅРѕРј РїРѕРёСЃРєРµ вЂ” РІ РІРµС‚РєР°С… РѕС‚РєР°Р·Р° Р»РѕС‚Р° РЅРµ Р±С‹Р»Рѕ.
         if (outcome.log) {
-            logger.info(`[world] Поиск лута`, {
+            logger.info(`[world] РџРѕРёСЃРє Р»СѓС‚Р°`, {
                 playerId,
                 foundItem: outcome.log.foundItemName,
                 effectiveLuck: outcome.log.effectiveLuck,
@@ -818,30 +817,30 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
         return res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        // ROLLBACK выполняет transaction(). Вручную он был нужен только
-        // из-за ручного же BEGIN, а теперь ещё и мешал: res.json стоял
-        // уже после COMMIT, и его исключение приводило к откату
-        // закрытой транзакции.
-        handleError(res, error, 'location_search');
+        // ROLLBACK РІС‹РїРѕР»РЅСЏРµС‚ transaction(). Р’СЂСѓС‡РЅСѓСЋ РѕРЅ Р±С‹Р» РЅСѓР¶РµРЅ С‚РѕР»СЊРєРѕ
+        // РёР·-Р·Р° СЂСѓС‡РЅРѕРіРѕ Р¶Рµ BEGIN, Р° С‚РµРїРµСЂСЊ РµС‰С‘ Рё РјРµС€Р°Р»: res.json СЃС‚РѕСЏР»
+        // СѓР¶Рµ РїРѕСЃР»Рµ COMMIT, Рё РµРіРѕ РёСЃРєР»СЋС‡РµРЅРёРµ РїСЂРёРІРѕРґРёР»Рѕ Рє РѕС‚РєР°С‚Сѓ
+        // Р·Р°РєСЂС‹С‚РѕР№ С‚СЂР°РЅР·Р°РєС†РёРё.
+        handleRouteError(res, error, 'location_search', req.playerId);
     }
 });
 
 // =============================================================================
-// ПЕРЕМЕЩЕНИЕ МЕЖДУ ЛОКАЦИЯМИ
+// РџР•Р Р•РњР•Р©Р•РќРР• РњР•Р–Р”РЈ Р›РћРљРђР¦РРЇРњР
 // =============================================================================
 
 /**
- * Перемещение между локациями
- * POST /world/move → POST /api/game/world/move
+ * РџРµСЂРµРјРµС‰РµРЅРёРµ РјРµР¶РґСѓ Р»РѕРєР°С†РёСЏРјРё
+ * POST /world/move в†’ POST /api/game/world/move
  */
 router.post('/move', async (req, res) => {
-    // Валидация выполняется ДО открытия транзакции, как и раньше: BEGIN
-    // в прежней записи стоял после этих проверок. Заодно уходит лишнее
-    // занятие соединения из пула на время валидации.
+    // Р’Р°Р»РёРґР°С†РёСЏ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ Р”Рћ РѕС‚РєСЂС‹С‚РёСЏ С‚СЂР°РЅР·Р°РєС†РёРё, РєР°Рє Рё СЂР°РЅСЊС€Рµ: BEGIN
+    // РІ РїСЂРµР¶РЅРµР№ Р·Р°РїРёСЃРё СЃС‚РѕСЏР» РїРѕСЃР»Рµ СЌС‚РёС… РїСЂРѕРІРµСЂРѕРє. Р—Р°РѕРґРЅРѕ СѓС…РѕРґРёС‚ Р»РёС€РЅРµРµ
+    // Р·Р°РЅСЏС‚РёРµ СЃРѕРµРґРёРЅРµРЅРёСЏ РёР· РїСѓР»Р° РЅР° РІСЂРµРјСЏ РІР°Р»РёРґР°С†РёРё.
     if (!req.body || typeof req.body !== 'object') {
         return res.status(400).json({
             success: false,
-            error: 'Некорректное тело запроса',
+            error: 'РќРµРєРѕСЂСЂРµРєС‚РЅРѕРµ С‚РµР»Рѕ Р·Р°РїСЂРѕСЃР°',
             code: 'INVALID_REQUEST_BODY'
         });
     }
@@ -850,14 +849,14 @@ router.post('/move', async (req, res) => {
     if (!req.player) {
         return unauthorized(res);
     }
-    if (!req.player?.id) return unauthorized(res);
-    const playerId = req.player?.id;
+    const playerId = playerIdGuard(req, res);
+    if (!playerId) return;
     const locationIdNum = Number(location_id);
 
     if (location_id === undefined || location_id === null) {
         return res.status(400).json({
             success: false,
-            error: 'Укажите ID локации',
+            error: 'РЈРєР°Р¶РёС‚Рµ ID Р»РѕРєР°С†РёРё',
             code: 'MISSING_LOCATION_ID'
         });
     }
@@ -865,40 +864,40 @@ router.post('/move', async (req, res) => {
     if (!validateLocationId(locationIdNum)) {
         return res.status(400).json({
             success: false,
-            error: 'ID локации должен быть положительным целым числом',
+            error: 'ID Р»РѕРєР°С†РёРё РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РїРѕР»РѕР¶РёС‚РµР»СЊРЅС‹Рј С†РµР»С‹Рј С‡РёСЃР»РѕРј',
             code: 'INVALID_LOCATION_ID'
         });
     }
 
     try {
-        // Как и в /search: тело транзакции возвращает результат, ответ
-        // уходит после COMMIT, ROLLBACK делает transaction().
+        // РљР°Рє Рё РІ /search: С‚РµР»Рѕ С‚СЂР°РЅР·Р°РєС†РёРё РІРѕР·РІСЂР°С‰Р°РµС‚ СЂРµР·СѓР»СЊС‚Р°С‚, РѕС‚РІРµС‚
+        // СѓС…РѕРґРёС‚ РїРѕСЃР»Рµ COMMIT, ROLLBACK РґРµР»Р°РµС‚ transaction().
         const outcome = await transaction(async (client) => {
             const player = await lockPlayer(playerId, client, 'id, level, current_location_id, energy, last_energy_update, active_boss_id, active_raid_id');
 
             if (!player) {
-                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND' } };
             }
 
-            // Запрещаем перемещение во время активного боя/рейда.
+            // Р—Р°РїСЂРµС‰Р°РµРј РїРµСЂРµРјРµС‰РµРЅРёРµ РІРѕ РІСЂРµРјСЏ Р°РєС‚РёРІРЅРѕРіРѕ Р±РѕСЏ/СЂРµР№РґР°.
             if (player.active_boss_id || player.active_raid_id) {
                 return {
                     status: 409,
                     body: {
                         success: false,
-                        error: 'Нельзя перемещаться во время активного боя или рейда',
+                        error: 'РќРµР»СЊР·СЏ РїРµСЂРµРјРµС‰Р°С‚СЊСЃСЏ РІРѕ РІСЂРµРјСЏ Р°РєС‚РёРІРЅРѕРіРѕ Р±РѕСЏ РёР»Рё СЂРµР№РґР°',
                         code: 'ACTIVE_BATTLE_IN_PROGRESS'
                     }
                 };
             }
 
-            // Проверяем существование игрока
+            // РџСЂРѕРІРµСЂСЏРµРј СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ РёРіСЂРѕРєР°
             if (!player) {
                 return {
                     status: 404,
                     body: {
                         success: false,
-                        error: 'Игрок не найден',
+                        error: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ',
                         code: 'PLAYER_NOT_FOUND'
                     }
                 };
@@ -916,7 +915,7 @@ router.post('/move', async (req, res) => {
                     status: 404,
                     body: {
                         success: false,
-                        error: 'Локация не найдена',
+                        error: 'Р›РѕРєР°С†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°',
                         code: 'LOCATION_NOT_FOUND'
                     }
                 };
@@ -929,7 +928,7 @@ router.post('/move', async (req, res) => {
                     status: 403,
                     body: {
                         success: false,
-                        error: 'Эта локация сейчас недоступна для перехода',
+                        error: 'Р­С‚Р° Р»РѕРєР°С†РёСЏ СЃРµР№С‡Р°СЃ РЅРµРґРѕСЃС‚СѓРїРЅР° РґР»СЏ РїРµСЂРµС…РѕРґР°',
                         code: 'LOCATION_UNAVAILABLE'
                     }
                 };
@@ -941,7 +940,7 @@ router.post('/move', async (req, res) => {
                     status: 403,
                     body: {
                         success: false,
-                        error: `Нужен уровень ${requiredLevel}+`,
+                        error: `РќСѓР¶РµРЅ СѓСЂРѕРІРµРЅСЊ ${requiredLevel}+`,
                         code: 'INSUFFICIENT_LEVEL',
                         required_level: requiredLevel,
                         current_level: player.level
@@ -949,13 +948,13 @@ router.post('/move', async (req, res) => {
                 };
             }
 
-            // Перемещение стоит 1 энергии
+            // РџРµСЂРµРјРµС‰РµРЅРёРµ СЃС‚РѕРёС‚ 1 СЌРЅРµСЂРіРёРё
             if (Number(player.energy || 0) < 1) {
                 return {
                     status: 400,
                     body: {
                         success: false,
-                        error: 'Недостаточно энергии для перемещения',
+                        error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЌРЅРµСЂРіРёРё РґР»СЏ РїРµСЂРµРјРµС‰РµРЅРёСЏ',
                         code: 'INSUFFICIENT_ENERGY',
                         energy: Number(player.energy || 0)
                     }
@@ -967,8 +966,8 @@ router.post('/move', async (req, res) => {
                    SET current_location_id = $1,
                        updated_at = NOW(),
                        energy = GREATEST(0, energy - 1),
-                       -- locations_visited читает достижение «Путешественник»
-                       -- (3 локации) и «Искатель» (7). Хранит объекты {id, name}.
+                       -- locations_visited С‡РёС‚Р°РµС‚ РґРѕСЃС‚РёР¶РµРЅРёРµ В«РџСѓС‚РµС€РµСЃС‚РІРµРЅРЅРёРєВ»
+                       -- (3 Р»РѕРєР°С†РёРё) Рё В«РСЃРєР°С‚РµР»СЊВ» (7). РҐСЂР°РЅРёС‚ РѕР±СЉРµРєС‚С‹ {id, name}.
                         locations_visited = (
                             SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb)
                               FROM jsonb_array_elements(
@@ -979,14 +978,14 @@ router.post('/move', async (req, res) => {
 WHERE id = $2
             `, [locationIdNum, playerId, locationData.name]);
 
-            // Прогресс ежедневного задания «посещение локаций»
+            // РџСЂРѕРіСЂРµСЃСЃ РµР¶РµРґРЅРµРІРЅРѕРіРѕ Р·Р°РґР°РЅРёСЏ В«РїРѕСЃРµС‰РµРЅРёРµ Р»РѕРєР°С†РёР№В»
             try {
                 const { progressDailyTask, progressContract } = require('../../utils/game-helpers');
                 if (typeof progressDailyTask === 'function') await progressDailyTask(client, playerId, 'locations_visited', 1);
                 if (typeof progressContract === 'function') await progressContract(client, playerId, 'locations_visited', 1);
             } catch (_) { /* ignore */ }
 
-            // Обновление освоения локации
+            // РћР±РЅРѕРІР»РµРЅРёРµ РѕСЃРІРѕРµРЅРёСЏ Р»РѕРєР°С†РёРё
             try {
                 await client.query(`
                     INSERT INTO location_mastery (player_id, location_id, visits_count, last_visit_at)
@@ -1004,12 +1003,12 @@ WHERE id = $2
                         location: {
                             id: locationData.id,
                             name: locationData.name,
-                            icon: locationData.icon || '🏠',
+                            icon: locationData.icon || 'рџЏ ',
                             radiation: locationData.radiation,
                             danger_level: locationData.danger_level || 1,
                             description: locationData.description
                         },
-                        message: `Вы прибыли в ${locationData.name}`
+                        message: `Р’С‹ РїСЂРёР±С‹Р»Рё РІ ${locationData.name}`
                     }
                 },
                 log: {
@@ -1020,7 +1019,7 @@ WHERE id = $2
         });
 
         if (outcome.log) {
-            logger.info(`[world] Перемещение`, {
+            logger.info(`[world] РџРµСЂРµРјРµС‰РµРЅРёРµ`, {
                 playerId,
                 fromLocationId: outcome.log.fromLocationId,
                 toLocationId: outcome.log.toLocationId
@@ -1029,9 +1028,10 @@ WHERE id = $2
 
         return res.status(outcome.status).json(outcome.body);
     } catch (error) {
-        handleError(res, error, 'location_move');
+        handleRouteError(res, error, 'location_move', req.playerId);
     }
 });
 
 module.exports = router;
+
 

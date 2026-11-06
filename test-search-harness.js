@@ -271,7 +271,7 @@ async function run() {
         console.log('    SQL   :', sql2.replace(/\s+/g, ' '));
         console.log('    PARAMS:', JSON.stringify(ps2));
         ok('все обязательные поля в UPDATE',
-            /inventory = \$\d+/.test(sql2) && /experience = experience \+ \$\d+/.test(sql2) && /items_collected = COALESCE\(items_collected, 0\) \+ \$\d+/.test(sql2) && /coins = COALESCE\(coins, 0\) \+ \$\d+/.test(sql2));
+            /inventory = \$\d+/.test(sql2) && /items_collected = COALESCE\(items_collected, 0\) \+ \$\d+/.test(sql2) && /coins = COALESCE\(coins, 0\) \+ \$\d+/.test(sql2));
         ok('последний параметр = playerId', ps2[ps2.length - 1] === 7, JSON.stringify(ps2[ps2.length - 1]));
         const sc2 = sql2.slice(sql2.indexOf('SET') + 3, sql2.lastIndexOf('WHERE'));
         const nums2 = [...sc2.matchAll(/\$(\d+)/g)].map(m => Number(m[1]));

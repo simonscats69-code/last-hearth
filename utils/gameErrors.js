@@ -56,8 +56,6 @@ const GAME_ERROR_CODES = Object.freeze({
     CONTRACT_ALREADY_CLAIMED: { message: 'Награда уже получена', code: 'CONTRACT_ALREADY_CLAIMED', statusCode: 400 },
     CONTRACT_COMPLETED: { message: 'Нельзя отказаться от выполненного контракта', code: 'CONTRACT_COMPLETED', statusCode: 400 },
     CONTRACT_CLAIMED: { message: 'Нельзя отказаться от полученного контракта', code: 'CONTRACT_CLAIMED', statusCode: 400 },
-    REROLL_LIMIT: { message: 'Лимит reroll исчерпан', code: 'REROLL_LIMIT', statusCode: 400 },
-    NO_AVAILABLE_TYPES: { message: 'Нет доступных типов для замены', code: 'NO_AVAILABLE_TYPES', statusCode: 400 },
 
     // Крафт
     RECIPE_NOT_FOUND: { message: 'Рецепт не найден', code: 'RECIPE_NOT_FOUND', statusCode: 404 },
@@ -80,8 +78,6 @@ const GAME_ERROR_CODES = Object.freeze({
     TASK_NOT_COMPLETED: { message: 'Задание не выполнено', code: 'TASK_NOT_COMPLETED', statusCode: 400 },
     TASK_ALREADY_CLAIMED: { message: 'Награда уже получена', code: 'TASK_ALREADY_CLAIMED', statusCode: 400 },
     TASK_LOCKED: { message: 'Нельзя заменить выполненное/полученное задание', code: 'TASK_LOCKED', statusCode: 400 },
-    NO_AVAILABLE_TYPES: { message: 'Нет доступных типов для замены', code: 'NO_AVAILABLE_TYPES', statusCode: 400 },
-    REROLL_LIMIT: { message: 'Лимит reroll исчерпан', code: 'REROLL_LIMIT', statusCode: 400 },
 
     // PvP
     BANNED: { message: 'Игрок заблокирован', code: 'BANNED', statusCode: 403 },
