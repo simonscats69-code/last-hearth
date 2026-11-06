@@ -449,7 +449,7 @@ async function setupWebhook(app) {
                 case 'top': text = await adminTopText(); break;
                 case 'metrics': text = adminMetricsText(); break;
                 case 'errors': text = adminErrorsText(); break;
-                case 'player': text = '👤 <b>Поиск игрока</b>\n\nИспользуйте команды:\n/player <telegram_id>\n/resources <id> <energy> <health> <exp>\n/ban <id> [причина]\n/unban <id>'; break;
+                case 'player': text = '👤 <b>Поиск игрока</b>\n\nИспользуйте команды:\n/player &lt;telegram_id&gt;\n/resources &lt;id&gt; &lt;energy&gt; &lt;health&gt; &lt;exp&gt;\n/ban &lt;id&gt; [причина]\n/unban &lt;id&gt;'; break;
                 case 'banned': text = await adminBannedText(); break;
                 case 'bosses': text = await adminBossesText(); break;
                 case 'maint': text = adminMaintenanceText(); break;
