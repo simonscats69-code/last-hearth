@@ -162,6 +162,17 @@ const gameRouter = require('./routes/game');
 const adminRouter = require('./routes/admin');
 
 const app = express();
+
+// Принудительный charset utf-8 для всех JSON-ответов, иначе браузеры
+// угадывают кодировку (Windows-1251) и кракозябрят русские сообщения.
+app.use((req, res, next) => {
+    const _json = res.json.bind(res);
+    res.json = function (body) {
+        res.set('Content-Type', 'application/json; charset=utf-8');
+        return _json(body);
+    };
+    next();
+});
 const PORT = process.env.PORT || 3000;
 
 /**
