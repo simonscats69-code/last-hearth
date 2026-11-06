@@ -70,7 +70,7 @@ router.post('/craft', async (req, res) => {
         const recipeId = Number(req.body?.recipe_id);
         const rawQty = Number(req.body?.quantity);
         if (!Number.isFinite(rawQty) || !Number.isInteger(rawQty) || rawQty < 1) {
-            return res.status(400).json({ success: false, error: 'РљРѕР»РёС‡РµСЃС‚РІРѕ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ С†РµР»С‹Рј С‡РёСЃР»РѕРј >= 1', code: 'INVALID_QUANTITY' });
+            return res.status(400).json({ success: false, error: 'Количество должно быть целым числом >= 1', code: 'INVALID_QUANTITY' });
         }
         const quantity = Math.min(10, rawQty);
 
@@ -101,7 +101,7 @@ router.post('/craft', async (req, res) => {
             try {
                 materials = safeJsonParse(r.required_materials, {});
             } catch (_) {
-                return { status: 400, body: { success: false, error: 'РќРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚ РјР°С‚РµСЂРёР°Р»РѕРІ', code: 'INVALID_MATERIALS' } };
+                return { status: 400, body: { success: false, error: 'Неверный формат материалов', code: 'INVALID_MATERIALS' } };
             }
             const inventory = normalizeInventory(player.inventory);
 
@@ -249,7 +249,7 @@ router.post('/craft-all', async (req, res) => {
         }
 
         if (maxQty <= 0) {
-            return res.status(400).json({ success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјР°С‚РµСЂРёР°Р»РѕРІ', code: 'NOT_ENOUGH_MATERIALS' });
+            return res.status(400).json({ success: false, error: 'Недостаточно материалов', code: 'NOT_ENOUGH_MATERIALS' });
         }
 
         // РџСЂРѕРІРµСЂСЏРµРј РјРѕРЅРµС‚С‹
@@ -301,7 +301,7 @@ router.post('/discover', async (req, res) => {
 
         const materials = Array.isArray(req.body?.materials) ? req.body.materials : [];
         if (materials.length === 0) {
-            return res.status(400).json({ success: false, error: 'РЈРєР°Р¶РёС‚Рµ РјР°С‚РµСЂРёР°Р»С‹', code: 'NO_MATERIALS' });
+            return res.status(400).json({ success: false, error: 'Укажите материалы', code: 'NO_MATERIALS' });
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
@@ -317,7 +317,7 @@ router.post('/discover', async (req, res) => {
             for (const matName of materials) {
                 const idx = inventory.findIndex((i) => i.name === matName && i.type === 'resource' && Number(i.quantity) > 0);
                 if (idx === -1) {
-                    return { status: 400, body: { success: false, error: 'РњР°С‚РµСЂРёР°Р» РЅРµ РЅР°Р№РґРµРЅ: ' + matName, code: 'MATERIAL_NOT_FOUND' } };
+                    return { status: 400, body: { success: false, error: 'Материал не найден: ' + matName, code: 'MATERIAL_NOT_FOUND' } };
                 }
                 inventory[idx].quantity = Number(inventory[idx].quantity) - 1;
                 if (inventory[idx].quantity <= 0) inventory.splice(idx, 1);
@@ -370,7 +370,7 @@ router.post('/refine', async (req, res) => {
         const quantity = Math.max(1, Math.min(50, Number(req.body?.quantity) || 1));
 
         if (!fromMat || !toMat) {
-            return res.status(400).json({ success: false, error: 'РЈРєР°Р¶РёС‚Рµ РјР°С‚РµСЂРёР°Р»С‹', code: 'INVALID_MATERIALS' });
+            return res.status(400).json({ success: false, error: 'Укажите материалы', code: 'INVALID_MATERIALS' });
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
@@ -387,7 +387,7 @@ router.post('/refine', async (req, res) => {
                 [fromMat, toMat, level]
             );
             if (!refinement.rows[0]) {
-                return { status: 404, body: { success: false, error: 'Р Р°С„РёРЅРёСЂРѕРІР°РЅРёРµ РЅРµРґРѕСЃС‚СѓРїРЅРѕ', code: 'REFINEMENT_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Рафинирование недоступно', code: 'REFINEMENT_NOT_FOUND' } };
             }
 
             const r = refinement.rows[0];
@@ -424,7 +424,7 @@ router.post('/refine', async (req, res) => {
 
             const resultQty = Math.floor(quantity * (1 - lossPercent / 100));
             if (resultQty <= 0) {
-                return { status: 400, body: { success: false, error: 'Р Р°С„РёРЅРёСЂРѕРІР°РЅРёРµ РґР°С‘С‚ 0 СЂРµР·СѓР»СЊС‚Р°С‚Р° РїСЂРё С‚Р°РєРѕРј РєРѕР»РёС‡РµСЃС‚РІРµ/РїРѕС‚РµСЂСЏС…', code: 'ZERO_RESULT' } };
+                return { status: 400, body: { success: false, error: 'Рафинирование даёт 0 результата при таком количестве/потерях', code: 'ZERO_RESULT' } };
             }
             if (resultQty > 0) {
                 const { addItemToInventory } = require('../../utils/game-helpers');
@@ -453,7 +453,7 @@ router.post('/refine', async (req, res) => {
                         result_qty: resultQty,
                         loss_percent: lossPercent,
                         coins_spent: coinsCost,
-                        message: 'Р Р°С„РёРЅРёСЂРѕРІР°РЅРѕ ' + quantity + ' ' + fromMat + ' в†’ ' + resultQty + ' ' + toMat
+                        message: 'Рафинировано ' + quantity + ' ' + fromMat + ' → ' + resultQty + ' ' + toMat
                     }
                 }
             };

@@ -292,7 +292,7 @@ router.post('/search', async (req, res) => {
                     status: 400,
                     body: {
                         success: false,
-                        error: 'Р’С‹ РёСЃС‚РѕС‰РµРЅС‹. РЎРЅР°С‡Р°Р»Р° РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚Рµ Р·РґРѕСЂРѕРІСЊРµ.',
+                        error: 'Вы истощены. Сначала восстановите здоровье.',
                         code: 'NO_HEALTH',
                         health: 0,
                         max_health: updatedPlayer.max_health
@@ -307,7 +307,7 @@ router.post('/search', async (req, res) => {
             // СЃС‡РёС‚Р°РµРј СЃС‚РѕРёРјРѕСЃС‚СЊ РґРµР№СЃС‚РІРёСЏ.
             if (!updatedPlayer.current_location_id) {
                 throw {
-                    message: 'Р›РѕРєР°С†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°',
+                    message: 'Локация не найдена',
                     code: 'LOCATION_NOT_FOUND',
                     statusCode: 404
                 };
@@ -319,7 +319,7 @@ router.post('/search', async (req, res) => {
 
             if (location.rows.length === 0) {
                 throw {
-                    message: 'Р›РѕРєР°С†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°',
+                    message: 'Локация не найдена',
                     code: 'LOCATION_NOT_FOUND',
                     statusCode: 404
                 };
@@ -332,7 +332,7 @@ router.post('/search', async (req, res) => {
                     status: 403,
                     body: {
                         success: false,
-                        error: 'Р­С‚Р° Р»РѕРєР°С†РёСЏ СЃРµР№С‡Р°СЃ РЅРµРґРѕСЃС‚СѓРїРЅР° РґР»СЏ РёСЃСЃР»РµРґРѕРІР°РЅРёР№',
+                        error: 'Эта локация сейчас недоступна для исследования',
                         code: 'LOCATION_UNAVAILABLE'
                     }
                 };
@@ -373,7 +373,7 @@ router.post('/search', async (req, res) => {
             const energyCost = activeBuffs.free_energy ? 0 : (ENERGY_COST_BY_TIER[riskProfile.tier] || 1);
             if (Number(updatedPlayer.energy || 0) < energyCost) {
                 throw {
-                    message: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЌРЅРµСЂРіРёРё',
+                    message: 'Недостаточно энергии',
                     code: 'INSUFFICIENT_ENERGY',
                     statusCode: 400,
                     energy: Math.max(0, updatedPlayer.energy),
@@ -595,7 +595,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 coinDrop = coinDropResult.amount;
             }
         } catch (err) {
-            logger.warn('РћС€РёР±РєР° СЂР°СЃС‡С‘С‚Р° РІС‹РїР°РґРµРЅРёСЏ РјРѕРЅРµС‚', { error: err.message });
+            logger.warn('Ошибка расчёта выпадения монет', { error: err.message });
         }
 
         // Р’С‹С‡РёСЃР»СЏРµРј СѓСЂРѕРЅ РѕС‚ СЂР°РґРёР°С†РёРё Р’РќР• Р±Р»РѕРєР° Р»СѓС‚Р°: Р·РґРѕСЂРѕРІСЊРµ С‚РµСЂСЏРµС‚СЃСЏ РїСЂРё
@@ -669,7 +669,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 status: 200,
                 body: {
                     success: false,
-                    error: 'Р’С‹ РїРѕРіРёР±Р»Рё РѕС‚ СЂР°РґРёР°С†РёРё РІ СЌС‚РѕР№ Р·РѕРЅРµ. РќСѓР¶РЅРѕ РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ Р·РґРѕСЂРѕРІСЊРµ.',
+                    error: 'Вы погибли от радиации в этой зоне. Нужно восстановить здоровье.',
                     code: 'PLAYER_DEAD_FROM_RADIATION',
                     health: 0,
                     max_health: updatedPlayer.max_health,
@@ -856,7 +856,7 @@ router.post('/move', async (req, res) => {
     if (location_id === undefined || location_id === null) {
         return res.status(400).json({
             success: false,
-            error: 'РЈРєР°Р¶РёС‚Рµ ID Р»РѕРєР°С†РёРё',
+            error: 'Укажите ID локации',
             code: 'MISSING_LOCATION_ID'
         });
     }
@@ -864,7 +864,7 @@ router.post('/move', async (req, res) => {
     if (!validateLocationId(locationIdNum)) {
         return res.status(400).json({
             success: false,
-            error: 'ID Р»РѕРєР°С†РёРё РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РїРѕР»РѕР¶РёС‚РµР»СЊРЅС‹Рј С†РµР»С‹Рј С‡РёСЃР»РѕРј',
+            error: 'ID локации должен быть положительным целым числом',
             code: 'INVALID_LOCATION_ID'
         });
     }
@@ -885,7 +885,7 @@ router.post('/move', async (req, res) => {
                     status: 409,
                     body: {
                         success: false,
-                        error: 'РќРµР»СЊР·СЏ РїРµСЂРµРјРµС‰Р°С‚СЊСЃСЏ РІРѕ РІСЂРµРјСЏ Р°РєС‚РёРІРЅРѕРіРѕ Р±РѕСЏ РёР»Рё СЂРµР№РґР°',
+                        error: 'Нельзя перемещаться во время активного боя или рейда',
                         code: 'ACTIVE_BATTLE_IN_PROGRESS'
                     }
                 };
@@ -915,7 +915,7 @@ router.post('/move', async (req, res) => {
                     status: 404,
                     body: {
                         success: false,
-                        error: 'Р›РѕРєР°С†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°',
+                        error: 'Локация не найдена',
                         code: 'LOCATION_NOT_FOUND'
                     }
                 };
@@ -928,7 +928,7 @@ router.post('/move', async (req, res) => {
                     status: 403,
                     body: {
                         success: false,
-                        error: 'Р­С‚Р° Р»РѕРєР°С†РёСЏ СЃРµР№С‡Р°СЃ РЅРµРґРѕСЃС‚СѓРїРЅР° РґР»СЏ РїРµСЂРµС…РѕРґР°',
+                        error: 'Эта локация сейчас недоступна для перехода',
                         code: 'LOCATION_UNAVAILABLE'
                     }
                 };
@@ -954,7 +954,7 @@ router.post('/move', async (req, res) => {
                     status: 400,
                     body: {
                         success: false,
-                        error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЌРЅРµСЂРіРёРё РґР»СЏ РїРµСЂРµРјРµС‰РµРЅРёСЏ',
+                        error: 'Недостаточно энергии для перемещения',
                         code: 'INSUFFICIENT_ENERGY',
                         energy: Number(player.energy || 0)
                     }

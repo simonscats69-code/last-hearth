@@ -314,7 +314,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
                 return {
                     success: true,
-                    message: '@54<5B M:8?8@>20=',
+                    message: 'Предмет использован',
                     item: { id: item.id, name: item.name },
                     log: { action: 'item_equip', playerId, data: { slot, item_id: item.id } }
                 };
@@ -385,6 +385,26 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 return {
                     success: true,
                     message: '@54<5B 8A?>;L7>20=',
+                    item: { id: item.id, name: item.name },
+                    quantity_left: quantityLeft,
+                    log: { action: 'item_use', playerId, data: { item_id: item.id, item_name: item.name } }
+                };
+            }
+
+            // Расходники без статов (консервы и т.п.) всё равно расходуются.
+            if (item.type === 'food' || item.type === 'consumable') {
+                const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, itemIndex);
+                await client.query(
+                    'UPDATE players SET inventory = $1 WHERE id = $2',
+                    [JSON.stringify(updatedInventory), playerId]
+                );
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, updatedInventory);
+                } catch (_) { /* ignore */ }
+                return {
+                    success: true,
+                    message: 'Предмет использован',
                     item: { id: item.id, name: item.name },
                     quantity_left: quantityLeft,
                     log: { action: 'item_use', playerId, data: { item_id: item.id, item_name: item.name } }
