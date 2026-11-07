@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Last Hearth - >AB0?>:0;8?B8G5A:89 survival RPG Telegram Mini App
  * 
  * ">G:0 2E>40 A5@25@0
