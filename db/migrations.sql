@@ -112,7 +112,7 @@ BEGIN
             ADD CONSTRAINT player_boss_progress_player_id_fkey
             FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE;
     END IF;
-END $do$
+END $do$;
 
 
 -- ===== 007_drop_unused_tables.sql =====
