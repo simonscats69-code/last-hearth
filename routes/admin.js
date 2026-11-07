@@ -234,7 +234,7 @@ router.post('/player/:telegramId/ban', requireAdmin, async (req, res) => {
             admin: req.telegramUser?.id
         });
         
-        res.json({ success: true, message: '3@>: 701;>:8@>20=' });
+        res.json({ success: true, message: 'Игрок заблокирован' });
     } catch (err) {
         logger.error({ type: 'admin_ban_error', message: err.message });
         res.status(500).json({ error: 'H81:0 10=0' });
@@ -267,7 +267,7 @@ router.post('/player/:telegramId/unban', requireAdmin, async (req, res) => {
             admin: req.telegramUser?.id
         });
         
-        res.json({ success: true, message: '3@>: @071;>:8@>20=' });
+        res.json({ success: true, message: 'Игрок разблокирован' });
     } catch (err) {
         logger.error({ type: 'admin_unban_error', message: err.message });
         res.status(500).json({ error: 'H81:0 @0710=0' });

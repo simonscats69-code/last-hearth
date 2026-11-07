@@ -384,7 +384,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
                 return {
                     success: true,
-                    message: '@54<5B 8A?>;L7>20=',
+                    message: 'Предмет использован',
                     item: { id: item.id, name: item.name },
                     quantity_left: quantityLeft,
                     log: { action: 'item_use', playerId, data: { item_id: item.id, item_name: item.name } }
@@ -411,7 +411,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 };
             }
 
-            return { success: false, message: '-B>B ?@54<5B =5;L7O 8A?>;L7>20BL' };
+            return { success: false, message: 'Этот предмет нельзя использовать' };
         });
 
         // >38@C5< ! :><<8B0 B@0=70:F88

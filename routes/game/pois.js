@@ -126,7 +126,7 @@ router.post('/:poiId/search', async (req, res) => {
                     [playerId, poiId, today]
                 );
                 if (Number(uses.rows[0]?.cnt || 0) >= poiData.max_uses_per_day) {
-                    return { status: 400, body: { success: false, error: '8<8B 8A?>;L7>20=89 =0 A53>4=O 8AG5@?0=', code: 'POI_DAILY_LIMIT' } };
+                    return { status: 400, body: { success: false, error: 'Лимит использований на сегодня исчерпан', code: 'POI_DAILY_LIMIT' } };
                 }
             }
 
@@ -178,7 +178,7 @@ router.get('/:locationId/mastery', async (req, res) => {
 
         const locationId = Number(req.params.locationId);
         if (!Number.isInteger(locationId) || locationId <= 0) {
-            return res.status(400).json({ success: false, error: '525@=K9 ID ;>:0F88', code: 'INVALID_LOCATION_ID' });
+            return res.status(400).json({ success: false, error: 'Неверный ID локации', code: 'INVALID_LOCATION_ID' });
         }
 
         const mastery = await queryOne(
