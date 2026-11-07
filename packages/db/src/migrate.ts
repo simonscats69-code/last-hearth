@@ -5,13 +5,13 @@ import { Pool } from 'pg';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const MIGRATIONS_DIR: string = (() => {
+const MIGRATIONS_FILE: string = (() => {
   const candidates = [
-    path.join(__dirname, '../db/migrations'),
-    path.join(__dirname, '../../../db/migrations'),
-    path.join(__dirname, '../../db/migrations'),
-    path.join(process.cwd(), 'db/migrations'),
-    path.join(process.cwd(), '../db/migrations'),
+    path.join(__dirname, '../db/migrations.sql'),
+    path.join(__dirname, '../../../db/migrations.sql'),
+    path.join(__dirname, '../../db/migrations.sql'),
+    path.join(process.cwd(), 'db/migrations.sql'),
+    path.join(process.cwd(), '../db/migrations.sql'),
   ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
@@ -19,42 +19,45 @@ const MIGRATIONS_DIR: string = (() => {
   return candidates[0] as string;
 })();
 
+const MIGRATION_VERSION = 'migrations_sql';
+
 async function runMigrations(pool: Pool) {
-  // Create migrations table if not exists
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
-      id SERIAL PRIMARY KEY,
-      version VARCHAR(255) UNIQUE NOT NULL,
+      version VARCHAR(255) PRIMARY KEY,
       applied_at TIMESTAMP DEFAULT NOW()
     )
   `);
 
-  // Get applied migrations
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
   const applied = new Set(result.rows.map(r => r.version));
 
-  // Read migration files
-  const files = fs.readdirSync(MIGRATIONS_DIR)
-    .filter(f => f.endsWith('.sql'))
-    .sort();
+  if (!fs.existsSync(MIGRATIONS_FILE)) {
+    console.log('No migrations file found, skipping');
+    return;
+  }
+  const sql = fs.readFileSync(MIGRATIONS_FILE, 'utf-8');
+  if (!sql.trim()) {
+    console.log('Migrations file is empty, skipping');
+    return;
+  }
+
+  if (applied.has(MIGRATION_VERSION)) {
+    console.log('Migrations already applied');
+    return;
+  }
 
   const client = await pool.connect();
   try {
-    for (const file of files) {
-      const version = file.replace('.sql', '');
-      if (applied.has(version)) continue;
-
-      const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf-8');
-      await client.query('BEGIN');
-      try {
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version]);
-        await client.query('COMMIT');
-        console.log(`Applied migration: ${version}`);
-      } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-      }
+    await client.query('BEGIN');
+    try {
+      await client.query(sql);
+      await client.query('INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING', [MIGRATION_VERSION]);
+      await client.query('COMMIT');
+      console.log(`Applied migration: ${MIGRATION_VERSION}`);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
     }
   } finally {
     client.release();
