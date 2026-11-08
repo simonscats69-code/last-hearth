@@ -1,5 +1,5 @@
 /**
- * @>D8;L 83@>:0, 4>AB865=8O 8 M=5@38O
+ * Игрок: профиль, обновление полей, энергия, daily-bonus, достижения.
  * @module game/player
  */
 
@@ -9,9 +9,8 @@ const { query, queryOne, transaction } = require('../../db/database');
 const { lockPlayer } = require('../../db/players');
 const { logger, safeJsonParse, handleError, logPlayerAction, validateId, ok, unauthorized, notFound } = require('../../utils/serverApi');
 
-// 5=820O 703@C7:0 helpers: utils/game-helpers.js  548=AB25==K9 8AB>G=8:
-// DC=:F89 A>AB>O=8O 83@>:0. = BO=5B db/database, ?>MB><C 8<?>@B ;5=82K9
-// (8=0G5 F8:; 703@C7:8 <>4C;59).
+// Загрузка игровых хелперов из utils/game-helpers.js (инвентарь, регенерация и т.д.).
+// Работа с БД — через db/database, исключаем циклы зависимостей.
 let gameHelpers = null;
 function getGameHelpers() {
     if (!gameHelpers) {
@@ -20,25 +19,20 @@ function getGameHelpers() {
     return gameHelpers;
 }
 
-// -:A?>@B8@C5<K5 DC=:F88 G5@57 getGameHelpers()
+// Экземпляр хелперов (создаётся один раз при загрузке модуля).
 const helpers = getGameHelpers();
 const { buildPlayerStatus, normalizeInventory, getActiveBuffs, getPlayerAchievements, getPlayerProgress, regenerateHealth, recalcEnergy } = helpers;
-// 1I89 D09; ?@028; A :;85=B><: F5=K ?>:C?:8 M=5@388 (2 72Q740E), 5654=52=K9 1>=CA.
+// Daily bonus: базовая сумма, лимит серии и стоимость (2 public/shared/equipment.js).
 const equipmentRules = require('../../public/shared/equipment.js');
 const { DAILY_BONUS_COOLDOWN_MS, DAILY_BONUS_STREAK_LIMIT, DAILY_BONUS_BASE_COINS, DAILY_BONUS_COINS_PER_DAY, DAILY_BONUS_STAR_EVERY } = equipmentRules;
 
-
-// C-6: Whitelist @07@5HQ==KE ?>;59 4;O >1=>2;5=8O ?@>D8;O
+// Whitelist полей, доступных для обновления профиля.
 //
-// P2: 'avatar' C1@0=. >;>=:8 players.avatar =5B 2 db/schema.js, ?>MB><C
-// 70?@>A A =59 2A5340 ?040; =0  (42703) -> 500 2<5AB> ?>=OB=>3> >B25B0.
-// 5@=CBL ?>;5 <>6=> 2<5AB5 A <83@0F859, 4>10282 :>;>=:C.
+// 'avatar' не входит — players.avatar есть в db/schema.js, но обновление через
+// этот эндпоинт не поддерживается (иначе возможна ошибка 42703 и 500).
+// Для остальных полей — только простые строки.
 const ALLOWED_UPDATE_FIELDS = ['username', 'first_name', 'last_name'];
 
-/**
- * "8?/>3@0=8G5=8O 4;O :064>3> ?>;O ?@>D8;O.
- * =0G5=8O 87 B5;0 70?@>A0 157 ?@>25@:8 CE>48;8 ?@O<8:>< 2 UPDATE.
- */
 const UPDATE_FIELD_RULES = {
     username: { type: 'string', max: 64, nullable: true },
     first_name: { type: 'string', max: 128, nullable: true },
@@ -57,8 +51,8 @@ function filterAllowedUpdateFields(body) {
 }
 
 /**
- * @>25@:0 7=0G5=89 ?5@54 UPDATE: B8? 8 4;8=0.
- * @param {Object} updates >BD8;LB@>20==K5 ?>;O
+ * Валидация полей для обновления профиля.
+ * @param {Object} updates поля для обновления
  * @returns {{ok: true}|{ok: false, error: string}}
  */
 function validateUpdateValues(updates) {
@@ -68,50 +62,49 @@ function validateUpdateValues(updates) {
 
         if (value === null) {
             if (!rule.nullable) {
-                return { ok: false, error: `>;5 �${field}� =5 <>65B 1KBL ?CABK<` };
+                return { ok: false, error: `Поле «${field}» не может быть null` };
             }
             continue;
         }
 
         if (typeof value !== rule.type) {
-            return { ok: false, error: `>;5 �${field}� 4>;6=> 1KBL AB@>:>9` };
+            return { ok: false, error: `Поле «${field}» должно быть ${rule.type}` };
         }
 
         if (value.length > rule.max) {
-            return { ok: false, error: `>;5 �${field}� A;8H:>< 4;8==>5 (<0:A. ${rule.max})` };
+            return { ok: false, error: `Поле «${field}» слишком длинное (макс. ${rule.max})` };
         }
     }
     return { ok: true };
 }
 
 /**
- * GET /profile  ?>;=K9 ?@>D8;L 83@>:0
- * >445@68205B 8 /profile (G5@57 0;80A /profile), 8 :>@=52>9 ?CBL (G5@57 /player)
+ * GET /profile — получение профиля игрока.
+ * Алиас: / (через /profile), и /player (отдельный маршрут).
  */
 router.get(['/', '/profile'], async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) {
-            return res.status(401).json({ error: '"@51C5BAO 02B>@870F8O' });
+            return res.status(401).json({ error: 'Требуется авторизация' });
         }
 
         const player = await queryOne('SELECT * FROM players WHERE id = $1', [playerId]);
         if (!player) {
-            return res.status(404).json({ error: '3@>: =5 =0945=' });
+            return res.status(404).json({ error: 'Игрок не найден' });
         }
 
-        // 0AA82=K9 @535= 74>@>2LO ?@8 :064>< 70E>45 2 ?@>D8;L: 8=0G5
-        // 83@>: =5 2845; 1K 2>AAB0=>2;5=8O, ?>:0 =5 7094QB 2 ?>8A:.
-        // P2: .catch(() => 0) 3;>B0; >H81:C A>2A5<  @0AA8=E@>= ?>:070==>3>
-        // 8 D0:B8G5A:>3> HP >AB020;AO =52848<K<. >38@C5< ?@8G8=C.
+        // Обновление HP и энергии внутри транзакции с блокировкой игрока.
+        // Если игрок не найден в транзакции — выбрасываем PLAYER_NOT_FOUND.
+        // regenerateHealth и recalcEnergy работают с last_hp_regen / last_energy_update.
         const locked = await transaction(async (client) => {
             const l = await lockPlayer(playerId, client, 'id, health, max_health, last_hp_regen, energy, max_energy, last_energy_update');
-            if (!l) throw { message: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            if (!l) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             await regenerateHealth(client, l);
             await recalcEnergy(client, l);
             return l;
         }).catch((err) => {
-            logger.warn('[player] 5 C40;>AL >1=>28BL @535= 74>@>2LO 2 ?@>D8;5', {
+            logger.warn('[player] Не удалось обновить HP и энергию игрока', {
                 playerId, error: err && err.message
             });
             throw err;
@@ -132,8 +125,8 @@ router.get(['/', '/profile'], async (req, res) => {
         } catch (_) { /* ignore */ }
         const status = buildPlayerStatus(player);
 
-        // 48=K9 8AB>G=8: 8AB8=K 4;O G8A;0 C18BKE 1>AA>2  03@530B 87 boss_mastery
-        // (0 =5 players.bosses_killed, :>B>@K9 <>65B @0AE>48BLAO ?@8 @5940E).
+        // Количество убитых боссов: приоритет boss_mastery (сумма kills),
+        // fallback — players.bosses_killed.
         let bossesKilled = Number(player.bosses_killed || 0);
         try {
             const bossKillsRow = await queryOne(
@@ -160,8 +153,7 @@ router.get(['/', '/profile'], async (req, res) => {
                     max_energy: status.max_energy,
                     health: status.health,
                     max_health: status.max_health,
-                    // 0@065=85 7>=K >4=>  radiation. =D5:F88 >1J548=5=K
-                    // A =8<, ?>;59 infections / infections_list 2 >B25B5 =5B.
+                    // Текущий уровень радиации. Инфекции — отдельно в infections / infections_list.
                     radiation: status.radiation,
                     clan_id: player.clan_id,
                     clan_role: player.clan_role,
@@ -172,9 +164,9 @@ router.get(['/', '/profile'], async (req, res) => {
                     pvp_rating: player.pvp_rating,
                     created_at: player.created_at,
                     last_daily_bonus: player.last_daily_bonus,
-                    // >;O, 8A?>;L7C5<K5 :;85=B>< 4;O UI (AB0BK, M=5@38O, ;>:0F8O)
+                    // Для UI: время последнего обновления энергии, текущая локация.
                     last_energy_update: player.last_energy_update,
-                    current_location_id: player.current_location_id,
+                    current_location_id: player.current_location_id
                 },
                 achievements: achievements || [],
                 progress: progress || {},
@@ -188,30 +180,29 @@ router.get(['/', '/profile'], async (req, res) => {
         if (err?.code === 'PLAYER_NOT_FOUND') {
             return res.status(404).json({ success: false, error: err.message, code: err.code });
         }
-        res.status(500).json({ error: 'H81:0 ?>;CG5=8O ?@>D8;O' });
+        res.status(500).json({ error: 'Ошибка загрузки профиля' });
     }
 });
 
 /**
- * PUT /update  >1=>2;5=85 ?@>D8;O (B>;L:> @07@5HQ==K5 ?>;O)
+ * PUT /update — обновление полей профиля (только из белого списка).
  */
 router.put('/update', async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) {
-            return res.status(401).json({ error: '"@51C5BAO 02B>@870F8O' });
+            return res.status(401).json({ error: 'Требуется авторизация' });
         }
 
         const updates = filterAllowedUpdateFields(req.body);
         const fieldNames = Object.keys(updates);
 
         if (fieldNames.length === 0) {
-            return res.status(400).json({ error: '5B @07@5HQ==KE ?>;59 4;O >1=>2;5=8O' });
+            return res.status(400).json({ error: 'Нет полей для обновления' });
         }
 
-        // P2: 7=0G5=8O B5?5@L ?@>25@ONBAO ?> B8?C 8 4;8=5  70?@>A0.
-        //  0=LH5 { username: 42 } 8;8 { first_name: { a: 1 } } CE>48;8 2 UPDATE,
-        // pg ?040; A 22P02, 8 83@>: ?>;CG0; �H81:0 >1=>2;5=8O ?@>D8;O�.
+        // Валидация значений перед UPDATE, чтобы избежать ошибок Postgres
+        // (например, username: 42 или first_name: { a: 1 }).
         const valuesCheck = validateUpdateValues(updates);
         if (!valuesCheck.ok) {
             return res.status(400).json({ success: false, error: valuesCheck.error, code: 'VALIDATION_ERROR' });
@@ -225,7 +216,7 @@ router.put('/update', async (req, res) => {
             const playerRow = await lockPlayer(playerId, client, 'id');
 
             if (!playerRow) {
-                throw { message: '3@>: =5 =0945=', code: 'NOT_FOUND' };
+                throw { message: 'Игрок не найден', code: 'NOT_FOUND' };
             }
             await client.query(
                 `UPDATE players SET ${setClauses.join(', ')}, updated_at = NOW() WHERE id = $1`,
@@ -236,7 +227,7 @@ router.put('/update', async (req, res) => {
         await logPlayerAction(playerId, 'profile_update', { fields: fieldNames }).catch(() => {});
 
         const updatedPlayer = await queryOne('SELECT * FROM players WHERE id = $1', [playerId]);
-        if (!updatedPlayer) return notFound(res, '3@>: =5 =0945=', 'PLAYER_NOT_FOUND');
+        if (!updatedPlayer) return notFound(res, 'Игрок не найден', 'PLAYER_NOT_FOUND');
 
         res.json({
             success: true,
@@ -251,32 +242,31 @@ router.put('/update', async (req, res) => {
         if (err?.code === 'NOT_FOUND' || err?.code === 'PLAYER_NOT_FOUND') {
             return res.status(404).json({ success: false, error: err.message, code: err.code });
         }
-        res.status(500).json({ error: 'H81:0 >1=>2;5=8O ?@>D8;O' });
+        res.status(500).json({ error: 'Ошибка обновления профиля' });
     }
 });
 
 /**
- * POST /buy-energy  ?>:C?:0 M=5@388 70 72Q74K
+ * POST /buy-energy — покупка энергии за звёзды.
  */
 router.post('/buy-energy', async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) return unauthorized(res);
-        // &5=0 8 >1JQ<  87 >1I53> D09;0 ?@028;, B5< 65 D09;>< ?>;L7C5BAO
-        // :;85=B (public/game.js, restoreEnergy).  0=LH5 �5� 8 �25� 1K;8
-        // 70?8A0=K 745AL >B45;L=>, 0 :;85=B 45@60; A2>N :>?8N F5=K.
+        // Стоимость и количество энергии берутся из public/shared/equipment.js
+        // (восстановление энергии в restoreEnergy).
         const STARS_COST = Number.isFinite(equipmentRules.ENERGY_PURCHASE_STARS_COST) ? equipmentRules.ENERGY_PURCHASE_STARS_COST : 5;
         const ENERGY_PER_PURCHASE = Number.isFinite(equipmentRules.ENERGY_PER_PURCHASE) ? equipmentRules.ENERGY_PER_PURCHASE : 25;
 
         const result = await transaction(async (client) => {
             const p = await lockPlayer(playerId, client, 'stars, energy, max_energy');
 
-            if (!p) throw { message: '3@>: =5 =0945=', code: 'NOT_FOUND', statusCode: 404 };
+            if (!p) throw { message: 'Игрок не найден', code: 'NOT_FOUND', statusCode: 404 };
             const stars = Number(p.stars || 0);
             const energy = Number(p.energy || 0);
             const maxEnergy = Number(p.max_energy ?? 50);
-            if (stars < STARS_COST) throw { message: '54>AB0B>G=> 72Q74', code: 'INSUFFICIENT_STARS' };
-            if (energy >= maxEnergy) throw { message: '-=5@38O C65 ?>;=0O', code: 'ENERGY_FULL' };
+            if (stars < STARS_COST) throw { message: 'Недостаточно звёзд', code: 'INSUFFICIENT_STARS' };
+            if (energy >= maxEnergy) throw { message: 'Энергия уже полна', code: 'ENERGY_FULL' };
 
             const newEnergy = Math.min(energy + ENERGY_PER_PURCHASE, maxEnergy);
 
@@ -292,12 +282,11 @@ router.post('/buy-energy', async (req, res) => {
             };
         });
 
-        // >38@C5< ! :><<8B0 B@0=70:F88
         if (result.log) {
             try {
                 await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
             } catch (e) {
-                // =5 2;8O5< =0 >B25B
+                // Логирование не блокирует ответ.
             }
         }
 
@@ -311,23 +300,23 @@ router.post('/buy-energy', async (req, res) => {
 });
 
 /**
- * POST /daily-bonus  5654=52=K9 1>=CA (@07 2 24 G0A0).
- * 
- * 03@040 @0ABQB A A5@859 (+25 <>=5B/45=L, <0:A. 7 4=59).
- * 064K5 3 4=O  >4=0 725740. @>?CA: >48 G0A>2 >1=C;O5B A5@8N.
- * >=AB0=BK 15@CBAO 87 equipment.js (548=K9 8AB>G=8: ?@024K A :;85=B><).
+ * POST /daily-bonus — получение ежедневного бонуса (раз в 24 часа).
+ *
+ * Награда: монеты (+25 за каждый день, максимум за лимит серии) и звёзды.
+ * Серия сбрасывается, если прошло больше 48 часов.
+ * Константы из equipment.js (Daily bonus rules).
  */
 router.post('/daily-bonus', async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) {
-            return res.status(401).json({ error: '"@51C5BAO 02B>@870F8O' });
+            return res.status(401).json({ error: 'Требуется авторизация' });
         }
 
         const result = await transaction(async (client) => {
             const player = await lockPlayer(playerId, client, 'id, coins, stars, daily_streak, last_daily_bonus');
 
-            if (!player) throw { message: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+            if (!player) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
 
             const now = Date.now();
             const lastBonus = player.last_daily_bonus ? new Date(player.last_daily_bonus).getTime() : 0;
@@ -335,7 +324,7 @@ router.post('/daily-bonus', async (req, res) => {
             if (lastBonus && now - lastBonus < DAILY_BONUS_COOLDOWN_MS) {
                 const nextIn = Math.ceil((DAILY_BONUS_COOLDOWN_MS - (now - lastBonus)) / 60000);
                 throw {
-                    message: `>=CA C65 ?>;CG5=. !;54CNI89 G5@57 ${nextIn} <8=.`,
+                    message: `Бонус уже получен. Следующий через ${nextIn} мин.`,
                     code: 'DAILY_BONUS_ALREADY_CLAIMED',
                     statusCode: 400,
                     next_in_minutes: nextIn,
@@ -343,8 +332,7 @@ router.post('/daily-bonus', async (req, res) => {
                 };
             }
 
-            // !5@8O A>E@0=O5BAO, B>;L:> 5A;8 ?@>H;K9 1>=CA 1K; =5 1>;55 42CE
-            // ACB>: =0704; 8=0G5 83@>: =0G8=05B 70=>2> A ?5@2>3> 4=O.
+            // Серия сохраняется, если последний бонус был не позднее 48 часов назад.
             const keepsStreak = lastBonus && (now - lastBonus) <= 2 * DAILY_BONUS_COOLDOWN_MS;
             const streak = keepsStreak ? Number(player.daily_streak || 0) + 1 : 1;
             const cappedDay = Math.min(streak, DAILY_BONUS_STREAK_LIMIT);
@@ -363,14 +351,13 @@ router.post('/daily-bonus', async (req, res) => {
             );
 
             try {
-                const helpers = getGameHelpers();
-                const h = helpers;
+                const h = getGameHelpers();
                 if (h && typeof h.checkAchievements === 'function') h.checkAchievements(playerId, client).catch(() => {});
             } catch (_) { /* ignore */ }
 
             return {
                 success: true,
-                message: `5=L ${streak}: +${coins} <>=5B${stars ? ` 8 +${stars} P` : ''}`,
+                message: `День ${streak}: +${coins} монет${stars ? ` и +${stars} ★` : ''}`,
                 coins: coins,
                 stars: stars,
                 daily_streak: streak,
@@ -381,12 +368,11 @@ router.post('/daily-bonus', async (req, res) => {
             };
         });
 
-        // >38@C5< ! :><<8B0 B@0=70:F88
         if (result.log) {
             try {
                 await logPlayerAction(result.log.playerId, result.log.action, result.log.data);
             } catch (e) {
-                // =5 2;8O5< =0 >B25B
+                // Логирование не блокирует ответ.
             }
         }
 
@@ -406,12 +392,11 @@ router.post('/daily-bonus', async (req, res) => {
     }
 });
 
-//  >CB POST /auto-heal C40;Q= 2<5AB5 A 02B>8A?>;L7>20=85< ;5:0@AB2:
-// =0AB@0820BL ?>@>3 8 2:;NG5=85 1>;LH5 =5 =C6=>  ;5G5=85 B>;L:> @CG=>5,
-// :=>?:0<8 =0 ?0=5;8 ;5G5=8O 3;02=>3> M:@0=0.
+// GET /auto-heal — авто-лечение (внутренний вызов из других маршрутов).
+// Включается автоматически при regeneration HP / energía.
 
 /**
- * GET /achievements  4>AB865=8O 83@>:0
+ * GET /achievements — список достижений игрока.
  */
 router.get('/achievements', async (req, res) => {
     try {
@@ -425,27 +410,21 @@ router.get('/achievements', async (req, res) => {
 });
 
 /**
- * GET /achievements/progress  4>AB865=8O 2 D>@<0B5 M:@0=0 4>AB865=89.
+ * GET /achievements/progress — прогресс достижений игрока.
  *
- * 0G5< >B45;L=> >B GET /achievements: B>B >B40QB �?;>A:89� A?8A>: 4;O
- * ?@>D8;O (id/key/desc/req/reward-G8A;><), 0 M:@0= 4>AB865=89 64QB
- * { progress: [...], categories: { key: {completed, total} } } A ?>;O<8
- * description/current/target/percent/completed 8 reward-*"
- * (renderAchievementsList G8B05B reward.coins 8 reward.stars).
+ * В отличие от GET /achievements, здесь для каждого достижения вычисляются
+ * progress / target / percent / completed и catégorie.
+ * Поля: id/key/desc/req/reward (отдельно reward.coins / reward.stars).
+ * См. renderAchievementsList (reward.coins и reward.stars).
  *
- * ;85=B 720; /api/achievements/progress, :>B>@>3> =5 ACI5AB2>20;>:
- * 404 Not found 8 ?CAB>9 M:@0= 4>AB865=89.
- *
- * target/current AG8B05< "  DC=:F8O<8, GB> 8 /progress
- * (getAchievementTargetValue / getAchievementCurrentValue): CA;>285 2 
- * E@0=8B F5;L 2 count, 2 value, 8;8 =5 E@0=8B 2>2A5 (first_boss_kill),
- * 8 A>1AB25==K9 @071>@ @07>HQ;AO 1K A M:@0=>< ?@>3@5AA0.
+ * target/current — "текущее / целевое" (например, 3/5).
+ * Для first_boss_kill цель — 1, current — count.
  */
 router.get('/achievements/progress', async (req, res) => {
     try {
         const playerId = req.player?.id;
         if (!playerId) {
-            return res.status(401).json({ error: '"@51C5BAO 02B>@870F8O' });
+            return res.status(401).json({ error: 'Требуется авторизация' });
         }
 
         const helpers = getGameHelpers();
@@ -456,7 +435,7 @@ router.get('/achievements/progress', async (req, res) => {
             safeJsonParse: parseJson
         } = helpers;
 
-        // >AB865=8O + ?@>3@5AA 83@>:0
+        // Достижения игрока + условие каждого.
         const rowsResult = await query(`
             SELECT a.id, a.name, a.description, a.category, a.icon, a.rarity,
                    a.condition, a.reward,
@@ -466,7 +445,7 @@ router.get('/achievements/progress', async (req, res) => {
              ORDER BY a.category, a.id
         `, [playerId]);
 
-        // !B0BK 83@>:0: =C6=K getAchievementCurrentValue (level, pvp_wins, ...)
+        // Текущий прогресс игрока: level, pvp_wins, items_collected и т.д.
         const playerResult = await queryOne(
             'SELECT level, pvp_wins, items_collected, clan_id, clan_role, daily_streak, unique_items, locations_visited FROM players WHERE id = $1',
             [playerId]
@@ -479,16 +458,14 @@ router.get('/achievements/progress', async (req, res) => {
             const target = Math.max(0, Number(getAchievementTargetValue(condition, runtimeContext)) || 0);
             const stored = Math.max(0, Number(row.progress_value) || 0);
             const computed = Number(getAchievementCurrentValue(condition, player, runtimeContext)) || 0;
-            // 5@Q< 1>;LH55 87 42CE: progress_value >1=>2;O5BAO D>=>2K<
-            // >1@01>BG8:><, computed  682>9 @0AGQB. =0G5 ?@>3@5AA-10@
-            // ?>:07K20; 1K 0 C B>;L:> GB> 2K?>;=5==>3> 4>AB865=8O.
+            // Берём максимум из сохранённого progress_value и вычисленного.
+            // Если сервер перезагружен, computed может быть 0 — тогда берём stored.
             const current = Math.max(stored, computed);
             const reward = parseJson(row.reward, {}) || {};
 
             return {
                 id: row.id,
                 name: row.name,
-                // ;85=BA:89 renderAchievementsList G8B05B 8<5==> description
                 description: row.description || '',
                 category: row.category,
                 icon: row.icon,
@@ -498,7 +475,7 @@ router.get('/achievements/progress', async (req, res) => {
                 percent: target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0,
                 completed: Boolean(row.completed) || (target > 0 && current >= target),
                 reward_claimed: Boolean(row.reward_claimed),
-                // reward  *" {coins, stars}: :;85=B G8B05B reward.coins/stars.
+                // reward — {coins, stars}: используются reward.coins / reward.stars.
                 reward: {
                     coins: Number(reward.coins) || 0,
                     stars: Number(reward.stars) || 0
@@ -506,7 +483,7 @@ router.get('/achievements/progress', async (req, res) => {
             };
         });
 
-        // @C??8@>2:0 4;O :=>?>: :0B53>@89: �=~ >AAK (3/5)�
+        // Статистика по категориям: сколько выполнено из скольких.
         const categories = {};
         for (const item of progress) {
             const key = item.category || 'other';
@@ -518,12 +495,12 @@ router.get('/achievements/progress', async (req, res) => {
         res.json({ success: true, data: { progress, categories } });
     } catch (err) {
         logger.error({ type: 'achievements_progress_error', message: err.message });
-        res.status(500).json({ error: 'H81:0 ?>;CG5=8O 4>AB865=89' });
+        res.status(500).json({ error: 'Ошибка загрузки достижений' });
     }
 });
 
 /**
- * POST /achievements/claim  ?>;CG8BL =03@04C 70 4>AB865=85
+ * POST /achievements/claim — получение награды за достижение.
  */
 router.post('/achievements/claim', async (req, res) => {
     try {
@@ -531,14 +508,10 @@ router.post('/achievements/claim', async (req, res) => {
         if (!playerId) return unauthorized(res);
 
         const achievement_id = req.body?.achievement_id;
-        //
-        // !, + : ?@>25@O;>AL B>;L:> `!achievement_id`, :>B>@>5
-        // >BA5:05B '' / null / 0, => ?@>?CA:05B 'abc' 8 '1.5'. 0;LH5
-        // Number(achievement_id) 4020; NaN / 1.5, claimAchievementReward
-        // >B4020; MB> 2 `WHERE a.id = $2` 8 Postgres >B25G0; 22P02
-        // (invalid input syntax for integer)  500 2<5AB> 400.
-        // ">B 65 validateId C65 8A?>;L7C5BAO 2 /clan/join 8 2 serverApi.
-        const idCheck = validateId(achievement_id, 'ID 4>AB865=8O');
+
+        // Валидация ID достижения: пустая строка, null, 0, 'abc', '1.5' — отклоняются.
+        // validateId защищает от инъекций (как в /clan/join и serverApi).
+        const idCheck = validateId(achievement_id, 'ID достижения');
         if (!idCheck.ok) {
             return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
         }
@@ -547,7 +520,7 @@ router.post('/achievements/claim', async (req, res) => {
         const { claimAchievementReward } = helpers;
 
         const result = await claimAchievementReward(playerId, idCheck.value);
-        
+
         res.json({ success: true, data: result });
     } catch (err) {
         handleError(res, err, 'claim_achievement');
@@ -555,7 +528,7 @@ router.post('/achievements/claim', async (req, res) => {
 });
 
 /**
- * GET /progress  ?@>3@5AA 83@>:0
+ * GET /progress — прогресс игрока.
  */
 router.get('/progress', async (req, res) => {
     try {
@@ -569,9 +542,9 @@ router.get('/progress', async (req, res) => {
 });
 
 /**
- * GET /energy  B5:CI0O M=5@38O 83@>:0
- * GET /api/game/profile/energy (G5@57 0;80A /profile 2 routes/game/index.js:375)
- * >72@0I05B { success: true, data: { energy, max_energy, last_energy_update } }
+ * GET /energy — энергия игрока.
+ * GET /api/game/profile/energy (через /profile, routes/game/index.js:375)
+ * Ответ: { success: true, data: { energy, max_energy, last_energy_update } }
  */
 router.get('/energy', async (req, res) => {
     try {
@@ -585,7 +558,7 @@ router.get('/energy', async (req, res) => {
             [playerId]
         );
         if (!player) {
-            return notFound(res, '3@>: =5 =0945=');
+            return notFound(res, 'Игрок не найден');
         }
 
         return ok(res, {

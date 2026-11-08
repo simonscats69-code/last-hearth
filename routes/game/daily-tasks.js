@@ -1,5 +1,5 @@
 // routes/game/daily-tasks.js
-// 654=52=K5 7040=8O: 35=5@0F8O, ?@>3@5AA, 2K40G0 =03@04, claim.
+// Ежедневные задания: поиск, босс, посещения, получение награды.
 const express = require('express');
 const { normalizeInventory } = require('../../utils/game-helpers');
 const { safeJsonParse } = require('../../utils/serverApi');
@@ -10,7 +10,7 @@ const { setPlayerInventory } = require('../../db/playerRepository');
 
 const router = express.Router();
 
-// --- 0B0;>3 B8?>2 7040G ---
+// --- Типы ежедневных заданий ---
 const DAILY_TASK_TYPES = [
     { type: 'search', target: (level) => Math.max(3, Math.floor(level / 5) + 3), reward: { coins: 50, xp: 20 }, difficulty: 'easy' },
     { type: 'boss_damage', target: (level) => 100 * level, reward: { coins: 100, xp: 50 }, difficulty: 'medium' },
@@ -52,7 +52,7 @@ async function generateDailyTasks(client, playerId, level) {
     }
 }
 
-// GET /daily-tasks  ?>;CG8BL A?8A>: 7040=89 =0 45=L
+// GET /daily-tasks — список ежедневных заданий игрока.
 router.get('/', async (req, res) => {
     try {
         const playerId = req.playerId;
@@ -61,11 +61,11 @@ router.get('/', async (req, res) => {
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const player = await lockPlayer(playerId, client, 'id, level');
             if (!player) {
-                return { status: 404, body: { success: false, error: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
             const level = Number(player.level) || 1;
 
-            // @>25@O5<, 5ABL ;8 7040=8O =0 A53>4=O
+            // Проверка: есть ли уже задания на сегодня.
             const existing = await client.query(
                 `SELECT id, task_type, target_value, current_value, reward, expires_at, completed, claimed, difficulty, status
                  FROM daily_tasks WHERE player_id = $1 AND expires_at > NOW() ORDER BY id`,
@@ -111,13 +111,13 @@ router.get('/', async (req, res) => {
     }
 });
 
-// POST /daily-tasks/claim  701@0BL =03@04C 70 2K?>;=5==>5 7040=85
+// POST /daily-tasks/claim — получение награды за задание.
 router.post('/claim', async (req, res) => {
     try {
         const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
-        const idCheck = (require('../../utils/validate').validateId)(req.body?.task_id, 'ID 7040=8O');
+        const idCheck = (require('../../utils/validate').validateId)(req.body?.task_id, 'ID задания');
         if (!idCheck.ok) return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
 
         const taskId = idCheck.value;
@@ -125,7 +125,7 @@ router.post('/claim', async (req, res) => {
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const lockedPlayer = await lockPlayer(playerId, client, 'id, coins, stars, experience');
             if (!lockedPlayer) {
-                return { status: 404, body: { success: false, error: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
             const task = await client.query(
@@ -135,20 +135,20 @@ router.post('/claim', async (req, res) => {
             );
 
             if (!task.rows[0]) {
-                return { status: 404, body: { success: false, error: '040=85 =5 =0945=>', code: 'TASK_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Задание не найдено', code: 'TASK_NOT_FOUND' } };
             }
 
             const t = task.rows[0];
             if (!t.completed) {
-                return { status: 400, body: { success: false, error: '040=85 =5 2K?>;=5=>', code: 'TASK_NOT_COMPLETED' } };
+                return { status: 400, body: { success: false, error: 'Задание не выполнено', code: 'TASK_NOT_COMPLETED' } };
             }
             if (t.claimed) {
-                return { status: 400, body: { success: false, error: '03@040 C65 ?>;CG5=0', code: 'TASK_ALREADY_CLAIMED' } };
+                return { status: 400, body: { success: false, error: 'Награда уже получена', code: 'TASK_ALREADY_CLAIMED' } };
             }
 
             const reward = safeJsonParse(t.reward, {});
 
-            // 0G8A;O5< =03@04K
+            // Начисление награды.
             if (reward.coins) {
                 await client.query('UPDATE players SET coins = COALESCE(coins, 0) + $1 WHERE id = $2', [reward.coins, playerId]);
             }
@@ -169,13 +169,13 @@ router.post('/claim', async (req, res) => {
                 await setPlayerInventory(playerId, inventory, client);
             }
 
-            // ><5G05< 7040=85 :0: 2K40==>5
+            // Помечаем задание как полученное.
             await client.query(
                 'UPDATE daily_tasks SET claimed = true, claimed_at = NOW(), status = $1 WHERE id = $2',
                 ['claimed', taskId]
             );
 
-            // =:@5<5=B8@C5< AGQBG8:
+            // Увеличиваем счетчик выполненных заданий.
             await client.query('UPDATE players SET daily_tasks_completed = COALESCE(daily_tasks_completed, 0) + 1 WHERE id = $1', [playerId]);
 
             return {
@@ -185,7 +185,7 @@ router.post('/claim', async (req, res) => {
                     data: {
                         task_id: taskId,
                         reward,
-                        message: '03@040 ?>;CG5=0'
+                        message: 'Награда получена'
                     }
                 }
             };
@@ -193,7 +193,6 @@ router.post('/claim', async (req, res) => {
 
         res.status(outcome.status).json(outcome.body);
 
-        // >38@>20=85 ?>A;5 :><<8B0
         if (outcome.status === 200) {
             try {
                 await logPlayerAction(playerId, 'daily_task_claim', { task_id: taskId });
@@ -204,7 +203,7 @@ router.post('/claim', async (req, res) => {
     }
 });
 
-// POST /daily-tasks/claim-all  701@0BL 2A5 2K?>;=5==K5 7040=8O
+// POST /daily-tasks/claim-all — получение наград за все выполненные задания.
 router.post('/claim-all', async (req, res) => {
     try {
         const playerId = req.playerId;
@@ -213,7 +212,7 @@ router.post('/claim-all', async (req, res) => {
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const lockedPlayer = await lockPlayer(playerId, client, 'id');
             if (!lockedPlayer) {
-                return { status: 404, body: { success: false, error: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
             const pending = await client.query(
@@ -287,13 +286,13 @@ router.post('/claim-all', async (req, res) => {
     }
 });
 
-// POST /daily-tasks/reroll  70<5=8BL 7040=85
+// POST /daily-tasks/reroll — перекат задания.
 router.post('/reroll', async (req, res) => {
     try {
         const playerId = req.playerId;
         if (!playerId) return (require('../../utils/serverApi').unauthorized)(res);
 
-        const idCheck = (require('../../utils/validate').validateId)(req.body?.task_id, 'ID 7040=8O');
+        const idCheck = (require('../../utils/validate').validateId)(req.body?.task_id, 'ID задания');
         if (!idCheck.ok) return res.status(400).json({ success: false, error: idCheck.error, code: idCheck.code });
 
         const taskId = idCheck.value;
@@ -301,13 +300,13 @@ router.post('/reroll', async (req, res) => {
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const lockedPlayer = await lockPlayer(playerId, client, 'id, level, daily_task_rerolls, daily_task_reroll_reset_at');
             if (!lockedPlayer) {
-                return { status: 404, body: { success: false, error: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
             const player = lockedPlayer;
             const level = Number(player.level) || 1;
 
-            // !1@>A AGQBG8:0 reroll @07 2 45=L
+            // Лимит переката обновляется раз в сутки.
             const now = new Date();
             const resetAt = player.daily_task_reroll_reset_at ? new Date(player.daily_task_reroll_reset_at) : null;
             let rerollsLeft = Number(player.daily_task_rerolls || 0);
@@ -317,7 +316,7 @@ router.post('/reroll', async (req, res) => {
             }
 
             if (rerollsLeft <= 0) {
-                return { status: 400, body: { success: false, error: '8<8B reroll 8AG5@?0=', code: 'REROLL_LIMIT' } };
+                return { status: 400, body: { success: false, error: 'Лимит переката исчерпан', code: 'REROLL_LIMIT' } };
             }
 
             const task = await client.query(
@@ -326,15 +325,15 @@ router.post('/reroll', async (req, res) => {
             );
 
             if (!task.rows[0]) {
-                return { status: 404, body: { success: false, error: '040=85 =5 =0945=>', code: 'TASK_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Задание не найдено', code: 'TASK_NOT_FOUND' } };
             }
 
             const t = task.rows[0];
             if (t.completed || t.claimed) {
-                return { status: 400, body: { success: false, error: '5;L7O 70<5=8BL 2K?>;=5==>5/?>;CG5==>5 7040=85', code: 'TASK_LOCKED' } };
+                return { status: 400, body: { success: false, error: 'Нельзя перекатать выполненное/полученное задание', code: 'TASK_LOCKED' } };
             }
 
-            // K18@05< =>2K9 B8? (=5 A>2?040NI89 A B5:CI8< 8 =5 4C1;8@CNI89 ACI5AB2CNI85)
+            // Типы, уже взятые на сегодня (кроме текущего).
             const existingTypes = await client.query(
                 `SELECT task_type FROM daily_tasks WHERE player_id = $1 AND expires_at = $2`,
                 [playerId, t.expires_at]
@@ -342,14 +341,14 @@ router.post('/reroll', async (req, res) => {
             const usedTypes = new Set(existingTypes.rows.map((r) => r.task_type));
             const available = DAILY_TASK_TYPES.filter((dt) => dt.type !== t.task_type && !usedTypes.has(dt.type));
             if (available.length === 0) {
-                return { status: 400, body: { success: false, error: '5B 4>ABC?=KE B8?>2 4;O 70<5=K', code: 'NO_AVAILABLE_TYPES' } };
+                return { status: 400, body: { success: false, error: 'Нет доступных типов для переката', code: 'NO_AVAILABLE_TYPES' } };
             }
             const newType = available[Math.floor(Math.random() * available.length)];
             const target = newType.target(level);
             const reward = { ...newType.reward };
             const expiresAt = t.expires_at;
 
-            // #40;O5< AB0@>5 7040=85 8 A>740Q< =>2>5
+            // Удаляем старое задание и вставляем новое.
             await client.query('DELETE FROM daily_tasks WHERE id = $1', [taskId]);
             const inserted = await client.query(`
                 INSERT INTO daily_tasks (player_id, task_type, target_value, current_value, reward, expires_at, completed, claimed, difficulty, status, created_at)

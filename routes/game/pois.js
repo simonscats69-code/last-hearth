@@ -1,5 +1,5 @@
 // routes/game/pois.js
-// ">G:8 8=B5@5A0 (POI) 2 ;>:0F8OE: A?8A>:, ?>8A:, :C;40C=K.
+// POI (точки интереса) по локациям: игроки, NPC, квесты.
 const express = require('express');
 const { query, queryOne } = require('../../db/database');
 const { normalizeInventory } = require('../../utils/game-helpers');
@@ -7,7 +7,7 @@ const { lockPlayer } = require('../../db/players');
 
 const router = express.Router();
 
-// GET /locations/:locationId/pois  A?8A>: POI 2 ;>:0F88
+// GET /locations/:locationId/pois — список POI локации.
 router.get('/:locationId', async (req, res) => {
     try {
         const playerId = req.playerId;
@@ -15,7 +15,7 @@ router.get('/:locationId', async (req, res) => {
 
         const locationId = Number(req.params.locationId);
         if (!Number.isInteger(locationId) || locationId <= 0) {
-            return res.status(400).json({ success: false, error: '525@=K9 ID ;>:0F88', code: 'INVALID_LOCATION_ID' });
+            return res.status(400).json({ success: false, error: 'Неверный ID локации', code: 'INVALID_LOCATION_ID' });
         }
 
         const pois = await query(
@@ -24,7 +24,7 @@ router.get('/:locationId', async (req, res) => {
             [locationId]
         );
 
-        // >;CG05< :C;40C=K 83@>:0 4;O MB8E POI
+        // Получение таймеров перезарядки игрока по POI.
         const cooldowns = await query(
             `SELECT poi_id, last_used_at FROM player_poi_cooldowns WHERE player_id = $1 AND poi_id = ANY($2::int[])`,
             [playerId, pois.rows.map((p) => p.id)]
@@ -57,7 +57,7 @@ router.get('/:locationId', async (req, res) => {
     }
 });
 
-// POST /locations/poi/:poiId/search  ?>8A: G5@57 POI
+// POST /locations/poi/:poiId/search — исследование POI.
 router.post('/:poiId/search', async (req, res) => {
     try {
         const playerId = req.playerId;
@@ -65,44 +65,44 @@ router.post('/:poiId/search', async (req, res) => {
 
         const poiId = Number(req.params.poiId);
         if (!Number.isInteger(poiId) || poiId <= 0) {
-            return res.status(400).json({ success: false, error: '525@=K9 ID POI', code: 'INVALID_POI_ID' });
+            return res.status(400).json({ success: false, error: 'Неверный ID POI', code: 'INVALID_POI_ID' });
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const lockedPlayer = await lockPlayer(playerId, client, 'id, energy, last_energy_update, level, current_location_id, radiation');
             if (!lockedPlayer) {
-                return { status: 404, body: { success: false, error: '3@>: =5 =0945=', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
             const player = lockedPlayer;
             const poi = await client.query('SELECT * FROM location_pois WHERE id = $1 AND enabled = true', [poiId]);
             if (!poi.rows[0]) {
-                return { status: 404, body: { success: false, error: '">G:0 8=B5@5A0 =5 =0945=0', code: 'POI_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'POI не найден', code: 'POI_NOT_FOUND' } };
             }
 
             const poiData = poi.rows[0];
 
-            // @>25@:0: 83@>: 2 B>9 65 ;>:0F88
+            // Проверка: игрок в той же локации.
             if (player.current_location_id !== poiData.location_id) {
-                return { status: 400, body: { success: false, error: 'K =5 2 MB>9 ;>:0F88', code: 'WRONG_LOCATION' } };
+                return { status: 400, body: { success: false, error: 'Вы не в этом месте', code: 'WRONG_LOCATION' } };
             }
 
-            // @>25@:0 M=5@388
+            // Проверка энергии.
             const energy = Number(player.energy || 0);
             if (energy < poiData.energy_cost) {
-                return { status: 400, body: { success: false, error: '54>AB0B>G=> M=5@388', code: 'NOT_ENOUGH_ENERGY' } };
+                return { status: 400, body: { success: false, error: 'Недостаточно энергии', code: 'NOT_ENOUGH_ENERGY' } };
             }
 
-            // @>25@:0 required_item
+            // Проверка необходимого предмета.
             if (poiData.required_item_id) {
                 const inventory = normalizeInventory(player.inventory);
                 const hasItem = inventory.some((i) => Number(i.id) === Number(poiData.required_item_id) && Number(i.quantity) > 0);
                 if (!hasItem) {
-                    return { status: 400, body: { success: false, error: 'C65= A?5F80;L=K9 ?@54<5B', code: 'MISSING_REQUIRED_ITEM' } };
+                    return { status: 400, body: { success: false, error: 'Необходимый предмет не найден', code: 'MISSING_REQUIRED_ITEM' } };
                 }
             }
 
-            // @>25@:0 :C;40C=0
+            // Проверка перезарядки.
             if (poiData.cooldown_minutes > 0) {
                 const cooldown = await client.query(
                     'SELECT last_used_at FROM player_poi_cooldowns WHERE player_id = $1 AND poi_id = $2',
@@ -112,12 +112,12 @@ router.post('/:poiId/search', async (req, res) => {
                     const lastUsed = new Date(cooldown.rows[0].last_used_at);
                     const cooldownEnd = new Date(lastUsed.getTime() + poiData.cooldown_minutes * 60 * 1000);
                     if (new Date() < cooldownEnd) {
-                        return { status: 400, body: { success: false, error: '">G:0 8=B5@5A0 =0 :C;40C=5', code: 'POI_COOLDOWN' } };
+                        return { status: 400, body: { success: false, error: 'POI на перезарядке', code: 'POI_COOLDOWN' } };
                     }
                 }
             }
 
-            // @>25@:0 max_uses_per_day
+            // Проверка лимита использований в день.
             if (poiData.max_uses_per_day > 0) {
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
@@ -130,19 +130,19 @@ router.post('/:poiId/search', async (req, res) => {
                 }
             }
 
-            // !?8AK205< M=5@38N
+            // Списывание энергии.
             await client.query('UPDATE players SET energy = GREATEST(0, energy - $1) WHERE id = $2', [poiData.energy_cost, playerId]);
 
-            // 1=>2;O5< :C;40C=
+            // Запись перезарядки.
             await client.query(`
                 INSERT INTO player_poi_cooldowns (player_id, poi_id, last_used_at) VALUES ($1, $2, NOW())
                 ON CONFLICT (player_id, poi_id) DO UPDATE SET last_used_at = NOW()
             `, [playerId, poiId]);
 
-            // 5=5@8@C5< ;CB 87 loot_table (C?@>IQ==>)
-            const foundItem = null; // TODO: @50;87>20BL 35=5@0F8N ;CB0 87 loot_table
+            // Получение лута из loot_table (случайный).
+            const foundItem = null; // TODO: реализовать выпадение лута из loot_table
 
-            // @>3@5AA :>=B@0:B>2
+            // Обновление прогресса.
             try {
                 const { progressContract } = require('../../utils/game-helpers');
                 if (typeof progressContract === 'function') await progressContract(client, playerId, 'scout', 1);
@@ -157,7 +157,7 @@ router.post('/:poiId/search', async (req, res) => {
                         name: poiData.name,
                         energy_spent: poiData.energy_cost,
                         found_item: foundItem,
-                        message: `K >1KA:0;8 ${poiData.name}`
+                        message: `Вы исследовали ${poiData.name}`
                     }
                 }
             };
@@ -170,7 +170,7 @@ router.post('/:poiId/search', async (req, res) => {
     }
 });
 
-// GET /locations/:locationId/mastery  >A2>5=85 ;>:0F88
+// GET /locations/:locationId/mastery — мастерство локации.
 router.get('/:locationId/mastery', async (req, res) => {
     try {
         const playerId = req.playerId;

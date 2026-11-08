@@ -1,23 +1,22 @@
-﻿// 48=K9 1>52>9 <>4C;L (utils/combat.js)
-// '8ABK5 @0AGQBK C@>=0/70I8BK/20@80F88 4;O bosses, pvp, <8@0.
-// 028A8<>AB8: public/shared/equipment.js (G5@57 getGameHelpers/equipmentRules).
-// AO 1>520O <0B5<0B8:0 4>;6=0 68BL 745AL, GB>1K B5AB8@>20BL 8 10;0=A8@>20BL 5Q
-// 2 >4=>< <5AB5, 0 =5 4C1;8@>20BL ?> @>CB0<.
+﻿// Формулы боя (utils/combat.js)
+// Расчет урона для bosses, pvp,<Item>.
+// Берем из public/shared/equipment.js (через getGameHelpers/equipmentRules).
+// Базовый урон bosса масштабируется, но ограничен, чтобы не было дюпа урона от одного杀.
 
 'use strict';
 
 const equipmentRules = require('../public/shared/equipment.js');
 
-// --- >=AB0=BK 10;0=A0 1>O ---
+// --- Константы босса ---
 const BOSS_BASE_DAMAGE = 3;
 const BOSS_DAMAGE_PER_LEVEL = 2;
 const BOSS_COUNTER_BASE = 3;
 const BOSS_COUNTER_PER_LEVEL = 3;
 const DAMAGE_PER_KILL = 0.1;
 const KILL_DECAY_FACTOR = 0.2;
-const MAX_KILL_BONUS = 100; // ?>B>;>: 1>=CA0 >B <0AB5@AB20
+const MAX_KILL_BONUS = 100; // Максимальный бонус за киллы
 
-// --- 0AB5@AB2> ---
+// --- Бонус урона ---
 function calculateDamageBonus(bossId, masteries, opts) {
     const damagePerKill = (opts && opts.damagePerKill) || DAMAGE_PER_KILL;
     const killDecayFactor = (opts && opts.killDecayFactor) || KILL_DECAY_FACTOR;
@@ -29,14 +28,14 @@ function calculateDamageBonus(bossId, masteries, opts) {
     });
 
     let bonus = 0;
-    // :;04 ?@54K4CI8E 1>AA>2 (A 70BCE0=85<).
+    // Бонус от предыдущих боссов (с затуханием).
     for (let i = 1; i < bossId; i++) {
         const kills = masteryMap[i] || 0;
         if (kills <= 0) continue;
         const distance = bossId - i;
         bonus += kills * damagePerKill * Math.pow(killDecayFactor, distance);
     }
-    // :;04 B5:CI53> 1>AA0.
+    // Бонус от текущего босса.
     const currentKills = masteryMap[bossId] || 0;
     bonus += currentKills * damagePerKill;
 
@@ -45,7 +44,7 @@ function calculateDamageBonus(bossId, masteries, opts) {
     return bonus;
 }
 
-// --- #@>= 83@>:0 ?> 1>AAC ---
+// --- Урон игрока по боссу ---
 function calculateDamage(bossId, player, masteries, setBonuses, equipment) {
     const eq = equipment || (player && player.equipment) || {};
     const weaponDamage = equipmentRules.getWeaponDamageForContext(eq.weapon, equipmentRules.WEAPON_CONTEXTS.BOSS);
@@ -56,7 +55,7 @@ function calculateDamage(bossId, player, masteries, setBonuses, equipment) {
     return Math.max(1, Math.floor(weaponDamage + setDamage + bonus + baseDamage));
 }
 
-// --- >=B@-C@>= 1>AA0 ---
+// --- Контратака босса ---
 function calculateBossCounterDamage(boss, equipment, options) {
     options = options || {};
     const { currentHealth, playerLevel, setDefense } = options;
@@ -78,7 +77,7 @@ function calculateBossCounterDamage(boss, equipment, options) {
 }
 
 
-// ---  5M:A?>@B 87 equipment ---
+// --- Экспорт из equipment ---
 const rollVarianceDamage = equipmentRules.rollVarianceDamage;
 const calculateDefenseTotal = equipmentRules.calculateDefenseTotal;
 const calculateLevelDefense = equipmentRules.calculateLevelDefense;
@@ -87,7 +86,7 @@ const getWeaponDamageForContext = equipmentRules.getWeaponDamageForContext;
 const getWeaponContextMultiplier = equipmentRules.getWeaponContextMultiplier;
 
 module.exports = {
-    // >=AB0=BK
+    // Константы
     BOSS_BASE_DAMAGE,
     BOSS_DAMAGE_PER_LEVEL,
     BOSS_COUNTER_BASE,
@@ -95,7 +94,7 @@ module.exports = {
     DAMAGE_PER_KILL,
     KILL_DECAY_FACTOR,
     MAX_KILL_BONUS,
-    // '8ABK5 @0AGQBK
+    // Формулы урона
     calculateDamage,
     calculateDamageBonus,
     calculateBossCounterDamage,
@@ -105,6 +104,6 @@ module.exports = {
     applyDefenseReduction,
     getWeaponDamageForContext,
     getWeaponContextMultiplier,
-    //  5M:A?>@B 4;O A>2<5AB8<>AB8
+    // Экспорт для других модулей
     equipmentRules
 };
