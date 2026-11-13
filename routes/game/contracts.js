@@ -279,6 +279,12 @@ router.post('/claim', async (req, res) => {
                     addItemToInventory(inventory, item, null);
                 }
                 await setPlayerInventory(playerId, inventory, client);
+
+                // Синхронизация инвентаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+                } catch (_) { /* ignore */ }
             }
             if (reward.materials && typeof reward.materials === 'object') {
                 // Материалы добавляются как предметы типа 'material'
@@ -289,6 +295,12 @@ router.post('/claim', async (req, res) => {
                     addItemToInventory(inventory, { name: matName, type: 'material', category: 'material', rarity: 'common', icon: '📦', quantity: qty }, null);
                 }
                 await setPlayerInventory(playerId, inventory, client);
+
+                // Синхронизация инвентаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+                } catch (_) { /* ignore */ }
             }
 
             // Репутация

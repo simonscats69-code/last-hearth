@@ -337,6 +337,12 @@ router.post(['/use', '/use-item'], async (req, res) => {
                     [...params, JSON.stringify(updatedInventory)]
                 );
 
+                // Синхронизация инвентаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, updatedInventory);
+                } catch (_) { /* ignore */ }
+
                 return {
                     success: true,
                     message: 'Предмет использован',
@@ -388,9 +394,10 @@ router.post(['/use', '/use-item'], async (req, res) => {
 });
 
 /**
- * POST /items/sell — продажа предмета за монеты.
- * Минимальная цена продажи — 100 монет, иначе предмет не продается.
- */
+     * POST /items/sell — продажа предмета за монеты.
+     * Цена = 35% от цены магазина (SELL_RATE), минимум — по редкости
+     * (SELL_FLOOR_BY_RARITY). Предметы без цены продаются по фоллбэку редкости.
+     */
 router.post('/sell', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
@@ -425,7 +432,18 @@ router.post('/sell', async (req, res) => {
                 'SELECT id, name, type, rarity, price, stackable FROM items WHERE id = $1',
                 [item.id]
             );
-            const dbItem = dbItemResult.rows[0] || null;
+            let dbItem = dbItemResult.rows[0] || null;
+
+            // Фоллбэк: если id не найден в каталоге (устевший/phantom id),
+            // пытаемся резолвить по имени. Иначе продаваемый предмет
+            // пропадал из экономики из-за отсутствия строки в items.
+            if (!dbItem && item.name) {
+                const byName = await client.query(
+                    'SELECT id, name, type, rarity, price, stackable FROM items WHERE name = $1 LIMIT 1',
+                    [item.name]
+                );
+                dbItem = byName.rows[0] || null;
+            }
 
             const unitPrice = calculateSellPrice(dbItem, item);
             if (unitPrice <= 0) {
@@ -455,6 +473,13 @@ router.post('/sell', async (req, res) => {
                 'UPDATE players SET coins = $1, inventory = $2 WHERE id = $3',
                 [newCoins, JSON.stringify(inventory), playerId]
             );
+
+            // Синхронизация инвентаря в таблицу player_inventory:
+            // без этого следующий запрос, читающий таблицу, увидит старые данные.
+            try {
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+            } catch (_) { /* ignore */ }
 
             await logPlayerAction(playerId, 'item_sell', {
                 item_id: item.id,
@@ -589,7 +614,13 @@ router.post('/drop', async (req, res) => {
                 granted.push({ id: material.id, name: material.name, quantity, icon: material.icon || '=ж' });
             }
 
-            await setPlayerInventory(playerId, inventory, client, { jsonb: false });
+            await setPlayerInventory(playerId, inventory, client, { jsonb: true });
+
+            // Синхронизация инвентаря в таблицу player_inventory.
+            try {
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+            } catch (_) { /* ignore */ }
 
             await logPlayerAction(playerId, 'item_drop', {
                 item_id: item.id,
@@ -659,6 +690,12 @@ router.post('/unequip', async (req, res) => {
                 'UPDATE players SET equipment = $1::jsonb, inventory = $2 WHERE id = $3',
                 [JSON.stringify(equipment), JSON.stringify(inventory), playerId]
             );
+
+            // Синхронизация инвентаря в таблицу player_inventory.
+            try {
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+            } catch (_) { /* ignore */ }
 
             await logPlayerAction(playerId, 'item_unequip', {
                 slot,
@@ -747,6 +784,12 @@ router.post('/buy-stars', async (req, res) => {
                 'UPDATE players SET stars = GREATEST(0, COALESCE(stars,0) - $1), inventory = $2, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
                 [totalStars, JSON.stringify(inventory), playerId, quantity]
             );
+
+            // Синхронизация инвентаря в таблицу player_inventory.
+            try {
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+            } catch (_) { /* ignore */ }
 
             await trackCollectedItems(client, playerId, [shopItemRow.id]);
             await logPlayerAction(playerId, 'item_bought_stars', {

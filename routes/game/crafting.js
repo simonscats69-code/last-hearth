@@ -340,6 +340,12 @@ router.post('/discover', async (req, res) => {
 
             await setPlayerInventory(playerId, inventory, client);
 
+                // Синхронизация инвонтаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+                } catch (_) { /* ignore */ }
+
             return {
                 status: 200,
                 body: {
@@ -441,6 +447,12 @@ router.post('/refine', async (req, res) => {
                 await client.query('UPDATE players SET coins = COALESCE(coins, 0) - $1 WHERE id = $2', [coinsCost, playerId]);
             }
             await setPlayerInventory(playerId, inventory, client);
+
+                // Синхронизация инвонтаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+                } catch (_) { /* ignore */ }
 
             return {
                 status: 200,

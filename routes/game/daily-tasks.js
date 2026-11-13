@@ -167,6 +167,12 @@ router.post('/claim', async (req, res) => {
                     addItemToInventory(inventory, item, null);
                 }
                 await setPlayerInventory(playerId, inventory, client);
+
+                // Синхронизация инвентаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+                } catch (_) { /* ignore */ }
             }
 
             // Помечаем задание как полученное.
@@ -258,6 +264,12 @@ router.post('/claim-all', async (req, res) => {
                     addItemToInventory(inventory, item, null);
                 }
                 await setPlayerInventory(playerId, inventory, client);
+
+                // Синхронизация инвентаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
+                } catch (_) { /* ignore */ }
             }
 
             await client.query('UPDATE players SET daily_tasks_completed = COALESCE(daily_tasks_completed, 0) + $1 WHERE id = $2', [pending.rows.length, playerId]);

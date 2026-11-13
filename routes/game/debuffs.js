@@ -377,6 +377,12 @@ const DebuffAPI = {
                     [JSON.stringify(updatedInventory), playerId]
                 );
 
+                // Синхронизация инвентаря в таблицу player_inventory.
+                try {
+                    const { syncInventoryToTable } = require('../../utils/game-helpers');
+                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, updatedInventory);
+                } catch (_) { /* ignore */ }
+
                 return {
                     success: true,
                     cured: resolvedCureType,

@@ -1386,7 +1386,10 @@ async function mergeDuplicateInventoryStacks() {
         const merged = [];
         for (const entry of inventory) {
             if (!entry || typeof entry !== 'object') continue;
-            addItemToInventory(merged, entry, meta.get(String(entry.id)) || null);
+            // Предмет без id (null/undefined) не стакуется по id — добавляем как
+            // отдельный слот, чтобы он не пропадал и не ломал миграцию.
+            const itemMeta = entry.id != null ? meta.get(String(entry.id)) : null;
+            addItemToInventory(merged, entry, itemMeta);
         }
 
         if (merged.length < inventory.length) {

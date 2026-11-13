@@ -247,23 +247,32 @@ const SELL_RATE = equipmentRules.SELL_RATE;
 const SELL_FLOOR_BY_RARITY = equipmentRules.SELL_FLOOR_BY_RARITY || {};
 
 /**
- * Расчет цены продажи предмета.
- * @param {object|null} dbItem - запись из таблицы items
- * @param {object} inventoryItem - предмет из инвентаря игрока
- * @returns {number} цена продажи за 1 штуку
- */
-function calculateSellPrice(dbItem, inventoryItem) {
-    if (!dbItem) return 0;
-    if (NON_SELLABLE_TYPES.has(String(dbItem.type || inventoryItem?.type || ''))) return 0;
+     * Расчет цены продажи предмета.
+     *
+     * Если dbItem (строка каталога) не найдена — не возвращаем 0 без попытки:
+     * фоллбэк на данные из инвентаря (rarity, price). Иначе предметы с
+     * устевшим/phantom id или null-id пропадали из экономики, хотя
+     * продаваемыми были по редкости.
+     *
+     * @param {object|null} dbItem - запись из таблицы items
+     * @param {object} inventoryItem - предмет из инвентаря игрока
+     * @returns {number} цена продажи за 1 штуку
+     */
+    function calculateSellPrice(dbItem, inventoryItem) {
+        const source = dbItem || (inventoryItem && typeof inventoryItem === 'object' ? inventoryItem : null);
+        if (!source) return 0;
 
-    const shopPrice = Number(dbItem.price || 0);
-    if (shopPrice > 0) {
-        return Math.max(1, Math.floor(shopPrice * SELL_RATE));
+        const type = String(source.type || (inventoryItem && inventoryItem.type) || '');
+        if (NON_SELLABLE_TYPES.has(type)) return 0;
+
+        const shopPrice = Number(source.price || (inventoryItem && inventoryItem.price) || 0);
+        if (shopPrice > 0) {
+            return Math.max(1, Math.floor(shopPrice * SELL_RATE));
+        }
+
+        const rarity = String(source.rarity || (inventoryItem && inventoryItem.rarity) || 'common');
+        return SELL_FLOOR_BY_RARITY[rarity] || SELL_FLOOR_BY_RARITY.common;
     }
-
-    const rarity = String(dbItem.rarity || inventoryItem?.rarity || 'common');
-    return SELL_FLOOR_BY_RARITY[rarity] || SELL_FLOOR_BY_RARITY.common;
-}
 
 /**
  * Добавление предмета в инвентарь с объединением стаков.
@@ -1275,8 +1284,11 @@ async function syncInventoryToTable(client, playerId, inventory) {
 }
 
 module.exports = {
+    // SELL_FLOOR_BY_RARITY и SELL_RATE — публичные константы продажи,
+    // их читает db/schema.js (repairPlayerInventories) и другие модули.
+    SELL_FLOOR_BY_RARITY,
+    SELL_RATE,
     // Нормализация состояния игрока.
-    // normalizeItemStats, normalizePlayerBuffs, SELL_RATE используются в других модулях.
     safeJsonParse,
     normalizeInventory,
     syncInventoryToTable,

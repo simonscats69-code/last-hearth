@@ -25,7 +25,7 @@ function getGameHelpers() {
 }
 
 const helpers = getGameHelpers();
-const { equipmentRules, normalizeEquipment, normalizeInventory, syncInventoryToTable } = helpers;
+const { equipmentRules, normalizeEquipment, normalizeInventory } = helpers;
 
 const VALID_SLOTS = equipmentRules.COMBAT_SLOTS;
 
@@ -338,9 +338,16 @@ router.post('/scrap-all', async (req, res) => {
             });
 
             // Проверка, хватит ли мест для новых материалов.
-            const MAX_SLOTS = equipmentRules.MAX_INVENTORY_SLOTS || 100;
-            const materialCount = Object.keys(gainedMaterials).length;
-            if (remaining.length + materialCount > MAX_SLOTS) {
+            // Считаем реальные слоты, которые добавятся (с учётом стакования),
+            // а не количество имён материалов: иначе при большом количестве
+            // разных материалов проверка завышалася.
+            const projected = inventory.slice();
+            for (const [mat, qty] of Object.entries(gainedMaterials)) {
+                helpers.addItemToInventory(projected, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty, durability: 100, max_durability: 100 }, null);
+            }
+
+            const slotsNeeded = Math.max(0, projected.length - inventory.length);
+            if (slotsNeeded > 0) {
                 return { status: 400, body: { success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' } };
             }
 
@@ -423,7 +430,8 @@ router.post('/upgrade', async (req, res) => {
                 }
 
                 const owned = inventory
-                    .filter((entry) => Number(entry.id) === Number(material.id))
+                    .filter((entry) => Number(entry.id) === Number(material.id)
+                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase()))
                     .reduce((sum, entry) => sum + Math.max(0, Number(entry.quantity || 1)), 0);
 
                 if (owned < required) {
@@ -439,20 +447,25 @@ router.post('/upgrade', async (req, res) => {
             }
 
             // Списывание материалов из инвентаря.
+            // Сначала по id, затем по имени: предметы с null-id (ручные,
+            // после миграции) не игнорируются, иначе материал есть — но не списывается.
             for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
-                    if (Number(inventory[i].id) !== Number(material.id)) continue;
+                    const entry = inventory[i];
+                    const matches = Number(entry.id) === Number(material.id)
+                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase());
+                    if (!matches) continue;
 
-                    const have = Math.max(0, Number(inventory[i].quantity || 1));
+                    const have = Math.max(0, Number(entry.quantity || 1));
                     const take = Math.min(have, left);
                     left -= take;
                     if (take >= have) {
                         inventory.splice(i, 1);
                         i--;
                     } else {
-                        inventory[i] = { ...inventory[i], quantity: have - take };
+                        inventory[i] = { ...entry, quantity: have - take };
                     }
                 }
             }
@@ -568,7 +581,8 @@ router.post('/modify', async (req, res) => {
                 }
 
                 const owned = inventory
-                    .filter((entry) => Number(entry.id) === Number(material.id))
+                    .filter((entry) => Number(entry.id) === Number(material.id)
+                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase()))
                     .reduce((sum, entry) => sum + Math.max(0, Number(entry.quantity || 1)), 0);
 
                 if (owned < required) {
@@ -584,20 +598,25 @@ router.post('/modify', async (req, res) => {
             }
 
             // Списывание материалов из инвентаря.
+            // Сначала по id, затем по имени: предметы с null-id (ручные,
+            // после миграции) не игнорируются, иначе материал есть — но не списывается.
             for (const [name, required] of Object.entries(cost.materials || {})) {
                 const material = materials.get(name);
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
-                    if (Number(inventory[i].id) !== Number(material.id)) continue;
+                    const entry = inventory[i];
+                    const matches = Number(entry.id) === Number(material.id)
+                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase());
+                    if (!matches) continue;
 
-                    const have = Math.max(0, Number(inventory[i].quantity || 1));
+                    const have = Math.max(0, Number(entry.quantity || 1));
                     const take = Math.min(have, left);
                     left -= take;
                     if (take >= have) {
                         inventory.splice(i, 1);
                         i--;
                     } else {
-                        inventory[i] = { ...inventory[i], quantity: have - take };
+                        inventory[i] = { ...entry, quantity: have - take };
                     }
                 }
             }
