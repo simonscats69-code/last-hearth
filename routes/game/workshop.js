@@ -129,7 +129,7 @@ router.get('/', async (req, res) => {
         if (!playerIdGuard(req, res)) return;
 
         const playerResult = await query(
-            'SELECT coins, equipment, inventory FROM players WHERE id = ',
+            'SELECT coins, equipment, inventory FROM players WHERE id = $1',
             [req.player.id]
         );
         const player = playerResult.rows[0] || null;
