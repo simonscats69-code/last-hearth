@@ -145,7 +145,7 @@ async function getBossKeyChances(client, playerId) {
         name: row.key_name,
         icon: row.key_icon,
         rarity: row.key_rarity,
-        chance: Math.round(Number(row.key_drop_chance) * 100000) / 100000
+        chance: Math.min(100, Math.max(0, Number(row.key_drop_chance) || 0))
     }];
 }
 
@@ -180,7 +180,7 @@ async function handleLocationsList(req, res) {
                    min_level as required_level, description,
                    loot_table, exhaustion, is_available
             FROM locations
-            ORDER BY min_level ASC
+            ORDER BY min_level ASC, id ASC
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
         
@@ -407,7 +407,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 );
                 radiationExpiresAt = expiresAt.toISOString();
                 
-                resultingRadiationLevel = Math.min(radiationConfig.maxLevel, existingRadiation.level + radiationGain);
+                resultingRadiationLevel = Math.min(radiationConfig.maxLevel, resultingRadiationLevel + radiationGain);
                 
                 await setPlayerRadiation(playerId, {
                         level: resultingRadiationLevel,
@@ -454,61 +454,71 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         const exhaustionPenalty = Math.min(0.5, locationExhaustion / 200); // до -50% шанса
         const adjustedDropChance = Math.max(0.01, dropChance * (1 - exhaustionPenalty));
         
-        if (rolled <= adjustedDropChance) {
-            // Ключи боссов. Шансы берём из bosses.key_drop_chance (в процентах
-            // от дропа), а предмет — джойном items -> bosses по
-            // required_key_id: без этого джойна ключ не находится вовсе,
-            // энергия тратится, а лут не выпадает.
-            //
-            // Ключи выпадают ТОЛЬКО для следующего босса в последовательности.
-            // getBossKeyChances теперь принимает playerId и возвращает ключ
-            // только для следующего босса в прогрессии игрока.
-            const keyChanceRows = await getBossKeyChances(client, playerId);
-            const keyRoll = crypto.randomInt(10000) / 100;
-
-            let foundKey = null;
-            let cumulativeKeyChance = 0;
-
-            for (const key of keyChanceRows) {
-                cumulativeKeyChance += key.chance;
-                if (keyRoll < cumulativeKeyChance) {
-                    foundKey = key;
-                    break;
-                }
-            }
-
-            if (foundKey) {
-                lootRolled = true;
-                // Ключ «Ключ от X» открывает бой с X, а хранится он под
-                // владельцем предыдущего босса: boss_keys.boss_id = X - 1.
-                const ownerBossId = Math.max(1, foundKey.bossId - 1);
-                await client.query(`
-                    INSERT INTO boss_keys (player_id, boss_id, quantity)
-                    VALUES ($1, $2, 1)
-                    ON CONFLICT (player_id, boss_id)
-                    DO UPDATE SET quantity = boss_keys.quantity + 1
-                `, [playerId, ownerBossId]);
-
-                foundKeyInfo = {
-                    name: foundKey.name,
-                    icon: foundKey.icon || '🗝️',
-                    rarity: foundKey.rarity || 'epic',
-                    boss_id: foundKey.bossId,
-                    boss_name: foundKey.bossName
-                };
-            } else {
-                // Pity timer: если активен, принудительно выбираем редкость не ниже uncommon.
-                let forcedRarity = null;
+            if (rolled <= adjustedDropChance) {
+                // Pity timer: при активном pity гарантируем предмет, а не ключ.
                 if (pityActive) {
-                    forcedRarity = 'uncommon';
-                }
-                itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck, locationData.loot_table, forcedRarity);
+                    let forcedRarity = 'uncommon';
+                    itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck, locationData.loot_table, forcedRarity);
+                    foundItem = await getRandomLootItem(client, itemRarity, locationData.id);
+                    if (foundItem) {
+                        lootRolled = true;
+                    }
+                } else {
+                    // Ключи боссов. Шансы берём из bosses.key_drop_chance (в процентах
+                    // от дропа), а предмет — джойном items -> bosses по
+                    // required_key_id: без этого джойна ключ не находится вовсе,
+                    // энергия тратится, а лут не выпадает.
+                    //
+                    // Ключи выпадают ТОЛЬКО для следующего босса в последовательности.
+                    // getBossKeyChances теперь принимает playerId и возвращает ключ
+                    // только для следующего босса в прогрессии игрока.
+                    const keyChanceRows = await getBossKeyChances(client, playerId);
+                    const keyRoll = crypto.randomInt(10000) / 100;
 
-                foundItem = await getRandomLootItem(client, itemRarity, locationData.id);
-            }
-            
-            if (foundItem) {
-                lootRolled = true;
+                    let foundKey = null;
+                    let cumulativeKeyChance = 0;
+
+                    for (const key of keyChanceRows) {
+                        cumulativeKeyChance += key.chance * (riskProfile.keyChanceMultiplier || 1);
+                        if (keyRoll < cumulativeKeyChance) {
+                            foundKey = key;
+                            break;
+                        }
+                    }
+
+                    if (foundKey) {
+                        lootRolled = true;
+                        // Ключ «Ключ от X» открывает бой с X, а хранится он под
+                        // владельцем предыдущего босса: boss_keys.boss_id = X - 1.
+                        const ownerBossId = Math.max(1, foundKey.bossId - 1);
+                        await client.query(`
+                            INSERT INTO boss_keys (player_id, boss_id, quantity)
+                            VALUES ($1, $2, 1)
+                            ON CONFLICT (player_id, boss_id)
+                            DO UPDATE SET quantity = boss_keys.quantity + 1
+                        `, [playerId, ownerBossId]);
+
+                        foundKeyInfo = {
+                            name: foundKey.name,
+                            icon: foundKey.icon || '🗝️',
+                            rarity: foundKey.rarity || 'epic',
+                            boss_id: foundKey.bossId,
+                            boss_name: foundKey.bossName
+                        };
+                    } else {
+                        // Pity timer: если активен, принудительно выбираем редкость не ниже uncommon.
+                        let forcedRarity = null;
+                        if (pityActive) {
+                            forcedRarity = 'uncommon';
+                        }
+                        itemRarity = rollItemRarity(locationData.id, riskAdjustedLuck, locationData.loot_table, forcedRarity);
+
+                        foundItem = await getRandomLootItem(client, itemRarity, locationData.id);
+                    }
+                }
+                
+                if (foundItem) {
+                    lootRolled = true;
                 const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(updatedPlayer.inventory);
 
                 // Проверяем место в инвентаре перед добавлением предмета.
@@ -637,12 +647,15 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
             setParts.push(`inventory = $${params.length}`);
         }
         // Синхронизация инвентаря в нормализованную таблицу
-        try {
-            const { syncInventoryToTable, normalizeInventory } = require('../../utils/game-helpers');
-            if (typeof syncInventoryToTable === 'function') {
-                await syncInventoryToTable(client, playerId, normalizeInventory(inventoryUpdate));
-            }
-        } catch (_) { /* ignore */ }
+        if (inventoryUpdate) {
+            try {
+                const { syncInventoryToTable, normalizeInventory } = require('../../utils/game-helpers');
+                const parsedInventory = typeof inventoryUpdate === 'string' ? JSON.parse(inventoryUpdate) : inventoryUpdate;
+                if (typeof syncInventoryToTable === 'function') {
+                    await syncInventoryToTable(client, playerId, normalizeInventory(parsedInventory));
+                }
+            } catch (_) { /* ignore */ }
+        }
         // XP больше не пишется напрямую: единый путь через progression.grantExperience.
         if (itemsCollected > 0) {
             params.push(itemsCollected);
@@ -754,7 +767,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                     last_update: lastEnergyUpdate,
                     coins: Number(energyResult.rows[0].coins || 0)
                 },
-                health: Number(updatedPlayer.health || 0) - (radiationDamage || 0),
+                health: newHealth,
                 // Заражение зоной — одно. РИРЅС„РµРєС†РёРё объединены с радиацией,
                 // поэтому отдельный блок infection больше не отдаётся:
                 // весь «урон зоне» считается в radiation.
@@ -851,8 +864,6 @@ router.post('/move', async (req, res) => {
     }
     const playerId = playerIdGuard(req, res);
     if (!playerId) return;
-    const locationIdNum = Number(location_id);
-
     if (location_id === undefined || location_id === null) {
         return res.status(400).json({
             success: false,
@@ -860,6 +871,24 @@ router.post('/move', async (req, res) => {
             code: 'MISSING_LOCATION_ID'
         });
     }
+
+    // Строгая валидация: только положительное целое, без неявного приведения.
+    if (typeof location_id === 'boolean' || Array.isArray(location_id) || (typeof location_id === 'object' && location_id !== null)) {
+        return res.status(400).json({
+            success: false,
+            error: 'ID локации должен быть положительным целым числом',
+            code: 'INVALID_LOCATION_ID'
+        });
+    }
+    const raw = String(location_id).trim();
+    if (!/^[1-9][0-9]*$/.test(raw)) {
+        return res.status(400).json({
+            success: false,
+            error: 'ID локации должен быть положительным целым числом',
+            code: 'INVALID_LOCATION_ID'
+        });
+    }
+    const locationIdNum = Number(raw);
 
     if (!validateLocationId(locationIdNum)) {
         return res.status(400).json({
@@ -948,7 +977,25 @@ router.post('/move', async (req, res) => {
                 };
             }
 
-            // Перемещение стоит 1 энергии
+            if (player.current_location_id === locationIdNum) {
+                return {
+                    status: 200,
+                    body: {
+                        success: true,
+                        data: {
+                            location: {
+                                id: locationData.id,
+                                name: locationData.name,
+                                icon: locationData.icon || '🏠',
+                                radiation: locationData.radiation,
+                                danger_level: locationData.danger_level || 1,
+                                description: locationData.description
+                            },
+                            message: `Вы уже находитесь в ${locationData.name}`
+                        }
+                    }
+                };
+            }
             if (Number(player.energy || 0) < 1) {
                 return {
                     status: 400,
