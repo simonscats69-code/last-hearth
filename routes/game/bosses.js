@@ -83,9 +83,9 @@ function formatDuration(ms) {
     const hours = Math.floor(ms / (60 * 60 * 1000));
     const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
     const seconds = Math.floor((ms % (60 * 1000)) / 1000);
-    if (hours > 0 && minutes > 0) return `${hours} С‡ ${minutes} РјРёРЅ`;
-    if (hours > 0) return `${hours} С‡`;
-    if (minutes > 0) return `${minutes} РјРёРЅ`;
+    if (hours > 0 && minutes > 0) return `${hours} ч ${minutes} мин`;
+    if (hours > 0) return `${hours} ч`;
+    if (minutes > 0) return `${minutes} мин`;
     return `${seconds} сек`;
 }
 
@@ -113,7 +113,7 @@ function formatDuration(ms) {
  * @param {object} boss строка bosses (нужны level, max_health)
  * @param {number} maxHealth максимальное здоровье игрока (не используется,
  *        оставлено для совместимости вызовов)
- * @param {object} equipment СЌРєРёРїРёСЂРѕРІРєР° РёРіСЂРѕРєР°
+ * @param {object} equipment экипировка игрока
  * @param {Object} [options]
  * @param {number} [options.currentHealth] текущее HP босса; без него берётся
  *        полное (нужно для карточки боя до первого удара)
@@ -509,7 +509,7 @@ async function loadItemTemplates(client, rewardItems) {
  * Выдать предметы-награды игроку.
  *
  * @param {object} client - клиент транзакции
- * @param {number} playerId - РєРѕРјСѓ
+ * @param {number} playerId - кому
  * @param {Array} rewardItems - наградные предметы ({item_id|name} + quantity)
  * @param {number} multiplier - множитель количества
  * @param {Array|null} preloadedTemplates - заранее загруженные шаблоны.
@@ -1076,7 +1076,7 @@ router.get('/', async (req, res) => {
     try {
         // transaction(), а НЕ withClient(): resolveActiveBattle чистит
         // просроченное состояние (DELETE player_boss_progress -> DELETE
-        // boss_sessions -> UPDATE players ... active_boss_* = NULL), Рё РІ
+        // boss_sessions -> UPDATE players ... active_boss_* = NULL), и в
         // withClient эти три шага были ТРЕМЯ авто-коммитами на read-запросе.
         // ЗДЕСЬ БЫЛ БАГ: падение на любом шаге после первого оставляло
         // players.active_boss_id указывающим на удалённые строки — игрок

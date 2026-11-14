@@ -243,7 +243,7 @@ router.get('/locations', handleLocationsList);
 
 /**
  * Поиск лута на локации
- * POST /world/search в†’ POST /api/game/world/search
+ * POST /world/search → POST /api/game/world/search
  */
 router.post('/search', async (req, res) => {
     // Фильтруем чувствительные заголовки перед логированием
@@ -479,7 +479,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
             if (foundKey) {
                 lootRolled = true;
-                // Ключ «Ключ от XВ» открывает бой с X, а хранится он под
+                // Ключ «Ключ от X» открывает бой с X, а хранится он под
                 // владельцем предыдущего босса: boss_keys.boss_id = X - 1.
                 const ownerBossId = Math.max(1, foundKey.bossId - 1);
                 await client.query(`
@@ -831,7 +831,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
 /**
  * Перемещение между локациями
- * POST /world/move в†’ POST /api/game/world/move
+ * POST /world/move → POST /api/game/world/move
  */
 router.post('/move', async (req, res) => {
     // Валидация выполняется ДО открытия транзакции, как и раньше: BEGIN

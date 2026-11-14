@@ -1,14 +1,14 @@
 ﻿/**
- * РЎРѕСЃС‚РѕСЏРЅРёРµ РёРіСЂРѕРєР° (Р·РґРѕСЂРѕРІСЊРµ, РіРѕР»РѕРґ, СЂР°РґРёР°С†РёСЏ Рё С‚.Рґ.)
+ * Состояние игрока (здоровье, голод, радиация и т.д.)
  */
 const { transaction } = require('../../db/database');
 const express = require('express');
 const router = express.Router();
 const { lockPlayer } = require('../../db/players');
 const { DEBUFF_CONFIG, getDebuffTier, normalizeRadiationLevel, calculateRadiationDamage } = require('../../utils/gameConstants');
-// РџРѕСЂРѕРі СѓСЂРѕРЅР° РѕС‚ Р·Р°СЂР°Р¶РµРЅРёСЏ Р±РѕР»СЊС€Рµ РЅРµ РЅСѓР¶РµРЅ Р·РґРµСЃСЊ: РЅРѕСЂРјР°Р»РёР·Р°С†РёСЏ СѓСЂРѕРІРЅСЏ Рё
-// СЃР°РјР° С„РѕСЂРјСѓР»Р° СѓСЂРѕРЅР° С‚РµРїРµСЂСЊ РІ utils/gameConstants.js (debuffs.js СЃС‡РёС‚Р°РµС‚
-// С‚РµРј Р¶Рµ РїСѓС‚РµРј) вЂ” СЂР°РЅСЊС€Рµ В«5В» Р±С‹Р»Рѕ РІРїРёСЃР°РЅРѕ Рё Р·РґРµСЃСЊ, Рё РІ debuffs.js.
+// Порог урона от заражения больше не нужен здесь: нормализация уровня и
+// сама формула урона теперь в utils/gameConstants.js (debuffs.js считает
+// тем же путем) — раньше «5» было вписано и здесь, и в debuffs.js.
 const { handleError, logPlayerAction, unauthorized } = require('../../utils/serverApi');
 const { parseRadiation } = require('../../utils/normalizePlayerJson');
 const { setPlayerRadiation } = require('../../db/playerRepository');
@@ -16,7 +16,7 @@ async function runStatusCheck(client, playerId) {
     const p = await lockPlayer(playerId, client, 'health, radiation');
 
     if (!p) {
-        throw { message: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
+        throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
     }
 
     const radConfig = DEBUFF_CONFIG?.radiation || { damagePerLevel: 5, maxLevel: 10 };
@@ -67,9 +67,9 @@ async function runStatusCheck(client, playerId) {
 
 
 /**
- * РџСЂРѕРІРµСЂРєР° СЃРѕСЃС‚РѕСЏРЅРёСЏ (РµР¶РµРґРЅРµРІРЅС‹Р№ СЌС„С„РµРєС‚)
- * POST /status/check в†’ POST /api/game/status/check
- * РџСѓС‚СЊ: /check (РІРЅСѓС‚СЂРё СЂРѕСѓС‚РµСЂР°)
+ * Проверка состояния (ежедневный эффект)
+ * POST /status/check → POST /api/game/status/check
+ * Путь: /check (внутри роутера)
  */
 router.post('/check', async (req, res) => {
     try {
@@ -80,10 +80,10 @@ router.post('/check', async (req, res) => {
             return unauthorized(res);
         }
         
-        // РСЃРїРѕР»СЊР·СѓРµРј С‚СЂР°РЅР·Р°РєС†РёСЋ СЃ Р±Р»РѕРєРёСЂРѕРІРєРѕР№ СЃС‚СЂРѕРєРё
+        // Используем транзакцию с блокировкой строки
         const result = await transaction(async (client) => runStatusCheck(client, playerId));
         
-        // Р›РѕРіРёСЂСѓРµРј РґРµР№СЃС‚РІРёРµ
+        // Логируем действие
         await logPlayerAction(playerId, 'status_check', {
             damage: result.totalDamage,
             effects: result.effects
@@ -96,7 +96,7 @@ router.post('/check', async (req, res) => {
             health: result.health,
             effects: result.effects,
             states: result.states,
-            message: result.radiationLevel > 0 ? 'РџРѕР»СѓС‡РµРЅРѕ СѓСЂРѕРЅР° РѕС‚ РґРµР±Р°С„С„РѕРІ!' : 'Р’СЃС‘ РІ РїРѕСЂСЏРґРєРµ'
+            message: result.radiationLevel > 0 ? 'Получено урона от дебаффов!' : 'Всё в порядке'
         });
         
     } catch (error) {

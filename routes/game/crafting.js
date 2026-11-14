@@ -1,5 +1,5 @@
 ﻿// routes/game/crafting.js
-// РљСЂР°С„С‚ РїСЂРµРґРјРµС‚РѕРІ РёР· РјР°С‚РµСЂРёР°Р»РѕРІ.
+// Крафт предметов из материалов.
 const express = require('express');
 const { query, queryOne } = require('../../db/database');
 const { normalizeInventory } = require('../../utils/game-helpers');
@@ -13,7 +13,7 @@ const { setPlayerInventory } = require('../../db/playerRepository');
 
 const router = express.Router();
 
-// GET /crafting/recipes вЂ” СЃРїРёСЃРѕРє СЂРµС†РµРїС‚РѕРІ
+// GET /crafting/recipes — список рецептов
 router.get('/recipes', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
@@ -40,7 +40,7 @@ router.get('/recipes', async (req, res) => {
     }
 });
 
-// GET /crafting/materials вЂ” СЃРїРёСЃРѕРє РјР°С‚РµСЂРёР°Р»РѕРІ РёРіСЂРѕРєР°
+// GET /crafting/materials — список материалов игрока
 router.get('/materials', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
@@ -61,7 +61,7 @@ router.get('/materials', async (req, res) => {
     }
 });
 
-// POST /crafting/craft вЂ” РєСЂР°С„С‚ РїСЂРµРґРјРµС‚Р°
+// POST /crafting/craft — крафт предмета
 router.post('/craft', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
@@ -75,13 +75,13 @@ router.post('/craft', async (req, res) => {
         const quantity = Math.min(10, rawQty);
 
         if (!Number.isInteger(recipeId) || recipeId <= 0) {
-            return res.status(400).json({ success: false, error: 'РќРµРІРµСЂРЅС‹Р№ ID СЂРµС†РµРїС‚Р°', code: 'INVALID_RECIPE_ID' });
+            return res.status(400).json({ success: false, error: 'Неверный ID рецепта', code: 'INVALID_RECIPE_ID' });
         }
 
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const lockedPlayer = await lockPlayer(playerId, client, 'id, level, coins, stars, inventory');
             if (!lockedPlayer) {
-                return { status: 404, body: { success: false, error: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
             const player = lockedPlayer;
@@ -89,12 +89,12 @@ router.post('/craft', async (req, res) => {
 
             const recipe = await client.query('SELECT * FROM crafting_recipes WHERE id = $1 AND enabled = true', [recipeId]);
             if (!recipe.rows[0]) {
-                return { status: 404, body: { success: false, error: 'Р РµС†РµРїС‚ РЅРµ РЅР°Р№РґРµРЅ', code: 'RECIPE_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Р ецепт не найден', code: 'RECIPE_NOT_FOUND' } };
             }
 
             const r = recipe.rows[0];
             if (level < Number(r.min_level || 1)) {
-                return { status: 400, body: { success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅС‹Р№ СѓСЂРѕРІРµРЅСЊ', code: 'LEVEL_TOO_LOW' } };
+                return { status: 400, body: { success: false, error: 'Недостаточный уровень', code: 'LEVEL_TOO_LOW' } };
             }
 
             let materials = {};
@@ -105,36 +105,36 @@ router.post('/craft', async (req, res) => {
             }
             const inventory = normalizeInventory(player.inventory);
 
-            // РџСЂРѕРІРµСЂРєР° РјР°С‚РµСЂРёР°Р»РѕРІ
+            // Проверка материалов
             for (const [matName, matQty] of Object.entries(materials)) {
                 const needed = matQty * quantity;
                 const owned = inventory.filter((i) => i.name === matName).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
                 if (owned < needed) {
-                    return { status: 400, body: { success: false, error: `РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ ${matName}: РЅСѓР¶РЅРѕ ${needed}, РµСЃС‚СЊ ${owned}`, code: 'NOT_ENOUGH_MATERIALS' } };
+                    return { status: 400, body: { success: false, error: `Недостаточно ${matName}: нужно ${needed}, есть ${owned}`, code: 'NOT_ENOUGH_MATERIALS' } };
                 }
             }
 
-            // РџСЂРѕРІРµСЂРєР° РјРѕРЅРµС‚
+            // Проверка монет
             const totalCoins = (r.coins_cost || 0) * quantity;
             if (Number(player.coins || 0) < totalCoins) {
-                return { status: 400, body: { success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРѕРЅРµС‚', code: 'NOT_ENOUGH_COINS' } };
+                return { status: 400, body: { success: false, error: 'Недостаточно монет', code: 'NOT_ENOUGH_COINS' } };
             }
 
-            // РџСЂРѕРІРµСЂРєР° Р·РІС‘Р·Рґ
+            // Проверка звёзд
             const totalStars = (r.stars_cost || 0) * quantity;
             if (Number(player.stars || 0) < totalStars) {
-                return { status: 400, body: { success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ Р·РІС‘Р·Рґ', code: 'NOT_ENOUGH_STARS' } };
+                return { status: 400, body: { success: false, error: 'Недостаточно звёзд', code: 'NOT_ENOUGH_STARS' } };
             }
 
-            // РџСЂРѕРІРµСЂРєР° СЃР»РѕС‚РѕРІ (СЂРµР·СѓР»СЊС‚Р°С‚ Р·Р°РЅРёРјР°РµС‚ СЃР»РѕС‚С‹)
+            // Проверка слотов (результат занимает слоты)
             const MAX_SLOTS = 100;
             const resultItem = await client.query('SELECT * FROM items WHERE id = $1', [r.result_item_id]);
             if (!resultItem.rows[0]) {
-                return { status: 404, body: { success: false, error: 'Р РµР·СѓР»СЊС‚Р°С‚ РєСЂР°С„С‚Р° РЅРµ РЅР°Р№РґРµРЅ', code: 'RESULT_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Р езультат крафта не найден', code: 'RESULT_NOT_FOUND' } };
             }
             const dbItem = resultItem.rows[0];
 
-            // РЎРїРёСЃС‹РІР°РµРј РјР°С‚РµСЂРёР°Р»С‹
+            // Списываем материалы
             for (const [matName, matQty] of Object.entries(materials)) {
                 const needed = matQty * quantity;
                 let remaining = needed;
@@ -153,32 +153,32 @@ router.post('/craft', async (req, res) => {
                 }
             }
 
-            // РЎРѕР·РґР°С‘Рј СЂРµР·СѓР»СЊС‚Р°С‚
+            // Создаём результат
             const { createInventoryItem, addItemToInventory } = require('../../utils/game-helpers');
             const resultItemObj = createInventoryItem(dbItem, { quantity: r.result_quantity * quantity });
 
-            // РџСЂРѕРІРµСЂСЏРµРј РІРјРµСЃС‚РёРјРѕСЃС‚СЊ Р”Рћ СЃРїРёСЃР°РЅРёСЏ РјРѕРЅРµС‚
+            // Проверяем вместимость ДО списания монет
             const slotsBefore = inventory.length;
             addItemToInventory(inventory, resultItemObj, dbItem);
             if (inventory.length > MAX_SLOTS) {
-                // РћС‚РєР°С‚С‹РІР°РµРј РґРѕР±Р°РІР»РµРЅРёРµ
+                // Откатываем добавление
                 inventory.length = slotsBefore;
-                return { status: 400, body: { success: false, error: 'РРЅРІРµРЅС‚Р°СЂСЊ РїРµСЂРµРїРѕР»РЅРµРЅ', code: 'INVENTORY_FULL' } };
+                return { status: 400, body: { success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' } };
             }
 
-            // РЎРїРёСЃС‹РІР°РµРј РјРѕРЅРµС‚С‹ Рё Р·РІС‘Р·РґС‹ РўРћР›Р¬РљРћ РїРѕСЃР»Рµ СѓСЃРїРµС€РЅРѕРіРѕ РґРѕР±Р°РІР»РµРЅРёСЏ
+            // Списываем монеты и звёзды ТОЛЬКО после успешного добавления
             if (totalCoins > 0) await client.query('UPDATE players SET coins = COALESCE(coins, 0) - $1 WHERE id = $2', [totalCoins, playerId]);
             if (totalStars > 0) await client.query('UPDATE players SET stars = COALESCE(stars, 0) - $1 WHERE id = $2', [totalStars, playerId]);
 
             await setPlayerInventory(playerId, inventory, client);
 
-            // РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РёРЅРІРµРЅС‚Р°СЂСЏ РІ РЅРѕСЂРјР°Р»РёР·РѕРІР°РЅРЅСѓСЋ С‚Р°Р±Р»РёС†Сѓ
+            // Синхронизация инвентаря в нормализованную таблицу
             try {
                 const { syncInventoryToTable } = require('../../utils/game-helpers');
                 if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
             } catch (_) { /* ignore */ }
 
-            // РўСЂРµРєРёРЅРі РґР»СЏ РґРѕСЃС‚РёР¶РµРЅРёР№
+            // Трекинг для достижений
             const { trackCollectedItems } = require('../../utils/game-helpers');
             if (dbItem.id) await trackCollectedItems(client, playerId, [dbItem.id]);
 
@@ -192,7 +192,7 @@ router.post('/craft', async (req, res) => {
                         quantity: r.result_quantity * quantity,
                         coins_spent: totalCoins,
                         stars_spent: totalStars,
-                        message: `РЎРєСЂР°С„С‡РµРЅРѕ ${r.result_quantity * quantity} Г— ${dbItem.name}`
+                        message: `Скрафчено ${r.result_quantity * quantity} × ${dbItem.name}`
                     }
                 }
             };
@@ -210,7 +210,7 @@ router.post('/craft', async (req, res) => {
     }
 });
 
-// POST /crafting/craft-all вЂ” РєСЂР°С„С‚ РјР°РєСЃРёРјР°Р»СЊРЅРѕРіРѕ РєРѕР»РёС‡РµСЃС‚РІР°
+// POST /crafting/craft-all — крафт максимального количества
 router.post('/craft-all', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
@@ -218,30 +218,30 @@ router.post('/craft-all', async (req, res) => {
 
         const recipeId = Number(req.body?.recipe_id);
         if (!Number.isInteger(recipeId) || recipeId <= 0) {
-            return res.status(400).json({ success: false, error: 'РќРµРІРµСЂРЅС‹Р№ ID СЂРµС†РµРїС‚Р°', code: 'INVALID_RECIPE_ID' });
+            return res.status(400).json({ success: false, error: 'Неверный ID рецепта', code: 'INVALID_RECIPE_ID' });
         }
 
-        // РЎРЅР°С‡Р°Р»Р° РїРѕР»СѓС‡Р°РµРј СЂРµС†РµРїС‚ Рё РїСЂРѕРІРµСЂСЏРµРј РјР°С‚РµСЂРёР°Р»С‹
+        // Сначала получаем рецепт и проверяем материалы
         const recipe = await queryOne('SELECT * FROM crafting_recipes WHERE id = $1 AND enabled = true', [recipeId]);
         if (!recipe) {
-            return res.status(404).json({ success: false, error: 'Р РµС†РµРїС‚ РЅРµ РЅР°Р№РґРµРЅ', code: 'RECIPE_NOT_FOUND' });
+            return res.status(404).json({ success: false, error: 'Р ецепт не найден', code: 'RECIPE_NOT_FOUND' });
         }
 
         const player = await queryOne('SELECT level, coins, stars, inventory FROM players WHERE id = $1', [playerId]);
         if (!player) {
-            return res.status(404).json({ success: false, error: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND' });
+            return res.status(404).json({ success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' });
         }
 
         const level = Number(player.level) || 1;
         if (level < Number(recipe.min_level || 1)) {
-            return res.status(400).json({ success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅС‹Р№ СѓСЂРѕРІРµРЅСЊ', code: 'LEVEL_TOO_LOW' });
+            return res.status(400).json({ success: false, error: 'Недостаточный уровень', code: 'LEVEL_TOO_LOW' });
         }
 
         const materials = safeJsonParse(recipe.required_materials, {});
         const inventory = normalizeInventory(player.inventory);
 
-        // РЎС‡РёС‚Р°РµРј РјР°РєСЃРёРјР°Р»СЊРЅРѕРµ РєРѕР»РёС‡РµСЃС‚РІРѕ
-        let maxQty = 100; // РєР°Рї
+        // Считаем максимальное количество
+        let maxQty = 100; // кап
         for (const [matName, matQty] of Object.entries(materials)) {
             const owned = inventory.filter((i) => i.name === matName).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
             const possible = Math.floor(owned / matQty);
@@ -252,25 +252,25 @@ router.post('/craft-all', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Недостаточно материалов', code: 'NOT_ENOUGH_MATERIALS' });
         }
 
-        // РџСЂРѕРІРµСЂСЏРµРј РјРѕРЅРµС‚С‹
+        // Проверяем монеты
         const totalCoins = (recipe.coins_cost || 0) * maxQty;
         if (Number(player.coins || 0) < totalCoins) {
             maxQty = Math.floor(Number(player.coins || 0) / (recipe.coins_cost || 1));
             if (maxQty <= 0) {
-                return res.status(400).json({ success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРѕРЅРµС‚', code: 'NOT_ENOUGH_COINS' });
+                return res.status(400).json({ success: false, error: 'Недостаточно монет', code: 'NOT_ENOUGH_COINS' });
             }
         }
 
-        // РџСЂРѕРІРµСЂСЏРµРј Р·РІС‘Р·РґС‹
+        // Проверяем звёзды
         const totalStars = (recipe.stars_cost || 0) * maxQty;
         if (Number(player.stars || 0) < totalStars) {
             maxQty = Math.floor(Number(player.stars || 0) / (recipe.stars_cost || 1));
             if (maxQty <= 0) {
-                return res.status(400).json({ success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ Р·РІС‘Р·Рґ', code: 'NOT_ENOUGH_STARS' });
+                return res.status(400).json({ success: false, error: 'Недостаточно звёзд', code: 'NOT_ENOUGH_STARS' });
             }
         }
 
-        // РџСЂРѕРІРµСЂСЏРµРј СЃР»РѕС‚С‹
+        // Проверяем слоты
         const MAX_SLOTS = 100;
         const freeSlots = MAX_SLOTS - inventory.length;
         const resultQty = recipe.result_quantity * maxQty;
@@ -278,13 +278,13 @@ router.post('/craft-all', async (req, res) => {
         if (slotsNeeded > freeSlots) {
             maxQty = Math.floor(freeSlots * 99 / recipe.result_quantity);
             if (maxQty <= 0) {
-                return res.status(400).json({ success: false, error: 'РРЅРІРµРЅС‚Р°СЂСЊ РїРµСЂРµРїРѕР»РЅРµРЅ', code: 'INVENTORY_FULL' });
+                return res.status(400).json({ success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' });
             }
         }
 
-        // Р”РµР»РµРіРёСЂСѓРµРј РІ /craft СЃ quantity=maxQty
+        // Делегируем в /craft с quantity=maxQty
         req.body = { recipe_id: recipeId, quantity: maxQty };
-        // РџРµСЂРµРЅР°РїСЂР°РІР»СЏРµРј РЅР° /craft
+        // Перенаправляем на /craft
         res.redirect(307, '/api/game/crafting/craft');
     } catch (error) {
         handleRouteError(res, error, 'crafting_craft_all', req.playerId);
@@ -307,7 +307,7 @@ router.post('/discover', async (req, res) => {
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const lockedPlayer = await lockPlayer(playerId, client, 'id, level, inventory');
             if (!lockedPlayer) {
-                return { status: 404, body: { success: false, error: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
             const player = lockedPlayer;
@@ -328,7 +328,7 @@ router.post('/discover', async (req, res) => {
                 [level]
             );
             if (recipes.rows.length === 0) {
-                return { status: 404, body: { success: false, error: 'РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… СЂРµС†РµРїС‚РѕРІ', code: 'NO_RECIPES' } };
+                return { status: 404, body: { success: false, error: 'Нет доступных рецептов', code: 'NO_RECIPES' } };
             }
 
             const recipe = recipes.rows[0];
@@ -353,7 +353,7 @@ router.post('/discover', async (req, res) => {
                     data: {
                         recipe_id: recipe.id,
                         recipe_name: recipe.name,
-                        message: 'РћС‚РєСЂС‹С‚ РЅРѕРІС‹Р№ СЂРµС†РµРїС‚: ' + recipe.name
+                        message: 'Открыт новый рецепт: ' + recipe.name
                     }
                 }
             };
@@ -365,7 +365,7 @@ router.post('/discover', async (req, res) => {
     }
 });
 
-// POST /crafting/refine - РєРѕРЅРІРµСЂСЃРёСЏ РјР°С‚РµСЂРёР°Р»РѕРІ
+// POST /crafting/refine - конверсия материалов
 router.post('/refine', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
@@ -382,7 +382,7 @@ router.post('/refine', async (req, res) => {
         const outcome = await (require('../../db/database').transaction)(async (client) => {
             const lockedPlayer = await lockPlayer(playerId, client, 'id, level, inventory, coins');
             if (!lockedPlayer) {
-                return { status: 404, body: { success: false, error: 'РРіСЂРѕРє РЅРµ РЅР°Р№РґРµРЅ', code: 'PLAYER_NOT_FOUND' } };
+                return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
             }
 
             const player = lockedPlayer;
@@ -406,11 +406,11 @@ router.post('/refine', async (req, res) => {
             const owned = inventory.filter((i) => i.name === fromMat && i.type === 'resource').reduce((s, i) => s + (Number(i.quantity) || 0), 0);
             const needed = ratio * quantity;
             if (owned < needed) {
-                return { status: 400, body: { success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ ' + fromMat + ': РЅСѓР¶РЅРѕ ' + needed + ', РµСЃС‚СЊ ' + owned, code: 'NOT_ENOUGH_MATERIALS' } };
+                return { status: 400, body: { success: false, error: 'Недостаточно ' + fromMat + ': нужно ' + needed + ', есть ' + owned, code: 'NOT_ENOUGH_MATERIALS' } };
             }
 
             if (coinsCost > 0 && Number(player.coins || 0) < coinsCost) {
-                return { status: 400, body: { success: false, error: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРѕРЅРµС‚', code: 'NOT_ENOUGH_COINS' } };
+                return { status: 400, body: { success: false, error: 'Недостаточно монет', code: 'NOT_ENOUGH_COINS' } };
             }
 
             let remaining = needed;
@@ -436,10 +436,10 @@ router.post('/refine', async (req, res) => {
                 const { addItemToInventory } = require('../../utils/game-helpers');
                 const MAX_SLOTS = 100;
                 const slotsBefore = inventory.length;
-                addItemToInventory(inventory, { name: toMat, type: 'resource', category: 'material', rarity: 'common', icon: 'рџ“¦', quantity: resultQty, durability: 100, max_durability: 100 }, null);
+                addItemToInventory(inventory, { name: toMat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: resultQty, durability: 100, max_durability: 100 }, null);
                 if (inventory.length > MAX_SLOTS) {
                     inventory.length = slotsBefore;
-                    return { status: 400, body: { success: false, error: 'РРЅРІРµРЅС‚Р°СЂСЊ РїРµСЂРµРїРѕР»РЅРµРЅ', code: 'INVENTORY_FULL' } };
+                    return { status: 400, body: { success: false, error: 'Инвентарь переполнен', code: 'INVENTORY_FULL' } };
                 }
             }
 
