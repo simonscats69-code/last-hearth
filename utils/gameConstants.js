@@ -266,10 +266,10 @@ function calculateDebuffModifiers(player) {
     };
 
     if (level > 0) {
-        modifiers.damage += level * DEBUFF_EFFECTS.strength;
-        modifiers.luck += level * DEBUFF_EFFECTS.luck;
-        modifiers.dropChance += level * DEBUFF_EFFECTS.dropChance;
-        modifiers.endurance += level * DEBUFF_EFFECTS.endurance;
+        for (const key of Object.keys(DEBUFF_EFFECTS)) {
+            const modKey = key === 'strength' ? 'damage' : key === 'dropChance' ? 'dropChance' : key;
+            modifiers[modKey] += level * DEBUFF_EFFECTS[key];
+        }
     }
 
     modifiers.damage = Math.max(0.1, modifiers.damage);
@@ -312,13 +312,12 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
     );
 
     const contaminationPressure = Math.max(0, contaminationThreat - contaminationDefense);
-    const riskScore = contaminationPressure;
-    const tier = getRiskTierByScore(riskScore);
+    const tier = getRiskTierByScore(contaminationPressure);
 
     return {
         tier: tier.key,
         label: tier.label,
-        riskScore,
+        riskScore: contaminationPressure,
         contaminationThreat,
         contaminationDefense,
         contaminationPressure,
@@ -327,7 +326,7 @@ function calculateLocationRiskProfile(location = {}, equipment = {}) {
         rarityLuckBonus: tier.rarityLuckBonus,
         expMultiplier: tier.expMultiplier,
         // Порог «освоено» — из общего файла правил.
-        isPrepared: riskScore <= RISK_PREPARED_MAX_SCORE
+        isPrepared: contaminationPressure <= RISK_PREPARED_MAX_SCORE
     };
 }
 

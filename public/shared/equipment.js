@@ -381,12 +381,12 @@
         }
     });
 
-    function calculateDropChance(luck) {
-        const luckNum = Number.isFinite(luck) ? luck : 0;
-        if (luckNum <= 0) return GAME_CONFIG.BASE_DROP_CHANCE || 5;
-        const chance = (GAME_CONFIG.BASE_DROP_CHANCE || 5) + (luckNum * 0.4);
-        return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
-    }
+function calculateDropChance(luck) {
+    const luckNum = Number.isFinite(luck) ? luck : 0;
+    if (luckNum <= 0) return GAME_CONFIG.BASE_DROP_CHANCE;
+    const chance = GAME_CONFIG.BASE_DROP_CHANCE + (luckNum * 0.4);
+    return Math.min(GAME_CONFIG.MAX_DROP_CHANCE, Math.round(chance * 10) / 10);
+}
 
     /**
      * Расчёт выпадения монет при поиске лута.
@@ -445,14 +445,13 @@
 
 /** Потолок регенерации HP (60% от максимума) */
     function getHealthRegenCap(maxHealth) {
-        return Math.max(0, Math.floor((Number(maxHealth) || 0) * HEALTH_REGEN_CAP_RATIO));
+        return Math.max(0, Math.floor(Number(maxHealth) || 0));
     }
 
 /** Сколько HP можно восстановить регеном */
     function getRegenerableHealth(currentHealth, maxHealth) {
-        const cap = getHealthRegenCap(maxHealth);
         const missing = Math.max(0, (Number(maxHealth) || 0) - (Number(currentHealth) || 0));
-        return Math.max(0, Math.min(cap, missing));
+        return missing;
     }
 
     /** Порог автолечения по умолчанию, % от максимума */
@@ -911,8 +910,7 @@ function resolveEquipmentSlot(item) {
         const defenseTotal = Number.isFinite(defenseRaw) ? Math.max(0, Math.floor(defenseRaw)) : 0;
         if (defenseTotal <= 0) return incoming;
 
-        const reduction = (defenseTotal / (defenseTotal + 100)) * 100;
-        return Math.max(0, Math.floor(incoming * (1 - reduction / 100)));
+        return Math.max(0, Math.floor(incoming * 100 / (defenseTotal + 100)));
     }
 
     /**
@@ -1035,7 +1033,7 @@ function resolveEquipmentSlot(item) {
             const count = counts[Number(set.id)] || 0;
             if (count < 2) continue;
 
-            const tier = count >= 4 ? 4 : (count === 3 ? 3 : 2);
+            const tier = Math.min(4, Math.max(2, count));
             const bonus = set[`bonus_${tier}`];
             if (!bonus || typeof bonus !== 'object') continue;
 

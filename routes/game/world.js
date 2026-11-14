@@ -479,7 +479,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                     let cumulativeKeyChance = 0;
 
                     for (const key of keyChanceRows) {
-                        cumulativeKeyChance += key.chance * (riskProfile.keyChanceMultiplier || 1);
+                        cumulativeKeyChance += key.chance * riskProfile.keyChanceMultiplier;
                         if (keyRoll < cumulativeKeyChance) {
                             foundKey = key;
                             break;
