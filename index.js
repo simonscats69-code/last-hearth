@@ -64,6 +64,15 @@ async function handleFatalRuntimeError(kind, error) {
         console.error(kind, error?.message);
     }
 
+    // Ошибки соединения с БД не должны гасить сервер: просто логируем.
+    try {
+        const { isConnectionError } = require('./db/database');
+        if (isConnectionError(error)) {
+            logger.warn({ type: 'connection_error', message: error?.message || String(error) });
+            return;
+        }
+    } catch (_) { /* ignore */ }
+
     if (server && !isShuttingDown) {
         await shutdown(kind);
         return;

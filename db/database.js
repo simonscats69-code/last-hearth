@@ -186,7 +186,7 @@ async function query(sql, params = []) {
         client.release();
         return result;
     } catch (err) {
-        client.release(err);
+        try { client.release(err); } catch (_) { /* ignore */ }
         throw err;
     }
 }
@@ -198,7 +198,7 @@ async function queryOne(sql, params = []) {
         client.release();
         return result.rows[0] || null;
     } catch (err) {
-        client.release(err);
+        try { client.release(err); } catch (_) { /* ignore */ }
         throw err;
     }
 }
@@ -210,7 +210,7 @@ async function queryAll(sql, params = []) {
         client.release();
         return result.rows || [];
     } catch (err) {
-        client.release(err);
+        try { client.release(err); } catch (_) { /* ignore */ }
         throw err;
     }
 }
@@ -263,7 +263,9 @@ async function transaction(fn) {
                 // игнорируем: соединение всё равно уйдёт в release()
             }
 
-            client.release(error);
+            try {
+                client.release(error);
+            } catch (_) { /* ignore */ }
 
             // Deadlock/serialization — повторяем с задержкой. Остальное — сразу наружу.
             if (!isRetryableTransactionError(error) || attempt === TRANSACTION_RETRY_MAX) {
@@ -294,7 +296,7 @@ async function withClient(fn) {
         client.release();
         return result;
     } catch (err) {
-        client.release(err);
+        try { client.release(err); } catch (_) { /* ignore */ }
         throw err;
     }
 }
