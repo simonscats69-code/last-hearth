@@ -222,13 +222,15 @@ router.post(['/use', '/use-item'], async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
         if (!playerId) return;
-        const itemIndex = Number(req.body?.item_index);
-        const equip = Boolean(req.body?.equip);
+    let itemIndex = Number(req.body?.item_index);
+    const itemId = Number(req.body?.item_id);
+    const hasItemId = Number.isInteger(itemId) && itemId > 0;
+    const equip = Boolean(req.body?.equip);
 
-        const itemIndexCheck = validateItemIndex(itemIndex);
-        if (!itemIndexCheck.ok) {
-            return fail(res, itemIndexCheck.error, itemIndexCheck.code);
-        }
+    const itemIndexCheck = validateItemIndex(itemIndex);
+    if (!hasItemId && !itemIndexCheck.ok) {
+        return fail(res, itemIndexCheck.error, itemIndexCheck.code);
+    }
 
         const result = await transaction(async (client) => {
             const playerRow = await lockPlayer(playerId, client, 'inventory, equipment, health, max_health, radiation');
@@ -402,10 +404,12 @@ router.post('/sell', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
         if (!playerId) return;
-        const itemIndex = Number(req.body?.item_index);
+        let itemIndex = Number(req.body?.item_index);
+        const itemId = Number(req.body?.item_id);
+        const hasItemId = Number.isInteger(itemId) && itemId > 0;
 
         const itemIndexCheck = validateItemIndex(itemIndex);
-        if (!itemIndexCheck.ok) {
+        if (!hasItemId && !itemIndexCheck.ok) {
             return fail(res, itemIndexCheck.error, itemIndexCheck.code);
         }
 
@@ -417,6 +421,13 @@ router.post('/sell', async (req, res) => {
             }
 
             const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(playerRow.inventory);
+
+            if (hasItemId) {
+                itemIndex = inventory.findIndex(i => Number(i?.id) === itemId);
+                if (itemIndex < 0) {
+                    throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+                }
+            }
 
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
@@ -520,10 +531,12 @@ router.post('/drop', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
         if (!playerId) return;
-        const itemIndex = Number(req.body?.item_index);
+        let itemIndex = Number(req.body?.item_index);
+        const itemId = Number(req.body?.item_id);
+        const hasItemId = Number.isInteger(itemId) && itemId > 0;
 
         const itemIndexCheck = validateItemIndex(itemIndex);
-        if (!itemIndexCheck.ok) {
+        if (!hasItemId && !itemIndexCheck.ok) {
             return fail(res, itemIndexCheck.error, itemIndexCheck.code);
         }
 
@@ -533,8 +546,15 @@ router.post('/drop', async (req, res) => {
             if (!playerRow) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
-
             const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(playerRow.inventory);
+
+            if (hasItemId) {
+                itemIndex = inventory.findIndex(i => Number(i?.id) === itemId);
+                if (itemIndex < 0) {
+                    throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+                }
+            }
+
             if (itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
