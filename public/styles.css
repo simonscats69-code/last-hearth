@@ -5922,3 +5922,54 @@ html, body {
     border-radius: 0.18em;
 }
 
+
+
+/* Progress tabs (achievements + daily tasks) */
+.progress-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.progress-tab {
+    flex: 1;
+    padding: var(--btn-pad-y) 8px;
+    border: 1px solid var(--metal-400);
+    border-radius: var(--radius-sm);
+    background: var(--metal-700);
+    color: var(--text-secondary);
+    cursor: pointer;
+    min-height: var(--tap-min);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--text-sm);
+    font-family: inherit;
+    font-weight: 600;
+    transition: background 0.2s ease, color 0.2s ease,
+        border-color 0.2s ease, transform 0.12s ease;
+}
+
+.progress-tab:hover {
+    background: var(--metal-500);
+    color: var(--text-primary);
+    border-color: var(--rust-400);
+}
+
+.progress-tab:active {
+    transform: scale(0.96);
+}
+
+.progress-tab.active {
+    background-color: var(--rust-500);
+    color: var(--text-primary);
+    border-color: var(--rust-400);
+}
+
+.progress-panel {
+    display: none;
+}
+
+.progress-panel.active {
+    display: block;
+}

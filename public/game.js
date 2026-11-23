@@ -2208,8 +2208,7 @@ const SCREENS = [
     'pvp-players',    // PvP игроки
     'pvp-fight',      // PvP бой
     'pvp-stats',      // PvP статистика
-    'achievements',   // Достижения
-    'daily-tasks',    // Ежедневные задания
+    'progress',       // Прогресс (достижения + ежедневные задания)
     'workshop',       // Мастерская
     'crafting',       // Крафт
 ];
@@ -2338,11 +2337,8 @@ function onScreenOpen(screenName) {
             safeAsync('clans-list', loadClansList());
             break;
 
-        case 'achievements':
-            safeAsync('achievements', loadAchievements());
-            break;
-        case 'daily-tasks':
-            safeAsync('daily-tasks', loadDailyTasks());
+        case 'progress':
+            safeAsync('progress', loadProgressPanel(activeProgressTab));
             break;
         case 'workshop':
             safeAsync('workshop', renderWorkshopPanel());
@@ -3629,7 +3625,7 @@ function handleMainGuidanceAction(action) {
             openTradeTab('market');
             break;
         case 'achievements':
-            showScreen('achievements');
+            openProgressTab('achievements');
             break;
         case 'inventory':
             showScreen('inventory');
@@ -9056,7 +9052,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // вызывал бы showScreen('trade') и перезагрузку всех панелей.
         // Кнопки создаются один раз в generateScreens, поэтому bindClickOnce
         // защищает от двойных слушателей при повторной инициализации.
-        document.querySelectorAll('.trade-tab').forEach(btn => {
+        document.querySelectorAll('.progress-tab').forEach(btn => {
+    bindClickOnce(btn, `progress-tab-${btn.dataset.progressTab || 'achievements'}`, () => {
+        setProgressTab(btn.dataset.progressTab || 'achievements');
+    });
+});
+
+document.querySelectorAll('.trade-tab').forEach(btn => {
             bindClickOnce(btn, `trade-tab-${btn.dataset.tradeTab || 'market'}`, () => {
                 setTradeTab(btn.dataset.tradeTab || 'market');
             });
@@ -9064,8 +9066,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         document.getElementById('rating-btn')?.addEventListener('click', () => showScreen('rating'));
         document.getElementById('pvp-btn')?.addEventListener('click', () => showScreen('pvp-players'));
-        document.getElementById('achievements-btn')?.addEventListener('click', () => showScreen('achievements'));
-        document.getElementById('daily-tasks-btn')?.addEventListener('click', () => showScreen('daily-tasks'));
+        document.getElementById('achievements-btn')?.addEventListener('click', () => openProgressTab('achievements'));
+        document.getElementById('daily-tasks-btn')?.addEventListener('click', () => openProgressTab('daily-tasks'));
         document.getElementById('inventory-workshop-btn')?.addEventListener('click', () => showScreen('workshop'));
         document.getElementById('inventory-crafting-btn')?.addEventListener('click', () => showScreen('crafting'));
         document.getElementById('crafting-discover-btn')?.addEventListener('click', () => discoverRecipe());
@@ -9276,8 +9278,7 @@ const SCREEN_BUILDERS = Object.freeze([
     'ratingScreenHtml',    'pvpPlayersScreenHtml',
     'pvpFightScreenHtml',
     'pvpStatsScreenHtml',
-    'achievementsScreenHtml',
-    'dailyTasksScreenHtml',
+    'progressScreenHtml',
     'workshopScreenHtml',
     'craftingScreenHtml'
 ]);
@@ -9969,36 +9970,29 @@ ${Templates.statCard('', '<span id="pvp-items-lost">0</span>', 'Потеряно
 }
 
 // eslint-disable-next-line no-unused-vars
-function achievementsScreenHtml() {
+function progressScreenHtml() {
     return `
-        <!-- Достижения -->
-        <div class="screen" id="achievements-screen">
-            <div class="screen-header">
-                <h2>🏆 Достижения</h2>
-            </div>
-            <div class="screen-content">
-                <div class="achievements-categories" id="achievements-categories"></div>
-                <div class="achievements-list" id="achievements-list"></div>
-            </div>
-        </div>
-    `;
-}
-
-function dailyTasksScreenHtml() {
-    return `
-        <!-- Ежедневные задания -->
-        <div class="screen" id="daily-tasks-screen">
+        <div class="screen" id="progress-screen">
             <div class="screen-header">
                 <button class="back-btn" data-screen="main">←</button>
-                <h2>📋 Ежедневные задания</h2>
+                <h2>📊 Прогресс</h2>
             </div>
             <div class="screen-content">
-                <div id="daily-tasks-list"></div>
+                <div class="progress-tabs">
+                    <button class="progress-tab active" data-progress-tab="achievements">🏆 Достижения</button>
+                    <button class="progress-tab" data-progress-tab="daily-tasks">📋 Задания</button>
+                </div>
+                <div class="progress-panel active" id="progress-panel-achievements">
+                    <div class="achievements-categories" id="achievements-categories"></div>
+                    <div class="achievements-list" id="achievements-list"></div>
+                </div>
+                <div class="progress-panel" id="progress-panel-daily-tasks">
+                    <div id="daily-tasks-list"></div>
+                </div>
             </div>
         </div>
     `;
 }
-
 function workshopScreenHtml() {
     return `
         <!-- Мастерская -->
@@ -10456,6 +10450,7 @@ function renderWheelSectors(palette) {
  * @type {'market'|'shop'|'wheel'}
  */
 let activeTradeTab = 'market';
+let activeProgressTab = 'achievements';
 
 /**
  * Загрузить данные одной панели «Торговли».
@@ -10490,6 +10485,35 @@ async function loadTradePanel(tab) {
  *
  * @param {'market'|'shop'|'wheel'} tab начальный под-таб
  */
+function loadProgressPanel(tab = 'achievements') {
+    activeProgressTab = tab;
+    if (tab === 'achievements') {
+        safeAsync('progress-achievements', loadAchievements());
+    } else {
+        safeAsync('progress-daily-tasks', loadDailyTasks());
+    }
+}
+
+function openProgressTab(tab = 'achievements') {
+    if (!showScreen('progress')) return;
+    setProgressTab(tab);
+}
+
+function syncProgressTabClasses(wanted) {
+    document.querySelectorAll('.progress-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.progressTab === wanted);
+    });
+    document.querySelectorAll('.progress-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `progress-panel-${wanted}`);
+    });
+}
+
+function setProgressTab(tab = 'achievements') {
+    activeProgressTab = tab;
+    syncProgressTabClasses(tab);
+    loadProgressPanel(tab);
+}
+
 function openTradeTab(tab = 'market') {
     // Неизвестный таб не листаем молча на первый: покажем рынок, но оставим
     // след в консоли для отладки.
