@@ -3801,6 +3801,7 @@ function updateHealPanel(player) {
 async function healItem(itemIndex) {
     if (!lockAction('healItem')) return;
     try {
+        await loadInventory();
         const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
             body: { item_index: itemIndex, equip: false },
@@ -4894,6 +4895,7 @@ async function dropItem(itemIndex) {
     if (!lockAction('dropItem')) return;
 
     try {
+        await loadInventory();
         const result = await apiRequest('/api/game/inventory/drop', {
             method: 'POST',
             body: { item_index: idx },
@@ -4958,6 +4960,7 @@ async function sellItem(itemIndex, quantity = null) {
     if (!lockAction('sellItem')) return;
 
     try {
+        await loadInventory();
         const result = await apiRequest('/api/game/inventory/sell', {
             method: 'POST',
             body: {
