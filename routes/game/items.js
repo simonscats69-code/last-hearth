@@ -239,7 +239,14 @@ router.post(['/use', '/use-item'], async (req, res) => {
 
             const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(playerRow.inventory);
 
-            if (itemIndex >= inventory.length) {
+            if (hasItemId) {
+                itemIndex = inventory.findIndex(i => Number(i?.id) === itemId);
+                if (itemIndex < 0) {
+                    throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
+                }
+            }
+
+            if (!Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
 
