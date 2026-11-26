@@ -442,6 +442,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         let inventoryUpdate = null;
         let coinDrop = null;
         let lootRolled = false;
+        let lootX2Collected = false;
         
         // Pity timer: после PITY_THRESHOLD подряд пустых поисков следующая
         // вылазка гарантированно даёт предмет редкостью не ниже uncommon.
@@ -519,7 +520,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                 
                 if (foundItem) {
                     lootRolled = true;
-                const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(updatedPlayer.inventory);
+                const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(updatedPlayer.inventory);
 
                 // Проверяем место в инвентаре перед добавлением предмета.
                 // Если инвентарь полон, не пытаемся добавить — выбрасываем
@@ -559,6 +560,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
                         // достижение «Коллекционер» не учитывает второй экземпляр.
                         if (foundItem?.id) {
                             await trackCollectedItems(client, playerId, [foundItem.id]);
+                            lootX2Collected = true;
                         }
                     }
                 }
@@ -648,13 +650,11 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
         }
         // Синхронизация инвентаря в нормализованную таблицу
         if (inventoryUpdate) {
-            try {
-                const { syncInventoryToTable, normalizeInventory } = require('../../utils/game-helpers');
-                const parsedInventory = typeof inventoryUpdate === 'string' ? JSON.parse(inventoryUpdate) : inventoryUpdate;
-                if (typeof syncInventoryToTable === 'function') {
-                    await syncInventoryToTable(client, playerId, normalizeInventory(parsedInventory));
-                }
-            } catch (_) { /* ignore */ }
+            const { syncInventoryToTable, normalizeInventory } = require('../../utils/game-helpers');
+            const parsedInventory = typeof inventoryUpdate === 'string' ? JSON.parse(inventoryUpdate) : inventoryUpdate;
+            if (typeof syncInventoryToTable === 'function') {
+                await syncInventoryToTable(client, playerId, normalizeInventory(parsedInventory));
+            }
         }
         // XP больше не пишется напрямую: единый путь через progression.grantExperience.
         if (itemsCollected > 0) {
@@ -714,7 +714,7 @@ let resultingRadiationLevel = normalizeRadiation(updatedPlayer.radiation).level;
 
         // Счётчики прогресса: без них достижения «Коллекционер»/«Ежедневная
         // победа» и ежедневные задания остаются на нуле при любых действиях.
-        if (foundItem?.id) {
+        if (foundItem?.id && !lootX2Collected) {
             await trackCollectedItems(client, playerId, [foundItem.id]);
         }
         await progressDailyTask(client, playerId, 'search', 1);

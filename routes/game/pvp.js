@@ -734,14 +734,14 @@ router.post('/attack-hit', async (req, res) => {
 
                 const coinsReward = pvp.calculateCoinsToSteal(defender.coins);
 
-                const defenderInventory = await (helpers.loadInventoryFromTable || (async () => null))(client, defenderId) || normalizeInventory(defender.inventory);
-                const attackerInventory = await (helpers.loadInventoryFromTable || (async () => null))(client, attackerId) || normalizeInventory(attacker.inventory);
+                const defenderInventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, defenderId)) ?? normalizeInventory(defender.inventory);
+                const attackerInventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, attackerId)) ?? normalizeInventory(attacker.inventory);
                 let stolenItem = null;
 
                 if (crypto.randomInt(10) === 0) {
                     const [stolen] = pvp.getRandomItemsToSteal(defenderInventory, 1);
                     if (stolen && attackerInventory.length < MAX_INVENTORY_SLOTS) {
-                        const stolenIndex = defenderInventory.indexOf(stolen);
+                        const stolenIndex = defenderInventory.findIndex((item) => item && item.id === stolen.id);
                         if (stolenIndex < 0) {
                             stolenItem = null;
                         } else {
@@ -819,6 +819,14 @@ router.post('/attack-hit', async (req, res) => {
                 `, [coinsReward, attackerId]);
 
                 if (stolenItem) {
+                    await client.query(
+                        `UPDATE players SET inventory = $1::jsonb WHERE id = $2`,
+                        [JSON.stringify(defenderInventory), defenderId]
+                    );
+                    await client.query(
+                        `UPDATE players SET inventory = $1::jsonb WHERE id = $2`,
+                        [JSON.stringify(attackerInventory), attackerId]
+                    );
                     await helpers.syncInventoryToTable(client, defenderId, defenderInventory);
                     await helpers.syncInventoryToTable(client, attackerId, attackerInventory);
                     await client.query(

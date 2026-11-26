@@ -41,7 +41,7 @@ const clientFactory = () => ({
         if (/SELECT coins, inventory FROM players WHERE id = \$1 FOR UPDATE/.test(sql)) {
             return { rows: [{ coins, inventory }] };
         }
-        if (/^UPDATE players SET coins = coins - \$1, inventory = \$2/.test(sql)) {
+        if (/^UPDATE players SET coins = .* - \$1, inventory = \$2/.test(sql)) {
             // Именно вычитание: оно атомарно на стороне SQL. Если бы роут
             // считал newCoins в JS и писал SET coins = $N, повторное
             // применение дало бы двойное списание.
@@ -165,7 +165,7 @@ const player = () => ({ id: 5 });
     await buy(req, res);
 
     const lockIndex = callLog.findIndex(q => /SELECT coins, inventory FROM players WHERE id = \$1 FOR UPDATE/.test(q.sql));
-    const updateIndex = callLog.findIndex(q => /^UPDATE players SET coins = coins - \$1/.test(q.sql));
+    const updateIndex = callLog.findIndex(q => /^UPDATE players SET coins = .* - \$1/.test(q.sql));
     ok('SELECT ... FOR UPDATE выполнен', lockIndex !== -1);
     ok('UPDATE coins выполнен', updateIndex !== -1);
     ok('блокировка взята ДО списания', lockIndex !== -1 && lockIndex < updateIndex, `lock=${lockIndex} update=${updateIndex}`);

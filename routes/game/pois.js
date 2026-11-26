@@ -26,7 +26,7 @@ router.get('/:locationId', async (req, res) => {
 
         // Получение таймеров перезарядки игрока по POI.
         const cooldowns = await query(
-            `SELECT poi_id, last_used_at FROM player_poi_cooldowns WHERE player_id = $1 AND poi_id = ANY($2::int[])`,
+            `SELECT poi_id, MAX(last_used_at) AS last_used_at FROM player_poi_cooldowns WHERE player_id = $1 AND poi_id = ANY($2::int[]) GROUP BY poi_id`,
             [playerId, pois.rows.map((p) => p.id)]
         );
         const cooldownMap = {};
@@ -105,7 +105,7 @@ router.post('/:poiId/search', async (req, res) => {
             // Проверка перезарядки.
             if (poiData.cooldown_minutes > 0) {
                 const cooldown = await client.query(
-                    'SELECT last_used_at FROM player_poi_cooldowns WHERE player_id = $1 AND poi_id = $2',
+                    'SELECT last_used_at FROM player_poi_cooldowns WHERE player_id = $1 AND poi_id = $2 ORDER BY last_used_at DESC LIMIT 1',
                     [playerId, poiId]
                 );
                 if (cooldown.rows[0]) {
@@ -136,7 +136,6 @@ router.post('/:poiId/search', async (req, res) => {
             // Запись перезарядки.
             await client.query(`
                 INSERT INTO player_poi_cooldowns (player_id, poi_id, last_used_at) VALUES ($1, $2, NOW())
-                ON CONFLICT (player_id, poi_id) DO UPDATE SET last_used_at = NOW()
             `, [playerId, poiId]);
 
             // Получение лута из loot_table (случайный).

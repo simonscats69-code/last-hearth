@@ -42,6 +42,50 @@ function toFiniteNumber(value, fallback) {
     return n;
 }
 
+/**
+ * Глубокое сравнение двух значений с поддержкой NaN и циклических ссылок.
+ * @param {*} a
+ * @param {*} b
+ * @returns {boolean}
+ */
+function deepEqual(a, b) {
+    if (a === b) return true;
+    if (Number.isNaN(a) && Number.isNaN(b)) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+
+    const seen = new WeakMap();
+    const eq = (x, y) => {
+        if (x === y) return true;
+        if (Number.isNaN(x) && Number.isNaN(y)) return true;
+        if (x === null || y === null || typeof x !== 'object' || typeof y !== 'object') return false;
+        if (Array.isArray(x) !== Array.isArray(y)) return false;
+
+        const prev = seen.get(x);
+        if (prev === y) return true;
+        seen.set(x, y);
+
+        if (x instanceof Date || y instanceof Date) {
+            if (!(x instanceof Date) || !(y instanceof Date)) return false;
+            return x.getTime() === y.getTime();
+        }
+        if (x instanceof RegExp || y instanceof RegExp) {
+            if (!(x instanceof RegExp) || !(y instanceof RegExp)) return false;
+            return x.toString() === y.toString();
+        }
+
+        const kx = Object.keys(x);
+        const ky = Object.keys(y);
+        if (kx.length !== ky.length) return false;
+        for (const key of kx) {
+            if (!Object.prototype.hasOwnProperty.call(y, key)) return false;
+            if (!eq(x[key], y[key])) return false;
+        }
+        return true;
+    };
+    return eq(a, b);
+}
+
 const VALID_RARITIES = new Set(['common', 'uncommon', 'rare', 'epic', 'legendary']);
 
 function normalizeInventoryItem(raw) {
@@ -208,17 +252,17 @@ function normalizeRadiation(value) {
 
     if (typeof parsed === 'number') {
         return {
-            level: parsed,
+            level: toFiniteNumber(parsed, 0),
             expires_at: null,
             applied_at: null
         };
     }
 
-    if (parsed && typeof parsed === 'object') {
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         return {
-            level: Number(parsed.level || 0),
-            expires_at: parsed.expires_at || null,
-            applied_at: parsed.applied_at || null
+            level: toFiniteNumber(parsed.level, 0),
+            expires_at: parsed.expires_at ?? null,
+            applied_at: parsed.applied_at ?? null
         };
     }
 
@@ -309,29 +353,32 @@ function addItemToInventory(inventory, newItem, dbItem) {
     // id: безопасное целое, иначе null.
     const newItemId = (item.id !== null && item.id !== undefined) ? (Number.isSafeInteger(Number(item.id)) ? Number(item.id) : null) : null;
 
+    const maxSlots = Number.isFinite(Number(equipmentRules.MAX_INVENTORY_SLOTS)) && Number(equipmentRules.MAX_INVENTORY_SLOTS) >= 1
+        ? Math.floor(Number(equipmentRules.MAX_INVENTORY_SLOTS)) : 100;
+
     let remaining = quantity;
 
-    // Сравнение двух предметов для объединения стаков (через JSON.stringify).
-    const deepEqual = (a, b) => {
-        if (a === b) return true;
-        if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
-        if (Array.isArray(a) !== Array.isArray(b)) return false;
-        const ka = Object.keys(a).sort();
-        const kb = Object.keys(b).sort();
-        if (ka.length !== kb.length) return false;
-        for (let i = 0; i < ka.length; i++) {
-            if (ka[i] !== kb[i]) return false;
-            if (!deepEqual(a[ka[i]], b[kb[i]])) return false;
-        }
-        return true;
-    };
+    // Сравнение двух предметов для объединения стаков.
+    // (используется модульный deepEqual)
 
-    if (stackable && !isEquipment && type !== 'key' && Number(item.upgrade_level || 0) === 0 && newItemId !== null) {
+    const canStackBase = stackable && !isEquipment && type !== 'key' && Number(item.upgrade_level || 0) === 0;
+
+    if (canStackBase && remaining > 0) {
         for (let i = 0; i < inventory.length && remaining > 0; i++) {
             const existing = inventory[i];
             if (!existing || typeof existing !== 'object' || Array.isArray(existing)) continue;
             const existingId = (existing.id !== null && existing.id !== undefined) ? (Number.isSafeInteger(Number(existing.id)) ? Number(existing.id) : null) : null;
-            if (existingId !== newItemId) continue;
+
+            let idMatches = false;
+            if (newItemId === null) {
+                // Стакование предметов с id=null — по имени и типу.
+                idMatches = existingId === null
+                    && String(existing.name ?? '') === String(item.name ?? '')
+                    && String(existing.type ?? '') === String(item.type ?? '');
+            } else {
+                idMatches = existingId === newItemId;
+            }
+            if (!idMatches) continue;
             if (existing.rarity !== item.rarity) continue;
             if (Number(existing.upgrade_level || 0) !== 0) continue;
             // Предметы с разной прочностью/макс.прочностью/модификациями/статами не объединяются.
@@ -351,14 +398,11 @@ function addItemToInventory(inventory, newItem, dbItem) {
 
     // Если остался нераспределенный остаток — добавляем новыми слотами.
     let slotsAdded = 0;
-    let iterations = 0;
-    const MAX_ITERATIONS = 10000;
-    while (remaining > 0 && iterations < MAX_ITERATIONS) {
+    while (remaining > 0 && inventory.length < maxSlots) {
         const chunk = Math.min(maxStack, remaining);
         inventory.push({ ...item, quantity: chunk });
         remaining -= chunk;
         slotsAdded++;
-        iterations++;
     }
 
     return slotsAdded;
@@ -586,7 +630,16 @@ function wearEquipmentSlots(equipment, slots) {
  * @param {Iterable<number|string>} itemIds - ID предметов
  */
 async function trackCollectedItems(client, playerId, itemIds) {
-    const ids = [...new Set(Array.from(itemIds || []).map(Number).filter(Number.isFinite))];
+    if (!client || typeof client.query !== 'function') return;
+    if (!playerId) return;
+
+    let raw = itemIds;
+    if (raw == null) raw = [];
+    if (!Array.isArray(raw) && (typeof raw !== 'object' || typeof raw[Symbol.iterator] !== 'function')) {
+        raw = [raw];
+    }
+
+    const ids = [...new Set(Array.from(raw).map((v) => Number(v)).filter((n) => Number.isFinite(n) && Number.isSafeInteger(n)))];
     if (ids.length === 0) return;
 
     await client.query(`
@@ -1168,14 +1221,24 @@ async function initAchievementsTable() {
  * @returns {Object} { updatedInventory, item, quantityLeft }
  */
 function consumeInventoryItem(inventory, itemIndex) {
-    const item = inventory[itemIndex];
-    if (!item) {
-        return { updatedInventory: inventory, item: null, quantityLeft: 0 };
+    if (!Array.isArray(inventory)) {
+        return { updatedInventory: [], item: null, quantityLeft: 0 };
+    }
+
+    let idx = Number(itemIndex);
+    if (!Number.isInteger(idx)) idx = Math.trunc(idx);
+    if (!Number.isSafeInteger(idx) || idx < 0 || idx >= inventory.length) {
+        return { updatedInventory: [...inventory], item: null, quantityLeft: 0 };
+    }
+
+    const item = inventory[idx];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return { updatedInventory: [...inventory], item: null, quantityLeft: 0 };
     }
 
     const rawQty = Number(item.quantity);
     if (!Number.isFinite(rawQty) || rawQty <= 0) {
-        return { updatedInventory: inventory, item: null, quantityLeft: 0 };
+        return { updatedInventory: [...inventory], item: null, quantityLeft: 0 };
     }
     const currentQty = rawQty;
     const remainingQty = currentQty - 1;
@@ -1183,12 +1246,12 @@ function consumeInventoryItem(inventory, itemIndex) {
     const updatedInventory = [...inventory];
 
     if (remainingQty > 0) {
-        updatedInventory[itemIndex] = { ...item, quantity: remainingQty };
+        updatedInventory[idx] = { ...item, quantity: remainingQty };
     } else {
-        updatedInventory.splice(itemIndex, 1);
+        updatedInventory.splice(idx, 1);
     }
 
-    return { updatedInventory, item, quantityLeft: remainingQty };
+    return { updatedInventory, item, quantityLeft: Math.max(0, remainingQty) };
 }
 
 /**
@@ -1198,89 +1261,125 @@ function consumeInventoryItem(inventory, itemIndex) {
  * @returns {Promise<Array|null>} массив предметов или null (fallback на JSONB)
  */
 async function loadInventoryFromTable(client, playerId) {
-    if (!client || !playerId) return null;
+    if (!client || typeof client.query !== 'function' || !playerId) return null;
     try {
         const result = await client.query(
-            'SELECT pi.item_id, pi.quantity, pi.durability, pi.max_durability, pi.upgrade_level, pi.modifications, pi.stats, i.name, i.type, i.category, i.rarity, i.icon, i.slot, i.price, i.ammo_type, i.max_stack, i.stackable, i.set_id FROM player_inventory pi JOIN items i ON i.id = pi.item_id WHERE pi.player_id = $1',
+            'SELECT pi.item_id, pi.quantity, pi.durability, pi.max_durability, pi.upgrade_level, pi.modifications, pi.stats, i.name, i.type, i.category, i.rarity, i.icon, i.slot, i.price, i.ammo_type, i.max_stack, i.stackable, i.set_id FROM player_inventory pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.player_id = $1',
             [playerId]
         );
-        if (result.rows.length === 0) return null; // fallback на JSONB
+        if (!result || !Array.isArray(result.rows) || result.rows.length === 0) return null;
         return result.rows.map((row) => ({
-            id: row.item_id,
-            name: row.name,
-            type: row.type,
-            category: row.category,
-            rarity: row.rarity,
-            icon: row.icon,
-            slot: row.slot,
+            id: row.item_id === null || row.item_id === undefined
+                ? null
+                : (Number.isSafeInteger(Number(row.item_id)) ? Number(row.item_id) : null),
+            name: row.name != null ? String(row.name) : 'Предмет',
+            type: row.type != null ? String(row.type) : 'misc',
+            category: row.category != null ? String(row.category) : (row.type != null ? String(row.type) : 'misc'),
+            rarity: VALID_RARITIES.has(row.rarity) ? row.rarity : 'common',
+            icon: row.icon != null ? String(row.icon) : '=ж',
+            slot: row.slot == null ? null : String(row.slot),
             price: row.price,
             ammo_type: row.ammo_type,
             max_stack: row.max_stack,
             stackable: row.stackable,
             set_id: row.set_id,
-            quantity: Number(row.quantity) || 0,
-            durability: Number(row.durability) || 100,
-            max_durability: Number(row.max_durability) || 100,
-            upgrade_level: Number(row.upgrade_level) || 0,
+            quantity: Math.max(0, Number.isFinite(Number(row.quantity)) ? Number(row.quantity) : 0),
+            durability: Number.isFinite(Number(row.durability)) ? Number(row.durability) : 0,
+            max_durability: (Number.isFinite(Number(row.max_durability)) && Number(row.max_durability) >= 1)
+                ? Number(row.max_durability) : 100,
+            upgrade_level: Number.isFinite(Number(row.upgrade_level))
+                ? Math.max(0, Math.trunc(Number(row.upgrade_level))) : 0,
             modifications: safeJsonParse(row.modifications, {}),
             stats: safeJsonParse(row.stats, {})
         }));
     } catch (e) {
-        return null; // fallback на JSONB
+        logger.error({ type: 'load_inventory_from_table_error', message: e.message, stack: e.stack });
+        return null;
     }
 }
 
 /**
  * Сохранение инвентаря и в JSONB, и в таблицу player_inventory.
- * @param {object} client - клиент БД
- * @param {number} playerId - ID игрока
- * @param {Array} inventory - массив предметов
  */
 async function saveInventoryBoth(client, playerId, inventory) {
-    if (!client || !playerId || !Array.isArray(inventory)) return;
-    // JSONB
-    await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inventory), playerId]);
-    // player_inventory
-    await syncInventoryToTable(client, playerId, inventory);
+    if (!client || typeof client.query !== 'function' || !playerId) return;
+    const inv = Array.isArray(inventory) ? inventory : [];
+    await client.query('UPDATE players SET inventory = $1::jsonb WHERE id = $2', [JSON.stringify(inv), playerId]);
+    await syncInventoryToTable(client, playerId, inv);
 }
 
 /**
  * Синхронизация инвентаря в таблицу player_inventory.
- * @param {object} client - клиент БД
- * @param {number} playerId - ID игрока
- * @param {Array} inventory - массив предметов
  */
 async function syncInventoryToTable(client, playerId, inventory) {
-    if (!client || !playerId || !Array.isArray(inventory)) return;
+    if (!client || typeof client.query !== 'function') throw new Error('syncInventoryToTable: client required');
+    if (!playerId) throw new Error('syncInventoryToTable: playerId required');
+    const inv = Array.isArray(inventory) ? inventory : [];
+
     try {
-        // Очистка таблицы.
+        // Блокировка строки игрока для атомарности.
+        await client.query('SELECT id FROM players WHERE id = $1 FOR UPDATE', [playerId]);
         await client.query('DELETE FROM player_inventory WHERE player_id = $1', [playerId]);
-        // Вставка предметов.
-        for (const item of inventory) {
-            if (!item || typeof item !== 'object') continue;
+
+        for (const item of inv) {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
             const itemId = Number.isSafeInteger(Number(item.id)) ? Number(item.id) : null;
             if (itemId === null) continue;
-            const qty = Math.max(0, Number(item.quantity) || 0);
+            const qty = Math.max(0, Number.isFinite(Number(item.quantity)) ? Number(item.quantity) : 0);
             if (qty <= 0) continue;
+            const durability = Number.isFinite(Number(item.durability)) ? Number(item.durability) : 0;
+            const maxDurability = (Number.isFinite(Number(item.max_durability)) && Number(item.max_durability) >= 1)
+                ? Number(item.max_durability) : 100;
+            const upgradeLevel = Number.isFinite(Number(item.upgrade_level))
+                ? Math.max(0, Math.trunc(Number(item.upgrade_level))) : 0;
+            const modifications = isPlainObject(item.modifications) ? item.modifications : {};
+            const stats = isPlainObject(item.stats) ? item.stats : {};
+
             await client.query(
                 `INSERT INTO player_inventory (player_id, item_id, quantity, durability, max_durability, upgrade_level, modifications, stats)
                 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)
-                ON CONFLICT (player_id, item_id, upgrade_level, durability) DO UPDATE SET
+                ON CONFLICT (player_id, item_id, upgrade_level, durability, modifications) DO UPDATE SET
                     quantity = player_inventory.quantity + EXCLUDED.quantity,
+                    max_durability = EXCLUDED.max_durability,
                     modifications = EXCLUDED.modifications,
                     stats = EXCLUDED.stats
             `, [
                 playerId, itemId, qty,
-                Number(item.durability) || 100,
-                Number(item.max_durability) || 100,
-                Number(item.upgrade_level) || 0,
-                JSON.stringify(item.modifications || {}),
-                JSON.stringify(item.stats || {})
+                durability,
+                maxDurability,
+                upgradeLevel,
+                JSON.stringify(modifications),
+                JSON.stringify(stats)
             ]);
         }
     } catch (e) {
-        // Ошибка синхронизации — не блокирующая.
+        logger.error({ type: 'sync_inventory_to_table_error', message: e.message, stack: e.stack });
+        throw e;
     }
+}
+
+/**
+ * Слияние дублей предметов инвентаря (чистая функция).
+ * @param {Array} inventory
+ * @param {Function|object} [itemMetaProvider]
+ * @returns {Array}
+ */
+function mergeDuplicateInventoryStacks(inventory, itemMetaProvider) {
+    if (!Array.isArray(inventory)) return [];
+    const merged = [];
+    for (const entry of inventory) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        let meta = null;
+        if (typeof itemMetaProvider === 'function') {
+            meta = itemMetaProvider(entry);
+        } else if (itemMetaProvider && typeof itemMetaProvider === 'object') {
+            meta = itemMetaProvider[String(entry.id)] || null;
+        } else if (entry.id != null) {
+            meta = entry;
+        }
+        addItemToInventory(merged, entry, meta);
+    }
+    return merged;
 }
 
 module.exports = {
@@ -1291,11 +1390,14 @@ module.exports = {
     // Нормализация состояния игрока.
     safeJsonParse,
     normalizeInventory,
+    normalizeInventoryItem,
     syncInventoryToTable,
     loadInventoryFromTable,
     saveInventoryBoth,
     createInventoryItem,
     normalizeRadiation,
+    deepEqual,
+    mergeDuplicateInventoryStacks,
     getActiveBuffs,
     buildPlayerStatus,
     recalcEnergy,

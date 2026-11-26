@@ -276,9 +276,6 @@ router.post('/repair-all', async (req, res) => {
                 [totalCost, JSON.stringify(equipment), playerId]
             );
 
-            // Синхронизация инвентаря в отдельную таблицу player_inventory.
-            await helpers.syncInventoryToTable(client, playerId, normalizeInventory(player.inventory));
-
             return {
                 status: 200,
                 body: {
@@ -310,7 +307,8 @@ router.post('/scrap-all', async (req, res) => {
             const player = await lockPlayer(playerId, client, 'coins, inventory');
             if (!player) return { status: 404, body: { success: false, error: 'Игрок не найден', code: 'PLAYER_NOT_FOUND' } };
 
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id) || normalizeInventory(player.inventory);
+            const rawInventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id);
+            const inventory = normalizeInventory(rawInventory || player.inventory);
             const toScrap = inventory.filter((item) => {
                 if (!item || !equipmentRules.isEquipmentItem(item)) return false;
                 const info = equipmentRules.getDurabilityInfo(item);
@@ -355,6 +353,8 @@ router.post('/scrap-all', async (req, res) => {
             for (const [mat, qty] of Object.entries(gainedMaterials)) {
                 helpers.addItemToInventory(remaining, { name: mat, type: 'resource', category: 'material', rarity: 'common', icon: '📦', quantity: qty, durability: 100, max_durability: 100 }, null);
             }
+
+            await client.query('UPDATE players SET inventory = $1 WHERE id = $2', [JSON.stringify(remaining), playerId]);
 
             await helpers.syncInventoryToTable(client, playerId, remaining);
 
@@ -419,7 +419,8 @@ router.post('/upgrade', async (req, res) => {
             }
 
             const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id) || normalizeInventory(player.inventory);
+            const rawInventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id);
+            const inventory = normalizeInventory(rawInventory || player.inventory);
 
             // Проверка наличия материалов в инвентаре.
             for (const [name, required] of Object.entries(cost.materials || {})) {
@@ -430,8 +431,18 @@ router.post('/upgrade', async (req, res) => {
                 }
 
                 const owned = inventory
-                    .filter((entry) => Number(entry.id) === Number(material.id)
-                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase()))
+                    .filter((entry) => {
+                        const entryId = entry?.id != null ? Number(entry.id) : null;
+                        const materialId = material?.id != null ? Number(material.id) : null;
+                        const typeMatches = !material?.type || !entry?.type
+                            || String(entry.type).toLowerCase() === String(material.type).toLowerCase();
+                        if (entryId !== null && materialId !== null) {
+                            return entryId === materialId && typeMatches;
+                        }
+                        return entry?.id == null
+                            && String(entry?.name || '').toLowerCase() === String(material?.name || '').toLowerCase()
+                            && typeMatches;
+                    })
                     .reduce((sum, entry) => sum + Math.max(0, Number(entry.quantity || 1)), 0);
 
                 if (owned < required) {
@@ -454,8 +465,18 @@ router.post('/upgrade', async (req, res) => {
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
                     const entry = inventory[i];
-                    const matches = Number(entry.id) === Number(material.id)
-                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase());
+                    const matches = (() => {
+                        const entryId = entry?.id != null ? Number(entry.id) : null;
+                        const materialId = material?.id != null ? Number(material.id) : null;
+                        const typeMatches = !material?.type || !entry?.type
+                            || String(entry.type).toLowerCase() === String(material.type).toLowerCase();
+                        if (entryId !== null && materialId !== null) {
+                            return entryId === materialId && typeMatches;
+                        }
+                        return entry?.id == null
+                            && String(entry?.name || '').toLowerCase() === String(material?.name || '').toLowerCase()
+                            && typeMatches;
+                    })();
                     if (!matches) continue;
 
                     const have = Math.max(0, Number(entry.quantity || 1));
@@ -480,6 +501,12 @@ router.post('/upgrade', async (req, res) => {
             await client.query(
                 'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb WHERE id = $3',
                 [cost.coins, JSON.stringify(equipment), req.player.id]
+            );
+
+            // Синхронизация JSONB-инвентаря в players.
+            await client.query(
+                'UPDATE players SET inventory = $1 WHERE id = $2',
+                [JSON.stringify(inventory), req.player.id]
             );
 
             // Синхронизация обновлённого инвентаря в отдельную таблицу player_inventory.
@@ -570,7 +597,8 @@ router.post('/modify', async (req, res) => {
                 };
             }
 
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id) || normalizeInventory(player.inventory);
+            const rawInventory = await (helpers.loadInventoryFromTable || (async () => null))(client, req.player?.id);
+            const inventory = normalizeInventory(rawInventory || player.inventory);
             const materials = await loadMaterials(client, Object.keys(cost.materials || {}));
 
             for (const [name, required] of Object.entries(cost.materials || {})) {
@@ -581,8 +609,18 @@ router.post('/modify', async (req, res) => {
                 }
 
                 const owned = inventory
-                    .filter((entry) => Number(entry.id) === Number(material.id)
-                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase()))
+                    .filter((entry) => {
+                        const entryId = entry?.id != null ? Number(entry.id) : null;
+                        const materialId = material?.id != null ? Number(material.id) : null;
+                        const typeMatches = !material?.type || !entry?.type
+                            || String(entry.type).toLowerCase() === String(material.type).toLowerCase();
+                        if (entryId !== null && materialId !== null) {
+                            return entryId === materialId && typeMatches;
+                        }
+                        return entry?.id == null
+                            && String(entry?.name || '').toLowerCase() === String(material?.name || '').toLowerCase()
+                            && typeMatches;
+                    })
                     .reduce((sum, entry) => sum + Math.max(0, Number(entry.quantity || 1)), 0);
 
                 if (owned < required) {
@@ -605,8 +643,18 @@ router.post('/modify', async (req, res) => {
                 let left = required;
                 for (let i = 0; i < inventory.length && left > 0; i++) {
                     const entry = inventory[i];
-                    const matches = Number(entry.id) === Number(material.id)
-                        || (entry.id == null && String(entry.name || '').toLowerCase() === String(material.name || '').toLowerCase());
+                    const matches = (() => {
+                        const entryId = entry?.id != null ? Number(entry.id) : null;
+                        const materialId = material?.id != null ? Number(material.id) : null;
+                        const typeMatches = !material?.type || !entry?.type
+                            || String(entry.type).toLowerCase() === String(material.type).toLowerCase();
+                        if (entryId !== null && materialId !== null) {
+                            return entryId === materialId && typeMatches;
+                        }
+                        return entry?.id == null
+                            && String(entry?.name || '').toLowerCase() === String(material?.name || '').toLowerCase()
+                            && typeMatches;
+                    })();
                     if (!matches) continue;
 
                     const have = Math.max(0, Number(entry.quantity || 1));
@@ -630,6 +678,12 @@ router.post('/modify', async (req, res) => {
             await client.query(
                 'UPDATE players SET coins = COALESCE(coins,0) - $1, equipment = $2::jsonb WHERE id = $3',
                 [cost.coins, JSON.stringify(equipment), req.player.id]
+            );
+
+            // Синхронизация JSONB-инвентаря в players.
+            await client.query(
+                'UPDATE players SET inventory = $1 WHERE id = $2',
+                [JSON.stringify(inventory), req.player.id]
             );
 
             // Синхронизация обновлённого инвентаря в отдельную таблицу player_inventory.

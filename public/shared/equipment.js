@@ -645,8 +645,14 @@ function resolveEquipmentSlot(item) {
      * @returns {{current:number,max:number,isBroken:boolean,ratio:number}}
      */
     function getDurabilityInfo(item) {
-        const maxRaw = Number(item && (item.max_durability !== undefined ? item.max_durability : item.durability));
-        const max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : BASE_DURABILITY));
+        const hasMaxDurability = Boolean(item && Object.prototype.hasOwnProperty.call(item, 'max_durability'));
+        const maxRaw = Number(item && (hasMaxDurability ? item.max_durability : item.durability));
+        let max;
+        if (hasMaxDurability) {
+            max = Number.isFinite(maxRaw) ? Math.max(0, Math.round(maxRaw)) : BASE_DURABILITY;
+        } else {
+            max = Math.max(1, Math.round(Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : BASE_DURABILITY));
+        }
 
         // Полей прочности нет вообще (расходник, валюта, пустой объект) —
         // предмет условно «бесконечен»: не ломается и не изнашивается.

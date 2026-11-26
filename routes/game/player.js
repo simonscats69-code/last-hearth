@@ -352,7 +352,7 @@ router.post('/daily-bonus', async (req, res) => {
 
             try {
                 const h = getGameHelpers();
-                if (h && typeof h.checkAchievements === 'function') h.checkAchievements(playerId, client).catch(() => {});
+                if (h && typeof h.checkAchievements === 'function') await h.checkAchievements(playerId, client);
             } catch (_) { /* ignore */ }
 
             return {

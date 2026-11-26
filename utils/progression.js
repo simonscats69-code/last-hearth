@@ -21,10 +21,11 @@ async function grantExperience(playerId, amount, source, client) {
     const result = await PlayerHelper.addExperience(playerId, exp, client);
 
     // Событийная проверка достижений (мгновенная обратная связь).
-    // Fire-and-forget, чтобы не блокировать транзакцию.
+    // Выполняем await внутри транзакции, пока client ещё валиден,
+    // чтобы достижения начислялись надёжно (без fire-and-forget).
     try {
         if (typeof checkAchievements === 'function') {
-            checkAchievements(playerId, client).catch(() => {});
+            await checkAchievements(playerId, client);
         }
     } catch (e) {
         // Не роняем основной поток из-за ошибки проверки достижений.

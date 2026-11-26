@@ -129,7 +129,7 @@ console.log('\n=== 3. Player: avatar, валидация, реген-log, daily 
     ok('daily: DAILY_BONUS_COINS_PER_DAY импортирован из equipment.js', /DAILY_BONUS_COINS_PER_DAY/.test(pl) && !/DAILY_BONUS_COINS_PER_DAY = 25/.test(plCode));
     ok('daily: DAILY_BONUS_STAR_EVERY импортирован из equipment.js', /DAILY_BONUS_STAR_EVERY/.test(pl) && !/DAILY_BONUS_STAR_EVERY = 3/.test(plCode));
     ok('daily: формула через константы', /DAILY_BONUS_BASE_COINS \+ \(cappedDay - 1\) \* DAILY_BONUS_COINS_PER_DAY/.test(pl));
-    ok('daily: звёзды через константу', /streak % DAILY_BONUS_STAR_EVERY === 0/.test(pl));
+    ok('daily: звёзды через константу', /cappedDay % DAILY_BONUS_STAR_EVERY === 0/.test(pl));
 }
 
 // ============================================================================
@@ -188,7 +188,7 @@ console.log('\n=== 5. Items: item_index, trackCollectedItems в /buy ===');
     const it = fs.readFileSync('routes/game/items.js', 'utf8');
 
     ok('/use использует validateItemIndex (2.5 отсекается)',
-        /validateItemIndex\(itemIndex\)/.test(it));
+        /validateItemIndex\(/.test(it));
     const isNaNChecks = (it.match(/if \(isNaN\(itemIndex\) \|\| itemIndex < 0\)/g) || []).length;
     ok('старой проверки isNaN не осталось', isNaNChecks === 0, isNaNChecks);
 

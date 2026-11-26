@@ -45,11 +45,11 @@ function clientFactory() {
             if (/FROM items WHERE id = \$1 AND stars_price > 0/.test(s)) {
                 return { rows: itemRow ? [itemRow] : [] };
             }
-            if (/UPDATE players SET coins = coins - \$1/.test(s)) {
+            if (/UPDATE players SET coins = COALESCE\(coins,0\) - \$1/.test(s)) {
                 playerRow.coins -= params[0];
                 return { rows: [], rowCount: 1 };
             }
-            if (/UPDATE players SET stars = GREATEST\(0, stars - \$1\)/.test(s)) {
+            if (/UPDATE players SET stars = GREATEST\(0, COALESCE\(stars,0\) - \$1\)/.test(s)) {
                 playerRow.stars = Math.max(0, playerRow.stars - params[0]);
                 return { rows: [], rowCount: 1 };
             }
@@ -286,7 +286,7 @@ async function run() {
     ({ req, res } = makeReqRes({ item_id: 2.5, quantity: 1 }));
     await buy(req, res);
     ok('item_id=2.5 -> 400', res.statusCode === 400, res.statusCode);
-    ok('код INVALID_ITEM_ID', res.body && res.body.code === 'INVALID_ITEM_ID', res.body && res.body.code);
+    ok('код INVALID_ID', res.body && res.body.code === 'INVALID_ID', res.body && res.body.code);
 
     reset();
     playerRow = makePlayer();

@@ -526,7 +526,7 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
 
     const playerRow = await lockPlayer(playerId, client, 'inventory');
     if (!playerRow) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
-    const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(playerRow.inventory);
+    const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(playerRow.inventory);
     const granted = [];
     const undropped = [];
     let totalGrantedCount = 0;
@@ -540,7 +540,7 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
         let actuallyGranted = 0;
 
         for (let i = 0; i < grantedQuantity; i++) {
-            if (inventory.length >= MAX_INVENTORY_SLOTS) break;
+            const qtyBefore = inventory.reduce((sum, it) => sum + (Number(it && it.quantity) || 0), 0);
 
             const item = createInventoryItem(template, {
                 quantity: 1,
@@ -548,15 +548,20 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
                 modifications: {}
             });
 
-            const slotsAdded = addItemToInventory(inventory, item, template);
-            if (slotsAdded > 0 && inventory.length > MAX_INVENTORY_SLOTS) {
-                // Удаляем все превышающие лимит слоты с конца (только что добавленные)
+            addItemToInventory(inventory, item, template);
+
+            const qtyAfter = inventory.reduce((sum, it) => sum + (Number(it && it.quantity) || 0), 0);
+            if (qtyAfter <= qtyBefore) break; // предмет не поместился
+
+            // Overflow: если добавление создало лишние слоты — откатываем их.
+            if (inventory.length > MAX_INVENTORY_SLOTS) {
                 while (inventory.length > MAX_INVENTORY_SLOTS) {
                     inventory.pop();
                 }
                 break;
             }
-            actuallyGranted++;
+
+            actuallyGranted += (qtyAfter - qtyBefore);
         }
 
         const skipped = grantedQuantity - actuallyGranted;
@@ -600,10 +605,8 @@ async function grantRewardItems(client, playerId, rewardItems, multiplier = 1, p
         );
 
         // Синхронизация инвентаря в нормализованную таблицу
-        try {
-            const { syncInventoryToTable } = require('../../utils/game-helpers');
-            if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
-        } catch (_) { /* ignore */ }
+        const { syncInventoryToTable } = require('../../utils/game-helpers');
+        if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
     }
 
     return { granted, undropped };
@@ -627,7 +630,9 @@ async function handleSoloBossKill(client, playerId, bossId, activeBuffs, masteri
             await progression.grantExperience(playerId, experienceReward, 'boss_kill', client);
         } catch (_) {
             await playerHelper.addExperience(playerId, experienceReward, client);
-            helpers.checkAchievements(playerId, client).catch(() => {});
+            try {
+                await helpers.checkAchievements(playerId, client);
+            } catch (_) { /* ignore */ }
         }
     }
 
@@ -2121,12 +2126,7 @@ if (grantedItems && grantedItems.length > 0) {
                     }
                 }
 
-                // Событийная проверка достижений для всех участников рейда
-                for (const entry of shares) {
-                    helpers.checkAchievements(entry.participantId, client).catch(() => {});
-                }
-
-                // Батчовый UPDATE bosses_killed и boss_mastery
+                // Батчевый UPDATE bosses_killed и boss_mastery
                 if (bossesKilledUpdates.length > 0) {
 
                     await client.query(
@@ -2148,6 +2148,13 @@ if (grantedItems && grantedItems.length > 0) {
                          DO UPDATE SET kills = boss_mastery.kills + 1, last_killed_at = NOW()`,
                         masteryUpdates
                     );
+                }
+
+                // Событийная проверка достижений для всех участников рейда (после обновления счётчиков)
+                for (const entry of shares) {
+                    try {
+                        await helpers.checkAchievements(entry.participantId, client);
+                    } catch (_) { /* ignore */ }
                 }
 
                 // Батчовый INSERT raid_rewards

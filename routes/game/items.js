@@ -9,13 +9,14 @@ const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, transaction } = require('../../db/database');
 const { lockPlayer } = require('../../db/players');
-const { safeJsonParse, handleError, logPlayerAction, notFound, fail, requireItemId } = require('../../utils/serverApi');
+const { safeJsonParse, handleError, logPlayerAction, notFound, fail } = require('../../utils/serverApi');
 const { playerIdGuard } = require('../../utils/routeHelpers');
 const { parseEquipment } = require('../../utils/normalizePlayerJson');
 const { setPlayerInventory } = require('../../db/playerRepository');
 // validateQuantity: валидация количества для /buy и /buy-stars.
 // validateItemIndex: валидация индекса предмета в инвентаре.
-const { validateQuantity, validateItemIndex } = require('../../utils/validate');
+// validateId: валидация ID предмета.
+const { validateQuantity, validateItemIndex, validateId } = require('../../utils/validate');
 
 // Загрузка игровых хелперов из utils/game-helpers.js.
 // Работа с БД — через db/database, исключаем циклы зависимостей.
@@ -125,8 +126,11 @@ router.post('/buy', async (req, res) => {
         }
         const quantity = qtyCheck.value;
 
-        const itemId = Number(req.body?.item_id);
-        if (!requireItemId(res, itemId)) return;
+        const itemIdCheck = validateId(req.body?.item_id, 'ID предмета');
+        if (!itemIdCheck.ok) {
+            return res.status(400).json({ success: false, error: itemIdCheck.error, code: itemIdCheck.code });
+        }
+        const itemId = itemIdCheck.value;
 
         const result = await transaction(async (client) => {
             const item = await client.query(
@@ -139,12 +143,14 @@ router.post('/buy', async (req, res) => {
             }
 
             const shopItem = item.rows[0];
-            const totalPrice = shopItem.price * quantity;
 
+            // Проверка игрока до расчёта цены.
             const player = await lockPlayer(playerId, client, 'coins, inventory');
             if (!player) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
+
+            const totalPrice = shopItem.price * quantity;
 
             if (Number(player.coins || 0) < totalPrice) {
                 throw {
@@ -154,7 +160,7 @@ router.post('/buy', async (req, res) => {
                 };
             }
 
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(player.inventory);
+            const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(player.inventory);
 
             const newItem = createInventoryItem(shopItem, { quantity });
             const addedAsNewSlots = addItemToInventory(inventory, newItem, shopItem);
@@ -169,15 +175,13 @@ router.post('/buy', async (req, res) => {
             }
 
             await client.query(
-                'UPDATE players SET coins = COALESCE(coins,0) - $1, inventory = $2, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
+                'UPDATE players SET coins = COALESCE(coins,0) - $1, inventory = $2::jsonb, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
                 [totalPrice, JSON.stringify(inventory), playerId, quantity]
             );
 
             // Синхронизация инвентаря в таблицу player_inventory.
-            try {
-                const { syncInventoryToTable } = require('../../utils/game-helpers');
-                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
-            } catch (_) { /* ignore */ }
+            const { syncInventoryToTable } = require('../../utils/game-helpers');
+            if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
 
             // Отслеживание собранных предметов (колекшен-трэкер).
             await trackCollectedItems(client, playerId, [shopItem.id]);
@@ -222,22 +226,32 @@ router.post(['/use', '/use-item'], async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
         if (!playerId) return;
-    let itemIndex = Number(req.body?.item_index);
-    const itemId = Number(req.body?.item_id);
-    const hasItemId = Number.isInteger(itemId) && itemId > 0;
-    const equip = Boolean(req.body?.equip);
 
-    const itemIndexCheck = validateItemIndex(itemIndex);
-    if (!hasItemId && !itemIndexCheck.ok) {
-        return fail(res, itemIndexCheck.error, itemIndexCheck.code);
-    }
+        const rawItemId = req.body?.item_id;
+        let itemId = null;
+        let hasItemId = false;
+        if (rawItemId !== undefined && rawItemId !== null && rawItemId !== '') {
+            const idCheck = validateId(rawItemId, 'ID предмета');
+            if (!idCheck.ok) return fail(res, idCheck.error, idCheck.code);
+            itemId = idCheck.value;
+            hasItemId = true;
+        }
+
+        let itemIndex = null;
+        if (!hasItemId) {
+            const itemIndexCheck = validateItemIndex(req.body?.item_index);
+            if (!itemIndexCheck.ok) return fail(res, itemIndexCheck.error, itemIndexCheck.code);
+            itemIndex = itemIndexCheck.value;
+        }
+
+        const equip = Boolean(req.body?.equip);
 
         const result = await transaction(async (client) => {
             const playerRow = await lockPlayer(playerId, client, 'inventory, equipment, health, max_health, radiation');
 
             if (!playerRow) throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
 
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(playerRow.inventory);
+            const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(playerRow.inventory);
 
             if (hasItemId) {
                 itemIndex = inventory.findIndex(i => Number(i?.id) === itemId);
@@ -246,7 +260,7 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 }
             }
 
-            if (!Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= inventory.length) {
+            if (itemIndex === null || !Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
 
@@ -281,14 +295,12 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 }
 
                 await client.query(
-                    'UPDATE players SET equipment = $1, inventory = $2 WHERE id = $3',
+                    'UPDATE players SET equipment = $1::jsonb, inventory = $2::jsonb WHERE id = $3',
                     [JSON.stringify(equipment), JSON.stringify(inventory), playerId]
                 );
 
-                try {
-                    const { syncInventoryToTable } = require('../../utils/game-helpers');
-                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
-                } catch (_) { /* ignore */ }
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
 
                 return {
                     success: true,
@@ -342,15 +354,12 @@ router.post(['/use', '/use-item'], async (req, res) => {
                 const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, itemIndex);
 
                 await client.query(
-                    `UPDATE players SET ${updates.join(', ')}, inventory = $${params.length + 1} WHERE id = $1`,
+                    `UPDATE players SET ${updates.join(', ')}, inventory = $${params.length + 1}::jsonb WHERE id = $1`,
                     [...params, JSON.stringify(updatedInventory)]
                 );
 
-                // Синхронизация инвентаря в таблицу player_inventory.
-                try {
-                    const { syncInventoryToTable } = require('../../utils/game-helpers');
-                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, updatedInventory);
-                } catch (_) { /* ignore */ }
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, updatedInventory);
 
                 return {
                     success: true,
@@ -365,13 +374,11 @@ router.post(['/use', '/use-item'], async (req, res) => {
             if (item.type === 'food' || item.type === 'consumable') {
                 const { updatedInventory, quantityLeft } = consumeInventoryItem(inventory, itemIndex);
                 await client.query(
-                    'UPDATE players SET inventory = $1 WHERE id = $2',
+                    'UPDATE players SET inventory = $1::jsonb WHERE id = $2',
                     [JSON.stringify(updatedInventory), playerId]
                 );
-                try {
-                    const { syncInventoryToTable } = require('../../utils/game-helpers');
-                    if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, updatedInventory);
-                } catch (_) { /* ignore */ }
+                const { syncInventoryToTable } = require('../../utils/game-helpers');
+                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, updatedInventory);
                 return {
                     success: true,
                     message: 'Предмет использован',
@@ -411,13 +418,30 @@ router.post('/sell', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
         if (!playerId) return;
-        let itemIndex = Number(req.body?.item_index);
-        const itemId = Number(req.body?.item_id);
-        const hasItemId = Number.isInteger(itemId) && itemId > 0;
 
-        const itemIndexCheck = validateItemIndex(itemIndex);
-        if (!hasItemId && !itemIndexCheck.ok) {
-            return fail(res, itemIndexCheck.error, itemIndexCheck.code);
+        const rawItemId = req.body?.item_id;
+        let requestedItemId = null;
+        let hasItemId = false;
+        if (rawItemId !== undefined && rawItemId !== null && rawItemId !== '') {
+            const idCheck = validateId(rawItemId, 'ID предмета');
+            if (!idCheck.ok) return fail(res, idCheck.error, idCheck.code);
+            requestedItemId = idCheck.value;
+            hasItemId = true;
+        }
+
+        let itemIndex = null;
+        if (!hasItemId) {
+            const itemIndexCheck = validateItemIndex(req.body?.item_index);
+            if (!itemIndexCheck.ok) return fail(res, itemIndexCheck.error, itemIndexCheck.code);
+            itemIndex = itemIndexCheck.value;
+        }
+
+        const requestedQuantityRaw = req.body?.quantity;
+        let validatedQuantity = null;
+        if (requestedQuantityRaw !== undefined && requestedQuantityRaw !== null && requestedQuantityRaw !== '') {
+            const qCheck = validateQuantity(requestedQuantityRaw);
+            if (!qCheck.ok) return fail(res, qCheck.error, qCheck.code);
+            validatedQuantity = qCheck.value;
         }
 
         const result = await transaction(async (client) => {
@@ -427,16 +451,16 @@ router.post('/sell', async (req, res) => {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
 
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(playerRow.inventory);
+            const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(playerRow.inventory);
 
             if (hasItemId) {
-                itemIndex = inventory.findIndex(i => Number(i?.id) === itemId);
+                itemIndex = inventory.findIndex(i => Number(i?.id) === requestedItemId);
                 if (itemIndex < 0) {
                     throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
                 }
             }
 
-            if (itemIndex >= inventory.length) {
+            if (itemIndex === null || itemIndex < 0 || itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
 
@@ -455,12 +479,15 @@ router.post('/sell', async (req, res) => {
             // Фоллбэк: если id не найден в каталоге (устевший/phantom id),
             // пытаемся резолвить по имени. Иначе продаваемый предмет
             // пропадал из экономики из-за отсутствия строки в items.
+            // Не выбираем другой предмет: фоллбэк применяется только при однозначном совпадении.
             if (!dbItem && item.name) {
                 const byName = await client.query(
-                    'SELECT id, name, type, rarity, price, stackable FROM items WHERE name = $1 LIMIT 1',
+                    'SELECT id, name, type, rarity, price, stackable FROM items WHERE name = $1',
                     [item.name]
                 );
-                dbItem = byName.rows[0] || null;
+                if (byName.rows.length === 1) {
+                    dbItem = byName.rows[0];
+                }
             }
 
             const unitPrice = calculateSellPrice(dbItem, item);
@@ -473,10 +500,10 @@ router.post('/sell', async (req, res) => {
             }
 
             const stackQuantity = Math.max(1, Number(item.quantity || 1));
-            const requestedQuantity = Number(req.body?.quantity);
-            const soldQuantity = (Number.isInteger(requestedQuantity) && requestedQuantity > 0)
-                ? Math.min(stackQuantity, requestedQuantity)
-                : stackQuantity;
+            let soldQuantity = stackQuantity;
+            if (validatedQuantity !== null) {
+                soldQuantity = Math.min(stackQuantity, validatedQuantity);
+            }
             const earned = unitPrice * soldQuantity;
 
             if (soldQuantity >= stackQuantity) {
@@ -485,19 +512,15 @@ router.post('/sell', async (req, res) => {
                 inventory[itemIndex] = { ...item, quantity: stackQuantity - soldQuantity };
             }
 
-            const newCoins = Number(playerRow.coins || 0) + earned;
-
             await client.query(
-                'UPDATE players SET coins = $1, inventory = $2 WHERE id = $3',
-                [newCoins, JSON.stringify(inventory), playerId]
+                'UPDATE players SET coins = COALESCE(coins,0) + $1, inventory = $2::jsonb WHERE id = $3',
+                [earned, JSON.stringify(inventory), playerId]
             );
 
             // Синхронизация инвентаря в таблицу player_inventory:
             // без этого следующий запрос, читающий таблицу, увидит старые данные.
-            try {
-                const { syncInventoryToTable } = require('../../utils/game-helpers');
-                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
-            } catch (_) { /* ignore */ }
+            const { syncInventoryToTable } = require('../../utils/game-helpers');
+            if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
 
             await logPlayerAction(playerId, 'item_sell', {
                 item_id: item.id,
@@ -513,7 +536,7 @@ router.post('/sell', async (req, res) => {
                 quantity_sold: soldQuantity,
                 unit_price: unitPrice,
                 coins_earned: earned,
-                coins_total: newCoins
+                coins_total: Number(playerRow.coins || 0) + earned
             };
         });
 
@@ -538,13 +561,30 @@ router.post('/drop', async (req, res) => {
     try {
         const playerId = playerIdGuard(req, res);
         if (!playerId) return;
-        let itemIndex = Number(req.body?.item_index);
-        const itemId = Number(req.body?.item_id);
-        const hasItemId = Number.isInteger(itemId) && itemId > 0;
 
-        const itemIndexCheck = validateItemIndex(itemIndex);
-        if (!hasItemId && !itemIndexCheck.ok) {
-            return fail(res, itemIndexCheck.error, itemIndexCheck.code);
+        const rawItemId = req.body?.item_id;
+        let requestedItemId = null;
+        let hasItemId = false;
+        if (rawItemId !== undefined && rawItemId !== null && rawItemId !== '') {
+            const idCheck = validateId(rawItemId, 'ID предмета');
+            if (!idCheck.ok) return fail(res, idCheck.error, idCheck.code);
+            requestedItemId = idCheck.value;
+            hasItemId = true;
+        }
+
+        let itemIndex = null;
+        if (!hasItemId) {
+            const itemIndexCheck = validateItemIndex(req.body?.item_index);
+            if (!itemIndexCheck.ok) return fail(res, itemIndexCheck.error, itemIndexCheck.code);
+            itemIndex = itemIndexCheck.value;
+        }
+
+        const requestedDropRaw = req.body?.quantity;
+        let validatedDropQuantity = null;
+        if (requestedDropRaw !== undefined && requestedDropRaw !== null && requestedDropRaw !== '') {
+            const qCheck = validateQuantity(requestedDropRaw);
+            if (!qCheck.ok) return fail(res, qCheck.error, qCheck.code);
+            validatedDropQuantity = qCheck.value;
         }
 
         const result = await transaction(async (client) => {
@@ -553,16 +593,16 @@ router.post('/drop', async (req, res) => {
             if (!playerRow) {
                 throw { message: 'Игрок не найден', code: 'PLAYER_NOT_FOUND', statusCode: 404 };
             }
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(playerRow.inventory);
+            const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(playerRow.inventory);
 
             if (hasItemId) {
-                itemIndex = inventory.findIndex(i => Number(i?.id) === itemId);
+                itemIndex = inventory.findIndex(i => Number(i?.id) === requestedItemId);
                 if (itemIndex < 0) {
                     throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
                 }
             }
 
-            if (itemIndex >= inventory.length) {
+            if (itemIndex === null || itemIndex < 0 || itemIndex >= inventory.length) {
                 throw { message: 'Предмет не найден в инвентаре', code: 'ITEM_NOT_IN_INVENTORY', statusCode: 400 };
             }
 
@@ -573,10 +613,10 @@ router.post('/drop', async (req, res) => {
             }
 
             const stackQuantity = Math.max(1, Number(item.quantity || 1));
-            const requested = Number(req.body?.quantity);
-            const dropQuantity = (Number.isInteger(requested) && requested > 0)
-                ? Math.min(stackQuantity, requested)
-                : stackQuantity;
+            let dropQuantity = stackQuantity;
+            if (validatedDropQuantity !== null) {
+                dropQuantity = Math.min(stackQuantity, validatedDropQuantity);
+            }
 
             // Разбор предмета на материалы.
             const scrapYield = equipmentRules.calculateScrapYield(item, dropQuantity);
@@ -644,10 +684,8 @@ router.post('/drop', async (req, res) => {
             await setPlayerInventory(playerId, inventory, client, { jsonb: true });
 
             // Синхронизация инвентаря в таблицу player_inventory.
-            try {
-                const { syncInventoryToTable } = require('../../utils/game-helpers');
-                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
-            } catch (_) { /* ignore */ }
+            const { syncInventoryToTable } = require('../../utils/game-helpers');
+            if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
 
             await logPlayerAction(playerId, 'item_drop', {
                 item_id: item.id,
@@ -701,7 +739,7 @@ router.post('/unequip', async (req, res) => {
                 throw { message: 'Слот пуст', code: 'SLOT_EMPTY', statusCode: 400 };
             }
 
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(player.inventory);
+            const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(player.inventory);
             if (inventory.length >= MAX_INVENTORY_SLOTS) {
                 throw {
                     message: `Лимит слотов инвентаря (макс. ${MAX_INVENTORY_SLOTS}).`,
@@ -714,15 +752,13 @@ router.post('/unequip', async (req, res) => {
             delete equipment[slot];
 
             await client.query(
-                'UPDATE players SET equipment = $1::jsonb, inventory = $2 WHERE id = $3',
+                'UPDATE players SET equipment = $1::jsonb, inventory = $2::jsonb WHERE id = $3',
                 [JSON.stringify(equipment), JSON.stringify(inventory), playerId]
             );
 
             // Синхронизация инвентаря в таблицу player_inventory.
-            try {
-                const { syncInventoryToTable } = require('../../utils/game-helpers');
-                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
-            } catch (_) { /* ignore */ }
+            const { syncInventoryToTable } = require('../../utils/game-helpers');
+            if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
 
             await logPlayerAction(playerId, 'item_unequip', {
                 slot,
@@ -767,8 +803,11 @@ router.post('/buy-stars', async (req, res) => {
         }
         const quantity = qtyCheck.value;
 
-        const itemId = Number(req.body?.item_id);
-        if (!requireItemId(res, itemId)) return;
+        const itemIdCheck = validateId(req.body?.item_id, 'ID предмета');
+        if (!itemIdCheck.ok) {
+            return res.status(400).json({ success: false, error: itemIdCheck.error, code: itemIdCheck.code });
+        }
+        const itemId = itemIdCheck.value;
 
         const result = await transaction(async (client) => {
             const shopItem = await client.query(
@@ -795,7 +834,7 @@ router.post('/buy-stars', async (req, res) => {
                 };
             }
 
-            const inventory = await (helpers.loadInventoryFromTable || (async () => null))(client, playerId) || normalizeInventory(player.inventory);
+            const inventory = (await (helpers.loadInventoryFromTable || (async () => null))(client, playerId)) ?? normalizeInventory(player.inventory);
             const newItem = createInventoryItem(shopItemRow, { quantity });
             const addedAsNewSlots = addItemToInventory(inventory, newItem, shopItemRow);
 
@@ -808,15 +847,13 @@ router.post('/buy-stars', async (req, res) => {
             }
 
             await client.query(
-                'UPDATE players SET stars = GREATEST(0, COALESCE(stars,0) - $1), inventory = $2, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
+                'UPDATE players SET stars = GREATEST(0, COALESCE(stars,0) - $1), inventory = $2::jsonb, items_collected = COALESCE(items_collected, 0) + $4 WHERE id = $3',
                 [totalStars, JSON.stringify(inventory), playerId, quantity]
             );
 
             // Синхронизация инвентаря в таблицу player_inventory.
-            try {
-                const { syncInventoryToTable } = require('../../utils/game-helpers');
-                if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
-            } catch (_) { /* ignore */ }
+            const { syncInventoryToTable } = require('../../utils/game-helpers');
+            if (typeof syncInventoryToTable === 'function') await syncInventoryToTable(client, playerId, inventory);
 
             await trackCollectedItems(client, playerId, [shopItemRow.id]);
             await logPlayerAction(playerId, 'item_bought_stars', {

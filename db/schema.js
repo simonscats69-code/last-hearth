@@ -54,7 +54,7 @@ async function createTables() {
     // Таблица игроков
     await query(`
         CREATE TABLE IF NOT EXISTS players (
-            id SERIAL PRIMARY KEY,
+            id BIGSERIAL PRIMARY KEY,
             telegram_id BIGINT UNIQUE NOT NULL,
             username VARCHAR(255),
             first_name VARCHAR(255),
@@ -213,15 +213,15 @@ async function createTables() {
     await query(`
         CREATE TABLE IF NOT EXISTS player_inventory (
             id SERIAL PRIMARY KEY,
-            player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
-            item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+            player_id BIGINT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
             quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 0),
             durability INTEGER DEFAULT 100,
             max_durability INTEGER DEFAULT 100,
             upgrade_level INTEGER DEFAULT 0,
             modifications JSONB DEFAULT '{}'::jsonb,
             stats JSONB DEFAULT '{}'::jsonb,
-            UNIQUE(player_id, item_id, upgrade_level, durability)
+            UNIQUE(player_id, item_id, upgrade_level, durability, modifications)
         );
     `);
 
@@ -609,15 +609,19 @@ async function createTables() {
         );
     `);
 
-    // Таблица кулдаунов POI
+    // Таблица кулдаунов POI. Одна строка = одно использование: PK по id,
+    // чтобы можно было считать количество использований за день по timestamps.
+    // Старые данные сохраняются (миграция снимает старый PK и добавляет id).
     await query(`
         CREATE TABLE IF NOT EXISTS player_poi_cooldowns (
+            id BIGSERIAL PRIMARY KEY,
             player_id BIGINT REFERENCES players(id) ON DELETE CASCADE,
             poi_id INTEGER REFERENCES location_pois(id) ON DELETE CASCADE,
-            last_used_at TIMESTAMP DEFAULT NOW(),
-            PRIMARY KEY (player_id, poi_id)
+            last_used_at TIMESTAMP DEFAULT NOW()
         );
     `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_poi_cooldowns_player_poi ON player_poi_cooldowns(player_id, poi_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_player_poi_cooldowns_used_at ON player_poi_cooldowns(last_used_at)`);
 
     // Таблица открытых рецептов игрока
     await query(`
@@ -839,8 +843,20 @@ async function createTables() {
 async function runMigrations() {
     // Оборачиваем все миграции в транзакцию для атомарности
     await transaction(async (client) => {
-        // Вспомогательная функция для выполнения запросов внутри транзакции
-        const queryTx = (sql, params = []) => client.query(sql, params);
+    // Вспомогательная функция для выполнения запросов внутри транзакции
+    const queryTx = (sql, params = []) => client.query(sql, params);
+    
+    // Миграция: согласуем тип players.id с BIGINT FK (player_id BIGINT и т.д.).
+    await queryTx(`
+        DO $do$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'players' AND column_name = 'id'
+                         AND data_type = 'integer') THEN
+                ALTER TABLE players ALTER COLUMN id TYPE BIGINT;
+            END IF;
+        END $do$;
+    `);
     
     // Создаём новую функцию
     await queryTx(`
@@ -1087,7 +1103,7 @@ async function runMigrations() {
     // Таблица ключей идемпотентности для защиты от повторных мутаций
     await queryTx(`
         CREATE TABLE IF NOT EXISTS idempotency_keys (
-            idempotency_key VARCHAR(200) PRIMARY KEY,
+            idempotency_key TEXT PRIMARY KEY,
             response_data JSONB NOT NULL,
             created_at TIMESTAMP DEFAULT NOW()
         )
@@ -1189,9 +1205,9 @@ async function runMigrations() {
     await queryTx(`CREATE INDEX IF NOT EXISTS idx_pvp_battle_log_battle ON pvp_battle_log(battle_id)`);
 
     // Индексы для player_inventory
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_inventory_player ON player_inventory(player_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_inventory_item ON player_inventory(item_id)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_player_inventory_player_item ON player_inventory(player_id, item_id)`);
+    await queryTx(`CREATE INDEX IF NOT EXISTS idx_player_inventory_player ON player_inventory(player_id)`);
+    await queryTx(`CREATE INDEX IF NOT EXISTS idx_player_inventory_item ON player_inventory(item_id)`);
+    await queryTx(`CREATE INDEX IF NOT EXISTS idx_player_inventory_player_item ON player_inventory(player_id, item_id)`);
 
     // raid_rewards: поле о невыданных предметах из-за переполнения инвентаря.
     await queryTx(`ALTER TABLE raid_rewards ADD COLUMN IF NOT EXISTS undropped_items JSONB NOT NULL DEFAULT '[]'`);
@@ -1334,9 +1350,37 @@ async function runMigrations() {
         END $$;
     `);
 
-    // Миграция boss_sessions: raid_id остаётся nullable (без DEFAULT -1),
-    // чтобы FK на raid_progress(id) не нарушалось значением -1.
-    // UNIQUE(boss_id, player_id, raid_id) работает корректно с NULL.
+    // Миграция: увеличиваем длину ключа идемпотентности (авто-ключи с JSON body
+    // могут превышать VARCHAR(200)). Приводим колонку к TEXT.
+    await queryTx(`
+        DO $do$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'idempotency_keys'
+                         AND column_name = 'idempotency_key'
+                         AND data_type <> 'text') THEN
+                ALTER TABLE idempotency_keys ALTER COLUMN idempotency_key TYPE TEXT;
+            END IF;
+        END $do$;
+    `);
+
+    // Миграция player_poi_cooldowns: переводим таблицу из одной строки на
+    // (player_id, poi_id) в журнал использований по timestamps. Старый PK
+    // снимается, добавляется суррогатный id, данные сохраняются.
+    await queryTx(`ALTER TABLE player_poi_cooldowns DROP CONSTRAINT IF EXISTS player_poi_cooldowns_pkey`);
+    await queryTx(`ALTER TABLE player_poi_cooldowns ADD COLUMN IF NOT EXISTS id BIGSERIAL`);
+    await queryTx(`
+        DO $do$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'player_poi_cooldowns_pkey'
+            ) THEN
+                ALTER TABLE player_poi_cooldowns ADD PRIMARY KEY (id);
+            END IF;
+        END $do$
+    `);
+    await queryTx(`CREATE INDEX IF NOT EXISTS idx_player_poi_cooldowns_player_poi ON player_poi_cooldowns(player_id, poi_id)`);
 });
 }
 

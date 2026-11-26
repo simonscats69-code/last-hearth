@@ -87,6 +87,7 @@ function validateItemIndex(value, fieldName = 'индекс предмета', m
 }
 
 module.exports = {
+    _toSafeInteger,
     validateId,
     validateQuantity,
     validateItemIndex,

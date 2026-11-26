@@ -1745,9 +1745,12 @@ const API = {
             // Автоматическое обновление gameState
             if (type === 'profile' && typeof gameState !== 'undefined') {
                 gameState.player = data;
+                if (data && data.inventory !== undefined) {
+                    setInventoryState(data.inventory);
+                }
             }
             if (type === 'inventory' && typeof gameState !== 'undefined') {
-                gameState.inventory = data.inventory || [];
+                setInventoryState((data && data.inventory !== undefined) ? data.inventory : data);
             }
             if (type === 'locations' && typeof gameState !== 'undefined') {
                 gameState.locations = data.locations || [];
@@ -2904,9 +2907,21 @@ async function initGame() {
  * @returns {Array} предметы с проставленным index
  */
 function setInventoryState(rawItems) {
-    const list = Array.isArray(rawItems) ? rawItems : [];
+    const list = Array.isArray(rawItems)
+        ? rawItems
+        : (Array.isArray(rawItems?.inventory) ? rawItems.inventory : (Array.isArray(rawItems?.data?.inventory) ? rawItems.data.inventory : []));
     gameState.inventory = list.map((item, index) => ({ ...item, index }));
     return gameState.inventory;
+}
+
+function findInventoryEntryByIdOrIndex(identifier) {
+    const idx = parseInt(identifier, 10);
+    if (!Number.isInteger(idx) || idx < 0) return null;
+    const inventory = Array.isArray(gameState.inventory) ? gameState.inventory : [];
+    const byIndex = inventory.find((entry) => Number(entry?.index) === idx);
+    if (byIndex) return byIndex;
+    const byId = inventory.find((entry) => Number(entry?.id) === idx);
+    return byId || null;
 }
 
 /**
@@ -3753,7 +3768,7 @@ function updateHealPanel(player) {
                 name: entry.name || 'Лекарство',
                 icon: entry.icon || '💊',
                 heal: Math.min(heal, maxHealth),
-                quantity: Math.max(1, Number(entry.quantity || entry.count || 1))
+                quantity: Number(entry.quantity !== undefined && entry.quantity !== null ? entry.quantity : (entry.count !== undefined && entry.count !== null ? entry.count : 1))
             };
         })
         .filter(Boolean);
@@ -3799,21 +3814,27 @@ function updateHealPanel(player) {
 
 /** Использовать лечебный предмет из панели лечения */
 async function healItem(itemIndex) {
+    const entry = findInventoryEntryByIdOrIndex(itemIndex);
+    const itemId = entry && entry.id !== undefined && entry.id !== null ? Number(entry.id) : null;
     if (!lockAction('healItem')) return;
     try {
         await loadInventory();
         const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
-            body: { item_index: itemIndex, equip: false },
-            idempotencyKey: stableMutationKey(`heal-item-${itemIndex}`, IDEMPOTENCY_WINDOW_MS)
+            body: itemId !== null ? { item_id: itemId, equip: false } : { item_index: parseInt(itemIndex, 10), equip: false },
+            idempotencyKey: stableMutationKey(`heal-item-${itemId !== null ? itemId : itemIndex}`, IDEMPOTENCY_WINDOW_MS)
         });
+        const payload = result?.data || result;
         if (result?.success) {
-            showNotification(`❤️ ${result.message || 'Здоровье восстановлено'}`, 'success');
+            showNotification(`❤️ ${result.message || payload?.message || 'Здоровье восстановлено'}`, 'success');
             RenderCache.clear();
             await loadProfile();
             await loadInventory();
+        } else {
+            showNotification(result?.error || result?.message || 'Не удалось применить лекарство', 'error');
         }
     } catch (error) {
+        console.error('Heal item error:', error);
         showNotification(clientErrorMessage(error, 'Не удалось применить лекарство'), 'error');
     } finally {
         unlockAction('healItem');
@@ -4348,6 +4369,8 @@ function isEquippableInventoryItem(item) {
 }
 
 async function useItem(itemId, options = {}) {
+    const entry = findInventoryEntryByIdOrIndex(itemId);
+    const resolvedItemId = entry && entry.id !== undefined && entry.id !== null ? Number(entry.id) : null;
     const idx = parseInt(itemId, 10);
     if (!Number.isInteger(idx) || idx < 0) {
         showNotification('Некорректный индекс предмета', 'error');
@@ -4358,11 +4381,10 @@ async function useItem(itemId, options = {}) {
     try {
         const result = await apiRequest('/api/game/inventory/use-item', {
             method: 'POST',
-            body: {
-                item_index: idx,
-                equip: Boolean(options.equip)
-            },
-            idempotencyKey: stableMutationKey(`use-item-${idx}`, IDEMPOTENCY_WINDOW_MS)
+            body: resolvedItemId !== null
+                ? { item_id: resolvedItemId, equip: Boolean(options.equip) }
+                : { item_index: idx, equip: Boolean(options.equip) },
+            idempotencyKey: stableMutationKey(`use-item-${resolvedItemId !== null ? resolvedItemId : idx}`, IDEMPOTENCY_WINDOW_MS)
         });
         const payload = result?.data || result;
 
@@ -4868,7 +4890,9 @@ function renderInventoryCapacity() {
     const el = document.getElementById('inventory-capacity');
     if (!el) return;
 
-    const used = Array.isArray(gameState.inventory) ? gameState.inventory.length : 0;
+    const used = Array.isArray(gameState.inventory)
+        ? gameState.inventory.filter((item) => item && Number(item.quantity !== undefined && item.quantity !== null ? item.quantity : 1) > 0).length
+        : 0;
     // max > 0 гарантирует: INVENTORY_MAX_SLOTS приходит из общего модуля,
     // но при его отсутствии используется запасное 100. Явная проверка
     // защищает от деления на ноль, если значение вдруг окажется 0.
@@ -4887,6 +4911,8 @@ function renderInventoryCapacity() {
  * @param {number|string} itemIndex - индекс слота в инвентаре
  */
 async function dropItem(itemIndex) {
+    const entry = findInventoryEntryByIdOrIndex(itemIndex);
+    const itemId = entry && entry.id !== undefined && entry.id !== null ? Number(entry.id) : null;
     const idx = parseInt(itemIndex, 10);
     if (!Number.isInteger(idx) || idx < 0) {
         showNotification('Некорректный индекс предмета', 'error');
@@ -4898,8 +4924,8 @@ async function dropItem(itemIndex) {
         await loadInventory();
         const result = await apiRequest('/api/game/inventory/drop', {
             method: 'POST',
-            body: { item_index: idx },
-            idempotencyKey: stableMutationKey(`inventory-drop-${idx}`, IDEMPOTENCY_WINDOW_MS)
+            body: itemId !== null ? { item_id: itemId } : { item_index: idx },
+            idempotencyKey: stableMutationKey(`inventory-drop-${itemId !== null ? itemId : idx}`, IDEMPOTENCY_WINDOW_MS)
         });
 
         if (result?.success) {
@@ -4938,6 +4964,8 @@ async function dropItem(itemIndex) {
  * @param {number} [quantity] - сколько продать из стека (по умолчанию весь)
  */
 async function sellItem(itemIndex, quantity = null) {
+    const entry = findInventoryEntryByIdOrIndex(itemIndex);
+    const itemId = entry && entry.id !== undefined && entry.id !== null ? Number(entry.id) : null;
     const idx = parseInt(itemIndex, 10);
     if (!Number.isInteger(idx) || idx < 0) {
         showNotification('Некорректный индекс предмета', 'error');
@@ -4963,11 +4991,13 @@ async function sellItem(itemIndex, quantity = null) {
         await loadInventory();
         const result = await apiRequest('/api/game/inventory/sell', {
             method: 'POST',
-            body: {
-                item_index: idx,
-                ...(quantity ? { quantity: parseInt(quantity, 10) } : {})
-            },
-            idempotencyKey: stableMutationKey(`inventory-sell-${idx}-${quantity}`, IDEMPOTENCY_WINDOW_MS)
+            body: itemId !== null
+                ? { item_id: itemId, ...(quantity ? { quantity: parseInt(quantity, 10) } : {}) }
+                : {
+                    item_index: idx,
+                    ...(quantity ? { quantity: parseInt(quantity, 10) } : {})
+                },
+            idempotencyKey: stableMutationKey(`inventory-sell-${itemId !== null ? itemId : idx}-${quantity}`, IDEMPOTENCY_WINDOW_MS)
         });
 
         if (result?.success) {
@@ -5048,7 +5078,7 @@ function showItemDetailCard(item) {
 
     const name = item.name || 'Предмет';
     const rarityLabel = RARITY_LABELS[item.rarity] || item.rarity || '';
-    const amount = Number(item.quantity || item.count || 1);
+    const amount = Number(item.quantity !== undefined && item.quantity !== null ? item.quantity : (item.count !== undefined && item.count !== null ? item.count : 1));
     const isEquippable = isEquippableInventoryItem(item);
     const sellPrice = Number(item.sell_price || 0);
 
@@ -5192,10 +5222,10 @@ function renderInventory(items) {
 
     for (const item of normalizedItems) {
         const slot = document.createElement('div');
-        slot.className = `inventory-slot item-rarity rarity-${item.rarity || 'common'}`;
+        slot.className = `inventory-slot item-rarity rarity-${escapeHtml(item.rarity || 'common')}`;
 
         const isEquippable = isEquippableInventoryItem(item);
-        const amount = Number(item.quantity || item.count || 1);
+        const amount = Number(item.quantity !== undefined && item.quantity !== null ? item.quantity : (item.count !== undefined && item.count !== null ? item.count : 1));
         const name = item.name || 'Предмет';
         const rarityLabel = RARITY_LABELS[item.rarity] || item.rarity || '';
         const sellPrice = Number(item.sell_price || 0);
@@ -5259,7 +5289,7 @@ function renderInventory(items) {
                         showStackSellDialog(item, amount, sellPrice);
                         return;
                     }
-                    sellItem(item.index);
+                    await sellItem(item.index);
                     return;
                 }
                 if (currentInventoryMode === 'drop') {
@@ -5276,10 +5306,10 @@ function renderInventory(items) {
                     if (!confirmed) {
                         return;
                     }
-                    dropItem(item.index);
+                    await dropItem(item.index);
                     return;
                 }
-                useItem(item.index, { equip: isEquippable });
+                await useItem(item.index, { equip: isEquippable });
             } finally {
                 slot.dataset.busy = '0';
             }
