@@ -1338,11 +1338,6 @@ async function syncInventoryToTable(client, playerId, inventory) {
             await client.query(
                 `INSERT INTO player_inventory (player_id, item_id, quantity, durability, max_durability, upgrade_level, modifications, stats)
                 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)
-                ON CONFLICT (player_id, item_id, upgrade_level, durability, modifications) DO UPDATE SET
-                    quantity = player_inventory.quantity + EXCLUDED.quantity,
-                    max_durability = EXCLUDED.max_durability,
-                    modifications = EXCLUDED.modifications,
-                    stats = EXCLUDED.stats
             `, [
                 playerId, itemId, qty,
                 durability,
